@@ -9,7 +9,7 @@ const MIN_ZOOM = 0.25;
 const MAX_ZOOM = 4.0;
 const ZOOM_SETTLE_EPSILON = 0.001;
 const ZOOM_SMOOTHING_TIME_MS = 16;
-const WHEEL_ZOOM_SENSITIVITY = 0.00525;
+const WHEEL_ZOOM_SENSITIVITY = 0.00625;
 const MAX_WHEEL_DELTA_PX = 120;
 
 export class ViewportManager {
@@ -84,17 +84,26 @@ export class ViewportManager {
 
   /** Ctrl+휠: 브라우저 줌 대신 문서 줌 */
   private onWheel(e: WheelEvent): void {
-    if (!e.ctrlKey && !e.metaKey) return;
+    const deltaX = this.wheelDeltaPixels(e.deltaX, e.deltaMode);
+    const deltaY = this.wheelDeltaPixels(e.deltaY, e.deltaMode);
+
+    if (!e.ctrlKey && !e.metaKey) {
+      if (
+        this.container
+        && !e.shiftKey
+        && deltaY !== 0
+        && Math.abs(deltaY) >= Math.abs(deltaX)
+      ) {
+        e.preventDefault();
+        this.setScrollTop(this.container.scrollTop + deltaY);
+      }
+      return;
+    }
     e.preventDefault();
 
-    const deltaPixels = e.deltaMode === 1
-      ? e.deltaY * 16
-      : e.deltaMode === 2
-        ? e.deltaY * Math.max(this.viewportHeight, 1)
-        : e.deltaY;
     const boundedDelta = Math.max(
       -MAX_WHEEL_DELTA_PX,
-      Math.min(MAX_WHEEL_DELTA_PX, deltaPixels),
+      Math.min(MAX_WHEEL_DELTA_PX, deltaY),
     );
     if (boundedDelta === 0) return;
 
@@ -110,6 +119,14 @@ export class ViewportManager {
       this.zoomTarget * Math.exp(-boundedDelta * WHEEL_ZOOM_SENSITIVITY),
       anchor,
     );
+  }
+
+  private wheelDeltaPixels(delta: number, deltaMode: number): number {
+    return deltaMode === 1
+      ? delta * 16
+      : deltaMode === 2
+        ? delta * Math.max(this.viewportHeight, 1)
+        : delta;
   }
 
   private updateViewportSize(): void {

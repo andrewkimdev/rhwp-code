@@ -165,7 +165,85 @@ test('a fine trackpad wheel delta produces a fine animated zoom change', async (
   );
 });
 
-test('an eight-pixel trackpad gesture settles within four frames and moves over four percent', async (t) => {
+test('vertical-dominant wheel input locks horizontal pan in every delta mode', async () => {
+  const { ViewportManager } = await loadViewportManager();
+  const viewport = new ViewportManager(new FakeEventBus() as never);
+  const container = { scrollTop: 100 };
+  (
+    viewport as unknown as {
+      container: typeof container;
+      viewportHeight: number;
+    }
+  ).container = container;
+  (viewport as unknown as { viewportHeight: number }).viewportHeight = 600;
+  const onWheel = (
+    viewport as unknown as {
+      onWheel: (event: {
+        ctrlKey: boolean;
+        metaKey: boolean;
+        deltaX: number;
+        deltaY: number;
+        deltaMode: number;
+        preventDefault: () => void;
+      }) => void;
+    }
+  ).onWheel.bind(viewport);
+
+  for (const sample of [
+    { deltaY: 20, deltaMode: 0, expected: 120 },
+    { deltaY: 2, deltaMode: 1, expected: 132 },
+    { deltaY: 0.5, deltaMode: 2, expected: 400 },
+  ]) {
+    container.scrollTop = 100;
+    let prevented = false;
+    onWheel({
+      ctrlKey: false,
+      metaKey: false,
+      deltaX: 0.1,
+      deltaY: sample.deltaY,
+      deltaMode: sample.deltaMode,
+      preventDefault: () => {
+        prevented = true;
+      },
+    });
+    assert.equal(prevented, true);
+    assert.equal(container.scrollTop, sample.expected);
+  }
+});
+
+test('horizontal-dominant wheel input retains native horizontal pan', async () => {
+  const { ViewportManager } = await loadViewportManager();
+  const viewport = new ViewportManager(new FakeEventBus() as never);
+  const container = { scrollTop: 100 };
+  (viewport as unknown as { container: typeof container }).container = container;
+  let prevented = false;
+  (
+    viewport as unknown as {
+      onWheel: (event: {
+        ctrlKey: boolean;
+        metaKey: boolean;
+        deltaX: number;
+        deltaY: number;
+        deltaMode: number;
+        preventDefault: () => void;
+      }) => void;
+    }
+  ).onWheel({
+    ctrlKey: false,
+    metaKey: false,
+    deltaX: 20,
+    deltaY: 3,
+    deltaMode: 0,
+    preventDefault: () => {
+      prevented = true;
+    },
+  });
+
+  assert.equal(prevented, false);
+  assert.equal(container.scrollTop, 100);
+});
+
+test('an eight-pixel trackpad gesture settles within four frames and moves nearly five percent', async (t) => {
   const frames = new FakeAnimationFrames();
   const previousRequest = globalThis.requestAnimationFrame;
   const previousCancel = globalThis.cancelAnimationFrame;
@@ -206,7 +284,10 @@ test('an eight-pixel trackpad gesture settles within four frames and moves over 
     frameCount += 1;
   }
 
-  assert.ok(viewport.getZoom() < 0.96, `expected responsive travel, got ${viewport.getZoom()}`);
+  assert.ok(
+    Math.abs(viewport.getZoom() - Math.exp(-8 * 0.00625)) < 1e-12,
+    `expected the stronger symmetric sensitivity, got ${viewport.getZoom()}`,
+  );
   assert.ok(frameCount <= 4, `expected at most four frames, got ${frameCount}`);
 });
 
