@@ -8,8 +8,8 @@ import {
 const MIN_ZOOM = 0.25;
 const MAX_ZOOM = 4.0;
 const ZOOM_SETTLE_EPSILON = 0.001;
-const ZOOM_SMOOTHING_TIME_MS = 22;
-const WHEEL_ZOOM_SENSITIVITY = 0.0042;
+const ZOOM_SMOOTHING_TIME_MS = 16;
+const WHEEL_ZOOM_SENSITIVITY = 0.00525;
 const MAX_WHEEL_DELTA_PX = 120;
 
 export class ViewportManager {

@@ -165,7 +165,7 @@ test('a fine trackpad wheel delta produces a fine animated zoom change', async (
   );
 });
 
-test('an eight-pixel trackpad gesture settles within six frames and moves over three percent', async (t) => {
+test('an eight-pixel trackpad gesture settles within four frames and moves over four percent', async (t) => {
   const frames = new FakeAnimationFrames();
   const previousRequest = globalThis.requestAnimationFrame;
   const previousCancel = globalThis.cancelAnimationFrame;
@@ -206,8 +206,8 @@ test('an eight-pixel trackpad gesture settles within six frames and moves over t
     frameCount += 1;
   }
 
-  assert.ok(viewport.getZoom() < 0.97, `expected responsive travel, got ${viewport.getZoom()}`);
-  assert.ok(frameCount <= 6, `expected at most six frames, got ${frameCount}`);
+  assert.ok(viewport.getZoom() < 0.96, `expected responsive travel, got ${viewport.getZoom()}`);
+  assert.ok(frameCount <= 4, `expected at most four frames, got ${frameCount}`);
 });
 
 test('wheel zoom emits the pointer anchor and inverse deltas restore zoom', async (t) => {
