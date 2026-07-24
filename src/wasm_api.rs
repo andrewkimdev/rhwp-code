@@ -979,6 +979,25 @@ impl HwpDocument {
         .map_err(|e| e.into())
     }
 
+    #[wasm_bindgen(js_name = replaceBodyTextLocal)]
+    pub fn replace_body_text_local(
+        &mut self,
+        section_idx: u32,
+        para_idx: u32,
+        char_offset: u32,
+        delete_count: u32,
+        text: &str,
+    ) -> Result<String, JsValue> {
+        self.replace_body_text_local_native(
+            section_idx as usize,
+            para_idx as usize,
+            char_offset as usize,
+            delete_count as usize,
+            text,
+        )
+        .map_err(|e| e.into())
+    }
+
     /// 표 셀 내부 문단에 텍스트를 삽입한다.
     ///
     /// 반환값: JSON `{"ok":true,"charOffset":<new_offset>}`

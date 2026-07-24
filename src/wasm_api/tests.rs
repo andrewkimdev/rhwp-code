@@ -25872,3 +25872,102 @@ fn style_json_survives_backslash_and_control_chars() {
     serde_json::from_str::<Value>(&at)
         .expect("getStyleAt 도 유효한 JSON 이어야 함(커서 이동마다 호출됨)");
 }
+
+#[test]
+fn local_body_replace_exposes_stable_edit_before_full_pagination() {
+    use crate::renderer::render_tree::{RenderNode, RenderNodeType};
+
+    fn contains_text(node: &RenderNode, needle: &str) -> bool {
+        if let RenderNodeType::TextRun(run) = &node.node_type {
+            if run.text.contains(needle) {
+                return true;
+            }
+        }
+        node.children
+            .iter()
+            .any(|child| contains_text(child, needle))
+    }
+
+    let mut doc = HwpDocument::create_empty();
+    doc.insert_text_native(0, 0, 0, "나")
+        .expect("seed non-empty body paragraph");
+    doc.build_page_render_tree(0).expect("warm page tree");
+
+    let raw = doc
+        .replace_body_text_local_native(0, 0, 1, 0, "가")
+        .expect("stable local insert");
+    let result: Value = serde_json::from_str(&raw).expect("local result json");
+
+    assert_eq!(result["charOffset"].as_u64(), Some(2));
+    assert_eq!(result["documentPaginationPending"].as_bool(), Some(true));
+    assert_eq!(result["flowChanged"].as_bool(), Some(false));
+    assert_eq!(
+        doc.get_text_range_native(0, 0, 0, 2)
+            .expect("immediate text"),
+        "나가"
+    );
+
+    let transient_tree = doc.build_page_render_tree(0).expect("transient page tree");
+    assert!(
+        contains_text(&transient_tree.root, "가"),
+        "warm page tree must expose the local edit before full pagination"
+    );
+
+    let deleted_raw = doc
+        .replace_body_text_local_native(0, 0, 1, 1, "")
+        .expect("stable local delete");
+    let deleted: Value = serde_json::from_str(&deleted_raw).expect("delete result json");
+    assert_eq!(deleted["charOffset"].as_u64(), Some(1));
+    assert_eq!(deleted["documentPaginationPending"].as_bool(), Some(true));
+    assert_eq!(deleted["flowChanged"].as_bool(), Some(false));
+    assert_eq!(
+        doc.get_text_range_native(0, 0, 0, 1).expect("deleted text"),
+        "나"
+    );
+}
+
+#[test]
+fn local_body_replace_applies_ime_replacement_as_one_final_state() {
+    let mut doc = HwpDocument::create_empty();
+    doc.replace_body_text_local_native(0, 0, 0, 0, "ㅎ")
+        .expect("initial composition");
+    let raw = doc
+        .replace_body_text_local_native(0, 0, 0, 1, "하")
+        .expect("composition replacement");
+    let result: Value = serde_json::from_str(&raw).expect("replace result json");
+
+    assert_eq!(result["charOffset"].as_u64(), Some(1));
+    assert_eq!(
+        doc.get_text_range_native(0, 0, 0, 1)
+            .expect("final composition"),
+        "하"
+    );
+}
+
+#[test]
+fn local_body_replace_paginates_immediately_at_flow_boundary() {
+    let mut doc = HwpDocument::create_empty();
+    let mut boundary = None;
+
+    for offset in 0..512 {
+        let raw = doc
+            .replace_body_text_local_native(0, 0, offset, 0, "가")
+            .expect("sequential local insert");
+        let result: Value = serde_json::from_str(&raw).expect("flow result json");
+        if result["flowChanged"].as_bool() == Some(true) {
+            boundary = Some(result);
+            break;
+        }
+    }
+
+    let result = boundary.expect("a body line-flow boundary within 512 characters");
+    assert_eq!(result["documentPaginationPending"].as_bool(), Some(false));
+    assert_eq!(result["flowChanged"].as_bool(), Some(true));
+    assert_eq!(
+        doc.page_count(),
+        doc.pagination
+            .iter()
+            .map(|section| section.pages.len())
+            .sum::<usize>() as u32
+    );
+}

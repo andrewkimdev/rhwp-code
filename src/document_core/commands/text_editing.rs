@@ -265,6 +265,13 @@ impl DocumentCore {
     }
 }
 
+fn body_paragraph_flow_signature(paragraph: &Paragraph) -> (usize, Option<i64>) {
+    (
+        paragraph.line_segs.len(),
+        relative_paragraph_flow_advance(paragraph),
+    )
+}
+
 #[derive(Clone, Copy)]
 struct FieldEndInsertion {
     control_idx: usize,
@@ -576,6 +583,186 @@ fn has_clickhere_field_range(para: &Paragraph) -> bool {
 }
 
 impl DocumentCore {
+    pub fn replace_body_text_local_native(
+        &mut self,
+        section_idx: usize,
+        para_idx: usize,
+        char_offset: usize,
+        delete_count: usize,
+        text: &str,
+    ) -> Result<String, HwpError> {
+        if section_idx >= self.document.sections.len() {
+            return Err(HwpError::RenderError(format!(
+                "구역 인덱스 {} 범위 초과 (총 {}개)",
+                section_idx,
+                self.document.sections.len()
+            )));
+        }
+        let section = &self.document.sections[section_idx];
+        if para_idx >= section.paragraphs.len() {
+            return Err(HwpError::RenderError(format!(
+                "문단 인덱스 {} 범위 초과 (총 {}개)",
+                para_idx,
+                section.paragraphs.len()
+            )));
+        }
+        let new_chars_count = text.chars().count();
+        if delete_count > 8
+            || new_chars_count > 8
+            || text.chars().any(|ch| matches!(ch, '\r' | '\n' | '\t'))
+        {
+            return Err(HwpError::RenderError(
+                "local 본문 편집은 줄바꿈·탭 없는 최대 8자만 지원합니다".to_string(),
+            ));
+        }
+
+        let flow_before = body_paragraph_flow_signature(
+            &self.document.sections[section_idx].paragraphs[para_idx],
+        );
+        let old_col = self
+            .para_column_map
+            .get(section_idx)
+            .and_then(|map| map.get(para_idx))
+            .copied()
+            .unwrap_or(0);
+        let stored_end_for_reset = crate::renderer::composer::paragraph_flow_end(
+            &self.document.sections[section_idx].paragraphs[para_idx],
+        );
+        self.document.sections[section_idx].raw_stream = None;
+
+        let deleted_count = if delete_count > 0 {
+            self.document.sections[section_idx].paragraphs[para_idx]
+                .delete_text_at(char_offset, delete_count)
+        } else {
+            0
+        };
+
+        if new_chars_count > 0 {
+            let active_field = self.active_field.clone();
+            let outside_insertions = inactive_field_end_insertions(
+                &self.document.sections[section_idx].paragraphs[para_idx],
+                active_field.as_ref(),
+                section_idx,
+                para_idx,
+                None,
+                char_offset,
+            );
+            let before_insertions = inactive_field_start_insertions(
+                &self.document.sections[section_idx].paragraphs[para_idx],
+                active_field.as_ref(),
+                section_idx,
+                para_idx,
+                None,
+                char_offset,
+            );
+            let para = &mut self.document.sections[section_idx].paragraphs[para_idx];
+            para.insert_text_at(char_offset, text);
+            keep_inactive_field_start_outside(para, &before_insertions, new_chars_count);
+            keep_inactive_field_end_outside(para, &outside_insertions, new_chars_count);
+            if has_clickhere_field_range(para) {
+                rebuild_char_offsets(para);
+            }
+        }
+
+        self.reflow_paragraph(section_idx, para_idx);
+        let doc_hwp3_layout = self.document.layout_profile().hwp3_layout();
+        crate::renderer::composer::recalculate_section_vpos(
+            &mut self.document.sections[section_idx].paragraphs,
+            para_idx,
+            None,
+            stored_end_for_reset,
+            &self.styles,
+            self.dpi,
+            doc_hwp3_layout,
+        );
+        self.recompose_paragraph(section_idx, para_idx);
+
+        let flow_after = body_paragraph_flow_signature(
+            &self.document.sections[section_idx].paragraphs[para_idx],
+        );
+        let flow_changed = flow_before != flow_after;
+        if flow_changed {
+            self.paginate();
+            for _ in 0..2 {
+                let new_col = self
+                    .para_column_map
+                    .get(section_idx)
+                    .and_then(|map| map.get(para_idx))
+                    .copied()
+                    .unwrap_or(0);
+                if new_col == old_col {
+                    break;
+                }
+                let stored_end_for_reset = crate::renderer::composer::paragraph_flow_end(
+                    &self.document.sections[section_idx].paragraphs[para_idx],
+                );
+                self.reflow_paragraph(section_idx, para_idx);
+                let doc_hwp3_layout = self.document.layout_profile().hwp3_layout();
+                crate::renderer::composer::recalculate_section_vpos(
+                    &mut self.document.sections[section_idx].paragraphs,
+                    para_idx,
+                    None,
+                    stored_end_for_reset,
+                    &self.styles,
+                    self.dpi,
+                    doc_hwp3_layout,
+                );
+                self.recompose_paragraph(section_idx, para_idx);
+                self.paginate();
+            }
+        } else {
+            self.refresh_render_normalized_body_paragraph_after_edit(section_idx, para_idx);
+        }
+
+        let new_offset = char_offset + new_chars_count;
+        let para = &self.document.sections[section_idx].paragraphs[para_idx];
+        let caret_utf16_pos = if new_offset < para.char_offsets.len() {
+            para.char_offsets[new_offset]
+        } else if !para.char_offsets.is_empty() {
+            let last = para.char_offsets.len() - 1;
+            let last_char = para.text.chars().nth(last);
+            para.char_offsets[last]
+                + last_char
+                    .map(|ch| if (ch as u32) > 0xFFFF { 2 } else { 1 })
+                    .unwrap_or(1)
+        } else {
+            (para.controls.len() as u32) * 8
+        };
+        self.document.doc_properties.caret_list_id = section_idx as u32;
+        self.document.doc_properties.caret_para_id = para_idx as u32;
+        self.document.doc_properties.caret_char_pos = caret_utf16_pos;
+        if let Some(ref mut raw) = self.document.doc_info.raw_stream {
+            let _ = crate::serializer::doc_info::surgical_update_caret(
+                raw,
+                section_idx as u32,
+                para_idx as u32,
+                caret_utf16_pos,
+            );
+        }
+
+        if deleted_count > 0 {
+            self.event_log.push(DocumentEvent::TextDeleted {
+                section: section_idx,
+                para: para_idx,
+                offset: char_offset,
+                count: deleted_count,
+            });
+        }
+        if new_chars_count > 0 {
+            self.event_log.push(DocumentEvent::TextInserted {
+                section: section_idx,
+                para: para_idx,
+                offset: char_offset,
+                len: new_chars_count,
+            });
+        }
+
+        Ok(super::super::helpers::json_ok_with(&format!(
+            "\"charOffset\":{},\"documentPaginationPending\":{},\"flowChanged\":{}",
+            new_offset, !flow_changed, flow_changed
+        )))
+    }
+
     pub fn insert_text_native(
         &mut self,
         section_idx: usize,
