@@ -30,6 +30,13 @@ test('style toolbar uses ordered field and command groups', () => {
   }
 });
 
+test('style toolbar shows its default before a document is loaded', () => {
+  assert.match(
+    html,
+    /<select id="style-name"[^>]*>\s*<option value="0">바탕글<\/option>\s*<\/select>/,
+  );
+});
+
 test('desktop formatting surface exposes visible ribbon hierarchy', () => {
   assert.match(html, /class="sb-ribbon-group sb-field-ribbon-group"/);
   assert.match(html, /class="sb-ribbon-group sb-character-ribbon-group"/);
