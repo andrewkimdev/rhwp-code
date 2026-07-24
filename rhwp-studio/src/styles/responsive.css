@@ -370,6 +370,10 @@
     overflow-y: auto;
     -webkit-overflow-scrolling: touch;
   }
+  .dialog-wrap.recovery-dialog {
+    max-height: 90dvh;
+    overflow: hidden;
+  }
   .dialog-title {
     padding: 12px 16px;
     font-size: var(--font-size-lg);
