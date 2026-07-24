@@ -181,6 +181,25 @@ export function canUseDeferredCellTextDelete(pos: DocumentPosition, count: numbe
   return Number.isInteger(count) && count > 0 && count <= MAX_PAGE_LOCAL_TEXT_EDIT_CHARS;
 }
 
+export function canUseDeferredCellTextReplace(
+  pos: DocumentPosition,
+  deleteCount: number,
+  text: string,
+): boolean {
+  if (!isCell(pos) || isNestedCell(pos)) return false;
+  if (
+    !Number.isInteger(deleteCount) ||
+    deleteCount < 1 ||
+    deleteCount > MAX_PAGE_LOCAL_TEXT_EDIT_CHARS
+  ) {
+    return false;
+  }
+  const textChars = charCount(text);
+  if (textChars < 1 || textChars > MAX_PAGE_LOCAL_TEXT_EDIT_CHARS) return false;
+  if (/[\r\n\t]/.test(text)) return false;
+  return true;
+}
+
 export function canUseLocalBodyTextReplace(
   pos: DocumentPosition,
   deleteCount: number,
@@ -312,6 +331,29 @@ export function replaceBodyTextWithMutationEffects(
     documentPaginationPending: result.documentPaginationPending,
     flowChanged: result.flowChanged,
     paginationCompleted: !result.documentPaginationPending,
+  };
+}
+
+export function replaceCellTextWithMutationEffects(
+  wasm: WasmBridge,
+  pos: DocumentPosition,
+  deleteCount: number,
+  text: string,
+): TextMutationEffects {
+  const result = wasm.replaceTextInCellDeferredPagination(
+    pos.sectionIndex,
+    pos.parentParaIndex!,
+    pos.controlIndex!,
+    pos.cellIndex!,
+    pos.cellParaIndex!,
+    pos.charOffset,
+    deleteCount,
+    text,
+  );
+  return {
+    documentPaginationPending: result.paginationDeferred,
+    flowChanged: result.paginationDeferred && result.cellFlowChanged,
+    paginationCompleted: !result.paginationDeferred,
   };
 }
 

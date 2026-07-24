@@ -44,6 +44,8 @@ const {
   deleteTextWithMutationEffects,
   insertTextWithMutationEffects,
   replaceBodyTextWithMutationEffects,
+  canUseDeferredCellTextReplace,
+  replaceCellTextWithMutationEffects,
 } = require(path.join(runtimeRoot, 'engine', 'command.js'));
 const { CommandHistory } = require(path.join(runtimeRoot, 'engine', 'history.js'));
 
@@ -117,6 +119,13 @@ class FakeWasm {
 
   deleteTextInCellDeferredPagination(...args) {
     this.calls.push({ name: 'delete-deferred', args });
+    const result = this.deferredResults.shift();
+    assert.ok(result, 'deferred mutation result fixture exhausted');
+    return result;
+  }
+
+  replaceTextInCellDeferredPagination(...args) {
+    this.calls.push({ name: 'replace-deferred', args });
     const result = this.deferredResults.shift();
     assert.ok(result, 'deferred mutation result fixture exhausted');
     return result;
@@ -330,6 +339,63 @@ test('delete helper는 depth 1 셀만 deferred로 보내고 depth 2 셀은 path 
     deleteTextWithMutationEffects(fallbackWasm, depth1Position(1), 1),
     IMMEDIATE_TEXT_MUTATION_EFFECTS,
     '구형 WASM bridge fallback은 deferred pending을 만들지 않아야 한다',
+  );
+});
+
+test('depth-1 IME replace는 atomic deferred mutation 한 번만 사용한다', () => {
+  const wasm = new FakeWasm(mutationResult(false));
+  const position = depth1Position(7);
+
+  assert.equal(canUseDeferredCellTextReplace(position, 1, '하'), true);
+  assert.deepEqual(
+    replaceCellTextWithMutationEffects(wasm, position, 1, '하'),
+    {
+      documentPaginationPending: true,
+      flowChanged: false,
+      paginationCompleted: false,
+    },
+  );
+  assert.deepEqual(wasm.calls, [{
+    name: 'replace-deferred',
+    args: [0, 5, 2, 3, 0, 7, 1, '하'],
+  }]);
+});
+
+test('flow boundary replace effect는 pre-caret flush 신호를 보존한다', () => {
+  const wasm = new FakeWasm(mutationResult(true));
+
+  assert.deepEqual(
+    replaceCellTextWithMutationEffects(wasm, depth1Position(7), 1, '가나다라마바사아'),
+    {
+      documentPaginationPending: true,
+      flowChanged: true,
+      paginationCompleted: false,
+    },
+  );
+});
+
+test('중첩 셀과 빈 replacement는 atomic cell replace 대상이 아니다', () => {
+  assert.equal(canUseDeferredCellTextReplace(depth2Position(), 1, '하'), false);
+  assert.equal(canUseDeferredCellTextReplace(depth1Position(), 1, ''), false);
+  assert.equal(canUseDeferredCellTextReplace(depth1Position(), 0, '하'), false);
+  assert.equal(canUseDeferredCellTextReplace(depth1Position(), 1, '가나다라마바사아자'), false);
+});
+
+test('atomic API fallback 결과는 immediate-completed effect다', () => {
+  const wasm = new FakeWasm({
+    ok: true,
+    charOffset: 8,
+    paginationDeferred: false,
+    cellFlowChanged: false,
+  });
+
+  assert.deepEqual(
+    replaceCellTextWithMutationEffects(wasm, depth1Position(7), 1, '하'),
+    {
+      documentPaginationPending: false,
+      flowChanged: false,
+      paginationCompleted: true,
+    },
   );
 });
 

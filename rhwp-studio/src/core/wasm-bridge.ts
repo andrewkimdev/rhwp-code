@@ -1010,6 +1010,88 @@ export class WasmBridge {
     };
   }
 
+  replaceTextInCellDeferredPagination(
+    sec: number,
+    parentPara: number,
+    controlIdx: number,
+    cellIdx: number,
+    cellParaIdx: number,
+    charOffset: number,
+    deleteCount: number,
+    text: string,
+  ): DeferredCellTextMutationResult {
+    if (!this.doc) throw new Error('문서가 로드되지 않았습니다');
+    const d = this.doc as unknown as {
+      replaceTextInCellDeferredPagination?: (
+        sec: number,
+        parentPara: number,
+        controlIdx: number,
+        cellIdx: number,
+        cellParaIdx: number,
+        charOffset: number,
+        deleteCount: number,
+        text: string,
+      ) => string;
+    };
+
+    let raw: string;
+    let paginationDeferred = false;
+    if (typeof d.replaceTextInCellDeferredPagination === 'function') {
+      raw = d.replaceTextInCellDeferredPagination(
+        sec,
+        parentPara,
+        controlIdx,
+        cellIdx,
+        cellParaIdx,
+        charOffset,
+        deleteCount,
+        text,
+      );
+      paginationDeferred = true;
+    } else {
+      if (deleteCount > 0) {
+        raw = this.doc.deleteTextInCell(
+          sec,
+          parentPara,
+          controlIdx,
+          cellIdx,
+          cellParaIdx,
+          charOffset,
+          deleteCount,
+        );
+      } else {
+        raw = JSON.stringify({ ok: true, charOffset });
+      }
+      if (text.length > 0) {
+        raw = this.doc.insertTextInCell(
+          sec,
+          parentPara,
+          controlIdx,
+          cellIdx,
+          cellParaIdx,
+          charOffset,
+          text,
+        );
+      }
+    }
+
+    const parsed = JSON.parse(raw) as Partial<DeferredCellTextMutationResult>;
+    const parsedCharOffset = parsed.charOffset;
+    if (
+      parsed.ok !== true ||
+      typeof parsedCharOffset !== 'number' ||
+      !Number.isInteger(parsedCharOffset)
+    ) {
+      throw new Error('잘못된 deferred cell text replace 결과');
+    }
+    return {
+      ok: true,
+      charOffset: parsedCharOffset,
+      paginationDeferred,
+      cellFlowChanged: paginationDeferred && parsed.cellFlowChanged !== false,
+    };
+  }
+
   deleteTextInCell(sec: number, parentPara: number, controlIdx: number, cellIdx: number, cellParaIdx: number, charOffset: number, count: number): string {
     if (!this.doc) throw new Error('문서가 로드되지 않았습니다');
     return this.doc.deleteTextInCell(sec, parentPara, controlIdx, cellIdx, cellParaIdx, charOffset, count);
