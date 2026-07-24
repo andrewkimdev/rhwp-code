@@ -17,6 +17,7 @@ import { applyGridOverlayBox, createGridClipCornerOverlay, createGridOverlay } f
 import { getGridViewSettings } from './grid-settings';
 import {
   calculateAnchoredScroll,
+  CENTER_ZOOM_ANCHOR,
   normalizeZoomAnchor,
   type ZoomAnchor,
   type ZoomPageBox,
@@ -55,6 +56,7 @@ export class CanvasView {
   private activeRendererDecisionKey: string | null = null;
   private autoRendererReselectionTimer: ReturnType<typeof setTimeout> | null = null;
   private documentLoadPrepared = false;
+  private layoutViewportSize = { width: 0, height: 0 };
   private disposed = false;
 
   constructor(
@@ -137,6 +139,9 @@ export class CanvasView {
     }
 
     this.recalcLayout();
+    this.viewportManager.setScrollLeft(
+      this.virtualScroll.getCenteredScrollLeft(this.layoutViewportSize.width),
+    );
 
     this.container.scrollTop = 0;
     this.updateVisiblePages();
@@ -267,10 +272,11 @@ export class CanvasView {
   /** 레이아웃을 재계산한다 (줌/리사이즈 공통) */
   private recalcLayout(): void {
     const zoom = this.viewportManager.getZoom();
-    const { width: vpWidth } = this.viewportManager.getViewportSize();
-    this.virtualScroll.setPageDimensions(this.pages, zoom, vpWidth);
+    const viewport = this.viewportManager.getViewportSize();
+    this.virtualScroll.setPageDimensions(this.pages, zoom, viewport.width);
     this.scrollContent.style.height = `${this.virtualScroll.getTotalHeight()}px`;
     this.scrollContent.style.width = `${this.virtualScroll.getTotalWidth()}px`;
+    this.layoutViewportSize = viewport;
 
     // 그리드 모드 CSS 클래스 토글
     this.scrollContent.classList.toggle('grid-mode', this.virtualScroll.isGridMode());
@@ -499,15 +505,53 @@ export class CanvasView {
 
   /** 뷰포트 리사이즈 처리 */
   private onViewportResize(): void {
+    const nextViewport = this.viewportManager.getViewportSize();
     if (this.pages.length === 0) {
+      this.layoutViewportSize = nextViewport;
       this.updateVisiblePages();
       return;
     }
+
+    const previousViewport = this.layoutViewportSize;
+    const canPreserveCenter = previousViewport.width > 0 && previousViewport.height > 0;
+    const scrollLeft = this.viewportManager.getScrollX();
+    const scrollTop = this.viewportManager.getScrollY();
+    const focusPage = canPreserveCenter
+      ? this.virtualScroll.getPageAtPoint(
+        scrollLeft + previousViewport.width / 2,
+        scrollTop + previousViewport.height / 2,
+      )
+      : 0;
+    const oldBox = canPreserveCenter
+      ? this.getZoomPageBox(focusPage, previousViewport.width)
+      : null;
 
     // 그리드 모드에서 열 수가 바뀔 수 있으므로 레이아웃 재계산
     const wasGrid = this.virtualScroll.isGridMode();
     this.recalcLayout();
     const isGrid = this.virtualScroll.isGridMode();
+
+    if (oldBox) {
+      const newBox = this.getZoomPageBox(focusPage, nextViewport.width);
+      const nextScroll = calculateAnchoredScroll(
+        oldBox,
+        newBox,
+        {
+          width: previousViewport.width,
+          height: previousViewport.height,
+          scrollLeft,
+          scrollTop,
+        },
+        CENTER_ZOOM_ANCHOR,
+        nextViewport,
+      );
+      this.viewportManager.setScrollLeft(nextScroll.scrollLeft);
+      this.viewportManager.setScrollTop(nextScroll.scrollTop);
+    } else {
+      this.viewportManager.setScrollLeft(
+        this.virtualScroll.getCenteredScrollLeft(nextViewport.width),
+      );
+    }
 
     if (wasGrid || isGrid) {
       // 그리드 관련 변경 시 전체 재렌더링

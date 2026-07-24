@@ -39,10 +39,13 @@ export function calculateAnchoredScroll(
   newBox: ZoomPageBox,
   viewport: ZoomViewportState,
   requestedAnchor: ZoomAnchor,
+  nextViewportSize: Pick<ZoomViewportState, 'width' | 'height'> = viewport,
 ): Pick<ZoomViewportState, 'scrollLeft' | 'scrollTop'> {
   const anchor = normalizeZoomAnchor(requestedAnchor);
   const viewportX = viewport.width * anchor.x;
   const viewportY = viewport.height * anchor.y;
+  const nextViewportX = nextViewportSize.width * anchor.x;
+  const nextViewportY = nextViewportSize.height * anchor.y;
   const documentX = viewport.scrollLeft + viewportX;
   const documentY = viewport.scrollTop + viewportY;
   const ratioX = oldBox.width > 0
@@ -53,7 +56,7 @@ export function calculateAnchoredScroll(
     : 0.5;
 
   return {
-    scrollLeft: newBox.left + newBox.width * ratioX - viewportX,
-    scrollTop: newBox.top + newBox.height * ratioY - viewportY,
+    scrollLeft: newBox.left + newBox.width * ratioX - nextViewportX,
+    scrollTop: newBox.top + newBox.height * ratioY - nextViewportY,
   };
 }
