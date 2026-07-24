@@ -1091,13 +1091,14 @@ impl DocumentCore {
         char_offset: usize,
         text: &str,
     ) -> Result<String, HwpError> {
-        self.insert_text_in_cell_native_impl(
+        self.replace_text_in_cell_native_impl(
             section_idx,
             parent_para_idx,
             control_idx,
             cell_idx,
             cell_para_idx,
             char_offset,
+            0,
             text,
             true,
         )
@@ -1115,19 +1116,21 @@ impl DocumentCore {
         char_offset: usize,
         text: &str,
     ) -> Result<String, HwpError> {
-        self.insert_text_in_cell_native_impl(
+        self.replace_text_in_cell_native_impl(
             section_idx,
             parent_para_idx,
             control_idx,
             cell_idx,
             cell_para_idx,
             char_offset,
+            0,
             text,
             false,
         )
     }
 
-    fn insert_text_in_cell_native_impl(
+    /// 표 셀 내부의 짧은 IME 조합 문자열을 원자적으로 교체하고 전체 페이지네이션은 지연한다.
+    pub fn replace_text_in_cell_native_deferred_pagination(
         &mut self,
         section_idx: usize,
         parent_para_idx: usize,
@@ -1135,10 +1138,65 @@ impl DocumentCore {
         cell_idx: usize,
         cell_para_idx: usize,
         char_offset: usize,
+        delete_count: usize,
+        text: &str,
+    ) -> Result<String, HwpError> {
+        let new_chars_count = text.chars().count();
+        if delete_count == 0
+            || delete_count > 8
+            || new_chars_count == 0
+            || new_chars_count > 8
+            || text.chars().any(|ch| matches!(ch, '\r' | '\n' | '\t'))
+        {
+            return Err(HwpError::RenderError(
+                "deferred 셀 replace는 줄바꿈·탭 없는 1~8자 교체만 지원합니다".to_string(),
+            ));
+        }
+
+        let text_len = self
+            .get_cell_paragraph_ref(
+                section_idx,
+                parent_para_idx,
+                control_idx,
+                cell_idx,
+                cell_para_idx,
+            )
+            .ok_or_else(|| HwpError::RenderError("교체할 셀 문단을 찾을 수 없습니다".to_string()))?
+            .text
+            .chars()
+            .count();
+        if char_offset > text_len || delete_count > text_len.saturating_sub(char_offset) {
+            return Err(HwpError::RenderError(
+                "deferred 셀 replace 범위가 문단 텍스트를 벗어났습니다".to_string(),
+            ));
+        }
+
+        self.replace_text_in_cell_native_impl(
+            section_idx,
+            parent_para_idx,
+            control_idx,
+            cell_idx,
+            cell_para_idx,
+            char_offset,
+            delete_count,
+            text,
+            false,
+        )
+    }
+
+    fn replace_text_in_cell_native_impl(
+        &mut self,
+        section_idx: usize,
+        parent_para_idx: usize,
+        control_idx: usize,
+        cell_idx: usize,
+        cell_para_idx: usize,
+        char_offset: usize,
+        delete_count: usize,
         text: &str,
         paginate_immediately: bool,
     ) -> Result<String, HwpError> {
-        // 셀 문단 접근 검증 및 텍스트 삽입
+        // 셀 문단 접근 검증 및 텍스트 교체
         let active_field = self.active_field.clone();
         let cell_path = [(control_idx, cell_idx, cell_para_idx)];
         let cell_para = self.get_cell_paragraph_mut(
@@ -1153,6 +1211,11 @@ impl DocumentCore {
             crate::renderer::layout::LayoutEngine::paragraph_contributes_to_table_nested_text_flag(
                 cell_para,
             );
+        let deleted_count = if delete_count > 0 {
+            cell_para.delete_text_at(char_offset, delete_count)
+        } else {
+            0
+        };
         let new_chars_count = text.chars().count();
         let outside_insertions = inactive_field_end_insertions(
             cell_para,
@@ -1170,12 +1233,15 @@ impl DocumentCore {
             Some(&cell_path),
             char_offset,
         );
-        cell_para.insert_text_at(char_offset, text);
-        keep_inactive_field_start_outside(cell_para, &before_insertions, new_chars_count);
-        keep_inactive_field_end_outside(cell_para, &outside_insertions, new_chars_count);
-        if has_clickhere_field_range(cell_para) {
-            rebuild_char_offsets(cell_para);
+        if new_chars_count > 0 {
+            cell_para.insert_text_at(char_offset, text);
+            keep_inactive_field_start_outside(cell_para, &before_insertions, new_chars_count);
+            keep_inactive_field_end_outside(cell_para, &outside_insertions, new_chars_count);
+            if has_clickhere_field_range(cell_para) {
+                rebuild_char_offsets(cell_para);
+            }
         }
+        debug_assert_eq!(deleted_count, delete_count);
 
         // 부모 컨트롤 dirty 마킹 (표 또는 글상자)
         self.mark_cell_control_dirty(section_idx, parent_para_idx, control_idx);
@@ -1207,7 +1273,7 @@ impl DocumentCore {
                     cell_para_idx,
                 )
                 .ok_or_else(|| {
-                    HwpError::RenderError("삽입 뒤 셀 문단을 다시 찾을 수 없습니다".to_string())
+                    HwpError::RenderError("편집 뒤 셀 문단을 다시 찾을 수 없습니다".to_string())
                 })?;
             (
                 relative_paragraph_flow_advance(cell_para_after),

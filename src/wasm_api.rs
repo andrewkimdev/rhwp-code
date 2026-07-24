@@ -1078,6 +1078,32 @@ impl HwpDocument {
         .map_err(|e| e.into())
     }
 
+    /// 표 셀 내부의 짧은 IME 조합 문자열을 원자적으로 교체하고 전체 페이지네이션은 지연한다.
+    #[wasm_bindgen(js_name = replaceTextInCellDeferredPagination)]
+    pub fn replace_text_in_cell_deferred_pagination(
+        &mut self,
+        section_idx: u32,
+        parent_para_idx: u32,
+        control_idx: u32,
+        cell_idx: u32,
+        cell_para_idx: u32,
+        char_offset: u32,
+        delete_count: u32,
+        text: &str,
+    ) -> Result<String, JsValue> {
+        self.replace_text_in_cell_native_deferred_pagination(
+            section_idx as usize,
+            parent_para_idx as usize,
+            control_idx as usize,
+            cell_idx as usize,
+            cell_para_idx as usize,
+            char_offset as usize,
+            delete_count as usize,
+            text,
+        )
+        .map_err(|e| e.into())
+    }
+
     /// 대형 표 continuation shadow job을 시작한다. 공개 페이지는 완료 전까지 유지된다.
     #[wasm_bindgen(js_name = beginDeferredPagination)]
     pub fn begin_deferred_pagination(&mut self, fragment_budget: u32) -> Result<String, JsValue> {
