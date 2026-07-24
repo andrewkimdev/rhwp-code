@@ -210,6 +210,87 @@ test('an eight-pixel trackpad gesture settles within six frames and moves over t
   assert.ok(frameCount <= 6, `expected at most six frames, got ${frameCount}`);
 });
 
+test('wheel zoom emits the pointer anchor and inverse deltas restore zoom', async (t) => {
+  const frames = new FakeAnimationFrames();
+  const previousRequest = globalThis.requestAnimationFrame;
+  const previousCancel = globalThis.cancelAnimationFrame;
+  globalThis.requestAnimationFrame = frames.request;
+  globalThis.cancelAnimationFrame = frames.cancel;
+  t.after(() => {
+    globalThis.requestAnimationFrame = previousRequest;
+    globalThis.cancelAnimationFrame = previousCancel;
+  });
+
+  const { ViewportManager } = await loadViewportManager();
+  const eventBus = new FakeEventBus();
+  const viewport = new ViewportManager(eventBus as never);
+  (viewport as unknown as { container: Pick<HTMLElement, 'getBoundingClientRect'> }).container = {
+    getBoundingClientRect: () => ({
+      left: 100,
+      top: 50,
+      right: 900,
+      bottom: 650,
+      width: 800,
+      height: 600,
+      x: 100,
+      y: 50,
+      toJSON: () => ({}),
+    }),
+  };
+
+  const onWheel = (
+    viewport as unknown as {
+      onWheel: (event: {
+        ctrlKey: boolean;
+        metaKey: boolean;
+        clientX: number;
+        clientY: number;
+        deltaY: number;
+        deltaMode: number;
+        preventDefault: () => void;
+      }) => void;
+    }
+  ).onWheel.bind(viewport);
+
+  onWheel({
+    ctrlKey: true,
+    metaKey: false,
+    clientX: 300,
+    clientY: 500,
+    deltaY: -8,
+    deltaMode: 0,
+    preventDefault: () => {},
+  });
+
+  let timestamp = 16;
+  while (frames.pendingCount > 0 && timestamp < 1000) {
+    frames.flush(timestamp);
+    timestamp += 16;
+  }
+
+  const zoomedIn = viewport.getZoom();
+  const firstZoomEvent = eventBus.events.find(({ event }) => event === 'zoom-changed');
+  assert.deepEqual(firstZoomEvent?.args[1], { x: 0.25, y: 0.75 });
+
+  onWheel({
+    ctrlKey: true,
+    metaKey: false,
+    clientX: 300,
+    clientY: 500,
+    deltaY: 8,
+    deltaMode: 0,
+    preventDefault: () => {},
+  });
+
+  while (frames.pendingCount > 0 && timestamp < 2000) {
+    frames.flush(timestamp);
+    timestamp += 16;
+  }
+
+  assert.ok(zoomedIn > 1);
+  assert.ok(Math.abs(viewport.getZoom() - 1) < 1e-12);
+});
+
 test('zoom in and out controls use the smooth zoom path', () => {
   const mainSource = readFileSync(new URL('../src/main.ts', import.meta.url), 'utf8');
   const viewCommandSource = readFileSync(

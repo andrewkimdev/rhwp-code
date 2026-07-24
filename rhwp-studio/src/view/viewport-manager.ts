@@ -1,4 +1,9 @@
 import type { EventBus } from '@/core/event-bus';
+import {
+  CENTER_ZOOM_ANCHOR,
+  normalizeZoomAnchor,
+  type ZoomAnchor,
+} from './zoom-anchor.ts';
 
 const MIN_ZOOM = 0.25;
 const MAX_ZOOM = 4.0;
@@ -20,6 +25,7 @@ export class ViewportManager {
   private zoomAnimationTimestamp: number | null = null;
   private zoomAnimating = false;
   private zoomTarget = 1.0;
+  private zoomAnchor: ZoomAnchor = CENTER_ZOOM_ANCHOR;
   private onScrollBound: () => void;
   private onWheelBound: (e: WheelEvent) => void;
   private onZoomAnimationFrameBound: (timestamp: number) => void;
@@ -92,8 +98,17 @@ export class ViewportManager {
     );
     if (boundedDelta === 0) return;
 
+    const rect = this.container?.getBoundingClientRect();
+    const anchor = rect && rect.width > 0 && rect.height > 0
+      ? normalizeZoomAnchor({
+        x: (e.clientX - rect.left) / rect.width,
+        y: (e.clientY - rect.top) / rect.height,
+      })
+      : CENTER_ZOOM_ANCHOR;
+
     this.smoothZoomTo(
       this.zoomTarget * Math.exp(-boundedDelta * WHEEL_ZOOM_SENSITIVITY),
+      anchor,
     );
   }
 
@@ -119,21 +134,23 @@ export class ViewportManager {
     return this.zoom;
   }
 
-  setZoom(zoom: number): void {
+  setZoom(zoom: number, anchor: ZoomAnchor = CENTER_ZOOM_ANCHOR): void {
     this.cancelZoomAnimation();
+    this.zoomAnchor = normalizeZoomAnchor(anchor);
     this.zoom = this.clampZoom(zoom);
     this.zoomTarget = this.zoom;
-    this.eventBus.emit('zoom-changed', this.zoom);
+    this.eventBus.emit('zoom-changed', this.zoom, this.zoomAnchor);
   }
 
-  smoothZoomBy(delta: number): void {
-    this.smoothZoomTo(this.zoomTarget + delta);
+  smoothZoomBy(delta: number, anchor: ZoomAnchor = CENTER_ZOOM_ANCHOR): void {
+    this.smoothZoomTo(this.zoomTarget + delta, anchor);
   }
 
-  smoothZoomTo(zoom: number): void {
+  smoothZoomTo(zoom: number, anchor: ZoomAnchor = CENTER_ZOOM_ANCHOR): void {
+    this.zoomAnchor = normalizeZoomAnchor(anchor);
     this.zoomTarget = this.clampZoom(zoom);
     if (Math.abs(this.zoomTarget - this.zoom) <= ZOOM_SETTLE_EPSILON) {
-      this.setZoom(this.zoomTarget);
+      this.setZoom(this.zoomTarget, this.zoomAnchor);
       return;
     }
     this.zoomAnimating = true;
@@ -161,7 +178,7 @@ export class ViewportManager {
       this.zoomAnimating = false;
       this.zoomAnimationTimestamp = null;
     }
-    this.eventBus.emit('zoom-changed', this.zoom);
+    this.eventBus.emit('zoom-changed', this.zoom, this.zoomAnchor);
 
     if (!settled) {
       this.zoomAnimationFrame = requestAnimationFrame(this.onZoomAnimationFrameBound);
@@ -186,6 +203,13 @@ export class ViewportManager {
     if (this.container) {
       this.container.scrollTop = y;
       this.scrollY = this.container.scrollTop;
+    }
+  }
+
+  setScrollLeft(x: number): void {
+    if (this.container) {
+      this.container.scrollLeft = x;
+      this.scrollX = this.container.scrollLeft;
     }
   }
 }
