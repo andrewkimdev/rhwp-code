@@ -15,6 +15,12 @@ import {
 } from './renderer-session';
 import { applyGridOverlayBox, createGridClipCornerOverlay, createGridOverlay } from './grid-overlay';
 import { getGridViewSettings } from './grid-settings';
+import {
+  calculateAnchoredScroll,
+  normalizeZoomAnchor,
+  type ZoomAnchor,
+  type ZoomPageBox,
+} from './zoom-anchor.ts';
 
 const TEXT_EDIT_STATIC_LAYER_VERIFY_DELAY_MS = 800;
 const AUTO_RENDERER_RESELECTION_DELAY_MS = 300;
@@ -71,7 +77,12 @@ export class CanvasView {
         if (!this.viewportManager.isZoomAnimating()) this.updateVisiblePages();
       }),
       eventBus.on('viewport-resize', () => this.onViewportResize()),
-      eventBus.on('zoom-changed', (zoom) => this.onZoomChanged(zoom as number)),
+      eventBus.on('zoom-changed', (zoom, anchor) => {
+        this.onZoomChanged(
+          zoom as number,
+          normalizeZoomAnchor(anchor as Partial<ZoomAnchor> | undefined),
+        );
+      }),
       eventBus.on('document-page-invalidated', (payload) => {
         void this.refreshInvalidatedPageForMutation(payload);
       }),
@@ -508,28 +519,44 @@ export class CanvasView {
     this.updateVisiblePages();
   }
 
+  private getZoomPageBox(pageIdx: number, viewportWidth: number): ZoomPageBox {
+    const layoutWidth = Math.max(viewportWidth, this.virtualScroll.getTotalWidth());
+    return {
+      left: this.virtualScroll.getPageLeftResolved(pageIdx, layoutWidth),
+      top: this.virtualScroll.getPageOffset(pageIdx),
+      width: this.virtualScroll.getPageWidth(pageIdx),
+      height: this.virtualScroll.getPageHeight(pageIdx),
+    };
+  }
+
   /** 줌 변경 처리 */
-  private onZoomChanged(zoom: number): void {
+  private onZoomChanged(zoom: number, anchor: ZoomAnchor): void {
     if (this.pages.length === 0) return;
 
-    // 현재 보이는 페이지 기억
-    const scrollY = this.viewportManager.getScrollY();
-    const { height: vpHeight } = this.viewportManager.getViewportSize();
-    const vpCenter = scrollY + vpHeight / 2;
-    const focusPage = this.virtualScroll.getPageAtY(vpCenter);
-    const oldOffset = this.virtualScroll.getPageOffset(focusPage);
-    const relativeY = vpCenter - oldOffset;
-    const oldHeight = this.virtualScroll.getPageHeight(focusPage);
-    const ratio = oldHeight > 0 ? relativeY / oldHeight : 0;
+    const scrollTop = this.viewportManager.getScrollY();
+    const scrollLeft = this.viewportManager.getScrollX();
+    const { width: vpWidth, height: vpHeight } = this.viewportManager.getViewportSize();
+    const anchorDocumentX = scrollLeft + vpWidth * anchor.x;
+    const anchorDocumentY = scrollTop + vpHeight * anchor.y;
+    const focusPage = this.virtualScroll.getPageAtPoint(anchorDocumentX, anchorDocumentY);
+    const oldBox = this.getZoomPageBox(focusPage, vpWidth);
 
-    // 페이지 크기 재계산
     this.recalcLayout();
 
-    // 스크롤 위치 보정
-    const newOffset = this.virtualScroll.getPageOffset(focusPage);
-    const newHeight = this.virtualScroll.getPageHeight(focusPage);
-    const newCenter = newOffset + newHeight * ratio;
-    this.viewportManager.setScrollTop(newCenter - vpHeight / 2);
+    const newBox = this.getZoomPageBox(focusPage, vpWidth);
+    const nextScroll = calculateAnchoredScroll(
+      oldBox,
+      newBox,
+      {
+        width: vpWidth,
+        height: vpHeight,
+        scrollLeft,
+        scrollTop,
+      },
+      anchor,
+    );
+    this.viewportManager.setScrollLeft(nextScroll.scrollLeft);
+    this.viewportManager.setScrollTop(nextScroll.scrollTop);
 
     this.eventBus.emit('zoom-level-display', zoom);
 

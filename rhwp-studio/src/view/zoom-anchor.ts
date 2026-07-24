@@ -19,3 +19,41 @@ export function normalizeZoomAnchor(
     y: normalizeAxis(anchor?.y),
   };
 }
+
+export interface ZoomPageBox {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+}
+
+export interface ZoomViewportState {
+  width: number;
+  height: number;
+  scrollLeft: number;
+  scrollTop: number;
+}
+
+export function calculateAnchoredScroll(
+  oldBox: ZoomPageBox,
+  newBox: ZoomPageBox,
+  viewport: ZoomViewportState,
+  requestedAnchor: ZoomAnchor,
+): Pick<ZoomViewportState, 'scrollLeft' | 'scrollTop'> {
+  const anchor = normalizeZoomAnchor(requestedAnchor);
+  const viewportX = viewport.width * anchor.x;
+  const viewportY = viewport.height * anchor.y;
+  const documentX = viewport.scrollLeft + viewportX;
+  const documentY = viewport.scrollTop + viewportY;
+  const ratioX = oldBox.width > 0
+    ? (documentX - oldBox.left) / oldBox.width
+    : 0.5;
+  const ratioY = oldBox.height > 0
+    ? (documentY - oldBox.top) / oldBox.height
+    : 0.5;
+
+  return {
+    scrollLeft: newBox.left + newBox.width * ratioX - viewportX,
+    scrollTop: newBox.top + newBox.height * ratioY - viewportY,
+  };
+}
