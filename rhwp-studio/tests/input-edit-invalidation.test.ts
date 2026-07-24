@@ -185,6 +185,52 @@ test('deferred pending이 실제로 있을 때만 page-local idle flush를 예�
   );
 });
 
+test('document pagination은 120ms idle과 명시 boundary에서 flush된다', () => {
+  const inputHandlerSource = readFileSync(new URL('../src/engine/input-handler.ts', import.meta.url), 'utf8');
+  const keyboardSource = readFileSync(new URL('../src/engine/input-handler-keyboard.ts', import.meta.url), 'utf8');
+  const textSource = readFileSync(new URL('../src/engine/input-handler-text.ts', import.meta.url), 'utf8');
+  const fileSource = readFileSync(new URL('../src/command/commands/file.ts', import.meta.url), 'utf8');
+
+  assert.match(
+    inputHandlerSource,
+    /const DOCUMENT_PAGINATION_IDLE_FLUSH_DELAY_MS = 120;/,
+  );
+  assert.doesNotMatch(inputHandlerSource, /DEFERRED_PAGINATION_AUTO_FLUSH_PAGE_LIMIT/);
+  assert.doesNotMatch(inputHandlerSource, /shouldAutoFlushDeferredPagination/);
+
+  const undoStart = inputHandlerSource.indexOf('private handleUndo(): void {');
+  const redoStart = inputHandlerSource.indexOf('private handleRedo(): void {');
+  const restoreStart = inputHandlerSource.indexOf('private restoreEditContextAfterHistory', redoStart);
+  const undoSource = inputHandlerSource.slice(undoStart, redoStart);
+  const redoSource = inputHandlerSource.slice(redoStart, restoreStart);
+  assert.ok(
+    undoSource.indexOf("flushDeferredPaginationIfNeeded('before-undo', false)") <
+      undoSource.indexOf('this.history.undo(this.wasm)'),
+  );
+  assert.ok(
+    redoSource.indexOf("flushDeferredPaginationIfNeeded('before-redo', false)") <
+      redoSource.indexOf('this.history.redo(this.wasm)'),
+  );
+
+  assert.match(keyboardSource, /PAGINATION_BOUNDARY_KEYS/);
+  assert.match(
+    keyboardSource,
+    /this\.flushDeferredPaginationIfNeeded\('before-navigation', false\)/,
+  );
+  assert.match(
+    textSource,
+    /function processPendingNav[\s\S]*?this\.flushDeferredPaginationIfNeeded\('before-navigation', false\);/,
+  );
+  assert.match(inputHandlerSource, /private onInputBlurBound: \(\) => void;/);
+  assert.match(
+    inputHandlerSource,
+    /this\.onInputBlurBound = \(\) => \{\s*this\.flushDeferredPaginationIfNeeded\('input-blur', false\);\s*\};/,
+  );
+  assert.match(inputHandlerSource, /this\.textarea\.addEventListener\('blur', this\.onInputBlurBound\);/);
+  assert.match(inputHandlerSource, /this\.textarea\.removeEventListener\('blur', this\.onInputBlurBound\);/);
+  assert.match(fileSource, /flushDeferredPaginationBeforeExplicitOutput/);
+});
+
 test('문서 전환은 deferred·IME·iOS 입력 세션 상태를 격리한다', () => {
   const inputHandlerSource = readFileSync(new URL('../src/engine/input-handler.ts', import.meta.url), 'utf8');
   const deactivateStart = inputHandlerSource.indexOf('deactivate(): void {');
@@ -192,6 +238,10 @@ test('문서 전환은 deferred·IME·iOS 입력 세션 상태를 격리한다',
   assert.ok(deactivateStart >= 0 && disposeStart > deactivateStart);
   const deactivateSource = inputHandlerSource.slice(deactivateStart, disposeStart);
 
+  assert.ok(
+    deactivateSource.indexOf("this.flushDeferredPaginationIfNeeded('before-deactivate', false)") <
+      deactivateSource.indexOf('this.active = false'),
+  );
   assert.match(deactivateSource, /this\.cancelDeferredPaginationFlush\(\);/);
   assert.match(deactivateSource, /this\.deferredPaginationRunner\.cancel\(\);/);
   assert.match(deactivateSource, /this\.deferredPaginationPending = false;/);

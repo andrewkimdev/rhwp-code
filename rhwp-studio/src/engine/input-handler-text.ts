@@ -105,6 +105,7 @@ function executeNavigationAction(this: any, action: NavigationAction, shiftKey: 
 }
 
 function processPendingNav(this: any, nav: NavigationKeyInput): void {
+  this.flushDeferredPaginationIfNeeded('before-navigation', false);
   const { code, shiftKey } = nav;
   const platform = detectPlatformKind();
   const action = getNavigationAction(nav, platform);
