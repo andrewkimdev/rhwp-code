@@ -17,6 +17,7 @@ use web_sys::HtmlCanvasElement;
 use crate::document_core::{
     DeferredPaginationJobState, DeferredPaginationStepResult, DocumentCore, DEFAULT_FALLBACK_FONT,
 };
+use crate::document_core::helpers::parse_removed_para_meta;
 use crate::error::HwpError;
 use crate::model::control::Control;
 use crate::model::document::{Document, Section};
@@ -1508,6 +1509,7 @@ impl HwpDocument {
         apply_to: u8,
         hf_para_idx: u32,
         char_offset: u32,
+        removed_para_meta: Option<String>,
     ) -> Result<String, JsValue> {
         self.split_paragraph_in_header_footer_native(
             section_idx as usize,
@@ -1515,6 +1517,7 @@ impl HwpDocument {
             apply_to,
             hf_para_idx as usize,
             char_offset as usize,
+            parse_removed_para_meta(removed_para_meta)?,
         )
         .map_err(|e| e.into())
     }
@@ -1915,11 +1918,13 @@ impl HwpDocument {
         section_idx: u32,
         para_idx: u32,
         char_offset: u32,
+        removed_para_meta: Option<String>,
     ) -> Result<String, JsValue> {
         self.split_paragraph_native(
             section_idx as usize,
             para_idx as usize,
             char_offset as usize,
+            parse_removed_para_meta(removed_para_meta)?,
         )
         .map_err(|e| e.into())
     }
@@ -4121,6 +4126,7 @@ impl HwpDocument {
         control_idx: u32,
         fn_para_idx: u32,
         char_offset: u32,
+        removed_para_meta: Option<String>,
     ) -> Result<String, JsValue> {
         self.split_paragraph_in_footnote_native(
             section_idx as usize,
@@ -4128,6 +4134,7 @@ impl HwpDocument {
             control_idx as usize,
             fn_para_idx as usize,
             char_offset as usize,
+            parse_removed_para_meta(removed_para_meta)?,
         )
         .map_err(|e| e.into())
     }
