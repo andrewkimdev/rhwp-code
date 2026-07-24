@@ -22,6 +22,7 @@ import {
   type ZoomAnchor,
   type ZoomPageBox,
 } from './zoom-anchor.ts';
+import { SubsecondRevisionWatcher } from '@/core/subsecond-runtime';
 
 const TEXT_EDIT_STATIC_LAYER_VERIFY_DELAY_MS = 800;
 const AUTO_RENDERER_RESELECTION_DELAY_MS = 300;
@@ -41,6 +42,7 @@ export class CanvasView {
   private pageRenderer: PageRenderer;
   private viewportManager: ViewportManager;
   private coordinateSystem: CoordinateSystem;
+  private subsecondRevisionWatcher: SubsecondRevisionWatcher;
 
   private scrollContent: HTMLElement;
   private pages: PageInfo[] = [];
@@ -70,6 +72,11 @@ export class CanvasView {
     this.pageRenderer = new PageRenderer(wasm);
     this.viewportManager = new ViewportManager(eventBus);
     this.coordinateSystem = new CoordinateSystem(this.virtualScroll);
+    this.subsecondRevisionWatcher = new SubsecondRevisionWatcher(
+      wasm,
+      () => eventBus.emit('document-view-changed', 'subsecond-renderer'),
+    );
+    this.subsecondRevisionWatcher.start();
 
     this.scrollContent = container.querySelector('#scroll-content')!;
     this.viewportManager.attachTo(container);
@@ -91,7 +98,11 @@ export class CanvasView {
       eventBus.on('document-changed', () => {
         void this.refreshPagesForMutation();
       }),
-      eventBus.on('document-view-changed', () => {
+      eventBus.on('document-view-changed', (source) => {
+        if (source === 'subsecond-renderer') {
+          this.refreshPages();
+          return;
+        }
         void this.refreshPagesForRevision();
       }),
       eventBus.on('grid-view-changed', () => this.refreshGridOverlays()),
@@ -861,6 +872,7 @@ export class CanvasView {
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
+    this.subsecondRevisionWatcher.stop();
     this.rendererSelectionEpoch += 1;
     this.documentLoadPrepared = false;
     this.cancelAutoRendererReselection();

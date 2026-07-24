@@ -1,4 +1,5 @@
 import init, { HwpDocument, version } from '@wasm/rhwp.js';
+import * as wasmExports from '@wasm/rhwp.js';
 import { blake3 } from '@noble/hashes/blake3.js';
 import { bytesToHex } from '@noble/hashes/utils.js';
 import type { DocumentInfo, PageInfo, PageDef, SectionDef, PageBorderFillSettings, EndnoteShapeSettings, NoteEditInfo, CursorRect, HitTestResult, BodyFootnoteMarkerHit, FootnoteAtCursorResult, DeleteFootnoteResult, LineInfo, TableDimensions, CellInfo, CellBbox, CellProperties, TableProperties, DocumentPosition, MoveVerticalResult, SelectionRect, CharProperties, ParaProperties, CellPathEntry, CellPathLike, NavContextEntry, FieldInfoResult, BookmarkInfo, LayerRenderProfile, PageLayerTree, CanvasKitDocumentPreflight } from './types';
@@ -99,6 +100,12 @@ export interface DeferredPaginationResult {
 
 import { fontFamilyChainForDisplay } from './font-substitution';
 import type { FileSystemFileHandleLike } from '@/command/file-system-access';
+import {
+  connectSubsecondDevtools,
+  type SubsecondWasmExports,
+} from './subsecond-runtime';
+
+let disconnectSubsecondDevtools: (() => void) | null = null;
 
 /**
  * CSS font 문자열에서 font-family를 추출하여 폰트 치환을 적용한다.
@@ -155,8 +162,45 @@ export class WasmBridge {
     installCanvasFontSubstitution();
     this.installMeasureTextWidth();
     await init();
+    if (!disconnectSubsecondDevtools) {
+      disconnectSubsecondDevtools = connectSubsecondDevtools(
+        wasmExports as unknown as SubsecondWasmExports,
+      );
+    }
     this.initialized = true;
     console.log(`[WasmBridge] WASM 초기화 완료 (rhwp ${version()})`);
+  }
+
+  isSubsecondHotpatchEnabled(): boolean {
+    return typeof Reflect.get(wasmExports, 'subsecondProbe') === 'function';
+  }
+
+  getSubsecondProbeValue(): number | null {
+    const probe = Reflect.get(wasmExports, 'subsecondProbe');
+    return typeof probe === 'function' ? probe() : null;
+  }
+
+  getSubsecondPatchRevision(): string | null {
+    if (!this.doc) return null;
+
+    const doc = this.doc as unknown as {
+      getSubsecondPatchRevision?: () => string;
+    };
+    return typeof doc.getSubsecondPatchRevision === 'function'
+      ? doc.getSubsecondPatchRevision()
+      : null;
+  }
+
+  invalidateSubsecondRenderCaches(): boolean {
+    if (!this.doc) return false;
+
+    const doc = this.doc as unknown as {
+      invalidateSubsecondRenderCaches?: () => void;
+    };
+    if (typeof doc.invalidateSubsecondRenderCaches !== 'function') return false;
+
+    doc.invalidateSubsecondRenderCaches();
+    return true;
   }
 
   /** WASM 렌더러가 호출하는 텍스트 폭 측정 함수를 등록한다 */
