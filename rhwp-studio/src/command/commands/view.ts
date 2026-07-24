@@ -149,7 +149,7 @@ export const viewCommands: CommandDef[] = [
     shortcutLabel: 'Shift+Num +',
     execute(services) {
       const vm = services.getViewportManager();
-      if (vm) vm.setZoom(vm.getZoom() + 0.1);
+      if (vm) vm.smoothZoomBy(0.1);
     },
   },
   {
@@ -159,7 +159,7 @@ export const viewCommands: CommandDef[] = [
     shortcutLabel: 'Shift+Num -',
     execute(services) {
       const vm = services.getViewportManager();
-      if (vm) vm.setZoom(vm.getZoom() - 0.1);
+      if (vm) vm.smoothZoomBy(-0.1);
     },
   },
   {

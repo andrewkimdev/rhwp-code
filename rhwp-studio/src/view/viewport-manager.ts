@@ -1,4 +1,11 @@
-import { EventBus } from '@/core/event-bus';
+import type { EventBus } from '@/core/event-bus';
+
+const MIN_ZOOM = 0.25;
+const MAX_ZOOM = 4.0;
+const ZOOM_SETTLE_EPSILON = 0.001;
+const ZOOM_SMOOTHING_TIME_MS = 22;
+const WHEEL_ZOOM_SENSITIVITY = 0.0042;
+const MAX_WHEEL_DELTA_PX = 120;
 
 export class ViewportManager {
   private scrollY = 0;
@@ -9,12 +16,20 @@ export class ViewportManager {
   private container: HTMLElement | null = null;
   private resizeObserver: ResizeObserver | null = null;
   private scrollAnimationFrame: number | null = null;
+  private zoomAnimationFrame: number | null = null;
+  private zoomAnimationTimestamp: number | null = null;
+  private zoomAnimating = false;
+  private zoomTarget = 1.0;
   private onScrollBound: () => void;
   private onWheelBound: (e: WheelEvent) => void;
+  private onZoomAnimationFrameBound: (timestamp: number) => void;
+  private eventBus: EventBus;
 
-  constructor(private eventBus: EventBus) {
+  constructor(eventBus: EventBus) {
+    this.eventBus = eventBus;
     this.onScrollBound = this.onScroll.bind(this);
     this.onWheelBound = this.onWheel.bind(this);
+    this.onZoomAnimationFrameBound = this.onZoomAnimationFrame.bind(this);
   }
 
   /** 스크롤 컨테이너에 연결한다 */
@@ -44,6 +59,7 @@ export class ViewportManager {
       cancelAnimationFrame(this.scrollAnimationFrame);
       this.scrollAnimationFrame = null;
     }
+    this.cancelZoomAnimation();
     this.container = null;
   }
 
@@ -65,10 +81,20 @@ export class ViewportManager {
     if (!e.ctrlKey && !e.metaKey) return;
     e.preventDefault();
 
-    // deltaY < 0 → 확대, deltaY > 0 → 축소
-    const step = 0.1;
-    const direction = e.deltaY < 0 ? 1 : -1;
-    this.setZoom(this.zoom + step * direction);
+    const deltaPixels = e.deltaMode === 1
+      ? e.deltaY * 16
+      : e.deltaMode === 2
+        ? e.deltaY * Math.max(this.viewportHeight, 1)
+        : e.deltaY;
+    const boundedDelta = Math.max(
+      -MAX_WHEEL_DELTA_PX,
+      Math.min(MAX_WHEEL_DELTA_PX, deltaPixels),
+    );
+    if (boundedDelta === 0) return;
+
+    this.smoothZoomTo(
+      this.zoomTarget * Math.exp(-boundedDelta * WHEEL_ZOOM_SENSITIVITY),
+    );
   }
 
   private updateViewportSize(): void {
@@ -94,8 +120,66 @@ export class ViewportManager {
   }
 
   setZoom(zoom: number): void {
-    this.zoom = Math.max(0.25, Math.min(4.0, zoom));
+    this.cancelZoomAnimation();
+    this.zoom = this.clampZoom(zoom);
+    this.zoomTarget = this.zoom;
     this.eventBus.emit('zoom-changed', this.zoom);
+  }
+
+  smoothZoomBy(delta: number): void {
+    this.smoothZoomTo(this.zoomTarget + delta);
+  }
+
+  smoothZoomTo(zoom: number): void {
+    this.zoomTarget = this.clampZoom(zoom);
+    if (Math.abs(this.zoomTarget - this.zoom) <= ZOOM_SETTLE_EPSILON) {
+      this.setZoom(this.zoomTarget);
+      return;
+    }
+    this.zoomAnimating = true;
+    if (this.zoomAnimationFrame === null) {
+      this.zoomAnimationFrame = requestAnimationFrame(this.onZoomAnimationFrameBound);
+    }
+  }
+
+  isZoomAnimating(): boolean {
+    return this.zoomAnimating;
+  }
+
+  private onZoomAnimationFrame(timestamp: number): void {
+    this.zoomAnimationFrame = null;
+    const elapsed = this.zoomAnimationTimestamp === null
+      ? 16
+      : Math.max(1, Math.min(timestamp - this.zoomAnimationTimestamp, 50));
+    this.zoomAnimationTimestamp = timestamp;
+
+    const progress = 1 - Math.exp(-elapsed / ZOOM_SMOOTHING_TIME_MS);
+    const nextZoom = this.zoom + (this.zoomTarget - this.zoom) * progress;
+    const settled = Math.abs(this.zoomTarget - nextZoom) <= ZOOM_SETTLE_EPSILON;
+    this.zoom = settled ? this.zoomTarget : nextZoom;
+    if (settled) {
+      this.zoomAnimating = false;
+      this.zoomAnimationTimestamp = null;
+    }
+    this.eventBus.emit('zoom-changed', this.zoom);
+
+    if (!settled) {
+      this.zoomAnimationFrame = requestAnimationFrame(this.onZoomAnimationFrameBound);
+    }
+  }
+
+  private cancelZoomAnimation(): void {
+    if (this.zoomAnimationFrame !== null) {
+      cancelAnimationFrame(this.zoomAnimationFrame);
+      this.zoomAnimationFrame = null;
+    }
+    this.zoomAnimationTimestamp = null;
+    this.zoomAnimating = false;
+    this.zoomTarget = this.zoom;
+  }
+
+  private clampZoom(zoom: number): number {
+    return Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, zoom));
   }
 
   setScrollTop(y: number): void {

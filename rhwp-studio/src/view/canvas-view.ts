@@ -67,7 +67,9 @@ export class CanvasView {
     this.viewportManager.attachTo(container);
 
     this.unsubscribers.push(
-      eventBus.on('viewport-scroll', () => this.updateVisiblePages()),
+      eventBus.on('viewport-scroll', () => {
+        if (!this.viewportManager.isZoomAnimating()) this.updateVisiblePages();
+      }),
       eventBus.on('viewport-resize', () => this.onViewportResize()),
       eventBus.on('zoom-changed', (zoom) => this.onZoomChanged(zoom as number)),
       eventBus.on('document-page-invalidated', (payload) => {
@@ -398,6 +400,7 @@ export class CanvasView {
       canvas.style.left = '50%';
       canvas.style.transform = 'translateX(-50%)';
     }
+    canvas.style.transformOrigin = '';
 
     // WASM이 Canvas 크기를 자동 설정한다 (물리 픽셀 = 페이지크기 × zoom × DPR)
     let renderResult: PageRenderResult = { needsTextEditStaticLayerVerification: false };
@@ -449,6 +452,8 @@ export class CanvasView {
     // CSS 표시 크기 = 물리 픽셀 / DPR (= 페이지크기 × zoom)
     renderedCanvas.style.width = `${renderedCanvas.width / dpr}px`;
     renderedCanvas.style.height = `${renderedCanvas.height / dpr}px`;
+    renderedCanvas.style.transformOrigin = '';
+    renderedCanvas.dataset.rhwpRenderedZoom = String(zoom);
     this.renderGridOverlay(pageIdx, renderedCanvas);
     if (renderResult.needsTextEditStaticLayerVerification) {
       this.scheduleTextEditStaticLayerVerification(pageIdx);
@@ -526,14 +531,52 @@ export class CanvasView {
     const newCenter = newOffset + newHeight * ratio;
     this.viewportManager.setScrollTop(newCenter - vpHeight / 2);
 
+    this.eventBus.emit('zoom-level-display', zoom);
+
+    if (this.viewportManager.isZoomAnimating()) {
+      this.cancelPendingTextEditRefresh();
+      this.cancelTextEditStaticLayerVerification();
+      this.cancelPendingPrefetch();
+      this.updateRenderedPageZoomPreview();
+      return;
+    }
+
     // 모든 Canvas 재렌더링
     this.cancelPendingTextEditRefresh();
     this.cancelTextEditStaticLayerVerification();
     this.releaseAllRenderedPages();
     this.pageRenderer.cancelAll();
     this.updateVisiblePages();
+  }
 
-    this.eventBus.emit('zoom-level-display', zoom);
+  private updateRenderedPageZoomPreview(): void {
+    const zoom = this.viewportManager.getZoom();
+    for (const pageIdx of this.canvasPool.activePages) {
+      const canvas = this.canvasPool.getCanvas(pageIdx);
+      if (!canvas) continue;
+      const renderedZoom = Number(canvas.dataset.rhwpRenderedZoom);
+      const scale = Number.isFinite(renderedZoom) && renderedZoom > 0
+        ? zoom / renderedZoom
+        : 1;
+      this.applyZoomPreviewBox(canvas, pageIdx, scale);
+      this.scrollContent.querySelectorAll<HTMLElement>(
+        `[data-rhwp-overlay-page="${pageIdx}"], [data-rhwp-grid-page="${pageIdx}"]`,
+      ).forEach((element) => this.applyZoomPreviewBox(element, pageIdx, scale));
+    }
+  }
+
+  private applyZoomPreviewBox(element: HTMLElement, pageIdx: number, scale: number): void {
+    element.style.top = `${this.virtualScroll.getPageOffset(pageIdx)}px`;
+    const pageLeft = this.virtualScroll.getPageLeft(pageIdx);
+    if (pageLeft >= 0) {
+      element.style.left = `${pageLeft}px`;
+      element.style.transform = `scale(${scale})`;
+      element.style.transformOrigin = 'top left';
+    } else {
+      element.style.left = '50%';
+      element.style.transform = `translateX(-50%) scale(${scale})`;
+      element.style.transformOrigin = 'top center';
+    }
   }
 
   /** 편집 후 보이는 페이지를 재렌더링한다 */

@@ -633,10 +633,10 @@ function setupZoomControls(): void {
   const vm = canvasView.getViewportManager();
 
   document.getElementById('sb-zoom-in')!.addEventListener('click', () => {
-    vm.setZoom(vm.getZoom() + 0.1);
+    vm.smoothZoomBy(0.1);
   });
   document.getElementById('sb-zoom-out')!.addEventListener('click', () => {
-    vm.setZoom(vm.getZoom() - 0.1);
+    vm.smoothZoomBy(-0.1);
   });
 
   // 폭 맞춤: 용지 폭에 맞게 줌 조절
@@ -681,10 +681,10 @@ function setupZoomControls(): void {
     if (!e.ctrlKey && !e.metaKey) return;
     if (e.key === '=' || e.key === '+') {
       e.preventDefault();
-      vm.setZoom(vm.getZoom() + 0.1);
+      vm.smoothZoomBy(0.1);
     } else if (e.key === '-') {
       e.preventDefault();
-      vm.setZoom(vm.getZoom() - 0.1);
+      vm.smoothZoomBy(-0.1);
     } else if (e.key === '0') {
       e.preventDefault();
       vm.setZoom(1.0);
