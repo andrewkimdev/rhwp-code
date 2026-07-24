@@ -2392,7 +2392,7 @@ impl DocumentCore {
             };
             let next_vpos = next_line_vpos_after_para_for_enter(anchor).saturating_add(enter_gap);
             let keep_wrap_zone = next_vpos < chain.bottom_vpos;
-            let new_para = if keep_wrap_zone {
+            let mut new_para = if keep_wrap_zone {
                 empty_paragraph_after_square_wrap_anchor(
                     &self.document.sections[section_idx].paragraphs[para_idx],
                 )
@@ -2401,6 +2401,12 @@ impl DocumentCore {
                     &self.document.sections[section_idx].paragraphs[para_idx],
                 )
             };
+            // square-OLE wrap도 merge의 역연산으로 문단을 되살리는 경로다. Enter의
+            // 기본 상속은 유지하되, merge undo가 준 원래 문단 메타는 모든 생성 분기에서
+            // 동일하게 적용해야 한다 (Task #2342 review).
+            if let Some(meta) = restore_meta {
+                new_para.apply_meta(meta);
+            }
             self.document.sections[section_idx]
                 .paragraphs
                 .insert(new_para_idx, new_para);

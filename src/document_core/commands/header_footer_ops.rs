@@ -1184,7 +1184,9 @@ mod tests {
             .expect("page-number field after rendered file-name offset");
         assert!(result.contains("\"charOffset\":2"));
 
-        let result = core.get_header_footer_para_info_native(0, true, 0, 0).unwrap();
+        let result = core
+            .get_header_footer_para_info_native(0, true, 0, 0)
+            .unwrap();
         assert!(result.contains("\"charCount\":2"));
     }
 

@@ -14,10 +14,10 @@ use wasm_bindgen::prelude::*;
 #[cfg(target_arch = "wasm32")]
 use web_sys::HtmlCanvasElement;
 
+use crate::document_core::helpers::parse_removed_para_meta;
 use crate::document_core::{
     DeferredPaginationJobState, DeferredPaginationStepResult, DocumentCore, DEFAULT_FALLBACK_FONT,
 };
-use crate::document_core::helpers::parse_removed_para_meta;
 use crate::error::HwpError;
 use crate::model::control::Control;
 use crate::model::document::{Document, Section};

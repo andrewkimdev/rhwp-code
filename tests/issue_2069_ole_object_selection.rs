@@ -9,6 +9,7 @@ use std::path::Path;
 
 use rhwp::document_core::DocumentCore;
 use rhwp::model::control::Control;
+use rhwp::model::paragraph::{ColumnBreakType, NumberingRestart, ParaMeta};
 use rhwp::model::shape::{ShapeObject, TextWrap};
 use rhwp::renderer::hwpunit_to_px;
 use rhwp::renderer::render_tree::{RenderNode, RenderNodeType};
@@ -947,6 +948,43 @@ fn hwpx_enter_after_square_ole_respects_height_boundary() {
 #[test]
 fn hwp_enter_backspace_reenter_keeps_ole_anchor_flow() {
     assert_enter_backspace_reenter_after_square_ole("samples/한셀OLE.hwp");
+}
+
+#[test]
+fn hwp_square_ole_merge_undo_restores_removed_paragraph_meta() {
+    let mut core = load_core("samples/한셀OLE.hwp");
+    core.split_paragraph_native(0, 0, 0, None)
+        .expect("Enter creates the square-OLE wrap paragraph");
+
+    let expected: ParaMeta = {
+        let restored = &mut core.document_mut().sections[0].paragraphs[1];
+        // Deliberately differ from the OLE anchor. All seven ParaMeta fields must
+        // survive Backspace merge and its undo, not only the visible alignment.
+        restored.para_shape_id = 20;
+        restored.style_id = 5;
+        restored.column_type = ColumnBreakType::Page;
+        restored.raw_break_type = 0x04;
+        restored.numbering_restart = Some(NumberingRestart::NewStart(7));
+        restored.raw_header_extra = vec![0, 0, 0, 0, 0, 0, 0xbb, 0xbb, 0xbb, 0xbb];
+        restored.tab_extended = vec![[100, 0, 0x0200, 0, 0, 0, 9]];
+        restored.capture_meta()
+    };
+
+    let merged = core
+        .merge_paragraph_native(0, 1)
+        .expect("Backspace merges the empty square-OLE wrap paragraph");
+    let merged: Value = serde_json::from_str(&merged).expect("merge result JSON");
+    let removed_meta: ParaMeta = serde_json::from_value(merged["removedParaMeta"].clone())
+        .expect("merge exposes removed paragraph metadata");
+    assert_eq!(removed_meta, expected);
+
+    core.split_paragraph_native(0, 0, 0, Some(removed_meta))
+        .expect("undo split restores the square-OLE wrap paragraph");
+    assert_eq!(
+        core.document().sections[0].paragraphs[1].capture_meta(),
+        expected,
+        "square-OLE wrap branch must apply restore_meta just like the table and ordinary branches"
+    );
 }
 
 #[test]
