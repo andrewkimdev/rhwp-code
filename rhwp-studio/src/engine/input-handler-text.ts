@@ -15,6 +15,8 @@ import {
   insertTextWithMutationEffects,
   deleteTextWithMutationEffects,
   replaceBodyTextWithMutationEffects,
+  canUseDeferredCellTextReplace,
+  replaceCellTextWithMutationEffects,
   canUseLocalBodyTextReplace,
   cellParaIndexOf,
   IMMEDIATE_TEXT_MUTATION_EFFECTS,
@@ -681,6 +683,13 @@ export function replaceTextAtRaw(
   if (!this.canInsertTextInFormMode?.(pos)) return NO_TEXT_MUTATION_EFFECTS;
   if (deleteCount > 0 && !this.canDeleteTextInFormMode?.(pos, deleteCount)) {
     return NO_TEXT_MUTATION_EFFECTS;
+  }
+  if (
+    !this.cursor.isInHeaderFooter() &&
+    !this.cursor.isInFootnote() &&
+    canUseDeferredCellTextReplace(pos, deleteCount, text)
+  ) {
+    return replaceCellTextWithMutationEffects(this.wasm, pos, deleteCount, text);
   }
   if (
     !this.cursor.isInHeaderFooter() &&

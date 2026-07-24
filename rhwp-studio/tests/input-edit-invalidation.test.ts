@@ -154,6 +154,30 @@ test('raw 셀 입력은 command와 같은 typed mutation helper를 사용한다'
   );
 });
 
+test('depth-1 셀 IME replacement는 body fallback보다 먼저 atomic helper를 사용한다', () => {
+  const textSource = readFileSync(
+    new URL('../src/engine/input-handler-text.ts', import.meta.url),
+    'utf8',
+  );
+  const replaceStart = textSource.indexOf('export function replaceTextAtRaw(');
+  const deleteStart = textSource.indexOf('export function deleteTextAt(', replaceStart);
+  const replaceSource = textSource.slice(replaceStart, deleteStart);
+
+  assert.match(
+    replaceSource,
+    /canUseDeferredCellTextReplace\(pos, deleteCount, text\)/,
+  );
+  assert.match(
+    replaceSource,
+    /return replaceCellTextWithMutationEffects\(this\.wasm, pos, deleteCount, text\);/,
+  );
+  assert.ok(
+    replaceSource.indexOf('canUseDeferredCellTextReplace') <
+      replaceSource.indexOf('canUseLocalBodyTextReplace'),
+    'cell atomic route must be checked before the body-only route',
+  );
+});
+
 test('deferred pending이 실제로 있을 때만 page-local idle flush를 예약한다', () => {
   const inputHandlerSource = readFileSync(new URL('../src/engine/input-handler.ts', import.meta.url), 'utf8');
   const bridgeSource = readFileSync(new URL('../src/core/wasm-bridge.ts', import.meta.url), 'utf8');
