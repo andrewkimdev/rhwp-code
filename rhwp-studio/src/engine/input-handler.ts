@@ -505,6 +505,7 @@ export class InputHandler {
     // contentEditable <div>를 사용하고 .value 프록시를 추가한다.
     const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) ||
       (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+    const inputHost = this.container.closest('main') ?? document.body;
 
     if (isIOS) {
       const div = document.createElement('div');
@@ -519,7 +520,8 @@ export class InputHandler {
       div.setAttribute('autocapitalize', 'off');
       div.setAttribute('spellcheck', 'false');
       div.setAttribute('inputmode', 'text');
-      document.body.appendChild(div);
+      div.setAttribute('aria-label', '문서 편집 입력');
+      inputHost.appendChild(div);
       // textarea 인터페이스 호환을 위한 프록시
       Object.defineProperty(div, 'value', {
         get() { return div.textContent || ''; },
@@ -534,7 +536,8 @@ export class InputHandler {
       this.textarea.setAttribute('autocorrect', 'off');
       this.textarea.setAttribute('autocapitalize', 'off');
       this.textarea.setAttribute('spellcheck', 'false');
-      document.body.appendChild(this.textarea);
+      this.textarea.setAttribute('aria-label', '문서 편집 입력');
+      inputHost.appendChild(this.textarea);
     }
 
     this.onClickBound = this.onClick.bind(this);
