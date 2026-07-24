@@ -2370,6 +2370,12 @@ export class InputHandler {
     this.rawTextMutationEffects.add(_text.insertTextAtRaw.call(this, pos, text));
   }
 
+  private replaceTextAtRaw(pos: DocumentPosition, deleteCount: number, text: string): void {
+    this.rawTextMutationEffects.add(
+      _text.replaceTextAtRaw.call(this, pos, deleteCount, text),
+    );
+  }
+
   /** 위치에서 텍스트를 삭제한다 (WASM 직접 호출, IME 조합용) */
   private deleteTextAt(pos: DocumentPosition, count: number): void {
     this.rawTextMutationEffects.add(_text.deleteTextAt.call(this, pos, count));
@@ -2471,12 +2477,13 @@ export class InputHandler {
       this.deferredPaginationRunner.cancel();
       this.deferredPaginationPending = false;
     }
-    if (!effects.deferredPagination) return false;
+    if (effects.flowChanged && effects.paginationCompleted) return true;
+    if (!effects.documentPaginationPending) return false;
 
     const replacesActiveJob = this.deferredPaginationRunner.isActive();
     this.cancelDeferredPaginationFlush();
     this.deferredPaginationPending = true;
-    if (!effects.cellFlowChanged && !replacesActiveJob) return false;
+    if (!effects.flowChanged && !replacesActiveJob) return false;
 
     // 최신 revision의 shadow job으로 교체하고, 한 macrotask당 한 fragment씩 전진한다.
     this.deferredPaginationRunner.start();

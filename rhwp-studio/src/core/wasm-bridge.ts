@@ -14,6 +14,10 @@ import {
   type CellSelectionRectDocument,
   type SelectionPageHints,
 } from './selection-page-hints';
+import {
+  parseLocalBodyTextReplaceResult,
+  type LocalBodyTextReplaceResult,
+} from './local-text-replace-result';
 
 /** HWPX 비표준 감지 경고 리포트 (#177). */
 export interface ValidationReport {
@@ -782,6 +786,42 @@ export class WasmBridge {
   insertText(sec: number, para: number, charOffset: number, text: string): string {
     if (!this.doc) throw new Error('문서가 로드되지 않았습니다');
     return this.doc.insertText(sec, para, charOffset, text);
+  }
+
+  replaceBodyTextLocal(
+    sec: number,
+    para: number,
+    charOffset: number,
+    deleteCount: number,
+    text: string,
+  ): LocalBodyTextReplaceResult {
+    if (!this.doc) throw new Error('문서가 로드되지 않았습니다');
+    const doc = this.doc as unknown as {
+      replaceBodyTextLocal?: (
+        sec: number,
+        para: number,
+        charOffset: number,
+        deleteCount: number,
+        text: string,
+      ) => string;
+    };
+    if (typeof doc.replaceBodyTextLocal === 'function') {
+      return parseLocalBodyTextReplaceResult(
+        doc.replaceBodyTextLocal(sec, para, charOffset, deleteCount, text),
+      );
+    }
+    if (deleteCount > 0) {
+      this.doc.deleteText(sec, para, charOffset, deleteCount);
+    }
+    if (text.length > 0) {
+      this.doc.insertText(sec, para, charOffset, text);
+    }
+    return {
+      ok: true,
+      charOffset: charOffset + [...text].length,
+      documentPaginationPending: false,
+      flowChanged: true,
+    };
   }
 
   deleteText(sec: number, para: number, charOffset: number, count: number): string {

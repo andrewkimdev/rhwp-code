@@ -84,6 +84,26 @@ test('raw IME/iOS 입력은 flow effect를 cursor lookup 전에 소비하고 ref
     /this\.caret\.hideComposition\(\);\s*this\.updateCaret\(\);\s*this\.resetRawTextMutationEffects\(\);/,
     'compositionend는 일반 DOM caret를 exact cursor에서 다시 표시해야 한다',
   );
+
+  assert.match(
+    imeSource,
+    /this\.replaceTextAtRaw\(anchor, this\.compositionLength, text\);/,
+    'IME update는 이전 조합 삭제와 새 조합 삽입을 한 local replace로 보내야 한다',
+  );
+  assert.doesNotMatch(imeSource, /this\.deleteTextAt\(anchor/);
+  assert.doesNotMatch(imeSource, /this\.insertTextAtRaw\(anchor/);
+  assert.match(
+    iosSource,
+    /this\.replaceTextAtRaw\(this\._iosAnchor, this\._iosLength, text\);/,
+    'iOS fallback도 조합 교체를 한 local replace로 보내야 한다',
+  );
+  assert.doesNotMatch(iosSource, /this\.deleteTextAt\(this\._iosAnchor/);
+  assert.doesNotMatch(iosSource, /this\.insertTextAtRaw\(this\._iosAnchor/);
+  assert.doesNotMatch(
+    iosSource,
+    /this\._iosInputTimer = setTimeout/,
+    'iOS 현재 페이지 paint도 100ms debounce를 기다리면 안 된다',
+  );
 });
 
 test('IME 조합 caret은 시작 시 보존한 anchor 좌표를 재사용한다', () => {
@@ -152,6 +172,12 @@ test('deferred pending이 실제로 있을 때만 page-local idle flush를 예�
     inputHandlerSource,
     /if \(effects\.paginationCompleted\) \{\s*this\.cancelDeferredPaginationFlush\(\);\s*this\.deferredPaginationRunner\.cancel\(\);\s*this\.deferredPaginationPending = false;\s*\}/,
   );
+  assert.match(inputHandlerSource, /if \(effects\.flowChanged && effects\.paginationCompleted\) return true;/);
+  assert.match(inputHandlerSource, /if \(!effects\.documentPaginationPending\) return false;/);
+  assert.match(
+    inputHandlerSource,
+    /if \(!effects\.flowChanged && !replacesActiveJob\) return false;/,
+  );
   assert.match(
     inputHandlerSource,
     /this\.deferredPaginationRunner\.start\(\);/,
@@ -196,14 +222,49 @@ test('저장·다른 이름 저장·인쇄는 resumable job을 출력 전에 동
   }
 });
 
-test('isPageLocalTextEditCommand는 본문 텍스트와 구조 변경 명령을 full refresh로 남긴다', () => {
+test('isPageLocalTextEditCommand는 같은 본문 문단의 짧은 텍스트 편집을 허용한다', () => {
   const bodyPos: DocumentPosition = {
     sectionIndex: 0,
     paragraphIndex: 2,
     charOffset: 3,
   };
 
-  assert.equal(isPageLocalTextEditCommand('insertText', bodyPos, { ...bodyPos, charOffset: 4 }), false);
+  assert.equal(
+    isPageLocalTextEditCommand(
+      'insertText',
+      bodyPos,
+      { ...bodyPos, charOffset: 4 },
+      { insertedText: '가', beforePageIndex: 0, afterPageIndex: 0 },
+    ),
+    true,
+  );
+  assert.equal(
+    isPageLocalTextEditCommand(
+      'deleteText',
+      bodyPos,
+      bodyPos,
+      { deleteCount: 1, beforePageIndex: 0, afterPageIndex: 0 },
+    ),
+    true,
+  );
+});
+
+test('isPageLocalTextEditCommand는 본문 경계와 구조 변경을 full refresh로 남긴다', () => {
+  const bodyPos: DocumentPosition = {
+    sectionIndex: 0,
+    paragraphIndex: 2,
+    charOffset: 3,
+  };
+
+  assert.equal(
+    isPageLocalTextEditCommand(
+      'insertText',
+      bodyPos,
+      { ...bodyPos, paragraphIndex: 3, charOffset: 1 },
+      { insertedText: '가' },
+    ),
+    false,
+  );
   assert.equal(isPageLocalTextEditCommand('splitParagraphInCell', baseCellPos, baseCellPos), false);
   assert.equal(isPageLocalTextEditCommand('deleteSelection', baseCellPos, baseCellPos), false);
 });
