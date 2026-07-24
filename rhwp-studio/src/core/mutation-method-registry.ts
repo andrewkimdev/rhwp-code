@@ -26,7 +26,7 @@ export const MUTATING_METHODS: readonly string[] = [
   'insertPageBreak', 'insertColumnBreak', 'insertNewNumber', 'setNumberingRestart',
   // 셀 텍스트/문단
   'insertTextInCell', 'insertTextInCellDeferredPagination', 'deleteTextInCell',
-  'deleteTextInCellDeferredPagination',
+  'deleteTextInCellDeferredPagination', 'replaceTextInCellDeferredPagination',
   'deleteRangeInCell', 'insertTextInCellByPath', 'deleteTextInCellByPath', 'deleteRangeInCellByPath',
   'splitParagraphInCell', 'mergeParagraphInCell', 'splitParagraphInCellByPath',
   'mergeParagraphInCellByPath',
