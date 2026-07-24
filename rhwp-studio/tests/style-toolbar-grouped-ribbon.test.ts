@@ -75,6 +75,48 @@ test('mobile ribbon is compact without hiding command glyphs', () => {
   assert.doesNotMatch(responsive, /\.sb-ga\s*\{\s*display:\s*none;/);
 });
 
+test('mobile font size field uses one cohesive control shell', () => {
+  assert.match(
+    responsive,
+    /\.sb-field-grid \.sb-size-group\s*\{[^}]*border:\s*1px solid var\(--ui-border-light\);[^}]*border-radius:\s*var\(--radius-sm\);[^}]*overflow:\s*hidden;/s,
+  );
+  assert.match(
+    responsive,
+    /\.sb-field-grid \.sb-size\s*\{[^}]*height:\s*100%;[^}]*border:\s*0;[^}]*border-radius:\s*0;/s,
+  );
+  assert.match(
+    responsive,
+    /\.sb-field-grid \.sb-size-unit\s*\{[^}]*height:\s*100%;[^}]*border:\s*0;[^}]*border-left:\s*1px solid var\(--ui-border-light\);/s,
+  );
+  assert.match(
+    responsive,
+    /\.sb-field-grid \.sb-size-arrows\s*\{[^}]*height:\s*100%;[^}]*border-left:\s*1px solid var\(--ui-border-light\);/s,
+  );
+  assert.match(
+    responsive,
+    /\.sb-field-grid \.sb-size-arrows \.sb-arrow\s*\{[^}]*height:\s*50%;[^}]*border:\s*0;[^}]*border-radius:\s*0;/s,
+  );
+  assert.match(
+    responsive,
+    /\.sb-field-grid \.sb-size-arrows \.sb-arrow \+ \.sb-arrow\s*\{[^}]*border-top:\s*1px solid var\(--ui-border-light\);/s,
+  );
+  assert.match(
+    responsive,
+    /#style-bar #btn-size-up,\s*#style-bar #btn-size-down\s*\{[^}]*border-radius:\s*0;/s,
+  );
+});
+
+test('font size unit shares the input surface instead of the spinner surface', () => {
+  assert.match(
+    styles,
+    /\.sb-size-unit\s*\{[^}]*background:\s*var\(--color-surface\);/s,
+  );
+  assert.doesNotMatch(
+    styles,
+    /\.sb-size-unit\s*\{[^}]*background:\s*var\(--ui-surface-muted\);/s,
+  );
+});
+
 test('alignment icons use the shared theme-aware mask contract', () => {
   assert.match(styles, /\.sb-align\s*\{[^}]*background-color:\s*currentColor;[^}]*mask/s);
   for (const name of ['left', 'center', 'right', 'justify', 'distribute', 'split']) {

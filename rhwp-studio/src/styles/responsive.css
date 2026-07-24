@@ -197,6 +197,17 @@
     box-sizing: border-box;
   }
 
+  .sb-field-grid .sb-size-group {
+    border: 1px solid var(--ui-border-light);
+    border-radius: var(--radius-sm);
+    overflow: hidden;
+    background: var(--color-surface);
+  }
+
+  .sb-field-grid .sb-size-group:focus-within {
+    border-color: var(--color-focus-border);
+  }
+
   .sb-field-grid .sb-combo,
   .sb-field-grid .sb-size,
   .sb-field-grid .sb-size-unit,
@@ -213,10 +224,22 @@
     width: auto;
   }
 
+  .sb-field-grid .sb-size {
+    height: 100%;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    font-variant-numeric: tabular-nums;
+  }
+
   .sb-field-grid .sb-size-unit {
     flex: 0 0 auto;
+    height: 100%;
     padding: 0 2px;
     line-height: 25px;
+    border: 0;
+    border-left: 1px solid var(--ui-border-light);
+    background: transparent;
   }
 
   .sb-field-grid .sb-size-arrows,
@@ -225,10 +248,31 @@
     height: 27px;
   }
 
+  .sb-field-grid .sb-size-arrows {
+    height: 100%;
+    border-left: 1px solid var(--ui-border-light);
+  }
+
   .sb-field-grid .sb-arrow {
     width: 14px;
     height: 13.5px;
     min-height: 0;
+  }
+
+  .sb-field-grid .sb-size-arrows .sb-arrow {
+    height: 50%;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+  }
+
+  .sb-field-grid .sb-size-arrows .sb-arrow + .sb-arrow {
+    border-top: 1px solid var(--ui-border-light);
+  }
+
+  #style-bar #btn-size-up,
+  #style-bar #btn-size-down {
+    border-radius: 0;
   }
 
   .sb-command-band {
