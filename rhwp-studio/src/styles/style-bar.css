@@ -118,7 +118,7 @@
 
 #style-name { width: 88px; }
 .sb-font-lang { width: 64px; font-size: var(--font-size-sm); }
-.sb-font { width: 164px; }
+.sb-font { width: 160px; }
 
 /* 한컴형 글꼴 범주 메뉴 */
 .font-picker-menu {

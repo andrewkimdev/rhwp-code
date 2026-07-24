@@ -45,6 +45,52 @@
   }
 }
 
+/* ─── 태블릿 서식 리본: 필드 1행 + 명령 1행 ─────────── */
+@media (min-width: 768px) and (max-width: 1023px) {
+  #style-bar {
+    display: grid;
+    grid-template-columns: max-content max-content;
+    min-height: 0;
+    align-items: start;
+    align-content: start;
+    justify-content: start;
+    gap: 4px 0;
+    padding: 4px 6px 5px;
+  }
+
+  .sb-field-ribbon-group {
+    grid-column: 1 / -1;
+  }
+
+  .sb-character-band {
+    grid-column: 1;
+  }
+
+  .sb-paragraph-band {
+    grid-column: 2;
+  }
+
+  .sb-ribbon-group {
+    min-height: 0;
+    padding: 0;
+    border-right: 0;
+  }
+
+  .sb-ribbon-label {
+    display: none;
+  }
+
+  .sb-character-ribbon-group,
+  .sb-color-ribbon-group {
+    padding: 0 7px;
+    border-right: 1px solid var(--ui-border);
+  }
+
+  .sb-paragraph-ribbon-group {
+    padding: 0 7px;
+  }
+}
+
 /* ─── 모바일 (~767px) ────────────────────────────────── */
 @media (max-width: 767px) {
   /* 전체 레이아웃: 편집 영역 최대화 */
