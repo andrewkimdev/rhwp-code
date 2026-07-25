@@ -26,6 +26,7 @@ last_verified: 2026-07-25
 | [local_validation.md](local_validation.md) | local fetch, simulation, Cargo/npm/fixture 검증 |
 | [visual_fixture_evidence.md](visual_fixture_evidence.md) | renderer 또는 HWP/HWPX/PDF fixture·페이지·시각 검증 |
 | [multi_pr_update_branch.md](multi_pr_update_branch.md) | 대량 유입, 다수 PR 누적 검토, update branch, stale CI |
+| [review_only_fast_pass.md](review_only_fast_pass.md) | code PR 뒤 review-only commit 또는 PR 전체가 허용된 review-only 범위 |
 | [post_merge.md](post_merge.md) | merge 이후 문서·asset·issue·comment·정리 |
 | [rework_and_exceptions.md](rework_and_exceptions.md) | 재작업 요청/close, Dependabot, 오래된 base, 대형 PR |
 
@@ -38,7 +39,8 @@ last_verified: 2026-07-25
 | 한 기여자의 여러 PR을 체리픽 누적 검토 | maintainer_general | intake_and_review, local_validation, multi_pr_update_branch, 필요 시 visual_fixture_evidence, post_merge |
 | collaborator 본인 PR | collaborator_self_merge | intake_and_review, local_validation, 필요 시 visual_fixture_evidence |
 | collaborator가 contributor PR에 보정 commit을 추가 | collaborator_external_pr | intake_and_review, local_validation, 필요 시 visual_fixture_evidence와 multi_pr_update_branch, post_merge |
-| collaborator가 contributor code를 local 검증한 뒤 review·오늘할일만 source head에 추가 | collaborator_external_pr | intake_and_review, local_validation, post_merge |
+| collaborator가 contributor code를 local 검증한 뒤 review·오늘할일만 source head에 추가 | collaborator_external_pr | intake_and_review, local_validation, review_only_fast_pass, post_merge |
+| 완료된 원 PR의 review·asset만 별도 PR로 반영 | collaborator_self_merge | intake_and_review, review_only_fast_pass, post_merge |
 | base가 잘못되었거나 재작업 요청 | 해당 기본 경로 | intake_and_review, rework_and_exceptions |
 
 다수 PR을 동시에 다루더라도 reviewer assign, review 문서, 최종 CI·merge 판단은 PR 번호별로 분리한다.

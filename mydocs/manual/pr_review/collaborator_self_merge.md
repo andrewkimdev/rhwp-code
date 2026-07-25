@@ -28,6 +28,8 @@ mydocs/pr/archives/pr_N_report.md          # 필요 시
 mydocs/orders/YYYYMMDD.md                  # 갱신이 필요한 경우
 ~~~
 
+### 8.2.1 오늘할일 생성·갱신 시점
+
 오늘할일은 이슈 등록·branch 생성·조사·계획·구현 중간에는 만들거나 갱신하지 않는다. 변경 범위·검증·merge
 판단·PR 생성 승인이 확정된 **최종 준비 시점**에 최신 devel의 오늘할일을 반영하고, 최초 remote push와 PR
 생성 전에 같은 PR diff에 포함한다.

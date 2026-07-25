@@ -88,7 +88,7 @@ renderer 영향 PR의 Native Skia 공식 회귀 범위는 다음 3종이다.
 CARGO_INCREMENTAL=0 cargo test --profile release-test --features native-skia skia --lib
 CARGO_INCREMENTAL=0 cargo test --profile release-test --features native-skia --test issue_2225_missing_picture_placeholder
 CARGO_INCREMENTAL=0 cargo test --profile release-test --features native-skia --test render_p37_direct_pdf_export
-wasm-pack build --target web --out-dir pkg
+CARGO_INCREMENTAL=0 wasm-pack build --target web --out-dir pkg
 ~~~
 
 ## 4.3.1 새 HWP/HWPX fixture의 IR field sweep baseline 등록
@@ -117,7 +117,7 @@ npm/editor의 public API, transport, index.d.ts, README 또는 package manifest 
 ~~~bash
 npm --prefix npm/editor test
 node --test scripts/frontend-wasm-bindings.test.mjs scripts/frontend-editor-embed.test.mjs
-cd rhwp-studio && npx tsc --noEmit --skipLibCheck ../npm/editor/index.d.ts
+(cd rhwp-studio && npx tsc --noEmit --skipLibCheck ../npm/editor/index.d.ts)
 npm --prefix npm/editor pack --dry-run --json
 ~~~
 
@@ -125,12 +125,30 @@ iframe RPC 완료 시점이나 기본 옵션이 바뀌면 fresh WASM build와 �
 embed E2E를 추가한다. 기본값 변경은 옵션을 생략한 smoke에서도 loadFile 완료와 페이지 수를 기록한다.
 
 ~~~bash
-wasm-pack build --target web --out-dir pkg
+CARGO_INCREMENTAL=0 wasm-pack build --target web --out-dir pkg
 VITE_URL=http://127.0.0.1:7700 npm --prefix rhwp-studio run e2e:embed
 ~~~
 
 대형 복합 변경 또는 승인된 전체 검증은 build, release lib, release-test, Native Skia 3종, fmt,
 diff check, clippy, doc test, TypeScript, npm test, wasm-pack을 이 순서로 실행한다.
+
+~~~bash
+CARGO_INCREMENTAL=0 cargo build --release
+CARGO_INCREMENTAL=0 cargo test --release --lib
+CARGO_INCREMENTAL=0 cargo test --profile release-test --tests
+CARGO_INCREMENTAL=0 cargo test --profile release-test --features native-skia skia --lib
+CARGO_INCREMENTAL=0 cargo test --profile release-test --features native-skia --test issue_2225_missing_picture_placeholder
+CARGO_INCREMENTAL=0 cargo test --profile release-test --features native-skia --test render_p37_direct_pdf_export
+CARGO_INCREMENTAL=0 cargo fmt --check
+git diff --check
+CARGO_INCREMENTAL=0 cargo clippy --all-targets -- -D warnings
+CARGO_INCREMENTAL=0 cargo test --doc
+(cd rhwp-studio && npx tsc --noEmit)
+npm --prefix rhwp-studio test
+CARGO_INCREMENTAL=0 wasm-pack build --target web --out-dir pkg
+~~~
+
+각 명령은 앞 명령이 끝난 뒤 실행한다. 실패하면 뒤 명령으로 건너뛰어 전체 통과처럼 기록하지 않는다.
 
 svg_snapshot은 release-test 전체에 포함된다. 렌더 영향 PR에서 golden 실패를 좁히거나 재생성 결정성을
 확인할 때만 다음을 추가한다. golden은 원 PR merge 전에 별도 commit으로 반영하고 최신 CI를 다시 확인한다.
@@ -139,6 +157,10 @@ svg_snapshot은 release-test 전체에 포함된다. 렌더 영향 PR에서 gold
 CARGO_INCREMENTAL=0 cargo test --test svg_snapshot
 UPDATE_GOLDEN=1 CARGO_INCREMENTAL=0 cargo test --test svg_snapshot
 CARGO_INCREMENTAL=0 cargo test --test svg_snapshot
+git add tests/golden_svg/
+git commit -m "test(svg_snapshot): regenerate golden after #N (...)"
+# 작업지시자 push 승인 뒤
+git push <PR-head-remote> HEAD:<PR-head-branch>
 ~~~
 
 시각 검증 판정을 받은 PR은 Cargo 성공 뒤에도 [시각·fixture 증적](visual_fixture_evidence.md)의

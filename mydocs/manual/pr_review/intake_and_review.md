@@ -29,13 +29,27 @@ gh pr edit N --repo edwardkim/rhwp --add-reviewer <reviewer>
   merge 직전에 다시 확인한다.
 - 신규 mydocs/report 파일은 task_m100_{issue}_report.md 규칙과 본문의 Issue: #N을 대조한다.
   회차형 측정 기록은 문서·Git workflow의 예외를 따른다.
-- additions, deletions, files, commits로 규모를 확인한다. 1,000줄 초과 PR은 대형 PR 경로를 추가한다.
-- 작성자가 first-time contributor인지와 이전 PR 맥락을 확인한다.
 
 ~~~bash
 gh pr view N --repo edwardkim/rhwp --json \
   baseRefName,headRefName,headRefOid,mergeable,mergeStateStatus,isDraft,author,additions,deletions,files,commits
 ~~~
+
+## 2.3 규모 분석
+
+`additions`, `deletions`, `files`, `commits`로 변경 규모와 검토 범위를 확인한다. 1,000줄 초과 PR은
+[재작업과 예외](rework_and_exceptions.md)의 대형 PR 경로를 추가한다. commit 수가 비정상적으로 많으면
+오래된 base·이미 merge된 commit 혼입 여부도 함께 확인한다.
+
+100줄 미만의 소형 PR은 maintainer 일반 경로에서 빠르게 판단할 수 있지만, 최신 head·required check·승인
+조건을 생략하는 근거는 아니다.
+
+## 2.4 작성자 확인
+
+작성자가 first-time contributor인지, 이전 PR에서 이어진 변경인지, 같은 contributor의 선행·후속 PR이
+있는지 확인한다. first-time contributor에게는 환영과 구체적인 피드백을 함께 제공하고, 기존 contributor는
+이전 PR 맥락을 반영한다. 작성자 확인은 credit과 comment 언어·맥락을 위한 것이며 검증 수준을 낮추는
+근거가 아니다.
 
 ## 2.6 렌더 영향과 시각 검증 필요 여부
 

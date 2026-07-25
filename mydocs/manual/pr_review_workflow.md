@@ -59,6 +59,7 @@ current head: <작성 시점 참고 SHA 또는 재확인 필요>
 | 로컬 검증 | fetch, merge simulation, Cargo, npm, fixture 검증을 수행 | [로컬 검증](pr_review/local_validation.md) |
 | 시각·fixture 증적 | renderer/layout/paint, HWP/HWPX/PDF sample, 기준 PDF, 페이지·표·wrap·clipping 주장 | [시각·fixture 증적](pr_review/visual_fixture_evidence.md) |
 | 다수 PR·update branch | 대량 유입, 누적 cherry-pick, stale SHA CI 취소, update branch 발생 | [다수 PR과 update branch](pr_review/multi_pr_update_branch.md) |
+| review-only fast-pass | code PR 뒤 review 기록만 추가하거나 PR 전체가 문서·허용된 신규 기준 자료뿐임 | [review-only fast-pass](pr_review/review_only_fast_pass.md) |
 | merge 후 | 원 코드 PR 또는 후속 기록 PR이 merge됨 | [merge 후속 처리](pr_review/post_merge.md) |
 | 재작업·예외 | close/rework, Dependabot, 오래된 base, 대형 PR | [재작업과 예외](pr_review/rework_and_exceptions.md) |
 
@@ -76,8 +77,8 @@ current head: <작성 시점 참고 SHA 또는 재확인 필요>
 ~~~text
 CI preflight
     ├─ Lint (fmt, clippy, WASM check) ─┐
-    └─ Frontend package gates ─────────┴─ 둘 다 성공
-       (frontend 영향이 있을 때)              │
+    └─ Frontend package gates ─────────┴─ gate 충족
+       (영향 있음: success, 영향 없음: skipped) │
                          ┌────────────────────┴───────────────────┐
                          │                                        │
                     Build test archive                     Native Skia tests
@@ -89,7 +90,8 @@ CI preflight
 ~~~
 
 - Lint와 Frontend package gates는 preflight 뒤 병렬이다.
-- Build test archive와 Native Skia tests는 Lint와 필요한 Frontend gate가 성공한 뒤 병렬이다.
+- Build test archive와 Native Skia tests는 Lint가 성공하고, Frontend가 필요한 경우 success이거나
+  영향이 없어 skipped인 뒤 병렬이다.
 - 8개 default-feature shard는 archive와 Native Skia가 모두 성공한 뒤 병렬이며, shard 실패 시
   fail-fast로 나머지를 취소할 수 있다.
 - review-only fast-pass는 heavy job이 skipped일 수 있다. 이때도 preflight와 branch protection이
@@ -151,8 +153,9 @@ review 문서 경로, review_impl 작성 조건, 사전 판단 report의 범위�
 | 4.1, 4.1.1, 4.2, 4.3, 4.3.1, 4.3.2, 4.4 | [로컬 검증](pr_review/local_validation.md) |
 | 5–6 | [maintainer 일반 경로](pr_review/maintainer_general.md) |
 | 7, 7.1–7.8 | [merge 후속 처리](pr_review/post_merge.md) |
-| 8 | [collaborator self-merge](pr_review/collaborator_self_merge.md) |
-| 9 | [collaborator 매개 외부 PR](pr_review/collaborator_external_pr.md) |
+| 8, 8.2.1 | [collaborator self-merge](pr_review/collaborator_self_merge.md) |
+| 9, 9.2.1, 9.3.1 | [collaborator 매개 외부 PR](pr_review/collaborator_external_pr.md) |
+| 9.3.2 | [review-only fast-pass](pr_review/review_only_fast_pass.md) |
 | 10–13 | [재작업과 예외](pr_review/rework_and_exceptions.md) |
 
 ## 6. 문서 유지 규칙

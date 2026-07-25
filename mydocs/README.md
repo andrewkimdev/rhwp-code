@@ -35,6 +35,7 @@ front matter는 `mydocs/manual`, `mydocs/tech`, `mydocs/troubleshootings`의 모
 
 - `manual/verification/`: 시각 검증 정책과 실행 가이드
 - `manual/codex/`: 저장소 부트스트랩과 현행 문서·Git 절차
+- `manual/pr_review/`: canonical PR review 라우터가 조건별로 선택하는 역할·검증·후속 처리 가이드
 - `manual/memory/`: 과거 피드백과 memory 출처
 - `tech/investigations/issue-####/`: 특정 이슈의 가설·실험·관찰
 - `tech/archive/`: 대체된 계획·설계와 역사 자료

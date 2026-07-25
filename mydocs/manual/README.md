@@ -2,7 +2,7 @@
 kind: guide
 status: active
 canonical: mydocs/manual/README.md
-last_verified: 2026-07-17
+last_verified: 2026-07-25
 ---
 
 # manual 문서 지도
@@ -38,6 +38,8 @@ last_verified: 2026-07-17
 - `manual/`: 사람이 반복 수행하는 절차, 명령, 검증, 배포, 운영 규칙
 - `manual/codex/`: Codex 부트스트랩과 현행 문서·Git 절차. 종료 세션과 task memory는 `archive/`의
   historical snapshot이며 현재 절차의 근거로 사용하지 않는다.
+- `manual/pr_review/`: `pr_review_workflow.md`가 역할과 변경 조건에 따라 선택하도록 지정하는
+  PR review 자식 가이드다. 모 문서와 선택표를 먼저 읽고 해당 가이드만 적용한다.
 - `manual/memory/`: 과거 사용자 피드백과 프로젝트 memory의 출처를 보존하는 historical 색인이다.
   현행 규칙은 canonical manual에서 확인한다.
 - `tech/`: 포맷 사실, 아키텍처, 설계 결정, 이슈 조사 근거
