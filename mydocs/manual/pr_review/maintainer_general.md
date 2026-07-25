@@ -22,6 +22,16 @@ mydocs/pr/pr_N_review_impl.md
 원 코드 PR merge 뒤에는 [merge 후속 처리](post_merge.md)의 판단에 따라 archive로 이동한다. 원 코드 PR의
 review 기록만 따로 남길 것이 확정되었으면 처음부터 archive 경로를 쓰거나 같은 후속 기록 commit에서 이동한다.
 
+## 4.5 devel 규약 변경의 열린 PR 일괄 파급
+
+devel에 테스트 규약 변경이 merge되면, 이미 열린 PR의 신규 파일은 merge ref에서도 구 규약을 유지해 여러
+PR이 일괄 실패할 수 있다.
+
+- 영향받는 열린 PR과 신규 파일을 전수 분류한다.
+- 공통 규약을 충족하는 메인터너 보정 commit을 각 PR에 적용하고, 규약 변경과 보정 내용을 contributor 안내
+  comment로 남긴다.
+- 보정 뒤 최신 head의 required check를 PR별로 재검증한다.
+
 ## 5. 작업지시자 승인 요청
 
 접수·검증·필요한 시각 증적을 review 문서에 남긴 뒤 승인 요청을 한다. 다음 값은 요청 시점 참고값이고

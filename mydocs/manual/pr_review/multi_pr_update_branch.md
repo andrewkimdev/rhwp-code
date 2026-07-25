@@ -35,6 +35,12 @@ contributor 또는 maintainer가 Update branch를 수행해 PR head가 바뀌면
 3. queued, pending, in_progress run만 force-cancel API로 취소한다.
 4. 완료 상태와 cancelled 결론을 재확인한다.
 
+러너 구성 전환 등으로 배정 가능한 label이 사라진 run은 `queued`에 고착될 수 있다. 이 run은 일반 cancel이
+끝나지 않고 같은 concurrency group을 계속 점유해, 후속 run이 job을 하나도 시작하지 못한 `pending`으로
+연쇄 고착될 수 있다. 새 run이 `pending`이면 최신 run만 재실행하지 말고 같은 PR·workflow의 이전
+`queued`/`pending`/`in_progress` run부터 확인한다. 일반 cancel 뒤에도 상태가 유지되면 아래 force-cancel
+API를 사용하고, 이전 run이 실제 `completed/cancelled`가 된 뒤 후속 run 상태를 다시 확인한다.
+
 ~~~bash
 gh pr view N --repo edwardkim/rhwp --json headRefOid
 gh run list --repo edwardkim/rhwp --commit <old-sha> \
@@ -44,6 +50,10 @@ gh api --method POST repos/edwardkim/rhwp/actions/runs/<run-id>/force-cancel
 
 force-cancel 대상 SHA, run URL, 완료 상태를 review 문서 또는 작업 기록에 남긴다. stale run 정리는 최신
 head의 새 CI를 기다리는 일과 병렬로 할 수 있지만, 대상 SHA 검증과 force-cancel API 호출은 순차로 한다.
+
+PR close/reopen만으로는 GitHub의 merge ref가 항상 재계산된다고 가정하지 않는다. 고착 run을 정리한 뒤에도
+merge ref 또는 required check가 갱신되지 않으면, head SHA가 바뀌는 push의 `synchronize` 이벤트로
+재계산한다.
 
 ## 4.2.1 여러 PR 체리픽 누적 검토
 

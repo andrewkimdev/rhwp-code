@@ -39,6 +39,10 @@ mergeable, required check를 다시 확인한다.
   같은 checkout·target·Cargo cache의 로컬 Cargo와 wasm-pack은 계속 순차 실행한다.
 - contributor PR head 보정의 명시적 branch 전환·SHA 확인, fast-pass A/B 구분, merge 후 remote branch
   소유권·worktree·검토 전용 target 정리를 보강했다.
+- maintainer review 제안에 따라 배정 불가 runner의 좀비 `queued` run과 concurrency 연쇄 고착, close/reopen
+  대신 head push의 `synchronize` 이벤트로 merge ref를 재계산하는 복구 조건을 다수 PR 가이드에 추가했다.
+- devel의 신규 테스트 규약이 열린 PR 여러 건에 일괄 파급될 때의 메인터너 보정·기여자 안내·PR별 재검증
+  절차와 신규 CLI 통합 테스트의 런타임 우선 `rhwp_bin()` 규약을 명시했다.
 
 source, test, CI workflow, Cargo.lock, golden/baseline, sample 변경은 없다.
 
@@ -54,10 +58,12 @@ source, test, CI workflow, Cargo.lock, golden/baseline, sample 변경은 없다.
 - `git diff --check`: 통과
 - `python3 scripts/check_document_metadata.py`: 398개 문서, 이상 없음
 - `python3 scripts/check_markdown_links.py --changed-from upstream/devel --forbid-redirect-references`:
-  404개 문서, 변경 19개, redirect stub 31개, 내부 상대 링크 이상 없음
+  405개 문서, 변경 20개, redirect stub 31개, 내부 상대 링크 이상 없음
 - 모 문서와 `pr_review/README.md`의 자식 문서 라우팅 완전성: 누락 0건
 - 기존 단일 매뉴얼과 분리 문서의 절 번호·주요 명령 대조: 필요한 명령과 2.3, 2.4, 4.1.1, 4.3.1,
   7.7.1, 7.8, 8.2.1, 9.3.2, 10.1, 11.1–11.3, 13 보존 확인
+- maintainer review comment의 보강 후보 A/B/C를 각각 `multi_pr_update_branch.md`,
+  `maintainer_general.md`, `local_validation.md`에 반영
 - 문서-only 변경이므로 Cargo, frontend, 시각 검증은 로컬에서 생략했다.
 
 ## CI와 fast-pass 판정

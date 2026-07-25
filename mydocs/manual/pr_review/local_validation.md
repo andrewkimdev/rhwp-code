@@ -74,6 +74,11 @@ devel 위에 PR head를 합친 결과 tree와 conflict를 확인한다. conflict
 | CI workflow | workflow 구문·변경 조건·최신 GitHub Actions 결과 |
 | 기존 golden/baseline/fixture | 관련 focused test, snapshot 결정성, 최신 PR head CI |
 
+신규 CLI 통합 테스트는 `env!("CARGO_BIN_EXE_rhwp")`를 실행 경로로 직접 사용하지 않는다. nextest archive가
+런타임에 주입하는 `CARGO_BIN_EXE_rhwp`를 먼저 읽고 컴파일타임 값을 fallback으로 쓰는 기존 `rhwp_bin()`
+패턴을 따른다. 근거와 재현 조건은 [#3289 CI 보고서](../../report/task_m100_3289_report.md#멀티러너-거버넌스-운영-규칙)에
+기록되어 있다.
+
 일반 Rust 검증 예시는 다음과 같다. 명령은 같은 checkout에서 동시에 실행하지 않는다.
 
 ~~~bash
