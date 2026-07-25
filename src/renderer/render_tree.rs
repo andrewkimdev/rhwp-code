@@ -200,16 +200,23 @@ impl RenderNode {
                 "TextLine",
                 format!(",\"pi\":{}", tl.para_index.unwrap_or(0)),
             ),
-            RenderNodeType::TextRun(tr) => (
-                "TextRun",
-                format!(
+            RenderNodeType::TextRun(tr) => {
+                let mut extra = format!(
                     ",\"text\":{},\"pi\":{}",
                     json_escape(&tr.text),
                     tr.section_index
                         .map(|_| tr.para_index.unwrap_or(0))
                         .unwrap_or(0)
-                ),
-            ),
+                );
+                // `text`는 char_start와 같은 모델 좌표를 보존한다. 그러나 머리말/꼬리말
+                // 필드처럼 화면에 N자로 표시되는 marker는 displayText도 JSON에 노출해야
+                // render-tree 소비자가 실제 표시값을 검증·표시할 수 있다 (Task #3216).
+                if let Some(display_text) = &tr.display_text {
+                    extra.push_str(",\"displayText\":");
+                    extra.push_str(&json_escape(display_text));
+                }
+                ("TextRun", extra)
+            }
             RenderNodeType::Table(tn) => (
                 "Table",
                 format!(

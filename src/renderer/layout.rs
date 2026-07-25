@@ -2525,8 +2525,8 @@ impl LayoutEngine {
                 // 조각은 자기 글자에 맞는 표시 텍스트를 새로 갖는다. 원본 런의
                 // `display_text` 는 **런 전체**에 대해 만들어진 값이라(이 함수는
                 // `convert_pua_display_text` 직후에 돌아간다) 그대로 물려주면 조각이
-                // 남의 글자를 그린다. 형제 `substitute_page_auto_numbers_in_composed`
-                // 도 `text` 를 고친 뒤 `display_text` 를 무효화한다.
+                // 남의 글자를 그린다. 형제 `substitute_page_auto_numbers_in_composed`도
+                // 원본 marker 문자열은 보존하고 해당 문단의 표시 문자열을 다시 만든다.
                 let mut plain = String::new();
                 let mut push_plain = |new_runs: &mut Vec<_>, text: String| {
                     let mut piece = run.clone();
@@ -2687,6 +2687,11 @@ impl LayoutEngine {
     /// 같은 문단에 명시적으로 넣은 쪽번호 필드(`U+0015`)가 있어도 AutoNumber 컨트롤이
     /// 가리키는 위치만 처리해야 한다. 모든 `U+0015`를 일괄 치환하면 명시 필드의
     /// `display_text` 규약을 깨고, 필드 뒤의 캐럿이 다시 표시 문자열 공간으로 밀린다.
+    ///
+    /// marker와 뒤 공백을 별도 run으로 자르면 각 run의 정수 폭 반올림 때문에 SVG의
+    /// 소수 glyph advance와 다음 공백의 앵커가 어긋난다. 따라서 raw `text` 전체는
+    /// 그대로 두고, 그 동일 모델 run의 `display_text`만 재구성한다. 모델 길이는
+    /// 보존되며 SVG는 연속 표시 문자열의 문자별 정확한 advance를 사용한다.
     fn replace_composed_char_with_display(
         comp: &mut ComposedParagraph,
         abs_pos: usize,
@@ -2702,29 +2707,16 @@ impl LayoutEngine {
                     let rel_pos = abs_pos - run_start;
                     let mut chars = run.text.chars();
                     let before: String = chars.by_ref().take(rel_pos).collect();
-                    let Some(marker) = chars.next() else {
+                    let Some(_) = chars.next() else {
                         return false;
                     };
                     let after: String = chars.collect();
-                    let source = run.clone();
-                    let mut replacement_runs = Vec::with_capacity(3);
-                    if !before.is_empty() {
-                        let mut before_run = source.clone();
-                        before_run.text = before;
-                        before_run.display_text = None;
-                        replacement_runs.push(before_run);
-                    }
-                    let mut marker_run = source.clone();
-                    marker_run.text = marker.to_string();
-                    marker_run.display_text = Some(replacement.to_string());
-                    replacement_runs.push(marker_run);
-                    if !after.is_empty() {
-                        let mut after_run = source;
-                        after_run.text = after;
-                        after_run.display_text = None;
-                        replacement_runs.push(after_run);
-                    }
-                    line.runs.splice(run_idx..=run_idx, replacement_runs);
+                    let mut display = crate::renderer::composer::expand_pua_display_text(&before);
+                    display.push_str(replacement);
+                    display.push_str(&crate::renderer::composer::expand_pua_display_text(&after));
+                    // `line.runs[run_idx].text`는 marker를 포함한 원 모델 문자열이다.
+                    // 바꾸지 않아야 char_start/offset이 표시 자릿수에 끌려가지 않는다.
+                    line.runs[run_idx].display_text = Some(display);
                     return true;
                 }
                 run_start = run_end;

@@ -13,8 +13,8 @@ use super::super::{
 };
 use super::border_rendering::create_border_line_nodes;
 use super::text_measurement::{
-    compute_char_positions, estimate_text_width, extract_tab_leaders_with_extended,
-    find_next_tab_stop, resolved_to_text_style,
+    compute_char_positions, estimate_text_width, estimate_text_width_unrounded,
+    extract_tab_leaders_with_extended, find_next_tab_stop, resolved_to_text_style,
 };
 use super::utils::{
     expand_numbering_format, extract_shape_transform, find_bin_data,
@@ -4391,6 +4391,18 @@ impl LayoutEngine {
                 };
                 let chars: Vec<char> = run.text.chars().collect();
                 fs * crate::renderer::composer::char_overlap_advance_units(&chars) as f64
+            } else if run.display_text.is_some()
+                && run.text.chars().count() == 1
+                && matches!(
+                    run.text.chars().next(),
+                    Some('\u{0015}' | '\u{0016}' | '\u{0017}' | '\u{2007}')
+                )
+            {
+                // 필드 marker 한 글자와 표시 문자열의 폭이 소수 px일 수 있다. 이 런은
+                // 다음 조각과 분리되어 있으므로 정수 반올림을 하면 뒤의 fwSpace/텍스트
+                // 앵커가 SVG 실제 glyph advance보다 앞선다 (#3216, #1100). field 런만
+                // 비반올림 폭을 써서 모델 한 글자 경계와 표시 끝을 같은 좌표에 둔다.
+                estimate_text_width_unrounded(effective_text_for_metrics(run), &text_style)
             } else {
                 estimate_text_width(effective_text_for_metrics(run), &text_style)
             };
