@@ -1025,6 +1025,23 @@ pub fn render_font_family_chain(font_family: &str) -> String {
     }
 }
 
+/// Canvas 2D 렌더용 인용 font-family 체인.
+///
+/// [#3314] Canvas API가 요구하는 인용 형식을 유지하면서, 굵기 접미사 face
+/// 바로 뒤에 base family를 넣어 generic 폴백보다 먼저 선택되게 한다.
+/// 측정 경로에는 사용하지 않는다.
+pub fn canvas_font_family_chain(font_family: &str) -> String {
+    if font_family.is_empty() {
+        return "sans-serif".to_string();
+    }
+
+    let fallback = generic_fallback(font_family);
+    match base_family_without_weight_suffix(font_family) {
+        Some(base) => format!("\"{}\", \"{}\", {}", font_family, base, fallback),
+        None => format!("\"{}\", {}", font_family, fallback),
+    }
+}
+
 /// CSS generic fallback 반환 (serif 또는 sans-serif)
 ///
 /// 폰트 이름에 명조/바탕/궁서 등 세리프 계열 키워드가 포함되면 "serif",
@@ -1724,6 +1741,18 @@ mod tests {
         assert!(chain.starts_with("Noto Serif KR Black,'Noto Serif KR',"));
         let plain = render_font_family_chain("맑은 고딕");
         assert!(plain.starts_with("맑은 고딕,'Malgun Gothic'"));
+
+        assert_eq!(
+            canvas_font_family_chain("Noto Serif KR Black"),
+            format!(
+                "\"Noto Serif KR Black\", \"Noto Serif KR\", {}",
+                generic_fallback("Noto Serif KR Black")
+            )
+        );
+        assert_eq!(
+            canvas_font_family_chain("맑은 고딕"),
+            format!("\"맑은 고딕\", {}", generic_fallback("맑은 고딕"))
+        );
     }
 
     #[test]

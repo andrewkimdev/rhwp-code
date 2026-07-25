@@ -275,6 +275,17 @@ fn font_digest_matches_resource_bytes(digest: &crate::paint::FontDigest, actual:
     digest.algorithm == crate::paint::RESOURCE_KEY_ALGORITHM && digest.value == actual
 }
 
+const FORM_CJK_FAMILIES: &[&str] = &[
+    "Malgun Gothic",
+    "맑은 고딕",
+    "NanumGothic",
+    "나눔고딕",
+    "AppleGothic",
+    // #3300: 시스템 부재 headless 환경에서는 bundled_typefaces가 이 두 family를 제공한다.
+    "Noto Sans KR ExtraLight",
+    "Noto Sans KR",
+];
+
 pub struct SkiaLayerRenderer {
     font_mgr: FontMgr,
     /// 사용자 지정 폰트 디렉토리에서 미리 로드한 폰트 캐시.
@@ -1245,20 +1256,18 @@ impl LayerRasterRenderer for SkiaLayerRenderer {
 impl SkiaLayerRenderer {
     fn make_form_font(&self, size: f32) -> Font {
         let style = FontStyle::default();
-        let cjk_families = [
-            "Malgun Gothic",
-            "맑은 고딕",
-            "NanumGothic",
-            "나눔고딕",
-            "AppleGothic",
-        ];
-        for family in &cjk_families {
+        for family in FORM_CJK_FAMILIES {
             if let Some(tf) = self.custom_typefaces.get(*family).cloned() {
                 return Font::new(tf, size);
             }
             if let Some(tf) =
                 match_system_family_style(&self.font_mgr, &self.system_families, family, style)
             {
+                return Font::new(tf, size);
+            }
+            // [#3300] 시스템 폰트가 없는 headless 환경에서는 번들 폰트가
+            // custom·system 뒤의 최후 폴백으로 form caption의 한국어를 구제한다.
+            if let Some(tf) = self.bundled_typefaces.get(*family).cloned() {
                 return Font::new(tf, size);
             }
         }
@@ -1540,6 +1549,15 @@ mod tests {
         image::load_from_memory(bytes)
             .expect("decode png")
             .to_rgba8()
+    }
+
+    #[test]
+    fn issue_3300_form_family_chain_includes_bundled_noto_fallbacks() {
+        assert_eq!(
+            &FORM_CJK_FAMILIES[FORM_CJK_FAMILIES.len() - 2..],
+            &["Noto Sans KR ExtraLight", "Noto Sans KR"],
+            "form caption은 system 후보 뒤에 bundled Noto 최후 폴백까지 탐색해야 한다"
+        );
     }
 
     fn assert_channel(pixel: image::Rgba<u8>, channel: usize, min: u8, max: u8) {
