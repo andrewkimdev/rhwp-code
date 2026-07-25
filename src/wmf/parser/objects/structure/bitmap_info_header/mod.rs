@@ -169,14 +169,9 @@ impl BitmapInfoHeader {
     pub fn width(&self) -> usize {
         match self {
             Self::Core(BitmapInfoHeaderCore { width, .. }) => usize::from(*width),
-            // [정적분석] Width 는 스펙상 음수가 아니지만, 파일 바이트를 신뢰할 수
-            // 없으므로 음수를 그대로 `as usize` 캐스트하면 64비트에서 u64::MAX 에
-            // 가까운 값이 되어 하류(bitmap.rs expand_color_palette)의 곱셈 오버플로·
-            // 사실상 무한 루프·슬라이스 OOB 로 이어진다. `height()` 의 unsigned_abs
-            // 패턴과 동일하게 절대값으로 방어한다.
             Self::Info(BitmapInfoHeaderInfo { width, .. })
             | Self::V4(BitmapInfoHeaderV4 { width, .. })
-            | Self::V5(BitmapInfoHeaderV5 { width, .. }) => width.unsigned_abs() as usize,
+            | Self::V5(BitmapInfoHeaderV5 { width, .. }) => *width as usize,
         }
     }
 }
@@ -205,27 +200,5 @@ mod tests {
         });
 
         assert_eq!(header.height(), 10);
-    }
-
-    // [정적분석] 음수 Width 는 스펙 위반 입력이지만, 파서는 이를 거부하지 않고
-    // 그대로 통과시킨다. `width()` 가 절대값 없이 `as usize` 캐스트하면 64비트에서
-    // 거의 u64::MAX 에 가까운 값이 되어 하류 곱셈 오버플로/OOB 로 이어졌다.
-    #[test]
-    fn width_with_negative_value_does_not_wrap_to_huge_usize() {
-        let header = BitmapInfoHeader::Info(BitmapInfoHeaderInfo {
-            header_size: 40,
-            width: -1,
-            height: 10,
-            planes: 1,
-            bit_count: crate::wmf::parser::BitCount::BI_BITCOUNT_5,
-            compression: crate::wmf::parser::Compression::BI_RGB,
-            image_size: 0,
-            x_pels_per_meter: 0,
-            y_pels_per_meter: 0,
-            color_used: 0,
-            color_important: 0,
-        });
-
-        assert_eq!(header.width(), 1);
     }
 }

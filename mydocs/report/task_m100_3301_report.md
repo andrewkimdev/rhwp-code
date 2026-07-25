@@ -1,9 +1,8 @@
-# task_m100_3301 처리결과 보고서 — WMF/CFB 파서 메모리 안전 버그 3건
+# task_m100_3301 처리결과 보고서 — WMF/CFB 파서 안전 버그 2건
 
 - **이슈**: [#3301](https://github.com/edwardkim/rhwp/issues/3301)
 - **브랜치**: `pr/task-static-bugs-bundle` (upstream/devel 직분기)
 - **범위**: `src/wmf/parser/objects/structure/poly_polygon.rs`,
-  `src/wmf/parser/objects/structure/bitmap_info_header/mod.rs`,
   `src/parser/cfb_reader.rs`
 - **분류**: 버그 수정 (메모리/자원 안전, 정적 분석 발견)
 
@@ -13,7 +12,7 @@
 #3181 CFB DIFAT 순환 미탐지, WMF poly_line/polygon 미검증)와 같은 패턴을 코드베이스
 전역에서 정적으로 훑고, 각 발견을 독립 에이전트가 반박 시도하는 적대적 검증을 거쳐
 확정했다. 확정된 것 중 **서로 겹치지 않는 파일**·**정적 분석만으로 재현 가능**·
-**빌드/테스트 부담이 작은** 3건을 이번 PR 로 묶었다.
+**빌드/테스트 부담이 작은** 2건을 이번 PR 로 묶었다.
 
 ## 2. 버그 1 — WMF PolyPolygon 점 개수 누적 오버플로
 
@@ -31,20 +30,7 @@ wrap 되어 `aPointsPerPolygon` 이 요구하는 점 개수보다 적게 `aPoint
 `Vec::with_capacity` 는 사전 대량 할당을 피하기 위해 상한(1<<20)을 씌웠다 — 실제 벡터
 크기는 이후 입력 스트림 소진 시 자연히 제한된다.
 
-## 3. 버그 2 — WMF BitmapInfoHeader 음수 width 미검증
-
-`src/wmf/parser/objects/structure/bitmap_info_header/mod.rs:169`
-
-`height()` 는 MS-WMF 2.2.2.9 규약(음수 Height = top-down DIB, 절대값이 실제 픽셀 높이)에
-따라 `unsigned_abs()` 로 이미 방어하는데, `width()` 만 `*width as usize` 로 부호 검증
-없이 그대로 캐스트한다. 파일에서 읽은 음수 width 는 64비트 usize 에서 u64::MAX 근접값이
-되어, 하류(`src/wmf/converter/bitmap.rs` `expand_color_palette`)의 곱셈 오버플로·
-사실상 무한 루프·슬라이스 OOB 로 이어질 수 있다.
-
-**수정**: `height()` 와 동일하게 `width.unsigned_abs() as usize` 로 절대값 처리한다.
-음수 width 회귀 테스트(`width_with_negative_value_does_not_wrap_to_huge_usize`)를 추가.
-
-## 4. 버그 3 — CFB DIFAT→FAT sector id 중복 미검증 (DoS 증폭)
+## 3. 버그 2 — CFB DIFAT→FAT sector id 중복 미검증 (DoS 증폭)
 
 `src/parser/cfb_reader.rs` (`LenientCfbReader::open`)
 
@@ -61,15 +47,19 @@ FAT 벡터가 선형으로 폭증한다 — #3181 이 고친 "카운트 필드�
 양쪽에서 동일 id 를 조용히 건너뛴다. 유효한 파일의 정상 동작(각 id 가 원래 한 번씩만
 나타남)에는 영향이 없다.
 
-## 5. 검증
+## 4. 검증
 
-- `cargo test --release --lib` 전체: **2909 passed, 0 failed**(수정 전 2908 → 신규
-  회귀 테스트 1개 추가로 2909)
-- `cargo clippy --release --lib -- -D warnings`: 0
-- `rustfmt --check`: clean (3파일)
-- 실측 스모크: git-tracked 실제 HWP 파일 60건을 `rhwp info` 로 전수 파싱 — **60/60 성공**
-  (모두 CFB 컨테이너 경로를 타므로 버그 3 수정이 정상 파일에 영향 없음을 확인)
-- WMF 시드(`fuzz/corpus/parse_wmf/minimal_placeable.wmf`) 파싱 확인
+- `CARGO_INCREMENTAL=0 cargo test --profile release-test --lib`: **2921 passed, 0 failed,
+  7 ignored**
+- `CARGO_INCREMENTAL=0 cargo test --profile release-test --tests`: 통과
+- `CARGO_INCREMENTAL=0 cargo fmt --check`, `git diff --check`: 통과
+- `CARGO_INCREMENTAL=0 cargo clippy --all-targets -- -D warnings`: 통과
+
+## 5. 메인터너 보정
+
+원 PR의 음수 `width` 변경은 `BitmapInfoHeaderInfo::parse()`가 이미 `width <= 0`을
+오류로 거부하는 기존 경로와 중복이므로 제거했다. 두 실제 수정에는 각각 총점 65,536의
+PolyPolygon과 추가 DIFAT의 중복 FAT SID를 사용하는 회귀 테스트를 추가했다.
 
 ## 6. 남긴 것
 
