@@ -1,0 +1,33 @@
+---
+kind: reference
+status: active
+canonical: mydocs/manual/pr_review_workflow.md
+last_verified: 2026-07-26
+---
+
+# PR #3323 메인터너 보정 계획
+
+## 적용 순서
+
+1. 최신 `upstream/devel` `99732b2a1189`에서 `review/lpaiu-cs-hf-field-20260726`를 만들었다.
+2. contributor의 #3212 보정 revert `d9c5b325`와 #3216 본체 `ca8219d232`를 순서대로 적용했다.
+3. AutoNumber(Page) 치환은 blanket marker replacement를 제거하고 컨트롤 placeholder 위치만
+   `display_text` run으로 분리했다. 명시 필드와 AutoNumber가 공존하는 회귀 테스트를 추가했다.
+4. native `insertFieldInHf` 응답에 `insertedAt`·`insertedLength`를 추가했다. Studio history command는
+   redo의 원 cursor 좌표와 undo의 실제 marker 범위를 분리해 저장한다. trailing inline control 회귀와
+   Studio source contract test를 추가했다.
+
+## 검증·PR 준비
+
+1. Rust release-test 집중 회귀, 기존 #3216·#1144 회귀, 전체 Rust test, `cargo fmt --check`, Studio build/test와
+   Native Skia 필수 3종을 완료했다.
+2. `samples/SO-SUEOP.hwpx` 5쪽을 Native Skia PNG로 만들고 육안 확인한 뒤 review 기록에 inline asset으로
+   넣었다. AutoNumber(Page) `5`, 머리말 제목·밑줄, 꼬리말 학교명이 보이는 것을 확인했다.
+3. review 문서와 메인터너 보정을 한 commit으로 정리해 `devel` 대상 통합 PR을 만든다.
+4. 최신 head의 required CI가 통과하고 작업지시자가 승인한 뒤에만 merge한다.
+
+## rollback
+
+- display/model 규약 보정 전체를 되돌릴 때는 메인터너 보정 commit과 contributor commits를 역순으로
+  revert한다.
+- review 문서·asset만 되돌릴 때는 문서 commit만 revert하며 source·test 변경과 섞지 않는다.

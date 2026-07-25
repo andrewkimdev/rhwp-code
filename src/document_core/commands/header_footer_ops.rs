@@ -910,8 +910,8 @@ impl DocumentCore {
             len: 1,
         });
         Ok(super::super::helpers::json_ok_with(&format!(
-            "\"charOffset\":{}",
-            new_offset
+            "\"charOffset\":{},\"insertedAt\":{},\"insertedLength\":1",
+            new_offset, inserted_at
         )))
     }
 
@@ -1181,11 +1181,42 @@ mod tests {
             .insert_field_in_hf_native(0, true, 0, 0, 1, 1)
             .expect("page-number field after the file-name marker");
         assert!(result.contains("\"charOffset\":2"), "{result}");
+        assert!(result.contains("\"insertedAt\":1"), "{result}");
+        assert!(result.contains("\"insertedLength\":1"), "{result}");
 
         let info = core
             .get_header_footer_para_info_native(0, true, 0, 0)
             .unwrap();
         assert!(info.contains("\"charCount\":2"), "{info}");
+    }
+
+    /// 커서 좌표와 실제 텍스트 삽입 좌표가 다를 때에도 history가 지울 위치를
+    /// 정확히 받는다. trailing inline control 뒤의 위치는 cursor에서 유효하지만
+    /// 모델 텍스트에는 없으므로 `charOffset - 요청 offset`으로 길이를 계산하면 안 된다.
+    #[test]
+    fn field_insert_reports_actual_offset_separately_from_cursor_offset() {
+        let mut core = make_test_core();
+        core.create_header_footer_native(0, true, 0).unwrap();
+        {
+            let para = core.get_hf_paragraph_mut(0, true, 0, 0).unwrap();
+            para.text = "A".to_string();
+            para.char_offsets = vec![0];
+            para.controls.push(Control::Footnote(Box::default()));
+        }
+
+        // 텍스트 1자 뒤의 inline control까지 지나간 커서 좌표. 실제 marker는
+        // text index 1에 들어가지만, 커서는 여전히 control 뒤 위치 2를 가리킨다.
+        let result = core
+            .insert_field_in_hf_native(0, true, 0, 0, 2, 1)
+            .expect("field after trailing inline control");
+        assert!(result.contains("\"charOffset\":2"), "{result}");
+        assert!(result.contains("\"insertedAt\":1"), "{result}");
+        assert!(result.contains("\"insertedLength\":1"), "{result}");
+
+        core.delete_text_in_header_footer_native(0, true, 0, 0, 1, 1)
+            .expect("undo removes the marker at insertedAt");
+        let content = core.get_header_footer_native(0, true, 0).unwrap();
+        assert!(content.contains("\"text\":\"A\""), "{content}");
     }
 
     #[test]

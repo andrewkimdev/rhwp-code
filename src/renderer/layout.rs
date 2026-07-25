@@ -2566,20 +2566,11 @@ impl LayoutEngine {
 
         let page_str = page_number.to_string();
 
-        for line in &mut comp.lines {
-            for run in &mut line.runs {
-                if run.text.contains('\u{0015}') {
-                    run.text = run.text.replace('\u{0015}', &page_str);
-                    run.display_text = None;
-                }
-            }
-        }
-
         let mut positions = self.page_auto_number_placeholder_positions(para);
         positions.sort_unstable();
         positions.dedup();
         for pos in positions.into_iter().rev() {
-            Self::replace_composed_char(comp, pos, &page_str);
+            Self::replace_composed_char_with_display(comp, pos, &page_str);
         }
     }
 
@@ -2674,24 +2665,49 @@ impl LayoutEngine {
         })
     }
 
-    fn replace_composed_char(
+    /// AutoNumber의 모델 placeholder 한 글자를 유지한 채 표시값만 바꾼다.
+    ///
+    /// 같은 문단에 명시적으로 넣은 쪽번호 필드(`U+0015`)가 있어도 AutoNumber 컨트롤이
+    /// 가리키는 위치만 처리해야 한다. 모든 `U+0015`를 일괄 치환하면 명시 필드의
+    /// `display_text` 규약을 깨고, 필드 뒤의 캐럿이 다시 표시 문자열 공간으로 밀린다.
+    fn replace_composed_char_with_display(
         comp: &mut ComposedParagraph,
         abs_pos: usize,
         replacement: &str,
     ) -> bool {
         for line in &mut comp.lines {
             let mut run_start = line.char_start;
-            for run in &mut line.runs {
+            for run_idx in 0..line.runs.len() {
+                let run = &line.runs[run_idx];
                 let run_len = run.text.chars().count();
                 let run_end = run_start + run_len;
                 if abs_pos >= run_start && abs_pos < run_end {
                     let rel_pos = abs_pos - run_start;
                     let mut chars = run.text.chars();
                     let before: String = chars.by_ref().take(rel_pos).collect();
-                    let _ = chars.next();
+                    let Some(marker) = chars.next() else {
+                        return false;
+                    };
                     let after: String = chars.collect();
-                    run.text = format!("{before}{replacement}{after}");
-                    run.display_text = None;
+                    let source = run.clone();
+                    let mut replacement_runs = Vec::with_capacity(3);
+                    if !before.is_empty() {
+                        let mut before_run = source.clone();
+                        before_run.text = before;
+                        before_run.display_text = None;
+                        replacement_runs.push(before_run);
+                    }
+                    let mut marker_run = source.clone();
+                    marker_run.text = marker.to_string();
+                    marker_run.display_text = Some(replacement.to_string());
+                    replacement_runs.push(marker_run);
+                    if !after.is_empty() {
+                        let mut after_run = source;
+                        after_run.text = after;
+                        after_run.display_text = None;
+                        replacement_runs.push(after_run);
+                    }
+                    line.runs.splice(run_idx..=run_idx, replacement_runs);
                     return true;
                 }
                 run_start = run_end;
