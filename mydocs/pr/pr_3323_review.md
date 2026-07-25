@@ -14,16 +14,18 @@ last_verified: 2026-07-26
 | 원 PR | [#3323](https://github.com/edwardkim/rhwp/pull/3323) |
 | 작성자 | `lpaiu-cs` |
 | 관련 이슈 | #3216 (`closes #3216`은 통합 PR merge 뒤에만 실제 close 여부 확인) |
-| 원 head | `ca8219d232dcce2a081e1a6dccd789a4482bb16c` |
-| 원 base / 상태 | `devel` / `BEHIND` (검토 착수 시점) |
+| 원 head | `701a4906e9560fa398c092afbed167113634f334` |
+| 원 base / 상태 | `devel` / `BEHIND` (P2 반영 뒤 검토 시점) |
 | 원 변경 | 30 파일, +367/-80 |
 | 검토 branch | `review/lpaiu-cs-hf-field-20260726` |
 | 검토 base | `upstream/devel` `99732b2a1189` |
-| 적용한 contributor commits | `d9c5b325` → `9e78b00c6`, `ca8219d232` → `07bbc1492` |
+| 적용한 contributor commits | `d9c5b325` → `9e78b00c6`, `ca8219d232` → `07bbc1492`, `5ce61c9` → `cf2e52cc7` |
 | 검토 라우트 | `maintainer_general` + `intake_and_review`, `local_validation`, `visual_fixture_evidence`, `rework_and_exceptions` |
 
-원 tip만 체리픽하면 이미 revert된 #3212 보정이 빠져 충돌한다. 따라서 PR 범위의 두 commit을 최신
-`devel` 위에 순서대로 적용했으며, 누적 적용은 clean이다. reviewer는 `jangster77`로 요청했다.
+원 tip만 체리픽하면 이미 revert된 #3212 보정이 빠져 충돌한다. 따라서 PR 범위의 첫 두 commit을 최신
+`devel` 위에 순서대로 적용했다. 이후 contributor가 `upstream/devel` merge와 P2 `5ce61c9`를 새로
+push했으므로, 최신 `devel`에 이미 있는 merge commit은 제외하고 P2 기능 commit만 clean cherry-pick했다.
+reviewer는 `jangster77`로 요청했다.
 
 ## 원 변경 검토와 메인터너 보정
 
@@ -40,6 +42,9 @@ last_verified: 2026-07-26
    control 뒤 cursor에서는 native의 실제 text 삽입 위치와 달라 음수 길이 또는 잘못된 undo 범위가 될 수
    있었다. native 응답에 `insertedAt`·`insertedLength`를 명시하고, redo에는 원 cursor 좌표를,
    undo에는 실제 모델 범위를 사용하도록 고쳤다.
+3. contributor P2는 marker로 split된 before/after 조각이 원 run의 전체 `display_text`를 상속해 주변
+   글자를 중복 표시할 수 있던 문제를 조각별 PUA display 재계산으로 고쳤다. 또한 사람용 page text·Markdown
+   추출이 raw marker가 아니라 display text를 사용하도록 배선하고 회귀 2건을 추가했다.
 
 세부 적용·rollback은 [implementation 계획](pr_3323_review_impl.md)에 기록한다.
 
@@ -58,6 +63,7 @@ last_verified: 2026-07-26
 
 - 생성 명령: `target/review-lpaiu-cs-hf-field-20260726/release/rhwp export-png samples/SO-SUEOP.hwpx --page 4 --output mydocs/pr/assets --max-dimension 1600`
 - 산출물: `794 × 1123` RGBA PNG, SHA-256 `c4aa6cd11853ccc2a59db16631e5d04d58a2f19980b6c8d0860e579ff75211da`
+- P2 포함 릴리스 바이너리로 재생성해 같은 SHA임을 확인했다.
 - 기준 PDF는 원 PR에 없으므로 PDF 대조를 주장하지 않는다.
 
 이 기록을 작성하는 시점에는 아직 원격 push나 GitHub comment를 하지 않았다.
@@ -71,20 +77,22 @@ last_verified: 2026-07-26
 | --- | --- |
 | `git diff --check` | 통과 |
 | `cargo fmt --check` | 통과 |
-| 원 PR 집중 Rust: `issue_3216_hf_field_display_space` | 보정 전·후 통과 (3 tests) |
+| 원 PR·P2 집중 Rust: `issue_3216_hf_field_display_space` | 최신 head에서 통과 (5 tests) |
 | 원 PR 보조 Rust: `issue_1144` | 통과 (4 tests) |
 | AutoNumber placeholder 회귀: `issue_1113_header_autonum_placeholder` | 통과 (1 test) |
-| 전체 Rust: `cargo test --profile release-test --tests` | 통과 |
-| Studio `npm run build` | 통과 |
-| Studio `npm test` | 통과 (637 tests) |
+| 전체 Rust: `cargo test --profile release-test --tests` | P2 포함 최신 head에서 재실행 통과 |
+| Studio `npm run build` | 통과 (P2는 Studio 파일을 변경하지 않음) |
+| Studio `npm test` | 통과 (637 tests, P2는 Studio 파일을 변경하지 않음) |
 | 메인터너 AutoNumber/필드 회귀 | 통과 (1 test) |
 | 메인터너 inline-control history 회귀 | 통과 (1 test) |
-| Native Skia lib: `--features native-skia skia --lib` | 통과 (57 tests) |
+| Native Skia lib: `--features native-skia skia --lib` | P2 포함 최신 head에서 통과 (57 tests) |
 | Native Skia placeholder: `issue_2225_missing_picture_placeholder` | 통과 (2 tests) |
 | Native Skia PDF: `render_p37_direct_pdf_export` | 통과 (4 tests) |
 
 ## 현재 권고
 
-**메인터너 보정 포함 후 최신 head 검증·시각 증적이 완료되면 merge 준비 가능.** 원 #3323은 stale
+**메인터너 보정과 contributor P2를 포함한 최신 head 검증·시각 증적이 완료됐다.** 원 #3323은 stale
 base이므로, 원 contributor branch의 update 대신 이 최신 `devel` 기반 검토 branch에서 contributor credit과
-메인터너 보정을 포함한 통합 PR로 처리한다. 원격 push, PR 생성·comment, merge·close는 아직 하지 않았다.
+메인터너 보정을 포함한 통합 PR [#3325](https://github.com/edwardkim/rhwp/pull/3325)로 처리한다. 최신 push 뒤
+full CI 통과와 작업지시자 merge 승인이 남았으며, 원 #3323 close·contributor comment·#3216 close 여부는 merge
+뒤에 확인한다.

@@ -16,11 +16,14 @@ last_verified: 2026-07-26
 4. native `insertFieldInHf` 응답에 `insertedAt`·`insertedLength`를 추가했다. Studio history command는
    redo의 원 cursor 좌표와 undo의 실제 marker 범위를 분리해 저장한다. trailing inline control 회귀와
    Studio source contract test를 추가했다.
+5. contributor가 최신 `devel` merge 뒤 P2 `5ce61c9`를 push했다. 이미 base에 있는 merge는 중복 적용하지
+   않고 P2만 `cf2e52cc7`으로 적용해, split 조각별 PUA display 재계산 및 page text 추출 배선을 포함했다.
 
 ## 검증·PR 준비
 
-1. Rust release-test 집중 회귀, 기존 #3216·#1144 회귀, 전체 Rust test, `cargo fmt --check`, Studio build/test와
-   Native Skia 필수 3종을 완료했다.
+1. Rust release-test 집중 회귀(최신 P2 포함 5 tests), 기존 #3216·#1144 회귀, 전체 Rust test,
+   `cargo fmt --check`와 Native Skia 필수 3종을 최신 head에서 완료했다. Studio build/test는 P2가 Studio
+   파일을 바꾸지 않아 기존 통과 결과(637 tests)를 유지한다.
 2. `samples/SO-SUEOP.hwpx` 5쪽을 Native Skia PNG로 만들고 육안 확인한 뒤 review 기록에 inline asset으로
    넣었다. AutoNumber(Page) `5`, 머리말 제목·밑줄, 꼬리말 학교명이 보이는 것을 확인했다.
 3. review 문서와 메인터너 보정을 한 commit으로 정리해 `devel` 대상 통합 PR을 만든다.
