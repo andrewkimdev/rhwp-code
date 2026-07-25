@@ -17,6 +17,7 @@ last_verified: 2026-07-17
 
 ## 최근 분류된 레이아웃·왕복 충실도 항목
 
+- [raw_data 를 문 clone 뮤테이션 — 화면엔 보이고 저장엔 사라짐](raw_data_stale_clone_on_mutation.md)
 - [지연 셀 편집의 캐시·페이지네이션 정합성 진단](deferred_cell_edit_cache_coherence.md)
 - [하단 앵커의 선언 높이와 실측 높이 불일치](bottom_anchor_declared_vs_rendered_height.md)
 - [HWPX 표 outMargin과 common.margin 동기화](hwpx_table_out_margin_common_margin_sync.md)
