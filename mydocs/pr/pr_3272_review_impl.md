@@ -9,9 +9,9 @@ last_verified: 2026-07-25
 
 ## 적용 순서
 
-1. 최신 `upstream/devel` `b2e4340ab`에서 `review/lpaiu-cs-20260725`를 만들었다.
-2. performance 본체 `7c098e0d`를 `a89a2ad7d`로 체리픽했다.
-3. P1 BMP 표본 충돌 보정 `b873d66a`를 `503fe7b60`으로 이어 적용했다.
+1. 최신 `upstream/devel` `efc4b6c4c`에서 `review/lpaiu-cs-20260725`를 최신화했다.
+2. performance 본체 `7c098e0d`를 `c0c566a4c`로 체리픽했다.
+3. P1 BMP 표본 충돌 보정 `b873d66a`를 `640d41320`으로 이어 적용했다.
 4. 원 branch의 devel merge commit `ab811440`은 최신 base가 이미 포함하므로 적용하지 않았다.
 
 ## PR 준비와 merge 후
@@ -24,6 +24,6 @@ last_verified: 2026-07-25
 
 ## rollback
 
-- P1을 포함한 메모 전체를 되돌릴 때: `503fe7b60`, `a89a2ad7d`를 역순으로 revert한다.
+- P1을 포함한 메모 전체를 되돌릴 때: `640d41320`, `c0c566a4c`를 역순으로 revert한다.
 - asset·review 기록만 되돌릴 때는 docs commit만 revert한다. source/fixture/baseline 변경은 이 기록 commit에
   섞지 않는다.

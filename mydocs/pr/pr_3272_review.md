@@ -17,8 +17,8 @@ last_verified: 2026-07-25
 | 원 head | `ab811440bc500c96109d78228da679589f214dc6` (작성 시점 참고값) |
 | base / 상태 | `devel` / `MERGEABLE`, `BEHIND` (작성 시점 참고값) |
 | 원 변경 | 1 파일, +306/-15 (`src/renderer/image_resolver.rs`) |
-| 누적 검토 branch | `review/lpaiu-cs-20260725` (`upstream/devel` `b2e4340aba555961ae5c550235105e45104e9b4b`) |
-| 적용한 contributor commits | `7c098e0d164f242742c86754bcc921f2b3991afb` → `a89a2ad7d`, `b873d66a3720447758874c9410e6f82cdcce244c` → `503fe7b60` |
+| 누적 검토 branch | `review/lpaiu-cs-20260725` (`upstream/devel` `efc4b6c4c58b696c2fd4d28bbb82cbfeb6e0499d`) |
+| 적용한 contributor commits | `7c098e0d164f242742c86754bcc921f2b3991afb` → `c0c566a4c`, `b873d66a3720447758874c9410e6f82cdcce244c` → `640d41320` |
 
 ## 변경 검토
 
@@ -42,12 +42,12 @@ renderer 변경이므로 Native Skia before/current 대조를 수행했다. 원 
 | 항목 | 값 |
 | --- | --- |
 | 원본 | `samples/KTX.hwp` (SHA-256 `b6c1492152f53e8dd7d4bbbb4faca88866bb8458e9018c70c936cd469ea6fab3`) |
-| 기준 | `devel` `b2e4340ab` Native Skia release binary |
-| 현재 | integration head `864dc6a5a` Native Skia release binary |
+| 기준 | `devel` `efc4b6c4c` Native Skia release binary |
+| 현재 | code head `40f2f4a3d` Native Skia release binary |
 | 방법 | `export-png`으로 image node 포함 1·17쪽을 각각 출력 후 SHA-256 및 pixel 비교 |
-| 결과 | 1쪽 `3e4f…2bad`, 17쪽 `e2d1…48cf`: 기준·현재 PNG SHA-256이 각각 동일, pixel match 100% |
-| 임시 산출물 | `/tmp/rhwp-3272-visual/{base,current}-p001`, `{base,current}-p017` |
-| 대표 asset | `mydocs/pr/assets/pr_3272_lpaiu-cs_issue2520_p001_review.png` (SHA-256 `88cdacb7e242e600d12d1e7743900576bbc1b92f4175d3492183d5b62458e29b`) |
+| 결과 | 1쪽 `4d7508…b7f56`, 17쪽 `3f6586…856d9`: 기준·현재 PNG SHA-256이 각각 동일, pixel match 100% |
+| 임시 산출물 | `/tmp/rhwp-3272-visual.MA5Un0/{base,current}-p001`, `{base,current}-p017` |
+| 대표 asset | `mydocs/pr/assets/pr_3272_lpaiu-cs_issue2520_p001_review.png` (SHA-256 `5026c386ca8f760a51fc213f0871dda36575302bdc1e989d2976b509630eafbe`) |
 
 ![KTX p001 Native Skia devel/current review](assets/pr_3272_lpaiu-cs_issue2520_p001_review.png)
 

@@ -16,9 +16,9 @@ last_verified: 2026-07-25
 | 원 head | `ecdbc83af7cd2a795bd0fb84fd426dfce8a30849` (작성 시점 참고값) |
 | base / 상태 | `devel` / `MERGEABLE`, `CLEAN`, 본문은 WIP 누적 트래커라고 명시 (모두 작성 시점 참고값) |
 | 원 변경 | 1 파일, +3/-2 (`rhwp-studio/src/command/commands/insert.ts`) |
-| 누적 검토 branch | `review/lpaiu-cs-20260725` (`upstream/devel` `b2e4340aba555961ae5c550235105e45104e9b4b`) |
-| 적용한 contributor commit | `87f196b235c7e08f27b7a2c226e0a991f04841cc` → `7ed6f0711` |
-| maintainer 보정 | `8b9cd0917`, `864dc6a5a` — contributor 원 변경과 분리 |
+| 누적 검토 branch | `review/lpaiu-cs-20260725` (`upstream/devel` `efc4b6c4c58b696c2fd4d28bbb82cbfeb6e0499d`) |
+| 적용한 contributor commit | `87f196b235c7e08f27b7a2c226e0a991f04841cc` → `98f7cd453` |
+| maintainer 보정 | `fcfc966fa`, `40f2f4a3d` — contributor 원 변경과 분리 |
 
 ## 범위와 메인터너 지시 이행
 
