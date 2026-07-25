@@ -33,7 +33,7 @@ reviewer는 `jangster77`로 요청했다.
 유지하고, 화면 표시만 `display_text`로 확장한다. 이 규약은 hit test와 편집이 표시 문자열 길이가 아니라
 모델 오프셋을 쓰도록 만드는 핵심이다.
 
-검토 중 다음 두 결함을 확인해 메인터너 보정으로 현재 branch에 추가했다.
+검토 중 확인된 결함과 최초 통합 PR CI에서 드러난 후속 회귀를 메인터너 보정으로 현재 branch에 반영했다.
 
 1. `AutoNumber(Page)`가 있는 문단에서 기존 blanket `U+0015` 치환이 명시 쪽번호 필드까지 다시
    표시 문자열로 바꿔 `text`/`char_start` 정합을 깨뜨렸다. AutoNumber 컨트롤이 가리키는 위치만
@@ -45,6 +45,14 @@ reviewer는 `jangster77`로 요청했다.
 3. contributor P2는 marker로 split된 before/after 조각이 원 run의 전체 `display_text`를 상속해 주변
    글자를 중복 표시할 수 있던 문제를 조각별 PUA display 재계산으로 고쳤다. 또한 사람용 page text·Markdown
    추출이 raw marker가 아니라 display text를 사용하도록 배선하고 회귀 2건을 추가했다.
+4. 최초 #3325 CI의 Default-feature shard 7은 실제 PNG/SVG가 아니라 `getPageRenderTree()` JSON이
+   `TextRunNode.display_text`를 내보내지 않아, SO-SUEOP 5쪽의 footer AutoNumber(Page) `5`를 raw marker로만
+   관찰한 문제였다. raw `text` 모델 좌표는 그대로 두고 조건부 `displayText`를 함께 직렬화했으며,
+   #1692 검증은 표시 문자열 우선으로 실제 사용자 표시값을 검사하도록 고쳤다.
+5. 전체 release-test에서 기존 #1100이 AutoNumber 뒤 `fwSpace`의 SVG x 앵커 불일치를 잡았다. AutoNumber
+   marker와 뒤 공백을 정수 폭으로 분리하면 SVG의 소수 glyph advance보다 다음 공백이 앞서므로, raw 모델 run은
+   유지하고 그 run의 `display_text`만 다시 구성하도록 바로잡았다. 단일 명시 field marker는 비반올림 bbox 폭과
+   bbox 끝 기반 캐럿 경계를 써 모델 한 글자/표시 문자열의 좌표를 맞춘다. #1100의 기존 실제 SVG 계약이 재통과했다.
 
 세부 적용·rollback은 [implementation 계획](pr_3323_review_impl.md)에 기록한다.
 
@@ -61,9 +69,9 @@ reviewer는 `jangster77`로 요청했다.
 
 ![SO-SUEOP HWPX 5쪽 — Native Skia 머리말/꼬리말과 쪽번호 표시 검증](assets/pr_3323_lpaiu-cs_issue3216_p005_review.png)
 
-- 생성 명령: `target/review-lpaiu-cs-hf-field-20260726/release/rhwp export-png samples/SO-SUEOP.hwpx --page 4 --output mydocs/pr/assets --max-dimension 1600`
+- 생성 명령: `target/review-lpaiu-cs-hf-field-20260726/release/rhwp export-png samples/SO-SUEOP.hwpx --page 4 --output <temporary-output-dir> --max-dimension 1600` 뒤 실제 산출물을 이 asset 경로에 반영
 - 산출물: `794 × 1123` RGBA PNG, SHA-256 `c4aa6cd11853ccc2a59db16631e5d04d58a2f19980b6c8d0860e579ff75211da`
-- P2 포함 릴리스 바이너리로 재생성해 같은 SHA임을 확인했다.
+- P2·render-tree JSON·AutoNumber 앵커 보정까지 포함한 최종 release 바이너리로 재생성해 같은 SHA와 바이트 동일성을 확인했다.
 - 기준 PDF는 원 PR에 없으므로 PDF 대조를 주장하지 않는다.
 
 이 기록을 작성하는 시점에는 아직 원격 push나 GitHub comment를 하지 않았다.
@@ -80,19 +88,22 @@ reviewer는 `jangster77`로 요청했다.
 | 원 PR·P2 집중 Rust: `issue_3216_hf_field_display_space` | 최신 head에서 통과 (5 tests) |
 | 원 PR 보조 Rust: `issue_1144` | 통과 (4 tests) |
 | AutoNumber placeholder 회귀: `issue_1113_header_autonum_placeholder` | 통과 (1 test) |
-| 전체 Rust: `cargo test --profile release-test --tests` | P2 포함 최신 head에서 재실행 통과 |
+| 전체 Rust: `cargo test --profile release-test --tests` | 최종 head에서 통과 (lib 2,923 passed, 7 ignored 및 모든 integration test binary exit 0) |
+| #1100 AutoNumber 뒤 `fwSpace` 실제 SVG 앵커 | 통과 (3 tests) |
+| #1692 SO-SUEOP 5쪽 render-tree 표시 문자열 계약 | 통과 (1 test) |
 | Studio `npm run build` | 통과 (P2는 Studio 파일을 변경하지 않음) |
 | Studio `npm test` | 통과 (637 tests, P2는 Studio 파일을 변경하지 않음) |
 | 메인터너 AutoNumber/필드 회귀 | 통과 (1 test) |
 | 메인터너 inline-control history 회귀 | 통과 (1 test) |
-| Native Skia lib: `--features native-skia skia --lib` | P2 포함 최신 head에서 통과 (57 tests) |
+| Native Skia lib: `--features native-skia skia --lib` | 최종 head에서 통과 (57 tests) |
 | Native Skia placeholder: `issue_2225_missing_picture_placeholder` | 통과 (2 tests) |
 | Native Skia PDF: `render_p37_direct_pdf_export` | 통과 (4 tests) |
 
 ## 현재 권고
 
-**메인터너 보정과 contributor P2를 포함한 최신 head 검증·시각 증적이 완료됐다.** 원 #3323은 stale
+**메인터너 보정과 contributor P2를 포함한 최종 head의 검증·시각 증적이 완료됐다.** 원 #3323은 stale
 base이므로, 원 contributor branch의 update 대신 이 최신 `devel` 기반 검토 branch에서 contributor credit과
-메인터너 보정을 포함한 통합 PR [#3325](https://github.com/edwardkim/rhwp/pull/3325)로 처리한다. 최신 push 뒤
+메인터너 보정을 포함한 통합 PR [#3325](https://github.com/edwardkim/rhwp/pull/3325)로 처리한다. 최초 CI 실패
+(render-tree `displayText` 누락)와 전체 테스트에서 발견된 #1100 앵커 회귀는 현 head에서 보정했다. 최신 push 뒤
 full CI 통과와 작업지시자 merge 승인이 남았으며, 원 #3323 close·contributor comment·#3216 close 여부는 merge
 뒤에 확인한다.
