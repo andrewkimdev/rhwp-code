@@ -2,7 +2,7 @@
 
 - Issue: [#3319](https://github.com/edwardkim/rhwp/issues/3319)
 - Branch: `task/3319-hwpx-ole-selection`
-- 상태: 구현·로컬 검증 완료, PR 생성 승인 대기
+- 상태: [PR #3321](https://github.com/edwardkim/rhwp/pull/3321) CI 성공, merge 승인 대기
 
 ## 결과
 

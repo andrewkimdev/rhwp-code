@@ -33,4 +33,6 @@ E2E는 모든 assertion을 통과했다. 실제 선택 테두리·회전 핸들�
 
 ## 다음 단계
 
-현재 변경은 PR 생성 전 준비 상태다. PR 생성·push·Issue close는 작업지시자 승인 뒤 진행한다.
+[#3321](https://github.com/edwardkim/rhwp/pull/3321)을 `devel` 대상으로 생성·push했고, 구현 head의
+CI·CodeQL·Render Diff가 모두 성공했다. PR은 merge 승인 대기다. merge 뒤 `Closes #3319`의 실제
+Issue close와 branch·검토 전용 target 정리를 확인한다.
