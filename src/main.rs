@@ -894,15 +894,9 @@ fn allows_implicit_sibling_resources(format: rhwp::parser::FileFormat) -> bool {
 }
 
 fn export_svg(args: &[String]) -> i32 {
-    if args.is_empty() {
-        eprintln!("오류: 문서 파일 경로를 지정해주세요.");
-        eprintln!(
-            "사용법: rhwp export-svg <파일.hwp|파일.hwpx|파일.hml> [옵션] (rhwp --help 참조)"
-        );
-        return EXIT_USAGE;
-    }
-
-    let file_path = &args[0];
+    // [#3359] 위치 인자 파싱은 export-structure/export-text(#3349) 규약과 동일 —
+    // 첫 비플래그 토큰이 파일이고 옵션은 위치 무관이다.
+    let mut file_path: Option<&str> = None;
     let mut output_dir = "output".to_string();
     let mut target_page: Option<u32> = None;
     let mut show_para_marks = false;
@@ -916,7 +910,7 @@ fn export_svg(args: &[String]) -> i32 {
     let mut render_profile: Option<rhwp::paint::RenderProfile> = None;
     let mut json_mode = false;
 
-    let mut i = 1;
+    let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
             "--output" | "-o" => {
@@ -1050,12 +1044,27 @@ fn export_svg(args: &[String]) -> i32 {
                 json_mode = true;
                 i += 1;
             }
-            _ => {
-                eprintln!("알 수 없는 옵션: {}", args[i]);
+            other if other.starts_with('-') => {
+                eprintln!("알 수 없는 옵션: {other}");
                 return EXIT_USAGE;
+            }
+            other => {
+                if file_path.replace(other).is_some() {
+                    eprintln!("오류: 입력 파일은 하나만 지정할 수 있습니다: {other}");
+                    return EXIT_USAGE;
+                }
+                i += 1;
             }
         }
     }
+
+    let Some(file_path) = file_path else {
+        eprintln!("오류: 문서 파일 경로를 지정해주세요.");
+        eprintln!(
+            "사용법: rhwp export-svg <파일.hwp|파일.hwpx|파일.hml> [옵션] (rhwp --help 참조)"
+        );
+        return EXIT_USAGE;
+    };
 
     if render_profile.is_some() && font_embed_mode != rhwp::renderer::svg::FontEmbedMode::None {
         eprintln!("오류: --profile은 --font-style/--embed-fonts와 함께 사용할 수 없습니다.");
@@ -1232,20 +1241,15 @@ fn export_svg(args: &[String]) -> i32 {
 }
 
 fn export_render_tree(args: &[String]) -> i32 {
-    if args.is_empty() {
-        eprintln!("오류: HWP 파일 경로를 지정해주세요.");
-        eprintln!("사용법: rhwp export-render-tree <파일.hwp> [옵션] (rhwp --help 참조)");
-        return EXIT_USAGE;
-    }
-
-    let file_path = &args[0];
+    // [#3359] 위치 인자 파싱은 export-structure/export-text(#3349) 규약과 동일.
+    let mut file_path: Option<&str> = None;
     let mut output_dir = "output".to_string();
     let mut target_page: Option<u32> = None;
     let mut show_para_marks = false;
     let mut show_control_codes = false;
     let mut respect_vpos_reset = false;
 
-    let mut i = 1;
+    let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
             "--output" | "-o" => {
@@ -1284,12 +1288,25 @@ fn export_render_tree(args: &[String]) -> i32 {
                 respect_vpos_reset = true;
                 i += 1;
             }
-            _ => {
-                eprintln!("알 수 없는 옵션: {}", args[i]);
+            other if other.starts_with('-') => {
+                eprintln!("알 수 없는 옵션: {other}");
                 return EXIT_USAGE;
+            }
+            other => {
+                if file_path.replace(other).is_some() {
+                    eprintln!("오류: 입력 파일은 하나만 지정할 수 있습니다: {other}");
+                    return EXIT_USAGE;
+                }
+                i += 1;
             }
         }
     }
+
+    let Some(file_path) = file_path else {
+        eprintln!("오류: HWP 파일 경로를 지정해주세요.");
+        eprintln!("사용법: rhwp export-render-tree <파일.hwp> [옵션] (rhwp --help 참조)");
+        return EXIT_USAGE;
+    };
 
     let data = match fs::read(file_path) {
         Ok(d) => d,
@@ -1642,13 +1659,8 @@ fn export_png(_args: &[String]) -> i32 {
 fn export_png(args: &[String]) -> i32 {
     use rhwp::document_core::queries::rendering::{PngExportOptions, VlmTarget};
 
-    if args.is_empty() {
-        eprintln!("오류: HWP 파일 경로를 지정해주세요.");
-        eprintln!("사용법: rhwp export-png <파일.hwp> [옵션] (rhwp --help 참조)");
-        return EXIT_USAGE;
-    }
-
-    let file_path = &args[0];
+    // [#3359] 위치 인자 파싱은 export-structure/export-text(#3349) 규약과 동일.
+    let mut file_path: Option<&str> = None;
     let mut output_dir = "output".to_string();
     let mut target_page: Option<u32> = None;
     let mut font_paths: Vec<std::path::PathBuf> = Vec::new();
@@ -1659,7 +1671,7 @@ fn export_png(args: &[String]) -> i32 {
     // PNG export is print-equivalent output. Editor visuals require an explicit screen profile.
     let mut render_profile = rhwp::paint::RenderProfile::HighQuality;
 
-    let mut i = 1;
+    let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
             "--output" | "-o" => {
@@ -1775,12 +1787,25 @@ fn export_png(args: &[String]) -> i32 {
                     return EXIT_USAGE;
                 }
             }
-            _ => {
-                eprintln!("알 수 없는 옵션: {}", args[i]);
+            other if other.starts_with('-') => {
+                eprintln!("알 수 없는 옵션: {other}");
                 return EXIT_USAGE;
+            }
+            other => {
+                if file_path.replace(other).is_some() {
+                    eprintln!("오류: 입력 파일은 하나만 지정할 수 있습니다: {other}");
+                    return EXIT_USAGE;
+                }
+                i += 1;
             }
         }
     }
+
+    let Some(file_path) = file_path else {
+        eprintln!("오류: HWP 파일 경로를 지정해주세요.");
+        eprintln!("사용법: rhwp export-png <파일.hwp> [옵션] (rhwp --help 참조)");
+        return EXIT_USAGE;
+    };
 
     let png_options = PngExportOptions {
         scale,
@@ -1906,12 +1931,7 @@ fn export_png(args: &[String]) -> i32 {
 }
 
 fn export_pdf(args: &[String]) -> i32 {
-    if args.is_empty() {
-        eprintln!("오류: 문서 파일 경로를 지정해주세요.");
-        print_export_pdf_usage();
-        return 2;
-    }
-    if args[0] == "--help" || args[0] == "-h" {
+    if args.first().is_some_and(|a| a == "--help" || a == "-h") {
         print_export_pdf_usage();
         return 0;
     }
@@ -1924,7 +1944,8 @@ fn export_pdf(args: &[String]) -> i32 {
 
     #[cfg(not(target_arch = "wasm32"))]
     {
-        let file_path = &args[0];
+        // [#3359] 위치 인자 파싱은 export-structure/export-text(#3349) 규약과 동일.
+        let mut file_path: Option<&str> = None;
         let mut output_file = String::new();
         let mut target_page: Option<u32> = None;
         let mut pdf_backend = rhwp::renderer::pdf::PdfBackend::default();
@@ -1934,7 +1955,7 @@ fn export_pdf(args: &[String]) -> i32 {
         let mut compatibility_only_options = Vec::new();
         let mut direct_raster_dpi_was_set = false;
 
-        let mut i = 1;
+        let mut i = 0;
         while i < args.len() {
             match args[i].as_str() {
                 "--output" | "-o" => {
@@ -2131,13 +2152,26 @@ fn export_pdf(args: &[String]) -> i32 {
                     );
                     i += 1;
                 }
-                _ => {
-                    eprintln!("알 수 없는 옵션: {}", args[i]);
+                other if other.starts_with('-') => {
+                    eprintln!("알 수 없는 옵션: {other}");
                     print_export_pdf_usage();
                     return 2;
                 }
+                other => {
+                    if file_path.replace(other).is_some() {
+                        eprintln!("오류: 입력 파일은 하나만 지정할 수 있습니다: {other}");
+                        return 2;
+                    }
+                    i += 1;
+                }
             }
         }
+
+        let Some(file_path) = file_path else {
+            eprintln!("오류: 문서 파일 경로를 지정해주세요.");
+            print_export_pdf_usage();
+            return 2;
+        };
 
         compatibility_only_options.sort_unstable();
         compatibility_only_options.dedup();
@@ -2589,17 +2623,12 @@ fn export_tables(args: &[String]) -> i32 {
 }
 
 fn export_markdown(args: &[String]) -> i32 {
-    if args.is_empty() {
-        eprintln!("오류: HWP 파일 경로를 지정해주세요.");
-        eprintln!("사용법: rhwp export-markdown <파일.hwp> [옵션] (rhwp --help 참조)");
-        return EXIT_USAGE;
-    }
-
-    let file_path = &args[0];
+    // [#3359] 위치 인자 파싱은 export-structure/export-text(#3349) 규약과 동일.
+    let mut file_path: Option<&str> = None;
     let mut output_dir = "output".to_string();
     let mut target_page: Option<u32> = None;
 
-    let mut i = 1;
+    let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
             "--output" | "-o" => {
@@ -2626,12 +2655,25 @@ fn export_markdown(args: &[String]) -> i32 {
                     return EXIT_USAGE;
                 }
             }
-            _ => {
-                eprintln!("알 수 없는 옵션: {}", args[i]);
+            other if other.starts_with('-') => {
+                eprintln!("알 수 없는 옵션: {other}");
                 return EXIT_USAGE;
+            }
+            other => {
+                if file_path.replace(other).is_some() {
+                    eprintln!("오류: 입력 파일은 하나만 지정할 수 있습니다: {other}");
+                    return EXIT_USAGE;
+                }
+                i += 1;
             }
         }
     }
+
+    let Some(file_path) = file_path else {
+        eprintln!("오류: HWP 파일 경로를 지정해주세요.");
+        eprintln!("사용법: rhwp export-markdown <파일.hwp> [옵션] (rhwp --help 참조)");
+        return EXIT_USAGE;
+    };
 
     let data = match fs::read(file_path) {
         Ok(d) => d,
@@ -6012,19 +6054,12 @@ fn convert_hwp(args: &[String]) -> i32 {
 /// `export_hwpx_native()` 로 HWPX(ZIP) 직렬화한다. `convert`(배포용 해제 → .hwp 출력)와
 /// 별개의 포맷 변환 명령. 출력 생략 시 입력과 같은 폴더에 `<stem>.hwpx`.
 fn export_doclang(args: &[String]) -> i32 {
-    if args.is_empty() {
-        eprintln!("오류: 문서 파일 경로를 지정해주세요.");
-        eprintln!(
-            "사용법: rhwp export-doclang <파일.hwp|파일.hwpx> [-o <출력.xml>] [--assets-dir <디렉터리>] (rhwp --help 참조)"
-        );
-        return EXIT_USAGE;
-    }
-
-    let file_path = &args[0];
+    // [#3359] 위치 인자 파싱은 export-structure/export-text(#3349) 규약과 동일.
+    let mut file_path: Option<&str> = None;
     let mut output_override: Option<std::path::PathBuf> = None;
     let mut assets_dir: Option<std::path::PathBuf> = None;
 
-    let mut i = 1;
+    let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
             "--output" | "-o" => {
@@ -6045,12 +6080,27 @@ fn export_doclang(args: &[String]) -> i32 {
                     return EXIT_USAGE;
                 }
             }
-            _ => {
-                eprintln!("알 수 없는 옵션: {}", args[i]);
+            other if other.starts_with('-') => {
+                eprintln!("알 수 없는 옵션: {other}");
                 return EXIT_USAGE;
+            }
+            other => {
+                if file_path.replace(other).is_some() {
+                    eprintln!("오류: 입력 파일은 하나만 지정할 수 있습니다: {other}");
+                    return EXIT_USAGE;
+                }
+                i += 1;
             }
         }
     }
+
+    let Some(file_path) = file_path else {
+        eprintln!("오류: 문서 파일 경로를 지정해주세요.");
+        eprintln!(
+            "사용법: rhwp export-doclang <파일.hwp|파일.hwpx> [-o <출력.xml>] [--assets-dir <디렉터리>] (rhwp --help 참조)"
+        );
+        return EXIT_USAGE;
+    };
 
     // 기본 출력 경로: 입력 stem + `.dclg.xml` (입력 파일 옆).
     let input_path = std::path::Path::new(file_path);
