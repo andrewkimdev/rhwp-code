@@ -84,6 +84,7 @@ last_verified: 2026-07-26
 - [AMO 제출 4대 함정](feedback_amo_submission_gotchas.md) — Firefox 확장 제출 전 체크리스트
 - [테스트 용어 — 스모크/회귀 구분](feedback_test_terminology.md) — 경량 크래시 선행 vs 전체 diff 정밀 비교, 설명·문서에 구분 사용
 - [CI 진행중 수치 보고 금지](feedback_no_metrics_from_inprogress_ci.md) — in_progress run의 step 시간으로 성능 보고 금지 (#1192)
+- [문서 전용 변경은 CI 상태 체크 예외](feedback_docs_only_ci_exempt.md) — devel push의 "Build & Test is expected"는 문서만 바뀌었으면 무시
 
 ## project
 - [거버넌스 부트로더화](project_governance_bootloader.md) — 2026-07-17 이후 CLAUDE.md=38줄 부트로더, 절차는 canonical 문서 단일 기록 (docs_and_git_workflow/pr_review_workflow)
