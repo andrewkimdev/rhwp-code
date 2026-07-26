@@ -1,5 +1,5 @@
 ---
-kind: report
+kind: reference
 status: active
 canonical: mydocs/manual/agent_task_playbook.md
 last_verified: 2026-07-26
