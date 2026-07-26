@@ -42,7 +42,8 @@ pub struct GrepMatch {
     /// 글상자 안의 매치면 글상자 좌표. 본문·표 셀 매치면 생략된다.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub textbox: Option<TextBoxRef>,
-    /// 수식 스크립트 안의 매치면 수식 좌표. 본문·표 셀·글상자 매치면 생략된다.
+    /// 수식 스크립트 안의 매치면 수식 좌표. 표 셀·글상자 안의 수식은 해당
+    /// `cell`/`textbox` 좌표와 함께 제공된다.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub equation: Option<EquationRef>,
 }
@@ -70,7 +71,7 @@ pub struct TextBoxRef {
 /// 수식 매치의 좌표.
 #[derive(Debug, Clone, Serialize)]
 pub struct EquationRef {
-    /// 수식을 담은 본문 문단의 컨트롤 인덱스.
+    /// 수식을 담은 문단(본문·셀·글상자)의 컨트롤 인덱스.
     pub control: usize,
 }
 
@@ -187,6 +188,34 @@ impl DocumentCore {
                                             return out;
                                         }
                                     }
+                                    for (equation_idx, nested_control) in
+                                        cp.controls.iter().enumerate()
+                                    {
+                                        if let Control::Equation(equation) = nested_control {
+                                            for offset in super::search_query::find_matches(
+                                                &equation.script,
+                                                query,
+                                                case_sensitive,
+                                            ) {
+                                                out.push(make(
+                                                    &equation.script,
+                                                    offset,
+                                                    Some(CellRef {
+                                                        control: ctrl_idx,
+                                                        cell: cell_idx,
+                                                        paragraph: cp_idx,
+                                                    }),
+                                                    None,
+                                                    Some(EquationRef {
+                                                        control: equation_idx,
+                                                    }),
+                                                ));
+                                                if limit.is_some_and(|n| out.len() >= n) {
+                                                    return out;
+                                                }
+                                            }
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -212,6 +241,33 @@ impl DocumentCore {
                                         ));
                                         if limit.is_some_and(|n| out.len() >= n) {
                                             return out;
+                                        }
+                                    }
+                                    for (equation_idx, nested_control) in
+                                        tp.controls.iter().enumerate()
+                                    {
+                                        if let Control::Equation(equation) = nested_control {
+                                            for offset in super::search_query::find_matches(
+                                                &equation.script,
+                                                query,
+                                                case_sensitive,
+                                            ) {
+                                                out.push(make(
+                                                    &equation.script,
+                                                    offset,
+                                                    None,
+                                                    Some(TextBoxRef {
+                                                        control: ctrl_idx,
+                                                        paragraph: tp_idx,
+                                                    }),
+                                                    Some(EquationRef {
+                                                        control: equation_idx,
+                                                    }),
+                                                ));
+                                                if limit.is_some_and(|n| out.len() >= n) {
+                                                    return out;
+                                                }
+                                            }
                                         }
                                     }
                                 }

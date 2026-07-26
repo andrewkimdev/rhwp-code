@@ -33,6 +33,50 @@ use std::fmt::Write as _;
 const MAX_EMBEDDED_FONT_BYTES: usize = 32 * 1024 * 1024;
 const MAX_EMBEDDED_FONT_BYTES_PER_PAGE: usize = 64 * 1024 * 1024;
 
+/// Markdown 표 셀은 렌더 트리를 거치지 않으므로, 문단 본문과 수식 script를
+/// 컨트롤 문자 위치에 직접 합친다. 일반 본문 Markdown과 같은 수식 보존 계약이다.
+fn markdown_paragraph_text_with_equations(para: &Paragraph) -> String {
+    let text: Vec<char> = para.text.chars().collect();
+    let control_positions = para.control_text_positions();
+    let mut equations: Vec<(usize, &str)> = para
+        .controls
+        .iter()
+        .enumerate()
+        .filter_map(|(control_index, control)| match control {
+            Control::Equation(equation) if !equation.script.trim().is_empty() => Some((
+                control_positions
+                    .get(control_index)
+                    .copied()
+                    .unwrap_or(text.len())
+                    .min(text.len()),
+                equation.script.trim(),
+            )),
+            _ => None,
+        })
+        .collect();
+    equations.sort_by_key(|(position, _)| *position);
+
+    let mut output = String::new();
+    let mut equation_index = 0usize;
+    for position in 0..=text.len() {
+        while equation_index < equations.len() && equations[equation_index].0 == position {
+            let script = equations[equation_index].1;
+            if !output.is_empty() && !output.chars().last().is_some_and(char::is_whitespace) {
+                output.push(' ');
+            }
+            output.push_str(script);
+            if position < text.len() && !text[position].is_whitespace() {
+                output.push(' ');
+            }
+            equation_index += 1;
+        }
+        if let Some(ch) = text.get(position) {
+            output.push(*ch);
+        }
+    }
+    output
+}
+
 fn load_bounded_embedded_font_bytes(
     contents: &[crate::model::bin_data::BinDataContent],
     font_ids: &[u16],
@@ -3710,51 +3754,64 @@ impl DocumentCore {
             // (짝수 페이지가 없어도 Even 머리말이 다음 구역에 상속되어야 함)
             {
                 use crate::model::header_footer::HeaderFooterApply as HFA;
+                let mut entries: Vec<(usize, HeaderFooterRef, bool, HFA)> = Vec::new();
                 for (pi, para) in section.paragraphs.iter().enumerate() {
                     for (ci, ctrl) in para.controls.iter().enumerate() {
                         match ctrl {
                             Control::Header(h) => {
-                                let r = HeaderFooterRef {
-                                    para_index: pi,
-                                    control_index: ci,
-                                    source_section_index: idx,
-                                    table_path: Vec::new(),
-                                };
-                                match h.apply_to {
-                                    HFA::Both => {
-                                        carry_header_odd = Some(r.clone());
-                                        carry_header_even = Some(r);
-                                    }
-                                    HFA::Odd => {
-                                        carry_header_odd = Some(r);
-                                    }
-                                    HFA::Even => {
-                                        carry_header_even = Some(r);
-                                    }
-                                }
+                                entries.push((
+                                    pi,
+                                    HeaderFooterRef {
+                                        para_index: pi,
+                                        control_index: ci,
+                                        source_section_index: idx,
+                                        table_path: Vec::new(),
+                                    },
+                                    true,
+                                    h.apply_to,
+                                ));
                             }
                             Control::Footer(f) => {
-                                let r = HeaderFooterRef {
-                                    para_index: pi,
-                                    control_index: ci,
-                                    source_section_index: idx,
-                                    table_path: Vec::new(),
-                                };
-                                match f.apply_to {
-                                    HFA::Both => {
-                                        carry_footer_odd = Some(r.clone());
-                                        carry_footer_even = Some(r);
-                                    }
-                                    HFA::Odd => {
-                                        carry_footer_odd = Some(r);
-                                    }
-                                    HFA::Even => {
-                                        carry_footer_even = Some(r);
-                                    }
-                                }
+                                entries.push((
+                                    pi,
+                                    HeaderFooterRef {
+                                        para_index: pi,
+                                        control_index: ci,
+                                        source_section_index: idx,
+                                        table_path: Vec::new(),
+                                    },
+                                    false,
+                                    f.apply_to,
+                                ));
+                            }
+                            Control::Table(table) => {
+                                crate::renderer::pagination::collect_nested_header_footer_controls(
+                                    table,
+                                    pi,
+                                    idx,
+                                    ci,
+                                    &[],
+                                    &mut entries,
+                                );
                             }
                             _ => {}
                         }
+                    }
+                }
+
+                for (_, reference, is_header, apply_to) in entries {
+                    let (odd, even) = if is_header {
+                        (&mut carry_header_odd, &mut carry_header_even)
+                    } else {
+                        (&mut carry_footer_odd, &mut carry_footer_even)
+                    };
+                    match apply_to {
+                        HFA::Both => {
+                            *odd = Some(reference.clone());
+                            *even = Some(reference);
+                        }
+                        HFA::Odd => *odd = Some(reference),
+                        HFA::Even => *even = Some(reference),
                     }
                 }
             }
@@ -5375,7 +5432,8 @@ impl DocumentCore {
         fn table_cell_text(cell: &crate::model::table::Cell) -> String {
             let mut parts: Vec<String> = Vec::new();
             for para in &cell.paragraphs {
-                let txt = para.text.trim();
+                let text_with_equations = markdown_paragraph_text_with_equations(para);
+                let txt = text_with_equations.trim();
                 if !txt.is_empty() {
                     parts.push(markdown_escape_cell(txt));
                 }
@@ -5760,6 +5818,25 @@ mod tests {
     use super::*;
     use crate::model::bin_data::BinDataContent;
     use crate::renderer::render_tree::RenderNodeType;
+
+    #[test]
+    fn markdown_table_paragraph_preserves_equation_script() {
+        let mut paragraph = Paragraph {
+            text: "앞뒤".to_string(),
+            ..Default::default()
+        };
+        paragraph.controls.push(Control::Equation(Box::new(
+            crate::model::control::Equation {
+                script: "lim _{x rarrow 0}".to_string(),
+                ..Default::default()
+            },
+        )));
+
+        let text = markdown_paragraph_text_with_equations(&paragraph);
+        assert!(text.contains("앞"));
+        assert!(text.contains("lim _{x rarrow 0}"));
+        assert!(text.contains("뒤"));
+    }
 
     fn assert_send<T: Send>() {}
 

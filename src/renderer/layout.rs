@@ -6834,7 +6834,16 @@ impl LayoutEngine {
                     // outer)가 이미 밀려난 table_y_start보다 작게 나와 max()가 밀려난 값을
                     // 그대로 선택해 host-title 줄 예약분이 사라지고, 그 줄(예: "7. [필수]")과
                     // 표 첫 줄이 같은 y 에 겹쳐 그려졌다 (synam-001.hwp p30 "7. [필수]" 행).
-                    let mut title_flow_y = table_y_start;
+                    // #2439의 같은 문단 2표 저장 형상은 host 텍스트가 두 표 뒤에서
+                    // 재개되는 별도 계약이다. 이 경로까지 이미 밀린 표 좌표를 기준으로
+                    // 삼으면 host 텍스트가 후행 표 위에 남으므로 기존 문단 흐름 기준을
+                    // 유지하고, 일반 visible-host float에서만 실제 표 시작점을 기준으로
+                    // host 한 줄을 예약한다.
+                    let mut title_flow_y = if has_preceding_coanchored_float {
+                        para_y_for_table
+                    } else {
+                        table_y_start
+                    };
                     for zone in visible_float_exclusions.iter() {
                         if title_flow_y + 0.5 >= zone.top && title_flow_y < zone.bottom {
                             title_flow_y = title_flow_y.max(zone.bottom);

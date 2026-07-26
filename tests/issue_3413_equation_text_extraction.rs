@@ -1,30 +1,17 @@
 // [#3413] export-text 가 수식(Equation) 내용을 조용히 누락하던 결함의 회귀 계약.
 // 실제 수능 수학 20쪽 문서(정답지 PDF 있음)에서 발견: 발문·선택지의 수식이 통째로
 // 비었고(exit 0, 경고 없음), 파서/렌더는 정상이었다(`dump`로 script 확인됨).
+use rhwp::document_core::DocumentCore;
 use std::process::Command;
 
-fn rhwp_bin() -> std::path::PathBuf {
-    let mut p = std::env::current_exe().unwrap();
-    p.pop();
-    if p.ends_with("deps") {
-        p.pop();
-    }
-    p.push(if cfg!(windows) { "rhwp.exe" } else { "rhwp" });
-    p
+fn rhwp_bin() -> String {
+    std::env::var("CARGO_BIN_EXE_rhwp").unwrap_or_else(|_| env!("CARGO_BIN_EXE_rhwp").to_string())
 }
 
 #[test]
 fn export_text_includes_equation_script_not_empty_choices() {
     let bin = rhwp_bin();
-    if !bin.exists() {
-        eprintln!("skip: {} 없음(먼저 release-test 빌드 필요)", bin.display());
-        return;
-    }
     let sample = "samples/exam_math.hwp";
-    if !std::path::Path::new(sample).exists() {
-        eprintln!("skip: {sample} 없음");
-        return;
-    }
     let out = Command::new(&bin)
         .args(["export-text", "--json", sample])
         .output()
@@ -44,5 +31,24 @@ fn export_text_includes_equation_script_not_empty_choices() {
     assert!(
         !p13.contains("\t\t의 값은") && !p13.contains("\t의 값은"),
         "발문에 수식이 빠진 빈 패턴이 여전히 존재함: {p13:?}"
+    );
+}
+
+#[test]
+fn markdown_includes_equation_scripts_from_table_cells() {
+    let sample = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("samples/exam_math.hwp");
+    let bytes = std::fs::read(&sample).expect("read samples/exam_math.hwp");
+    let core = DocumentCore::from_bytes(&bytes).expect("parse samples/exam_math.hwp");
+    let markdown = core
+        .extract_page_markdown_native(12)
+        .expect("extract page 13 markdown");
+
+    assert!(
+        markdown.contains('|'),
+        "page 13 markdown should contain the answer-choice table"
+    );
+    assert!(
+        markdown.contains("lim") || markdown.contains("sin"),
+        "page 13 table markdown should preserve equation scripts: {markdown:?}"
     );
 }

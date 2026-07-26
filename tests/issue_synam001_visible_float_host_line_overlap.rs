@@ -79,29 +79,33 @@ fn host_title_line_does_not_overlap_visible_float_table_first_line() {
     let host_y = elements
         .iter()
         .filter(|(attrs, _, text)| {
-            attrs.contains("font-weight=\"bold\"")
-                && attrs.contains("x=\"37.78")
-                && text == "7"
+            attrs.contains("font-weight=\"bold\"") && attrs.contains("x=\"37.78") && text == "7"
         })
         .map(|(_, y, _)| *y)
         .next()
         .expect("host label '7' 글리프가 좌측 마진에서 렌더되어야 함");
 
     // 표 셀 첫 줄 텍스트: "본인은 위 1~6호..." 문단의 첫 글자 "본".
-    // 굵지 않고(font-weight 속성 없음), host label 바로 아래(host_y 이후 가장 가까운 줄)에서 시작.
+    // 굵지 않고(font-weight 속성 없음), 같은 표 영역에서 host label과 가장 가까운 "본"이다.
+    // `y > host_y`를 먼저 걸면 표가 host 위로 올라와 겹친 회귀를 결과 집합에서 숨기게 된다.
     let cell_y = elements
         .iter()
-        .filter(|(attrs, y, text)| {
+        .filter(|(attrs, _, text)| {
             !attrs.contains("font-weight=\"bold\"")
                 && text == "본"
                 && extract_attr(attrs, "x").map(|x| x > 40.0).unwrap_or(false)
-                && *y > host_y
         })
         .map(|(_, y, _)| *y)
-        .fold(f64::MAX, f64::min);
+        .min_by(|a, b| {
+            (a - host_y)
+                .abs()
+                .partial_cmp(&(b - host_y).abs())
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
+        .expect("표 셀 첫 줄 '본' 글리프가 렌더되어야 함 (내용 소실 회귀 가드 겸함)");
     assert!(
-        cell_y.is_finite(),
-        "host label 아래에서 표 셀 첫 줄 '본' 글리프가 렌더되어야 함 (내용 소실 회귀 가드 겸함)"
+        cell_y > host_y,
+        "표 셀 첫 줄이 host 줄 아래에 있어야 함: host_y={host_y:.2}, cell_y={cell_y:.2}"
     );
 
     let gap = cell_y - host_y;
@@ -110,5 +114,10 @@ fn host_title_line_does_not_overlap_visible_float_table_first_line() {
         "host 줄('7. [필수]', y={host_y:.2})과 표 첫 줄('본인은...', y={cell_y:.2})이 \
          겹침 — gap={gap:.2}px (최소 8px 기대). \
          선행 float exclusion 보정 후 title_flow_y 기준이 어긋난 회귀."
+    );
+    assert!(
+        gap <= 19.0,
+        "host 줄과 표 첫 줄 사이가 과도하게 벌어짐 — gap={gap:.2}px. \
+         #2439 exclusion에서 복원한 outer-top을 host 줄 보정에서 다시 더한 회귀."
     );
 }

@@ -275,9 +275,8 @@ mod tests {
     /// 4 대신 2가 렌더되던 회귀를 방어한다. (미적분 p16은 최상위 머리말이라 항상 정상)
     #[test]
     fn test_exam_math_booklet_corner_page_number_on_fourth_page() {
-        let Some(core) = load_document("samples/exam_math.hwp") else {
-            return;
-        };
+        let core = load_document("samples/exam_math.hwp")
+            .expect("samples/exam_math.hwp must load for the page-number regression test");
 
         // 짝수(왼쪽)쪽의 바깥 모서리(가장 왼쪽)에 있는 큰 폰트(>=38px) 한 자리 숫자 = 소책자 쪽번호
         fn corner_digit(node: &RenderNode, best: &mut Option<(f64, String)>) {
@@ -309,10 +308,11 @@ mod tests {
             (17, "2"),
             (19, "4"),
         ];
+        let mut validated_pages = 0usize;
         for (idx, want) in expected {
-            let Ok(tree) = core.build_page_render_tree(idx) else {
-                continue;
-            };
+            let tree = core.build_page_render_tree(idx).unwrap_or_else(|error| {
+                panic!("exam_math page index {idx} render failed: {error}")
+            });
             let mut best = None;
             corner_digit(&tree.root, &mut best);
             let got = best.map(|(_, s)| s);
@@ -324,7 +324,9 @@ mod tests {
                 got,
                 want
             );
+            validated_pages += 1;
         }
+        assert_eq!(validated_pages, expected.len());
     }
 
     #[test]
