@@ -99,6 +99,7 @@ py -m venv "$HOME\.codex\venvs\skill-creator"
 가상환경은 저장소 밖의 로컬 도구 의존성이므로 Git에 추가하지 않는다. 다른 환경에서는 해당 Codex
 설치 경로 아래에 같은 용도의 가상환경을 만들고, 저장소의 Skill 정의에는 환경별 절대 경로를 기록하지 않는다.
 
-향후 자동 검사를 추가할 때는 ID 중복, active 항목의 누락된 authority·진입점, 같은 파일을 두 ID가
-가리키는 경우를 빠른 문서 검사로 검출한다. 산출물·권위·비범위가 실질적으로 중복되는지는 기계적으로
-판정하지 않고 maintainer 리뷰로 결정한다.
+`scripts/check_markdown_links.py`는 등록부의 ID 형식·중복, active 항목의 authority와 runtime 진입점의
+실파일 해석, 서로 다른 capability가 같은 runtime 진입점을 가리키는 경우를 자동으로 검출한다. authority
+문서는 여러 capability가 공유할 수 있으므로 중복 오류로 다루지 않는다. 산출물·권위·비범위가 실질적으로
+중복되는지는 기계적으로 판정하지 않고 maintainer 리뷰로 결정한다.
