@@ -66,23 +66,38 @@ python3 scripts/check_markdown_links.py --changed-from upstream/devel
 python3 scripts/check_document_metadata.py
 ```
 
-Codex Skill을 추가·수정했다면 Skill Creator의 `quick_validate.py`도 실행한다. 이 Mac의 Homebrew
-Python은 externally managed 환경이므로 전역 또는 `--user` 설치로 PyYAML을 넣지 않는다. 검증 의존성은
-Codex 전용 가상환경 `/Users/tsjang/.codex/venvs/skill-creator`에 유지한다.
+Codex Skill을 추가·수정했다면 Skill Creator의 `quick_validate.py`도 실행한다. 활성 Python이
+externally managed 환경이라 전역 또는 `--user` 설치를 거부하면, 검증 의존성은 사용자 홈 아래 Codex
+전용 가상환경에 유지한다.
+
+macOS/Linux POSIX 셸:
 
 ```bash
 # 최초 1회: 가상환경 생성과 PyYAML 설치
-python3 -m venv /Users/tsjang/.codex/venvs/skill-creator
-/Users/tsjang/.codex/venvs/skill-creator/bin/pip install PyYAML
+python3 -m venv "$HOME/.codex/venvs/skill-creator"
+"$HOME/.codex/venvs/skill-creator/bin/pip" install PyYAML
 
 # Skill마다 실행
-/Users/tsjang/.codex/venvs/skill-creator/bin/python \
-  /Users/tsjang/.codex/skills/.system/skill-creator/scripts/quick_validate.py \
+"$HOME/.codex/venvs/skill-creator/bin/python" \
+  "$HOME/.codex/skills/.system/skill-creator/scripts/quick_validate.py" \
+  .agents/skills/<skill-name>
+```
+
+Windows PowerShell:
+
+```powershell
+# 최초 1회: 가상환경 생성과 PyYAML 설치
+py -m venv "$HOME\.codex\venvs\skill-creator"
+& "$HOME\.codex\venvs\skill-creator\Scripts\pip.exe" install PyYAML
+
+# Skill마다 실행
+& "$HOME\.codex\venvs\skill-creator\Scripts\python.exe" `
+  "$HOME\.codex\skills\.system\skill-creator\scripts\quick_validate.py" `
   .agents/skills/<skill-name>
 ```
 
 가상환경은 저장소 밖의 로컬 도구 의존성이므로 Git에 추가하지 않는다. 다른 환경에서는 해당 Codex
-설치 경로 아래에 같은 용도의 가상환경을 만들고, 저장소의 Skill 정의에는 환경별 경로를 기록하지 않는다.
+설치 경로 아래에 같은 용도의 가상환경을 만들고, 저장소의 Skill 정의에는 환경별 절대 경로를 기록하지 않는다.
 
 향후 자동 검사를 추가할 때는 ID 중복, active 항목의 누락된 authority·진입점, 같은 파일을 두 ID가
 가리키는 경우를 빠른 문서 검사로 검출한다. 산출물·권위·비범위가 실질적으로 중복되는지는 기계적으로
