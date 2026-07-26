@@ -2,7 +2,7 @@
 kind: guide
 status: active
 canonical: mydocs/report/rag_citation_demo/README.md
-last_verified: 2026-07-26
+last_verified: 2026-07-27
 ---
 
 # 실제 CLI 작동 사례 — 검색으로 근거 '쪽'을 답하고 그 쪽만 렌더해 인용 (RAG citation)

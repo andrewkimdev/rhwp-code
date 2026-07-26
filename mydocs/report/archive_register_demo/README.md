@@ -2,7 +2,7 @@
 kind: guide
 status: active
 canonical: mydocs/report/archive_register_demo/README.md
-last_verified: 2026-07-26
+last_verified: 2026-07-27
 ---
 
 # 실제 CLI 작동 사례 — 문서 아카이브 대장화 (파일 더미 → 대장)

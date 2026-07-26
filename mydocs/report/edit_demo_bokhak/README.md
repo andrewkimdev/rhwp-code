@@ -2,7 +2,7 @@
 kind: guide
 status: active
 canonical: mydocs/report/edit_demo_bokhak/README.md
-last_verified: 2026-07-26
+last_verified: 2026-07-27
 ---
 
 # 실제 CLI 편집 작동 사례 — 실물 대학 서식 채우기
