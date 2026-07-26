@@ -9,6 +9,11 @@
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
+use rhwp::document_core::queries::table_extract::extract_tables;
+use rhwp::model::control::Control;
+use rhwp::model::style::CharShape;
+use rhwp::wasm_api::HwpDocument;
+
 /// 실제 배포 정부 양식 — 누름틀 0·표 53(병합 포함). set-cell 의 실전 대상 그 자체다.
 const SAMPLE: &str = "samples/2025년 기부·답례품 실적 지자체 보고서_양식.hwpx";
 
@@ -81,6 +86,35 @@ fn pick_cell(v: &serde_json::Value) -> (u64, u64, u64, String) {
         cell["col"].as_u64().expect("col"),
         cell["text"].as_str().unwrap_or("").to_string(),
     )
+}
+
+/// 산출 HWP의 같은 격자 셀에 실제로 기록된 글자 모양을 읽는다.
+fn cell_char_shape(path: &Path, table_no: u64, row: u64, col: u64) -> CharShape {
+    let bytes = std::fs::read(path).expect("셀 글자모양 확인용 파일 읽기");
+    let doc = HwpDocument::from_bytes(&bytes).expect("셀 글자모양 확인용 문서 파싱");
+    let document = doc.document();
+    let grids = extract_tables(document);
+    let grid = grids
+        .iter()
+        .find(|grid| grid.index == table_no as usize && grid.container_path.is_empty())
+        .expect("본문 최상위 표");
+    let Control::Table(table) =
+        &document.sections[grid.section].paragraphs[grid.paragraph].controls[grid.control]
+    else {
+        panic!("표 grid가 Table control을 가리키지 않음");
+    };
+    let cell = table
+        .cells
+        .iter()
+        .find(|cell| cell.row as u64 == row && cell.col as u64 == col)
+        .expect("대상 셀");
+    let shape_id = cell
+        .paragraphs
+        .first()
+        .and_then(|paragraph| paragraph.char_shapes.first())
+        .expect("대상 셀 첫 문단 글자모양")
+        .char_shape_id as usize;
+    document.doc_info.char_shapes[shape_id].clone()
 }
 
 /// 핵심 루프 — 셀 기록 후 export-tables 재독으로 같은 좌표의 값을 대조한다.
@@ -291,6 +325,7 @@ fn default_black_style_and_keep_style_flag() {
     let sample = sample();
     let (tbl, row, col, _) = pick_cell(&tables_of(&sample));
     let (ts, rs, cs) = (tbl.to_string(), row.to_string(), col.to_string());
+    let before_shape = cell_char_shape(&sample, tbl, row, col);
 
     // 기본: keepStyle=false
     let out = temp_out("black");
@@ -323,6 +358,17 @@ fn default_black_style_and_keep_style_flag() {
         "기본은 검정 기록(keepStyle=false): {v}"
     );
     assert!(out.exists());
+    let after_shape = cell_char_shape(&out, tbl, row, col);
+    assert_eq!(after_shape.text_color, 0, "기본 글자색은 검정");
+    assert!(!after_shape.italic, "기본은 비이탤릭");
+    assert!(!after_shape.bold, "기본은 비진하게");
+    assert_eq!(after_shape.font_ids, before_shape.font_ids, "글꼴은 보존");
+    assert_eq!(
+        after_shape.base_size, before_shape.base_size,
+        "글자 크기는 보존"
+    );
+    assert_eq!(after_shape.ratios, before_shape.ratios, "장평은 보존");
+    assert_eq!(after_shape.spacings, before_shape.spacings, "자간은 보존");
     let _ = std::fs::remove_file(&out);
 
     // --keep-style: keepStyle=true

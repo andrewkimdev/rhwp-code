@@ -8425,7 +8425,8 @@ fn edit_replace_text(args: &[String]) -> i32 {
 /// 없다. v1 범위: 본문 최상위 표, 셀 첫 문단 교체(중첩 표·다문단 셀은 후속).
 /// [#3391] 셀 문단 0 의 글자모양을 검정·비이탤릭·비진하게 글자모양 하나로 덮는다.
 /// 안내문(파란 이탤릭)을 지우고 실값을 쓰는 set-cell 의 제출 요건(검정 글씨) 대응.
-/// 검정 글자모양이 없으면 char_shape 0 을 복제해 검정화한 뒤 추가한다.
+/// 대상 셀의 첫 글자모양을 복제하므로 글꼴·크기·자간은 보존한다. 같은 모양이 이미 있으면
+/// 재사용한다.
 /// 반환: 적용 성공 여부(좌표 해석 실패 시 false).
 fn recolor_cell_text_black(
     document: &mut rhwp::model::document::Document,
@@ -8437,37 +8438,56 @@ fn recolor_cell_text_black(
     use rhwp::model::control::Control;
     use rhwp::model::paragraph::CharShapeRef;
 
-    // 검정·비이탤릭·비진하게·밑줄 없음·취소선 없음인 글자모양 id 를 찾거나 만든다.
-    let is_plain_black = |cs: &rhwp::model::style::CharShape| {
-        cs.text_color == 0
-            && !cs.italic
-            && !cs.bold
-            && !cs.strikethrough
-            && cs.underline_type == rhwp::model::style::UnderlineType::None
+    // 대상 셀의 현재 글자모양을 기준으로 해야 한다. 문서 어딘가의 "검정" 모양을 재사용하면
+    // 글꼴·크기까지 바뀔 수 있다.
+    let source_id = {
+        let Some(section) = document.sections.get(sec) else {
+            return false;
+        };
+        let Some(parent) = section.paragraphs.get(para) else {
+            return false;
+        };
+        let Some(Control::Table(table)) = parent.controls.get(ctrl) else {
+            return false;
+        };
+        let Some(cell) = table.cells.get(cell_idx) else {
+            return false;
+        };
+        let Some(paragraph) = cell.paragraphs.first() else {
+            return false;
+        };
+        let Some(shape) = paragraph.char_shapes.first() else {
+            return false;
+        };
+        shape.char_shape_id as usize
     };
-    let black_id = match document
+    let Some(base) = document
+        .doc_info
+        .char_shapes
+        .get(source_id)
+        .or_else(|| document.doc_info.char_shapes.first())
+        .cloned()
+    else {
+        return false;
+    };
+    let mut black = base;
+    black.raw_data = None; // 원본 바이트를 버려 변경된 필드가 직렬화되게 한다.
+    black.text_color = 0;
+    black.italic = false;
+    black.bold = false;
+    black.strikethrough = false;
+    black.underline_type = rhwp::model::style::UnderlineType::None;
+    let black_id = document
         .doc_info
         .char_shapes
         .iter()
-        .position(is_plain_black)
-    {
-        Some(idx) => idx as u32,
-        None => {
-            let Some(base) = document.doc_info.char_shapes.first().cloned() else {
-                return false;
-            };
-            let mut black = base;
-            black.raw_data = None; // 원본 바이트를 버려 변경된 필드가 직렬화되게 한다.
-            black.text_color = 0;
-            black.italic = false;
-            black.bold = false;
-            black.strikethrough = false;
-            black.underline_type = rhwp::model::style::UnderlineType::None;
+        .position(|candidate| candidate == &black)
+        .map(|idx| idx as u32)
+        .unwrap_or_else(|| {
             let new_id = document.doc_info.char_shapes.len() as u32;
             document.doc_info.char_shapes.push(black);
             new_id
-        }
-    };
+        });
 
     let Some(section) = document.sections.get_mut(sec) else {
         return false;
