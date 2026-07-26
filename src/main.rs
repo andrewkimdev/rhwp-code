@@ -469,6 +469,8 @@ fn show_capabilities(args: &[String]) -> i32 {
                 "query",
                 "caseSensitive",
                 "matchCount",
+                "totalMatchCount",
+                "truncated",
                 "matches",
             ],
         ),
@@ -3280,8 +3282,12 @@ fn batch_search_record_inner(path: &str, query: &str) -> serde_json::Value {
         Ok(d) => d,
         Err(e) => return batch_fail_record(path, format!("파싱 실패: {}", e)),
     };
-    let matches = doc.grep(query, true, Some(BATCH_MATCH_LIMIT));
-    search_json_value(path, query, true, &matches)
+    // 단건 `search --limit`와 동일하게 전체 매치 수를 먼저 관찰하고, NDJSON 크기만
+    // 배치 상한으로 자른다. 그래야 단건·배치가 같은 envelope 계약을 공유한다.
+    let all_matches = doc.grep(query, true, None);
+    let total_match_count = all_matches.len();
+    let matches: Vec<_> = all_matches.into_iter().take(BATCH_MATCH_LIMIT).collect();
+    search_json_value(path, query, true, &matches, total_match_count)
 }
 
 /// [#3238] `batch info --json` 의 파일당 레코드 — `info --json` 과 같은 스키마
@@ -3344,6 +3350,7 @@ fn search_json_value(
     query: &str,
     case_sensitive: bool,
     matches: &[rhwp::document_core::queries::grep::GrepMatch],
+    total_match_count: usize,
 ) -> serde_json::Value {
     serde_json::json!({
         "schemaVersion": "1.0",
@@ -3351,6 +3358,8 @@ fn search_json_value(
         "query": query,
         "caseSensitive": case_sensitive,
         "matchCount": matches.len(),
+        "totalMatchCount": total_match_count,
+        "truncated": matches.len() < total_match_count,
         "matches": matches,
     })
 }
@@ -5648,16 +5657,43 @@ fn search_document(args: &[String]) -> i32 {
         }
     };
 
-    let matches = doc.grep(query, !ignore_case, limit);
+    // [#3353] 총량을 보고하려면 전수 스캔이 불가피하다 — `--limit` 의 목적은 스캔 시간이
+    // 아니라 출력 컨텍스트 절약이므로, 전수 grep 후 표시만 절단한다. 절단 사실을 숨기면
+    // 에이전트가 "정확히 N건"과 "N건만 표시(실제 그 이상)"를 구별할 수 없다.
+    let all_matches = doc.grep(query, !ignore_case, None);
+    let total_match_count = all_matches.len();
+    let matches: Vec<_> = match limit {
+        Some(n) => all_matches.into_iter().take(n).collect(),
+        None => all_matches,
+    };
+    let truncated = matches.len() < total_match_count;
 
     if json_mode {
-        let envelope = search_json_value(file_path, query, !ignore_case, &matches);
+        // [#3353] matchCount 는 반환된 매치 수이고, 추가-전용 totalMatchCount·truncated가
+        // 전체 수와 절단 여부를 표현한다. #3346 batch와 하나의 helper를 공유한다.
+        let envelope = search_json_value(
+            file_path,
+            query,
+            !ignore_case,
+            &matches,
+            total_match_count,
+        );
         println!("{envelope}");
         // 매치 0건은 실패가 아니다 — 1은 런타임 실패 전용이다(#2707).
         return EXIT_OK;
     }
 
-    println!("검색: {:?} in {} — {}건", query, file_path, matches.len());
+    if truncated {
+        println!(
+            "검색: {:?} in {} — {}건 중 {}건 표시 (--limit)",
+            query,
+            file_path,
+            total_match_count,
+            matches.len()
+        );
+    } else {
+        println!("검색: {:?} in {} — {}건", query, file_path, matches.len());
+    }
     for m in &matches {
         let page = m
             .page
