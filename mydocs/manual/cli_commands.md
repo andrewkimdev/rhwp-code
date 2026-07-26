@@ -389,9 +389,11 @@ rhwp search 개정본.hwp "2025년" --json | jq .matchCount     # → 0 이어�
 
 - `--table`/`--row`/`--col` — 본문 최상위 표의 0-based 격자 좌표
 - `--text <문자열>` — 셀에 넣을 값. 빈 문자열은 비우기이며 줄바꿈·탭은 v1에서 허용하지 않는다.
+- `--keep-style` — 셀 안내문의 글자 모양을 유지한다. 기본은 검정·비이탤릭·비진하게로 기록해,
+  제출용 양식의 파란 안내문 스타일을 실값이 상속하지 않게 한다 (#3391).
 - `-o, --output <파일>` — 출력 파일 (기본 `<입력명>_cell.hwp`)
 - `--dry-run` — 파일을 쓰지 않고 `oldText` → `newText` 변경 예정만 보고한다.
-- `--json` 봉투: `{"schemaVersion":"1.0","source","table","row","col","oldText","newText","dryRun","output"?}`
+- `--json` 봉투: `{"schemaVersion":"1.0","source","table","row","col","oldText","newText","dryRun","keepStyle","output"?}`
 - 병합으로 덮인 칸은 앵커 좌표를 안내하며 exit 2로 끝난다. 격자 밖 좌표도 exit 2다.
 - 실패 시 원본은 불변이며, v1 범위는 본문 최상위 표와 셀 첫 문단이다.
 
