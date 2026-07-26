@@ -115,6 +115,33 @@ last_verified: 2026-07-26
   텍스트 상자) · #3357(릴리스 바이너리 export-png 부재) · #3359(export 계열 파싱) ·
   #3366(thumbnail 계약 밖).
 
+## 예시 6 — 부동 개체의 본문 여백 정합 (수능 언어 정답지)
+
+- **문제 정의**: 바탕쪽의 `Para`/`Column` 기준 부동 도형이 한컴 정본처럼 **본문 여백**을
+  기준으로 정렬되는가. 정답 기준 = 수능 언어 정답지 8쪽의 머리말 `홀수형` 상자(우측)와
+  페이지번호(좌측)가 종이 물리적 가장자리가 아닌 본문 좌·우 경계에 놓인다.
+- **예시(실물)**: 입력은 `samples/21_언어_기출_편집가능본.hwp`
+  (SHA-256 `905454045ca2e236839a7cab59750678116d08af3db31dbf846819af355b8d15`), 정답지는
+  한컴 출력 `pdf/21_언어_기출_편집가능본-2022.pdf` 8쪽
+  (SHA-256 `f2d858d7974393661d91a658e6b384b951114ef52783379f426a963effd97b72`)이다.
+  아래는 같은 쪽의 한컴 정본·수정 전 rhwp·수정 후 rhwp를 실제 PNG로 나란히 남긴 검토 근거다.
+
+  ![수능 언어 정답지 8쪽: 한컴 정본, 수정 전 rhwp, 수정 후 rhwp 비교](../pr/assets/pr_3402_kevin9327_header_float_p008_review.png)
+
+- **흐름**: 한컴 PDF와 rhwp 출력 8쪽을 나란히 대조 → `홀수형`/페이지번호의 수평 기준을
+  추적 → `compute_object_position`이 `col_area`를 따르는 것을 확인 →
+  `LayoutEngine::build_master_page`의 호출 경로를 확인 → 본문 폭을 가진
+  `master_col_area`를 전달하도록 수정 → 해당 머리말 도형의 본문 경계 회귀 테스트와 실제
+  3단 비교로 재검증한다.
+- **방식(무엇을 찾나)**: 여백 기준 부동 개체가 종이 전체 폭에 붙는지, 특히 바탕쪽
+  Shape/Equation이 본문 컬럼 영역 대신 종이 영역을 받는지 본다. 이 사례의 확정 원인은
+  `build_master_page`가 `paper_area`를 `col_area`로 전달한 것이었다. 수정은 세로 범위는
+  종이 영역으로 유지하되 가로 `x`/`width`는 `body_area`로 제한한다. 다단 이전 전폭 문단이
+  원인이라는 초기 추정은 재현·코드 경로 대조에서 배제했다.
+- → **발견·수정**: [#3402](https://github.com/edwardkim/rhwp/pull/3402) (바탕쪽
+  `Para`/`Column` 부동 개체의 본문 여백 정합, merge commit
+  [`823f645`](https://github.com/edwardkim/rhwp/commit/823f6450620a59bafa1e3055d861b1decf13bbbe)).
+
 ---
 
 ## 여정 카탈로그 (다음 후보, 사용자 가치 순)
