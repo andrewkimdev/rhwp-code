@@ -383,6 +383,25 @@ rhwp edit replace-text 공문.hwp --find "2025년" --replace "2026년" -o 개정
 rhwp search 개정본.hwp "2025년" --json | jq .matchCount     # → 0 이어야 함
 ```
 
+### `edit set-cell <파일> --table <번호> --row <행> --col <열> --text <문자열> [옵션]` (#3381)
+표 격자 좌표로 셀 값을 바꾼다. `export-tables`의 `index`/`row`/`col`과 같은 좌표계를 써서
+누름틀 없는 표 양식도 발견 → 기록 → 재독 검증을 하나의 주소로 닫는다.
+
+- `--table`/`--row`/`--col` — 본문 최상위 표의 0-based 격자 좌표
+- `--text <문자열>` — 셀에 넣을 값. 빈 문자열은 비우기이며 줄바꿈·탭은 v1에서 허용하지 않는다.
+- `-o, --output <파일>` — 출력 파일 (기본 `<입력명>_cell.hwp`)
+- `--dry-run` — 파일을 쓰지 않고 `oldText` → `newText` 변경 예정만 보고한다.
+- `--json` 봉투: `{"schemaVersion":"1.0","source","table","row","col","oldText","newText","dryRun","output"?}`
+- 병합으로 덮인 칸은 앵커 좌표를 안내하며 exit 2로 끝난다. 격자 밖 좌표도 exit 2다.
+- 실패 시 원본은 불변이며, v1 범위는 본문 최상위 표와 셀 첫 문단이다.
+
+```bash
+# 발견 → 기록 → 재독 검증
+rhwp export-tables 양식.hwpx --json | jq '.tables[0].cells[:4]'
+rhwp edit set-cell 양식.hwpx --table 0 --row 2 --col 1 --text "1,234" -o 작성본.hwp --json
+rhwp export-tables 작성본.hwp --json | jq '.tables[0].cells[] | select(.row==2 and .col==1).text'
+```
+
 ---
 
 ## 3. 변환·비교
