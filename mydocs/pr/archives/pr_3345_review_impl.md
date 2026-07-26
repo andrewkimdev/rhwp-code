@@ -11,7 +11,7 @@ loaded documents: pr_review_workflow.md, pr_review/README.md,
   visual_fixture_evidence.md, multi_pr_update_branch.md
 ```
 
-`upstream/devel`의 `e7dffced399e45685ae746bd2ea21d37542ea95e`에서 사용자에게 보이는
+최신 `upstream/devel`의 `19ed96d5ed79621cf81af109708423adc87130b5`에서 사용자에게 보이는
 `review/kevin9327-20260726`을 만들고, 작성자 `kevin9327`의 아래 15개 open PR을 순서대로
 cherry-pick했다. 원 PR은 모두 `devel` base이고, 이 문서 작성 시점에는 maintainer 보류
 review/comment가 없었다. PR 상태·head SHA·CI는 변동 가능하므로 merge 직전에 다시 확인한다.
@@ -36,9 +36,9 @@ review/comment가 없었다. PR 상태·head SHA·CI는 변동 가능하므로 m
 
 #3391은 별도 PR이 아니라 #3384에 반영된 이슈이므로 독립 cherry-pick 대상이 아니다.
 
-주요 통합·보정 commit은 `6b6a5a3c2`(공유 CLI 계약), `a081c6b3d`(예시 JSON 줄끝),
-`05955bdae`(#3384 최신 #3391 반영), `723b7cd4b`·`0722029a3`·`6f4c17ec1`(#3394 3개
-gallery commit), `eaba0b772`(set-cell 글자모양 보정), `90cdc827a`(gallery 증적 메타데이터
+주요 통합·보정 commit은 `7dae51ae8`(공유 CLI 계약), `7537eb772`(예시 JSON 줄끝),
+`9cc95feb1`(#3384 최신 #3391 반영), `4ef8546c6`·`e1956b099`·`ac42912f9`(#3394 3개
+gallery commit), `72fa44f60`(set-cell 글자모양 보정), `0ed57ab82`(gallery 증적 메타데이터
 보정)이다. 원 contributor branch를 rebase·amend·force-push하지 않는다.
 
 ## 통합 시 확인·보정한 계약
