@@ -66,6 +66,12 @@ python3 scripts/check_markdown_links.py --changed-from upstream/devel
 python3 scripts/check_document_metadata.py
 ```
 
+등록부 검사기 자체를 수정했다면 형식·Markdown 표 파싱 회귀 테스트도 실행한다.
+
+```bash
+python3 -m unittest discover -s scripts/tests -p 'test_*.py'
+```
+
 Codex Skill을 추가·수정했다면 Skill Creator의 `quick_validate.py`도 실행한다. 활성 Python이
 externally managed 환경이라 전역 또는 `--user` 설치를 거부하면, 검증 의존성은 사용자 홈 아래 Codex
 전용 가상환경에 유지한다.

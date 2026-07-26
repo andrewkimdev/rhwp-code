@@ -43,8 +43,8 @@ CAPABILITY_REGISTRY_COLUMNS = (
     "Codex 진입점",
     "상태·소유",
 )
-CAPABILITY_ID_RE = re.compile(r"^(?:CAP-\d+|LEGACY-[0-9a-f]{9})$")
-CAPABILITY_SLUG_RE = re.compile(r"^[a-z][a-z0-9-]*$")
+CAPABILITY_ID_RE = re.compile(r"^(?:CAP-[1-9]\d*|LEGACY-[0-9a-f]{9})$")
+CAPABILITY_SLUG_RE = re.compile(r"^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$")
 CAPABILITY_STATUSES = {"active", "deprecated"}
 
 
@@ -310,7 +310,23 @@ def table_cells(line: str) -> list[str] | None:
     stripped = line.strip()
     if not (stripped.startswith("|") and stripped.endswith("|")):
         return None
-    return [cell.strip() for cell in stripped[1:-1].split("|")]
+
+    cells: list[str] = []
+    current: list[str] = []
+    preceding_backslashes = 0
+    for character in stripped[1:-1]:
+        if character == "|" and preceding_backslashes % 2 == 0:
+            cells.append("".join(current).strip())
+            current = []
+            preceding_backslashes = 0
+            continue
+        current.append(character)
+        if character == "\\":
+            preceding_backslashes += 1
+        else:
+            preceding_backslashes = 0
+    cells.append("".join(current).strip())
+    return cells
 
 
 def registry_link_target(
@@ -410,7 +426,8 @@ def collect_capability_registry_errors() -> list[CapabilityRegistryError]:
             errors.append(
                 CapabilityRegistryError(
                     line_number,
-                    "등록 식별번호는 CAP-<Issue 번호> 또는 LEGACY-<9자리 SHA> 형식이어야 합니다",
+                    "등록 식별번호는 CAP-<양의 Issue 번호(선행 0 없음)> 또는 "
+                    "LEGACY-<9자리 SHA> 형식이어야 합니다",
                 )
             )
         previous_line = identifiers.setdefault(registration_id, line_number)
