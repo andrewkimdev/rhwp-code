@@ -15,7 +15,7 @@
 ```text
 base route: collaborator 매개 외부 PR (Route B: 통합 PR)
 modifiers: 접수·리뷰 기록, 로컬 검증, 다수 PR·update branch, 재작업·예외(Dependabot)
-integration branch: codex/review-dependabot-vscode-20260726
+integration branch: review/dependabot-vscode-20260726
 base: upstream/devel@e7dffced399e45685ae746bd2ea21d37542ea95e
 verified local code head: fdc0af5b5c2d8b266990419fbc87cc0543589717
 ```

@@ -78,7 +78,7 @@ TypeError: Cannot read properties of undefined (reading 'fileExists')
 
 ## 검증
 
-보정된 통합 branch `codex/review-dependabot-vscode-20260726`에서 다음을 확인했다.
+보정된 통합 branch `review/dependabot-vscode-20260726`에서 다음을 확인했다.
 
 - `CARGO_INCREMENTAL=0 wasm-pack build --target web --dev`: 성공.
 - `npm ci`: 성공, 최종 audit 취약점 0건.
