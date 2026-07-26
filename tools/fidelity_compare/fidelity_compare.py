@@ -1,6 +1,6 @@
 # 한컴 공식 PDF(정답지) vs rhwp 렌더 — 페이지별 대규모 비교 하네스
-# 사용: python fidelity_harness.py <이름> <원본.hwp(x)> <정답지.pdf> <시작쪽> <끝쪽(포함)>
-# 산출: work/<이름>/ 에 페이지별 비교 시트 + diff 점수 랭킹(report.tsv)
+# 사용: python tools/fidelity_compare/fidelity_compare.py <키> <시작쪽(0 기준)> <끝쪽(포함)>
+# 산출: output/fidelity/<키>/ 에 페이지별 비교 시트 + diff 점수 랭킹(report.tsv)
 import os, sys, io, subprocess, base64, glob, re
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
 import pypdfium2 as pdfium

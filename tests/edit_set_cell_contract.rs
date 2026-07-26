@@ -244,7 +244,7 @@ fn covered_cell_is_usage_error_with_anchor_hint() {
     );
 }
 
-/// 필수 인자 누락·격자 밖 좌표는 사용법 오류(2)다.
+/// 필수 인자 누락·격자 밖 좌표·모델 u16 범위를 넘는 좌표는 사용법 오류(2)다.
 #[test]
 fn missing_args_and_out_of_range_are_usage_errors() {
     let sample = sample();
@@ -267,6 +267,12 @@ fn missing_args_and_out_of_range_are_usage_errors() {
         vec![
             "edit", "set-cell", s, "--table", &ts, "--row", "999", "--col", "0", "--text", "a",
         ], // 격자 밖
+        vec![
+            "edit", "set-cell", s, "--table", &ts, "--row", "65536", "--col", "0", "--text", "a",
+        ], // u16 초과 행은 0으로 wrap하면 안 됨
+        vec![
+            "edit", "set-cell", s, "--table", &ts, "--row", "0", "--col", "65536", "--text", "a",
+        ], // u16 초과 열은 0으로 wrap하면 안 됨
     ] {
         let output = run(&args);
         assert_eq!(

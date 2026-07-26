@@ -5816,13 +5816,8 @@ fn search_document(args: &[String]) -> i32 {
     if json_mode {
         // [#3353] matchCount 는 반환된 매치 수이고, 추가-전용 totalMatchCount·truncated가
         // 전체 수와 절단 여부를 표현한다. #3346 batch와 하나의 helper를 공유한다.
-        let envelope = search_json_value(
-            file_path,
-            query,
-            !ignore_case,
-            &matches,
-            total_match_count,
-        );
+        let envelope =
+            search_json_value(file_path, query, !ignore_case, &matches, total_match_count);
         println!("{envelope}");
         // 매치 0건은 실패가 아니다 — 1은 런타임 실패 전용이다(#2707).
         return EXIT_OK;
@@ -8441,14 +8436,32 @@ fn edit_set_cell(args: &[String]) -> i32 {
             "--table" | "--row" | "--col" => {
                 let name = args[i].clone();
                 i += 1;
-                let Some(v) = args.get(i).and_then(|v| v.parse::<u32>().ok()) else {
+                let Some(v) = args.get(i) else {
                     eprintln!("오류: {} 뒤에 0 이상의 정수가 필요합니다.", name);
                     return EXIT_USAGE;
                 };
                 match name.as_str() {
-                    "--table" => table_arg = Some(v as usize),
-                    "--row" => row_arg = Some(v as u16),
-                    _ => col_arg = Some(v as u16),
+                    "--table" => match v.parse::<usize>() {
+                        Ok(value) => table_arg = Some(value),
+                        Err(_) => {
+                            eprintln!("오류: {} 뒤에 0 이상의 정수가 필요합니다.", name);
+                            return EXIT_USAGE;
+                        }
+                    },
+                    "--row" => match v.parse::<u16>() {
+                        Ok(value) => row_arg = Some(value),
+                        Err(_) => {
+                            eprintln!("오류: {} 뒤에 0 이상 65535 이하의 정수가 필요합니다.", name);
+                            return EXIT_USAGE;
+                        }
+                    },
+                    _ => match v.parse::<u16>() {
+                        Ok(value) => col_arg = Some(value),
+                        Err(_) => {
+                            eprintln!("오류: {} 뒤에 0 이상 65535 이하의 정수가 필요합니다.", name);
+                            return EXIT_USAGE;
+                        }
+                    },
                 }
             }
             "--text" => {
