@@ -1063,23 +1063,36 @@ export class InsertFieldInHeaderFooterCommand implements EditCommand {
   constructor(
     private target: HeaderFooterEditTarget,
     private paraIdx: number,
-    private charOffset: number,
+    /** redo 시 native에 다시 넘길 원래 cursor 좌표 */
+    private requestedCharOffset: number,
+    /** undo가 marker를 지워야 하는 실제 모델 텍스트 좌표 */
+    private insertedAt: number,
     private fieldType: number,
-    /** 필드 마커가 차지한 문자 수 — 호출부가 삽입 결과 오프셋 차이로 실측해 넘긴다. */
+    /** 필드 마커가 실제 모델 텍스트에서 차지한 문자 수. */
     private markerLength: number,
+    /** 삽입 직후 cursor가 돌아갈 좌표. */
+    private cursorAfterOffset: number,
   ) {
-    this.lastContext = hfEditContext(target, paraIdx, charOffset + markerLength);
+    this.lastContext = hfEditContext(target, paraIdx, cursorAfterOffset);
   }
 
   execute(wasm: WasmBridge): DocumentPosition {
-    wasm.insertFieldInHf(this.target.sectionIdx, this.target.isHeader, this.target.applyTo, this.paraIdx, this.charOffset, this.fieldType);
-    this.lastContext = hfEditContext(this.target, this.paraIdx, this.charOffset + this.markerLength);
+    const result = wasm.insertFieldInHf(
+      this.target.sectionIdx, this.target.isHeader, this.target.applyTo,
+      this.paraIdx, this.requestedCharOffset, this.fieldType,
+    );
+    if (result.ok) {
+      this.insertedAt = result.insertedAt;
+      this.markerLength = result.insertedLength;
+      this.cursorAfterOffset = result.charOffset;
+    }
+    this.lastContext = hfEditContext(this.target, this.paraIdx, this.cursorAfterOffset);
     return hfFnStubPosition(this.target.sectionIdx);
   }
 
   undo(wasm: WasmBridge): DocumentPosition {
-    wasm.deleteTextInHeaderFooter(this.target.sectionIdx, this.target.isHeader, this.target.applyTo, this.paraIdx, this.charOffset, this.markerLength);
-    this.lastContext = hfEditContext(this.target, this.paraIdx, this.charOffset);
+    wasm.deleteTextInHeaderFooter(this.target.sectionIdx, this.target.isHeader, this.target.applyTo, this.paraIdx, this.insertedAt, this.markerLength);
+    this.lastContext = hfEditContext(this.target, this.paraIdx, this.requestedCharOffset);
     return hfFnStubPosition(this.target.sectionIdx);
   }
 
@@ -1363,6 +1376,8 @@ export class MergeParagraphInCellCommand implements EditCommand {
   readonly timestamp = Date.now();
 
   private mergePointOffset = 0;
+  /** 사라진 문단의 스코프 메타 — undo(분할)가 되돌린다 (Task #2342). */
+  private removedParaMeta?: RemovedParaMeta;
 
   constructor(private position: DocumentPosition) {}
 
@@ -1381,10 +1396,10 @@ export class MergeParagraphInCellCommand implements EditCommand {
         index + 1 === path.length ? { ...entry, cellParaIndex: cpi - 1 } : entry,
       );
       this.mergePointOffset = wasm.getCellParagraphLengthByPath(sec, ppi, JSON.stringify(prevPath));
-      wasm.mergeParagraphInCellByPath(sec, ppi, cellPathJson(pos));
+      this.removedParaMeta = JSON.parse(wasm.mergeParagraphInCellByPath(sec, ppi, cellPathJson(pos))).removedParaMeta;
     } else {
       this.mergePointOffset = wasm.getCellParagraphLength(sec, ppi, pos.controlIndex!, pos.cellIndex!, cpi - 1);
-      wasm.mergeParagraphInCell(sec, ppi, pos.controlIndex!, pos.cellIndex!, cpi);
+      this.removedParaMeta = JSON.parse(wasm.mergeParagraphInCell(sec, ppi, pos.controlIndex!, pos.cellIndex!, cpi)).removedParaMeta;
     }
     return cellParagraphPosition(pos, cpi - 1, this.mergePointOffset);
   }
@@ -1397,9 +1412,9 @@ export class MergeParagraphInCellCommand implements EditCommand {
     if (isNestedCell(pos)) {
       const undoPath = [...pos.cellPath!];
       undoPath[undoPath.length - 1] = { ...undoPath[undoPath.length - 1], cellParaIndex: cpi - 1 };
-      wasm.splitParagraphInCellByPath(sec, ppi, JSON.stringify(undoPath), this.mergePointOffset);
+      wasm.splitParagraphInCellByPath(sec, ppi, JSON.stringify(undoPath), this.mergePointOffset, this.removedParaMeta);
     } else {
-      wasm.splitParagraphInCell(sec, ppi, pos.controlIndex!, pos.cellIndex!, cpi - 1, this.mergePointOffset);
+      wasm.splitParagraphInCell(sec, ppi, pos.controlIndex!, pos.cellIndex!, cpi - 1, this.mergePointOffset, this.removedParaMeta);
     }
     return { ...pos };
   }
@@ -1413,6 +1428,9 @@ export class MergeNextParagraphInCellCommand implements EditCommand {
   readonly type = 'mergeNextParagraphInCell';
   readonly timestamp = Date.now();
 
+  /** 사라진 문단의 스코프 메타 — undo(분할)가 되돌린다 (Task #2342). */
+  private removedParaMeta?: RemovedParaMeta;
+
   constructor(private position: DocumentPosition) {}
 
   execute(wasm: WasmBridge): DocumentPosition {
@@ -1423,9 +1441,9 @@ export class MergeNextParagraphInCellCommand implements EditCommand {
     if (isNestedCell(pos)) {
       const nextPath = [...pos.cellPath!];
       nextPath[nextPath.length - 1] = { ...nextPath[nextPath.length - 1], cellParaIndex: cpi + 1 };
-      wasm.mergeParagraphInCellByPath(sec, ppi, JSON.stringify(nextPath));
+      this.removedParaMeta = JSON.parse(wasm.mergeParagraphInCellByPath(sec, ppi, JSON.stringify(nextPath))).removedParaMeta;
     } else {
-      wasm.mergeParagraphInCell(sec, ppi, pos.controlIndex!, pos.cellIndex!, cpi + 1);
+      this.removedParaMeta = JSON.parse(wasm.mergeParagraphInCell(sec, ppi, pos.controlIndex!, pos.cellIndex!, cpi + 1)).removedParaMeta;
     }
     return { ...pos };
   }
@@ -1436,9 +1454,9 @@ export class MergeNextParagraphInCellCommand implements EditCommand {
     const ppi = pos.parentParaIndex!;
     const cpi = cellParaIndexOf(pos);
     if (isNestedCell(pos)) {
-      wasm.splitParagraphInCellByPath(sec, ppi, cellPathJson(pos), pos.charOffset);
+      wasm.splitParagraphInCellByPath(sec, ppi, cellPathJson(pos), pos.charOffset, this.removedParaMeta);
     } else {
-      wasm.splitParagraphInCell(sec, ppi, pos.controlIndex!, pos.cellIndex!, cpi, pos.charOffset);
+      wasm.splitParagraphInCell(sec, ppi, pos.controlIndex!, pos.cellIndex!, cpi, pos.charOffset, this.removedParaMeta);
     }
     return { ...pos };
   }

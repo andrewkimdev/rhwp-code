@@ -290,7 +290,8 @@ impl SvgRenderer {
                         .font_codepoints
                         .entry(run.style.font_family.clone())
                         .or_default();
-                    for ch in run.text.chars() {
+                    // 그려지는 글자로 모은다 — 필드는 표시값이 나간다 (Task #3216).
+                    for ch in run.display_or_text().chars() {
                         if !ch.is_control() {
                             codepoints.insert(ch);
                         }
@@ -320,8 +321,8 @@ impl SvgRenderer {
                     let font_family = if run.style.font_family.is_empty() {
                         "sans-serif".to_string()
                     } else {
-                        let fb = super::generic_fallback(&run.style.font_family);
-                        format!("{},{}", run.style.font_family, fb)
+                        // [#3314] 요청 face → base family → generic 체인.
+                        super::render_font_family_chain(&run.style.font_family)
                     };
                     let mut attrs = format!("font-family=\"{}\" font-size=\"{}\" fill=\"{}\" text-anchor=\"middle\" dominant-baseline=\"central\"",
                         escape_xml(&font_family), font_size, color);
@@ -333,7 +334,7 @@ impl SvgRenderer {
                     if run.style.italic {
                         attrs.push_str(" font-style=\"italic\"");
                     }
-                    for c in run.text.chars() {
+                    for c in run.display_or_text().chars() {
                         if c == ' ' {
                             continue;
                         }
@@ -350,7 +351,7 @@ impl SvgRenderer {
                     }
                 } else {
                     self.draw_text(
-                        &run.text,
+                        run.display_or_text(),
                         node.bbox.x,
                         node.bbox.y + run.baseline,
                         &run.style,
@@ -1979,8 +1980,8 @@ impl SvgRenderer {
         let font_family_str = if style.font_family.is_empty() {
             "sans-serif".to_string()
         } else {
-            let fb = super::generic_fallback(&style.font_family);
-            format!("{},{}", style.font_family, fb)
+            // [#3314] 요청 face → base family → generic 체인.
+            super::render_font_family_chain(&style.font_family)
         };
         let mut font_attrs = format!(
             "font-family=\"{}\" font-size=\"{:.2}\"",
@@ -2123,8 +2124,8 @@ impl SvgRenderer {
         let font_family_str = if style.font_family.is_empty() {
             "sans-serif".to_string()
         } else {
-            let fb = super::generic_fallback(&style.font_family);
-            format!("{},{}", style.font_family, fb)
+            // [#3314] 요청 face → base family → generic 체인.
+            super::render_font_family_chain(&style.font_family)
         };
         let mut font_attrs = format!(
             "font-family=\"{}\" font-size=\"{:.2}\"",
@@ -2698,8 +2699,8 @@ impl Renderer for SvgRenderer {
         let font_family = if style.font_family.is_empty() {
             "sans-serif".to_string()
         } else {
-            let fb = super::generic_fallback(&style.font_family);
-            format!("{},{}", style.font_family, fb)
+            // [#3314] 요청 face → base family → generic 체인.
+            super::render_font_family_chain(&style.font_family)
         };
         let old_hangul_font_family = format!("'Source Han Serif K Old Hangul',{}", font_family);
 

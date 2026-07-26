@@ -8,7 +8,6 @@ use rhwp::parser::ole_container::is_hmapsi_ole_container;
 use rhwp::parser::parse_document;
 use rhwp::wasm_api::HwpDocument;
 use serde_json::Value;
-use std::path::Path;
 
 fn load(path: &str) -> rhwp::model::document::Document {
     let bytes = std::fs::read(path).unwrap_or_else(|e| panic!("read {path}: {e}"));
@@ -198,6 +197,37 @@ fn text_concat_in_tree(node: &Value, ancestor_type: &str) -> String {
         let now_in_ancestor = in_ancestor || node_type == ancestor_type;
         if now_in_ancestor && node_type == "TextRun" {
             if let Some(text) = node.get("text").and_then(Value::as_str) {
+                out.push_str(text);
+            }
+        }
+
+        if let Some(children) = node.get("children").and_then(Value::as_array) {
+            for child in children {
+                walk(child, ancestor_type, now_in_ancestor, out);
+            }
+        }
+    }
+
+    let mut out = String::new();
+    walk(node, ancestor_type, false, &mut out);
+    out
+}
+
+/// 렌더된 문자열을 검증할 때에는 모델용 `text` 대신 있으면 `displayText`를 읽는다.
+///
+/// Task #3216 필드처럼 모델 marker 한 글자가 화면에서는 여러 글자로 보일 수 있다.
+/// `text`는 char_start와 같은 모델 좌표 계약을 보존하므로, 사용자에게 실제로 보이는
+/// AutoNumber(Page)는 이 helper로 검증해야 한다.
+fn display_text_concat_in_tree(node: &Value, ancestor_type: &str) -> String {
+    fn walk(node: &Value, ancestor_type: &str, in_ancestor: bool, out: &mut String) {
+        let node_type = node.get("type").and_then(Value::as_str).unwrap_or("");
+        let now_in_ancestor = in_ancestor || node_type == ancestor_type;
+        if now_in_ancestor && node_type == "TextRun" {
+            if let Some(text) = node
+                .get("displayText")
+                .or_else(|| node.get("text"))
+                .and_then(Value::as_str)
+            {
                 out.push_str(text);
             }
         }
@@ -630,7 +660,7 @@ fn issue_1692_so_sueop_header_footer_page5_matches_reference_contract() {
             "SO-SUEOP header underline must render"
         );
 
-        let footer_text = text_concat_in_tree(tree, "Footer");
+        let footer_text = display_text_concat_in_tree(tree, "Footer");
         assert!(
             footer_text.contains("협성고등학교"),
             "page 5 footer school label must render"
@@ -681,27 +711,32 @@ fn issue_1692_so_sueop_hwpx_title_ole_renders_from_embedded_preview() {
 }
 
 #[test]
-fn issue_1692_so_sueop_hwp3_title_external_link_renders_from_sample_dir() {
+fn issue_1692_so_sueop_hwp3_title_renders_from_embedded_ole() {
+    // [#3363] 1쪽 제목은 외부 연결 그림이 아니라 내장 글맵시 OLE 다 —
+    // pic_type=1, 이름 `00000000.OOO` 는 추가 정보 블록 id=2 스토리지의 서브
+    // 스토리지 참조명. 종전 이 테스트는 사이드카(populate_external_images_from_dir)
+    // 오분류 동작을 고정하고 있었으나, payload 추출 배선 후에는 외부 파일 없이
+    // 내장 OLE(WMF 프레젠테이션)로 렌더되어야 한다.
     let hwp3_model = load("samples/SO-SUEOP.hwp");
-    let picture = first_picture(&hwp3_model.sections[0].paragraphs)
-        .expect("SO-SUEOP HWP3 page 1 title picture");
-    assert_eq!(
-        picture.image_attr.external_path.as_deref(),
-        Some("00000000.OOO"),
-        "HWP3 title picture must keep the linked external object basename"
-    );
-
-    let mut hwp3_doc = load_wasm_doc("samples/SO-SUEOP.hwp");
-    let loaded = hwp3_doc.populate_external_images_from_dir(Path::new("samples"));
     assert!(
-        loaded > 0,
-        "samples/00000000.OOO must be loaded as the HWP3 title image"
+        first_picture(&hwp3_model.sections[0].paragraphs).is_none(),
+        "payload 확보 그림은 Picture 가 아니라 Ole 컨트롤이어야 함"
+    );
+    let ole_content = hwp3_model
+        .bin_data_content
+        .iter()
+        .find(|c| c.extension == "ole")
+        .expect("HWP3 embedded OLE payload must be injected as BinData");
+    assert!(
+        is_hmapsi_ole_container(&ole_content.data.load()),
+        "SO-SUEOP title OLE must be identified as HMapsi content"
     );
 
+    let hwp3_doc = load_wasm_doc("samples/SO-SUEOP.hwp");
     let tree = page_render_tree(&hwp3_doc, 0);
     assert!(
-        contains_node_type(&tree, "Image"),
-        "SO-SUEOP HWP3 page 1 title must render as an image after external file loading"
+        contains_node_type(&tree, "RawSvg") || contains_node_type(&tree, "Image"),
+        "SO-SUEOP HWP3 page 1 title must render from the embedded OLE without sidecar files"
     );
     assert!(
         !contains_node_type(&tree, "Placeholder"),

@@ -298,6 +298,10 @@ export class WasmBridge {
   /** [Task #741 후속] 외부 file path 그림 영역 영역 dev 서버 영역 영역 fetch + inject. */
   private async populateExternalImagesFromDevServer(): Promise<void> {
     if (!this.doc) return;
+    // [#3348] /samples/ fetch는 vite dev 서버 전용(server.fs.allow). 프로덕션 빌드
+    // (Pages·확장)에는 경로가 없어 실패 로그만 쌓이므로 dev 외에는 시도하지 않는다.
+    // 프로덕션 사이드카 공급 UX는 #3313 잔여 범위.
+    if (!import.meta.env.DEV) return;
     try {
       const basenamesJson = this.doc.getExternalImageBasenames();
       const basenames: string[] = JSON.parse(basenamesJson);
@@ -929,9 +933,9 @@ export class WasmBridge {
     return this.doc.mergeParagraph(sec, para);
   }
 
-  splitParagraphInCell(sec: number, parentPara: number, controlIdx: number, cellIdx: number, cellParaIdx: number, charOffset: number): string {
+  splitParagraphInCell(sec: number, parentPara: number, controlIdx: number, cellIdx: number, cellParaIdx: number, charOffset: number, removedParaMeta?: RemovedParaMeta): string {
     if (!this.doc) throw new Error('문서가 로드되지 않았습니다');
-    return this.doc.splitParagraphInCell(sec, parentPara, controlIdx, cellIdx, cellParaIdx, charOffset);
+    return this.doc.splitParagraphInCell(sec, parentPara, controlIdx, cellIdx, cellParaIdx, charOffset, serializeParaMeta(removedParaMeta));
   }
 
   mergeParagraphInCell(sec: number, parentPara: number, controlIdx: number, cellIdx: number, cellParaIdx: number): string {
@@ -1218,9 +1222,9 @@ export class WasmBridge {
     return (this.doc as any).deleteRangeInCellByPath(sec, parentPara, pathJson, startPara, startOffset, endPara, endOffset);
   }
 
-  splitParagraphInCellByPath(sec: number, parentPara: number, pathJson: string, charOffset: number): string {
+  splitParagraphInCellByPath(sec: number, parentPara: number, pathJson: string, charOffset: number, removedParaMeta?: RemovedParaMeta): string {
     if (!this.doc) throw new Error('문서가 로드되지 않았습니다');
-    return (this.doc as any).splitParagraphInCellByPath(sec, parentPara, pathJson, charOffset);
+    return (this.doc as any).splitParagraphInCellByPath(sec, parentPara, pathJson, charOffset, serializeParaMeta(removedParaMeta));
   }
 
   mergeParagraphInCellByPath(sec: number, parentPara: number, pathJson: string): string {
@@ -2228,8 +2232,13 @@ export class WasmBridge {
     return this.doc.applyParaFormatInHf(sec, isHeader, applyTo, hfParaIdx, propsJson);
   }
 
-  /** 머리말/꼬리말 문단에 필드 마커를 삽입한다 (1=쪽번호, 2=총쪽수, 3=파일이름) */
-  insertFieldInHf(sec: number, isHeader: boolean, applyTo: number, hfParaIdx: number, charOffset: number, fieldType: number): { ok: boolean; charOffset: number } {
+  /**
+   * 머리말/꼬리말 문단에 필드 마커를 삽입한다 (1=쪽번호, 2=총쪽수, 3=파일이름).
+   *
+   * `charOffset`은 삽입 뒤 커서 좌표, `insertedAt`/`insertedLength`는 history가
+   * 역연산할 실제 모델 텍스트 범위다. inline control 뒤 cursor처럼 둘이 다를 수 있다.
+   */
+  insertFieldInHf(sec: number, isHeader: boolean, applyTo: number, hfParaIdx: number, charOffset: number, fieldType: number): { ok: boolean; charOffset: number; insertedAt: number; insertedLength: number } {
     if (!this.doc) throw new Error('문서가 로드되지 않았습니다');
     return JSON.parse(this.doc.insertFieldInHf(sec, isHeader, applyTo, hfParaIdx, charOffset, fieldType));
   }

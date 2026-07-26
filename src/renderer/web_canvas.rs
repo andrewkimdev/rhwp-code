@@ -729,12 +729,7 @@ impl WebCanvasRenderer {
             } else {
                 12.0
             };
-            let font_family = if run.style.font_family.is_empty() {
-                "sans-serif".to_string()
-            } else {
-                let fallback = super::generic_fallback(&run.style.font_family);
-                format!("\"{}\" , {}", run.style.font_family, fallback)
-            };
+            let font_family = super::canvas_font_family_chain(&run.style.font_family);
             let font = format!(
                 "{}{}{:.3}px {}",
                 font_style_str, font_weight, font_size, font_family
@@ -746,10 +741,15 @@ impl WebCanvasRenderer {
             let _ = self.ctx.rotate(run.rotation * std::f64::consts::PI / 180.0);
             self.ctx.set_text_align("center");
             self.ctx.set_text_baseline("middle");
-            let _ = self.ctx.fill_text(&run.text, 0.0, 0.0);
+            let _ = self.ctx.fill_text(run.display_or_text(), 0.0, 0.0);
             self.ctx.restore();
         } else {
-            self.draw_text(&run.text, bbox.x, bbox.y + run.baseline, &run.style);
+            self.draw_text(
+                run.display_or_text(),
+                bbox.x,
+                bbox.y + run.baseline,
+                &run.style,
+            );
         }
         if self.show_paragraph_marks || self.show_control_codes {
             let is_marker = !matches!(
@@ -2168,12 +2168,7 @@ impl Renderer for WebCanvasRenderer {
             (base_font_size, y)
         };
 
-        let font_family = if style.font_family.is_empty() {
-            "sans-serif".to_string()
-        } else {
-            let fallback = super::generic_fallback(&style.font_family);
-            format!("\"{}\", {}", style.font_family, fallback)
-        };
+        let font_family = super::canvas_font_family_chain(&style.font_family);
 
         let font = format!(
             "{}{}{:.3}px {}",
@@ -3003,12 +2998,7 @@ impl WebCanvasRenderer {
             glyph_color.clone()
         };
 
-        let font_family = if style.font_family.is_empty() {
-            "sans-serif".to_string()
-        } else {
-            let fallback = super::generic_fallback(&style.font_family);
-            format!("\"{}\" , {}", style.font_family, fallback)
-        };
+        let font_family = super::canvas_font_family_chain(&style.font_family);
         let font_weight = if style.bold { "bold " } else { "" };
         let font_style_str = if style.italic { "italic " } else { "" };
         let font = format!(
@@ -3169,12 +3159,7 @@ impl WebCanvasRenderer {
             glyph_color.clone()
         };
 
-        let font_family = if style.font_family.is_empty() {
-            "sans-serif".to_string()
-        } else {
-            let fallback = super::generic_fallback(&style.font_family);
-            format!("\"{}\" , {}", style.font_family, fallback)
-        };
+        let font_family = super::canvas_font_family_chain(&style.font_family);
 
         let cx = bbox_x + box_size / 2.0;
         let cy = bbox_y + bbox_h - box_size / 2.0;
