@@ -7,7 +7,8 @@ last_verified: 2026-07-26
 
 # 버그 헌팅 playbook — 실사례 여정 기반 탑다운
 
-> 제안 이슈: #3398. 실행 주체: [`bug-hunter` 서브에이전트](../../.claude/agents/bug-hunter.md).
+> 제안 이슈: #3398. 실행 진입점: [Claude bug-hunter 에이전트](../../.claude/agents/bug-hunter.md),
+> [Codex bug-hunter Skill](../../.agents/skills/bug-hunter/SKILL.md).
 
 ## 왜 이 방식인가
 
