@@ -58,10 +58,10 @@ impl DocumentCore {
 
     /// 비밀번호로 보호된 HWP 파일을 비밀번호와 함께 로드한다.
     ///
-    /// HWP5 EncryptVersion 4 비밀번호 암호 문서를 연다. 비밀번호가 틀리면
-    /// `HwpError::InvalidFile` 로 래핑된 `CryptoError::WrongPassword` 가 반환된다.
-    /// 암호화되지 않은 HWPX는 기존 파서로 열 수 있지만 암호화 HWPX 복호화는
-    /// 지원하지 않는다.
+    /// HWP5 EncryptVersion 4 및 압축 HWP3 비밀번호 암호 문서를 연다.
+    /// 비밀번호가 틀리면 `HwpError::InvalidFile`로 래핑된 암호 불일치/손상 오류가
+    /// 반환된다. 암호화되지 않은 HWPX는 기존 파서로 열 수 있지만 암호화 HWPX
+    /// 복호화는 지원하지 않는다.
     pub fn from_bytes_with_password(
         data: &[u8],
         password: &[u8],
