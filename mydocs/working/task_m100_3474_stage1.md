@@ -34,7 +34,7 @@ Issue: [#3474](https://github.com/edwardkim/rhwp/issues/3474)
 - HWP3 복호화 명세는 후속으로 확보한 뒤 `src/parser/hwp3/`에만 구현하고 `openWithPassword` 공통
   API로 연결한다. 이번 #3474 변경은 HWP5 EncryptVersion 4 UI에 한정하며 HWP3 암호 문서 지원을
   주장하지 않는다.
-- `samples/HWPW97-password.hwp`는 그 후속 구현의 회귀 fixture로만 보관한다. 현재 단계는 이 파일을
+- `samples/HWPW97-password-123456.hwp`는 그 후속 구현의 회귀 fixture로만 보관한다. 현재 단계는 이 파일을
   열거나 비밀번호를 코드·문서·검증 로그에 기록하지 않는다.
 
 ## 검증 계획

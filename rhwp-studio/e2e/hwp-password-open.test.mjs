@@ -10,7 +10,7 @@ import { assert, createNewDocument, runTest, waitForCanvas } from './helpers.mjs
 
 const E2E_DIR = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(E2E_DIR, '..', '..');
-const FIXTURE = path.join(REPO_ROOT, 'samples', 'hwp3-sample16-hwp5-2024-password.hwp');
+const FIXTURE = path.join(REPO_ROOT, 'samples', 'hwp3-sample16-hwp5-2024-password-123456.hwp');
 
 async function uploadFixture(page) {
   const input = await page.$('#file-input');
