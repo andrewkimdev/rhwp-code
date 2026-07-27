@@ -283,8 +283,13 @@ fn parse_hwp_with_cfb(
         let raw = cfb
             .read_stream_raw("/DocInfo")
             .map_err(ParseError::CfbError)?;
-        crypto::decrypt_password_protected(&raw, password.unwrap(), compressed)
-            .map_err(ParseError::CryptoError)?
+        crypto::decrypt_password_protected_limited(
+            &raw,
+            password.unwrap(),
+            compressed,
+            crypto::MAX_PASSWORD_DECOMPRESSED_STREAM_BYTES,
+        )
+        .map_err(ParseError::CryptoError)?
     } else {
         cfb.read_doc_info(compressed)
             .map_err(ParseError::CfbError)?
@@ -564,8 +569,13 @@ fn parse_sections_strict(
             let raw = cfb
                 .read_body_text_section(i, false, false)
                 .map_err(ParseError::CfbError)?;
-            crypto::decrypt_password_protected(&raw, password.unwrap(), compressed)
-                .map_err(ParseError::CryptoError)?
+            crypto::decrypt_password_protected_limited(
+                &raw,
+                password.unwrap(),
+                compressed,
+                crypto::MAX_PASSWORD_DECOMPRESSED_STREAM_BYTES,
+            )
+            .map_err(ParseError::CryptoError)?
         } else {
             cfb.read_body_text_section(i, compressed, false)
                 .map_err(ParseError::CfbError)?
@@ -612,8 +622,13 @@ fn parse_hwp_with_lenient(
         let raw = lenient
             .read_stream("DocInfo")
             .map_err(ParseError::CfbError)?;
-        crypto::decrypt_password_protected(&raw, password.unwrap(), compressed)
-            .map_err(ParseError::CryptoError)?
+        crypto::decrypt_password_protected_limited(
+            &raw,
+            password.unwrap(),
+            compressed,
+            crypto::MAX_PASSWORD_DECOMPRESSED_STREAM_BYTES,
+        )
+        .map_err(ParseError::CryptoError)?
     } else {
         lenient
             .read_doc_info(compressed)
@@ -639,8 +654,13 @@ fn parse_hwp_with_lenient(
             let raw = lenient
                 .read_body_text_section_full(i, false, false)
                 .map_err(ParseError::CfbError)?;
-            crypto::decrypt_password_protected(&raw, password.unwrap(), compressed)
-                .map_err(ParseError::CryptoError)?
+            crypto::decrypt_password_protected_limited(
+                &raw,
+                password.unwrap(),
+                compressed,
+                crypto::MAX_PASSWORD_DECOMPRESSED_STREAM_BYTES,
+            )
+            .map_err(ParseError::CryptoError)?
         } else {
             lenient
                 .read_body_text_section_full(i, compressed, false)
@@ -760,12 +780,7 @@ fn decode_encrypted_stream_limited(
     compressed: bool,
     max_bytes: usize,
 ) -> Option<Vec<u8>> {
-    let decrypted = crypto::decrypt_password_stream(raw, password);
-    if compressed {
-        cfb_reader::decompress_stream_limited(&decrypted, max_bytes).ok()
-    } else {
-        (decrypted.len() <= max_bytes).then_some(decrypted)
-    }
+    crypto::decrypt_password_protected_limited(raw, password, compressed, max_bytes).ok()
 }
 
 /// LenientCfbReader로 BinData 로드
@@ -800,7 +815,12 @@ fn load_bin_data_content_lenient(
             Ok(data) => {
                 let mut decompressed = if encrypted {
                     let pwd = password.unwrap();
-                    match crypto::decrypt_password_protected(&data, pwd, stream_compressed) {
+                    match crypto::decrypt_password_protected_limited(
+                        &data,
+                        pwd,
+                        stream_compressed,
+                        crypto::MAX_PASSWORD_DECOMPRESSED_STREAM_BYTES,
+                    ) {
                         Ok(d) => d,
                         Err(e) => {
                             eprintln!(
@@ -1560,7 +1580,13 @@ impl Hwp5BinResolver {
         if self.encrypted {
             let pwd = self.password.as_deref().unwrap_or(&[]);
             let compressed = self.compressed_streams.get(key).copied().unwrap_or(false);
-            crypto::decrypt_password_protected(raw, pwd, compressed).ok()
+            crypto::decrypt_password_protected_limited(
+                raw,
+                pwd,
+                compressed,
+                crypto::MAX_PASSWORD_DECOMPRESSED_STREAM_BYTES,
+            )
+            .ok()
         } else {
             match cfb_reader::decompress_stream(raw) {
                 Ok(d) => Some(d),
@@ -1749,7 +1775,12 @@ fn load_bin_data_content(
                 // 암호 문서: 복호화+압축해제. 그 외: 압축 해제 시도 (실패 시 원본).
                 let mut decompressed = if encrypted {
                     let pwd = password.unwrap();
-                    match crypto::decrypt_password_protected(&data, pwd, stream_compressed) {
+                    match crypto::decrypt_password_protected_limited(
+                        &data,
+                        pwd,
+                        stream_compressed,
+                        crypto::MAX_PASSWORD_DECOMPRESSED_STREAM_BYTES,
+                    ) {
                         Ok(d) => d,
                         Err(e) => {
                             eprintln!(

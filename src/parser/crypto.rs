@@ -10,12 +10,18 @@
 //!
 //! 참조: /home/edward/vsworks/shwp/hwp_semantic/crypto.py
 
-use super::cfb_reader::decompress_stream;
+use super::cfb_reader::{decompress_stream, decompress_stream_limited, CfbError};
 use super::record::Record;
 use super::tags;
 
 /// 현재 지원하는 HWP 5 비밀번호 암호화 방식(FileHeader EncryptVersion).
 pub const SUPPORTED_PASSWORD_ENCRYPT_VERSION: u32 = 4;
+
+/// HWP5 비밀번호 암호 스트림 하나가 압축 해제된 뒤 가질 수 있는 최대 크기.
+///
+/// HWPX BinData 입력 상한과 같은 512 MiB를 적용한다. 이 값은 DocInfo, BodyText,
+/// 즉시·지연 BinData의 공통 상한이며, 암호문 크기와 별개로 deflate 확장 폭주를 막는다.
+pub const MAX_PASSWORD_DECOMPRESSED_STREAM_BYTES: usize = 512 * 1024 * 1024;
 
 /// 배포용 문서 복호화 에러
 #[derive(Debug)]
@@ -32,6 +38,8 @@ pub enum CryptoError {
     RecordError(String),
     /// 압축 해제 실패
     DecompressError(String),
+    /// 비밀번호 암호 스트림의 복호화 후 크기가 상한을 초과함
+    DecompressedStreamLimitExceeded { max_bytes: usize },
     /// 비밀번호 불일치 또는 암호문 손상 (복호화 결과가 유효한 데이터가 아님)
     WrongPassword,
     /// 지원하지 않는 HWP 비밀번호 암호화 버전
@@ -49,6 +57,11 @@ impl std::fmt::Display for CryptoError {
             CryptoError::DecryptionFailed(e) => write!(f, "복호화 실패: {}", e),
             CryptoError::RecordError(e) => write!(f, "레코드 파싱 실패: {}", e),
             CryptoError::DecompressError(e) => write!(f, "압축 해제 실패: {}", e),
+            CryptoError::DecompressedStreamLimitExceeded { max_bytes } => write!(
+                f,
+                "비밀번호 암호 스트림의 압축 해제 결과가 {} 바이트 상한을 초과했습니다",
+                max_bytes
+            ),
             CryptoError::WrongPassword => {
                 write!(
                     f,
@@ -571,17 +584,44 @@ pub fn decrypt_password_stream(raw: &[u8], password: &[u8]) -> Vec<u8> {
 
 /// 비밀번호로 보호된 스트림(raw)을 복호화한다.
 ///
-/// `compressed`가 true면 복호화 후 zlib/raw-deflate 압축 해제까지 수행한다.
-/// 압축 해제 실패는 비밀번호 불일치의 강한 신호이므로 `WrongPassword`로 매핑한다.
+/// `compressed`가 true면 복호화 후 zlib/raw-deflate 압축 해제까지 수행한다. DocInfo,
+/// BodyText, 즉시·지연 BinData가 모두 같은 상한을 사용하도록 기본 상한을 적용한다.
 pub fn decrypt_password_protected(
     raw: &[u8],
     password: &[u8],
     compressed: bool,
 ) -> Result<Vec<u8>, CryptoError> {
+    decrypt_password_protected_limited(
+        raw,
+        password,
+        compressed,
+        MAX_PASSWORD_DECOMPRESSED_STREAM_BYTES,
+    )
+}
+
+/// 비밀번호 암호 스트림을 복호화하고, 결과 바이트 수를 `max_bytes`로 제한한다.
+///
+/// 압축 해제 형식 오류는 오답 비밀번호 또는 손상 암호문일 가능성이 높아
+/// `WrongPassword`로 매핑하지만, 상한 초과는 호출자가 정책 위반으로 구분할 수 있게
+/// 별도 오류로 보존한다.
+pub fn decrypt_password_protected_limited(
+    raw: &[u8],
+    password: &[u8],
+    compressed: bool,
+    max_bytes: usize,
+) -> Result<Vec<u8>, CryptoError> {
     let decrypted = decrypt_password_stream(raw, password);
 
     if compressed {
-        decompress_stream(&decrypted).map_err(|_| CryptoError::WrongPassword)
+        match decompress_stream_limited(&decrypted, max_bytes) {
+            Ok(output) => Ok(output),
+            Err(CfbError::LimitExceeded(_)) => {
+                Err(CryptoError::DecompressedStreamLimitExceeded { max_bytes })
+            }
+            Err(_) => Err(CryptoError::WrongPassword),
+        }
+    } else if decrypted.len() > max_bytes {
+        Err(CryptoError::DecompressedStreamLimitExceeded { max_bytes })
     } else {
         Ok(decrypted)
     }
@@ -1032,5 +1072,41 @@ mod tests {
         let fake = vec![0x11u8; 32];
         let result = decrypt_password_protected(&fake, b"pw", false).unwrap();
         assert_eq!(result.len(), 32);
+    }
+
+    #[test]
+    fn test_decrypt_password_protected_limited_rejects_compressed_expansion() {
+        use flate2::write::DeflateEncoder;
+        use flate2::Compression;
+        use std::io::Write;
+
+        const TEST_PASSWORD: &[u8] = &[0x73, 0x69, 0x7a, 0x65, 0x2d, 0x74, 0x65, 0x73, 0x74];
+        const MAX_BYTES: usize = 1024;
+        let plaintext = vec![b'A'; MAX_BYTES + 1];
+        let mut encoder = DeflateEncoder::new(Vec::new(), Compression::best());
+        encoder.write_all(&plaintext).unwrap();
+        let compressed = encoder.finish().unwrap();
+        let encrypted = encrypt_password_stream_for_test(&compressed, TEST_PASSWORD);
+
+        assert!(matches!(
+            decrypt_password_protected_limited(&encrypted, TEST_PASSWORD, true, MAX_BYTES),
+            Err(CryptoError::DecompressedStreamLimitExceeded {
+                max_bytes: MAX_BYTES
+            })
+        ));
+    }
+
+    #[test]
+    fn test_decrypt_password_protected_limited_rejects_uncompressed_oversize() {
+        const TEST_PASSWORD: &[u8] = &[0x73, 0x69, 0x7a, 0x65, 0x2d, 0x74, 0x65, 0x73, 0x74];
+        const MAX_BYTES: usize = 1024;
+        let encrypted = encrypt_password_stream_for_test(&vec![0xA5; MAX_BYTES + 1], TEST_PASSWORD);
+
+        assert!(matches!(
+            decrypt_password_protected_limited(&encrypted, TEST_PASSWORD, false, MAX_BYTES),
+            Err(CryptoError::DecompressedStreamLimitExceeded {
+                max_bytes: MAX_BYTES
+            })
+        ));
     }
 }
