@@ -180,31 +180,7 @@ await init({ module_or_path: '/rhwp_bg.wasm' });
 const resp = await fetch('document.hwp');
 const doc = new HwpDocument(new Uint8Array(await resp.arrayBuffer()));
 document.getElementById('viewer').innerHTML = doc.renderPageSvg(0);
-
-// 비밀번호 보호 HWP5(EncryptVersion 4)
-const password = window.prompt('문서 비밀번호') ?? '';
-const protectedDoc = HwpDocument.openWithPassword(
-  new Uint8Array(await (await fetch('protected.hwp')).arrayBuffer()),
-  password,
-);
 ```
-
-### 비밀번호 보호 문서 지원 범위
-
-일반 HWPX 읽기 지원과 암호화 HWPX 복호화 지원은 별개입니다. 현재 범위는 다음과
-같습니다.
-
-| 입력 형식 | 현재 상태 | 사용 방법·제약 |
-|-----------|-----------|----------------|
-| 암호화되지 않은 HWP5 | 지원 | 기존 생성자·CLI 명령 사용 |
-| HWP5 비밀번호 암호화, EncryptVersion 4 | 읽기 지원 | `openWithPassword` 또는 CLI `--password` / `--password-stdin` 사용 |
-| HWP5 EncryptVersion 1~3 | 미지원 | 지원하지 않는 암호화 방식으로 명시적 거부 |
-| 암호화되지 않은 HWPX | 지원 | 기존 HWPX 파서 사용 |
-| 암호화 HWPX(ODF `encryption-data`) | 감지·분류만 지원 | 복호화는 지원하지 않으며 명시적 거부 |
-| DRM(Fasoo/SoftCamp 등) | 미지원 | HWP5 비밀번호 암호화와 다른 보호 방식 |
-
-비밀번호로 연 HWP5를 저장하면 암호화되지 않은 일반 HWP가 생성됩니다. 비밀번호
-암호화 쓰기는 아직 지원하지 않습니다.
 
 | 패키지 | 용도 | 설치 |
 |--------|------|------|

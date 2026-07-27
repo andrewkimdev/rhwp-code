@@ -185,31 +185,7 @@ await init({ module_or_path: '/rhwp_bg.wasm' });
 const resp = await fetch('document.hwp');
 const doc = new HwpDocument(new Uint8Array(await resp.arrayBuffer()));
 document.getElementById('viewer').innerHTML = doc.renderPageSvg(0);
-
-// Password-protected HWP5 (EncryptVersion 4)
-const password = window.prompt('Document password') ?? '';
-const protectedDoc = HwpDocument.openWithPassword(
-  new Uint8Array(await (await fetch('protected.hwp')).arrayBuffer()),
-  password,
-);
 ```
-
-### Password-Protected Document Support
-
-Plain HWPX parsing and encrypted HWPX decryption are separate capabilities. The
-current support scope is:
-
-| Input format | Current status | Usage and limitations |
-|--------------|----------------|-----------------------|
-| Unencrypted HWP5 | Supported | Use the regular constructor or CLI commands |
-| Password-encrypted HWP5, EncryptVersion 4 | Read supported | Use `openWithPassword` or CLI `--password` / `--password-stdin` |
-| HWP5 EncryptVersion 1–3 | Unsupported | Rejected explicitly as an unsupported encryption scheme |
-| Unencrypted HWPX | Supported | Uses the existing HWPX parser |
-| Encrypted HWPX (ODF `encryption-data`) | Detection/classification only | Decryption is unsupported and the file is rejected explicitly |
-| DRM (including Fasoo/SoftCamp) | Unsupported | These schemes differ from HWP5 password encryption |
-
-Saving an HWP5 document opened with a password produces an unencrypted HWP file.
-Writing password-encrypted files is not currently supported.
 
 | Package | Purpose | Install |
 |---------|---------|---------|

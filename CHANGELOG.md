@@ -4,25 +4,6 @@
 
 ## [Unreleased]
 
-### 파서·직렬화
-
-- HWP5 EncryptVersion 4(한글 7.0 이후) 비밀번호 문서 읽기 지원. DocInfo,
-  BodyText, BinData, Scripts를 복호화하며 구버전 1~3은 명시적으로 거부한다.
-- 암호화되지 않은 HWPX는 기존대로 읽으며, 암호화 HWPX는 감지·분류까지만 지원하고
-  복호화하지 않는다. DRM 컨테이너도 비밀번호 복호화 범위에 포함하지 않는다.
-- 복호화 문서를 저장할 때 암호화 플래그와 EncryptVersion을 제거하고 일반 HWP로
-  내보낸다. Scripts·고아 BinData 스트림과 BinData별 압축 속성도 보존한다.
-
-### API
-
-- Rust: `parse_document_with_password`, `DocumentCore::from_bytes_with_password`.
-- WASM: `HwpDocument.openWithPassword(data, password)`.
-
-### CLI
-
-- 일반 HWP5 열기·내보내기·변환 명령에 `--password`와 `--password-stdin` 추가.
-  비밀번호가 필요한 경우 종료 코드 2, 불일치·암호문 손상은 종료 코드 1을 반환한다.
-
 ## [0.8.2] — 2026-07-27
 
 > 핫픽스 — 브라우저 확장의 인쇄 기능이 동작하지 않던 문제를 복구한다. v0.8.0 부터
