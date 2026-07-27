@@ -25,8 +25,9 @@ push 전에는 PR head·`ls-remote`·local parent SHA를 다시 대조한다.
 
 ## Stage 3 — 차단 해소 필요
 
-1. CodeQL의 cleartext logging 41건 및 test vector 16건을 분석해, 비밀번호가 error/log sink로
-   흐르지 않는 구조를 코드로 보장하거나 보안 reviewer 절차를 따른다.
+1. CodeQL 57건은 2026-07-27 annotation·source·두 CLI sentinel 실행으로 과탐지임을 확인하고
+   `false positive` 41건, `used in tests` 16건으로 dismiss했다. source push 뒤 새 CodeQL run에
+   새 alert가 없는지 확인한다. `--password-stdin` 권장과 UI 비보존 요구사항은 유지한다.
 2. 암호 DocumentCore 초기화의 DocInfo·BodyText·즉시 BinData 경로까지 압축 해제 출력 상한을
    일관되게 적용할지, PR의 security claim을 축소할지 작업지시자가 결정한다.
 3. 코드·test 변경이 생기면 새 review target에서 targeted test, IR sweep, release-test 전체,

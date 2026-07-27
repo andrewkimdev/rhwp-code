@@ -71,20 +71,29 @@ collaborator 보정 `ecdfd9ca4`은 다음만 추가·정리한다.
 
 ## 5. 발견한 차단 사유
 
-### 5.1 CodeQL security check 실패
+### 5.1 CodeQL security alert 57건 — 근거 확인 뒤 dismiss 완료
 
-원 head의 CodeQL 분석은 완료됐지만 PR aggregate의 `CodeQL` check는 실패다. 현재 PR merge ref에
-새 open alert 57건이 있다.
+원 head의 CodeQL Action 언어 분석은 성공했지만, 2026-07-27의 aggregate `CodeQL` check는 새 alert
+57건 때문에 failure였다. annotation과 source를 대조하고 실제 CLI binary로 두 입력 경로를 실행한 뒤,
+alert를 다음 사유로 dismiss했다.
 
-- `src/main.rs`와 `src/renderer/pdf.rs`의 무관한 오류 출력으로 이어지는
-  `rust/cleartext-logging` 41건: 전역 옵션 pre-scan의 반환 tuple 전체를 비밀번호 값으로 taint한
-  것으로 보인다. 실제로 `--password` 토큰을 제거한다는 구현과 정적 분석 모델의 정밀도를 재검증해야 한다.
-- parser test vector의 `rust/hard-coded-cryptographic-value` 16건: test-only 공개 벡터인지와
-  suppression/dismissal 정책을 security reviewer가 판정해야 한다. 심각도 표기를 이유로 무검토
-  dismiss하지 않는다.
+| rule / 수 | 판단 | dismiss 사유 |
+|---|---|---|
+| `rust/cleartext-logging` 41 | `extract_global_password()` 반환 tuple 전체가 taint돼, 비밀번호 토큰을 제거한 뒤 쓰는 `args` 오류 출력까지 모두 sink로 분류한 path-insensitive 과탐지 | `false positive` |
+| `rust/hard-coded-cryptographic-value` 16 | `src/parser/crypto.rs`, `src/parser/mod.rs`의 `#[cfg(test)]` 고정 알고리즘 벡터·합성 fixture 입력이며 release binary와 사용자 암호에 포함되지 않음 | `used in tests` |
 
-CodeQL failure가 branch protection을 만족하지 않으므로, 원인을 구조적으로 해소하거나 근거 있는
-security 예외 처리가 완료되기 전에는 merge하지 않는다.
+동적 확인은 `--password`와 `--password-stdin` 각각에 고유 sentinel을 주고, CodeQL이 가리킨
+`test-caption`의 옵션 오류를 발생시켜 수행했다. 두 경우 모두 stdout/stderr에 sentinel이 없었다.
+`raw_args`는 pre-scan 외에 사용되지 않고, 오류 출력은 비밀번호 토큰을 제거한 `args` 또는 공개 오류
+분류만 사용한다. 따라서 이 57건은 실제 비밀번호 유출 경로를 입증하지 않는다.
+
+다만 `--password <값>` 자체는 OS 프로세스 목록에 노출될 수 있으므로 CLI가 고지한 대로
+`--password-stdin`을 권장한다. 또한 단발 CLI의 thread-local `String`은 zeroization하지 않으므로,
+장기 실행 UI에서는 #3474의 비보존·수명 제한 요구사항을 따른다. dismiss는 과탐지의 처리이지 이 두
+운영상 주의사항을 없애는 조치가 아니다.
+
+기존 failure check는 과거 run의 불변 결과다. source push 뒤 새 CodeQL run에서 새 alert가 없는지와
+required check 성공을 다시 확인한다.
 
 ### 5.2 압축 해제 제한 주장과 구현 범위 불일치
 
@@ -100,11 +109,11 @@ lazy BinData `resolve_limited()`에만 적용된다. 필수 `DocInfo`와 `BodyTe
 ## 6. 최종 권고
 
 **보류.** 실제 fixture, API·CLI·저장 경로와 Rust 전체 회귀는 통과했고 maintainer 범위 정리도
-준비됐다. 그러나 최신 CodeQL security check 실패와 핵심 스트림의 압축 해제 상한 불일치가 남아 있다.
+준비됐다. CodeQL 57건은 근거 확인 뒤 dismiss했지만, 핵심 스트림의 압축 해제 상한 불일치가 남아 있다.
 
 merge 전 조건:
 
-1. 5.1 CodeQL alert의 구조적 수정 또는 security reviewer의 근거 있는 처리와 최신 head 재분석 성공
+1. source push 뒤 새 CodeQL run에서 새 alert가 없고 required check가 성공함을 확인
 2. 5.2의 전 스트림 상한 구현·회귀 또는 작업지시자의 명시적 보안 범위 결정
 3. source head가 다시 바뀌지 않았음을 확인한 뒤 collaborator 보정 commit·review 기록을 push하고,
    최신 head full CI와 작업지시자 승인을 재확인
