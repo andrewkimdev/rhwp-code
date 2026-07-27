@@ -23,15 +23,16 @@ last_verified: 2026-07-27
 이 commit은 contributor의 원 기능 commit과 분리됐다. 아직 source remote에 push하지 않았고,
 push 전에는 PR head·`ls-remote`·local parent SHA를 다시 대조한다.
 
-## Stage 3 — 차단 해소 필요
+## Stage 3 — 차단 해소 완료, 재검증 완료
 
 1. CodeQL 57건은 2026-07-27 annotation·source·두 CLI sentinel 실행으로 과탐지임을 확인하고
    `false positive` 41건, `used in tests` 16건으로 dismiss했다. source push 뒤 새 CodeQL run에
    새 alert가 없는지 확인한다. `--password-stdin` 권장과 UI 비보존 요구사항은 유지한다.
-2. 암호 DocumentCore 초기화의 DocInfo·BodyText·즉시 BinData 경로까지 압축 해제 출력 상한을
-   일관되게 적용할지, PR의 security claim을 축소할지 작업지시자가 결정한다.
-3. 코드·test 변경이 생기면 새 review target에서 targeted test, IR sweep, release-test 전체,
-   Clippy, WASM check를 다시 수행한다.
+2. `2c8dbfaf6 fix(crypto): 암호 HWP5 스트림 압축 해제 상한 적용`이 DocInfo·BodyText·즉시·지연
+   BinData에 스트림별 512 MiB 복호화 후 상한을 적용했다. compressed 확장과 uncompressed 초과 회귀를
+   추가했다.
+3. 전용 review target에서 targeted test, IR sweep baseline diff 0, release-test 전체 exit 0, Clippy,
+   WASM check를 다시 통과했다.
 
 ## Stage 4 — review 기록과 remote 준비
 

@@ -66,7 +66,8 @@ collaborator 보정 `ecdfd9ca4`은 다음만 추가·정리한다.
 | 실제 fixture 회귀 (`hwp5_password_fixture`) | 2 passed — 열기·오답·CLI exit contract·평문 저장 재열기 |
 | HWP5 roundtrip baseline | 3 passed |
 | IR field sweep baseline | 2 passed, baseline diff 0 |
-| `cargo test --profile release-test --tests` | 최종 `ecdfd9ca4` 기준 exit 0 |
+| 압축 해제 상한 단위 회귀 | compressed 확장·uncompressed 초과 각각 1건 통과 |
+| `cargo test --profile release-test --tests` | 최종 `2c8dbfaf6` 기준 exit 0 |
 | 원 PR GitHub CI | CI 모든 실행 check 성공. CodeQL Action의 언어 분석도 성공했으나 아래 security check는 실패 상태 |
 
 ## 5. 발견한 차단 사유
@@ -95,25 +96,25 @@ alert를 다음 사유로 dismiss했다.
 기존 failure check는 과거 run의 불변 결과다. source push 뒤 새 CodeQL run에서 새 alert가 없는지와
 required check 성공을 다시 확인한다.
 
-### 5.2 압축 해제 제한 주장과 구현 범위 불일치
+### 5.2 압축 해제 제한 주장과 구현 범위 불일치 — 메인터너 보정 완료
 
-PR 본문은 "복호화·압축 해제 크기 제한"을 말하지만 `decode_encrypted_stream_limited()`의 상한은
-lazy BinData `resolve_limited()`에만 적용된다. 필수 `DocInfo`와 `BodyText`는
-`decrypt_password_protected()`에서 제한 없는 `decompress_stream()`을 호출한다. 알려진 비밀번호를
-가진 악성 압축 문서는 이 경로에서 메모리를 과도하게 사용하게 할 수 있다.
+`2c8dbfaf6`에서 `MAX_PASSWORD_DECOMPRESSED_STREAM_BYTES`(512 MiB)를 도입하고
+`decrypt_password_protected_limited()`로 strict·lenient `DocInfo`, strict·lenient `BodyText`,
+즉시 materialize BinData, lazy BinData 기본 resolve를 모두 연결했다. bounded lazy resolve도 같은
+함수에 위임한다. 압축 스트림의 확장과 비압축 복호화 결과가 작은 회귀 상한을 초과하는 경우를 각각
+전용 오류로 고정했다.
 
-수용 전에는 (a) DocInfo·BodyText·즉시 materialize BinData까지 일관된 상한과 초과 회귀 테스트를
-구현하거나, (b) 기능 범위를 축소하고 PR 본문의 제한 주장을 삭제한 뒤 보안 정책상 허용 여부를
-명시적으로 승인받아야 한다. 현재 상태에서 (b)를 임의로 선택하지 않는다.
+상한은 **스트림별 복호화 후 결과**에 적용된다. CFB 원본 암호문을 읽는 크기는 파일 자체 크기에
+좌우되며, 이 보정은 deflate 확장으로 인한 추가 메모리 폭주를 제한한다. 따라서 기능 범위를 축소하는
+대안 (b)는 선택하지 않았다.
 
 ## 6. 최종 권고
 
-**보류.** 실제 fixture, API·CLI·저장 경로와 Rust 전체 회귀는 통과했고 maintainer 범위 정리도
-준비됐다. CodeQL 57건은 근거 확인 뒤 dismiss했지만, 핵심 스트림의 압축 해제 상한 불일치가 남아 있다.
+**수용 후보.** 실제 fixture, API·CLI·저장 경로, 전 스트림 압축 해제 상한과 Rust 전체 회귀를
+확인했다. CodeQL 57건은 근거 확인 뒤 dismiss했다.
 
 merge 전 조건:
 
 1. source push 뒤 새 CodeQL run에서 새 alert가 없고 required check가 성공함을 확인
-2. 5.2의 전 스트림 상한 구현·회귀 또는 작업지시자의 명시적 보안 범위 결정
-3. source head가 다시 바뀌지 않았음을 확인한 뒤 collaborator 보정 commit·review 기록을 push하고,
+2. source head가 다시 바뀌지 않았음을 확인한 뒤 collaborator 보정 commit·review 기록을 push하고,
    최신 head full CI와 작업지시자 승인을 재확인
