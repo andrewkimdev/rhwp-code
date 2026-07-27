@@ -1,6 +1,6 @@
 //! 실제 한컴 HWP5 EncryptVersion 4 fixture의 복호화 회귀 계약.
 //!
-//! `hwp3-sample16-hwp5-2024-password.hwp`는 공개 검증용 fixture이며, 아래
+//! `hwp3-sample16-hwp5-2024-password-123456.hwp`는 공개 검증용 fixture이며, 아래
 //! 비밀번호 바이트도 재현용 비밀값이 아니다. 합성 CFB test만으로는 실제 한컴
 //! 스트림의 키 파생·CFB·압축·BinData 조합 회귀를 막을 수 없으므로 함께 고정한다.
 
@@ -13,7 +13,7 @@ use std::process::{Command, Output, Stdio};
 use rhwp::parser::{parse_document, ParseError};
 use rhwp::{parse_document_with_password, wasm_api::HwpDocument};
 
-const FIXTURE: &str = "samples/hwp3-sample16-hwp5-2024-password.hwp";
+const FIXTURE: &str = "samples/hwp3-sample16-hwp5-2024-password-123456.hwp";
 const WRONG_PASSWORD_MESSAGE: &str = "비밀번호가 일치하지 않거나 암호화 데이터가 손상되었습니다";
 const FIXTURE_PASSWORD: &[u8] = &[49, 50, 51, 52, 53, 54];
 

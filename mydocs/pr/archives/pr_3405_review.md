@@ -37,7 +37,7 @@ collaborator 보정 `ecdfd9ca4`은 다음만 추가·정리한다.
 
 - 작업지시자 지시에 따라 maintainer 전용 최상위 `CHANGELOG.md`, `README.md`, `README_EN.md`의
   PR 추가 내용을 제거했다. 상세 사용법은 변경 범위의 component 문서에 남긴다.
-- 실제 HWP5 암호 fixture `samples/hwp3-sample16-hwp5-2024-password.hwp`를 유지하고,
+- 실제 HWP5 암호 fixture `samples/hwp3-sample16-hwp5-2024-password-123456.hwp`를 유지하고,
   정답·오답·미입력, Rust 공개 API, CLI stdin, 일반 HWP 저장 후 재파싱을 고정하는
   `tests/hwp5_password_fixture.rs`를 추가했다. fixture SHA-256은
   `59d4bed335b9552fe78fa68d2a56f7cfa3d586bcdeaaba839af80df13f3e08dc`다.
