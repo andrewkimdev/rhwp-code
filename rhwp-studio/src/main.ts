@@ -987,7 +987,7 @@ function isPasswordRejectedError(error: unknown): boolean {
 function passwordOpenFailure(error: unknown): Error {
   const message = String(error);
   if (message.includes('지원하지 않는 암호화 방식')) {
-    return new Error('지원하지 않는 암호화 방식의 문서입니다. 지원되는 HWP5 암호 문서만 열 수 있습니다.');
+    return new Error('지원하지 않는 암호화 방식의 문서입니다. 지원되는 HWP3/HWP5 암호 문서만 열 수 있습니다.');
   }
   if (message.includes('DRM')) {
     return new Error('DRM으로 보호된 문서는 지원하지 않습니다.');
@@ -999,8 +999,8 @@ function passwordOpenFailure(error: unknown): Error {
 }
 
 /**
- * 일반 열기를 먼저 시도하고, HWP5 EncryptVersion 4 암호 문서가 감지된 경우에만
- * 암호 입력 UI로 전환한다. 암호 문자열은 이 함수의 단일 시도 범위를 벗어나 보관하지 않는다.
+ * 일반 열기를 먼저 시도하고, 지원되는 HWP3/HWP5 암호 문서가 감지된 경우에만 암호
+ * 입력 UI로 전환한다. 암호 문자열은 이 함수의 단일 시도 범위를 벗어나 보관하지 않는다.
  */
 async function loadPasswordProtectedDocument(data: Uint8Array, fileName: string): Promise<DocumentInfo> {
   let retryMessage: string | undefined;
