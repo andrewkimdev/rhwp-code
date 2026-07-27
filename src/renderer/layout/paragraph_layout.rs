@@ -6432,7 +6432,7 @@ fn make_picture_image_node(
     crop: Option<(i32, i32, i32, i32)>,
     original_size_hu: Option<(u32, u32)>,
     bin_data_id: u16,
-    image_data: Option<std::sync::Arc<[u8]>>,
+    image_data: Option<Vec<u8>>,
     bbox: BoundingBox,
 ) -> RenderNode {
     let (cei, cpi, otci) = cell_ctx

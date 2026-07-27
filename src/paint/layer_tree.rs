@@ -16,12 +16,6 @@ pub struct PageLayerTree {
     pub root: LayerNode,
     pub resources: ResourceArena,
     pub text_sources: TextSourceTable,
-    /// 그림 신원 키(`imageKey`)에 섞는 문서 단위 세대 번호 (Task #3315).
-    ///
-    /// `bin_data_id` 는 append-only 라 세션 중에는 안정하지만, undo 스냅샷 복원으로
-    /// 문서가 통째로 되감기면 같은 id 가 다른 바이트를 가리킬 수 있다. 소비자 캐시가
-    /// 그 순간 낡은 그림을 붙잡지 않도록 세대 번호를 키에 함께 싣는다.
-    pub bin_data_epoch: u32,
 }
 
 impl PageLayerTree {
@@ -35,7 +29,6 @@ impl PageLayerTree {
             root,
             resources: ResourceArena::default(),
             text_sources,
-            bin_data_epoch: 0,
         }
     }
 
@@ -54,7 +47,6 @@ impl PageLayerTree {
             root,
             resources: ResourceArena::default(),
             text_sources,
-            bin_data_epoch: 0,
         }
     }
 
@@ -69,7 +61,7 @@ impl PageLayerTree {
     }
 
     pub fn with_bin_data_epoch(mut self, bin_data_epoch: u32) -> Self {
-        self.bin_data_epoch = bin_data_epoch;
+        self.resources.set_source_image_epoch(bin_data_epoch);
         self
     }
 }

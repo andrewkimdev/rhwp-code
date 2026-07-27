@@ -82,7 +82,7 @@ fn load_bounded_embedded_font_bytes(
     font_ids: &[u16],
     per_font_limit: usize,
     page_limit: usize,
-) -> std::collections::HashMap<u16, std::sync::Arc<[u8]>> {
+) -> std::collections::HashMap<u16, Vec<u8>> {
     let mut bytes_by_id = std::collections::HashMap::new();
     let mut attempted_ids = std::collections::HashSet::new();
     let mut loaded_bytes = 0usize;
@@ -717,7 +717,7 @@ impl DocumentCore {
         self.document
             .bin_data_content
             .get(index)
-            .map(|b| b.data.load().to_vec())
+            .map(|b| b.data.load())
     }
 
     pub fn render_page_svg_native(&self, page_num: u32) -> Result<String, HwpError> {
@@ -931,9 +931,7 @@ impl DocumentCore {
     /// SVG `@font-face` 직접 임베딩용. 미설치 임베디드 폰트(bitmap 등)가
     /// `local()` 폴백으로 chrome 두부가 되던 문제 해소. 동일 face 명이 여러
     /// 언어 슬롯에 있으면 첫 항목만 담는다.
-    fn collect_embedded_font_bytes_by_name(
-        &self,
-    ) -> std::collections::HashMap<String, std::sync::Arc<[u8]>> {
+    fn collect_embedded_font_bytes_by_name(&self) -> std::collections::HashMap<String, Vec<u8>> {
         let mut ids = Vec::new();
         let mut name_id: Vec<(String, u16)> = Vec::new();
         for fonts in &self.document.doc_info.font_faces {
@@ -1419,49 +1417,40 @@ impl DocumentCore {
 
     /// 페이지가 그리는 그림들의 신원 키만 작은 JSON 으로 반환한다 (Task #3315).
     ///
-    /// `{"keys":["img:0:1:src", ...]}` 형태이며, 등장 순서를 보존한다. 소비자는 이 목록을
+    /// `{"keys":["bin:0:1:src", ...]}` 형태이며, 등장 순서를 보존한다. 소비자는 이 목록을
     /// 서명으로 삼아 "그림이 그대로면 앞서 만든 디코드 결과를 재사용"할 수 있다 — 그러려고
     /// 수 MB 짜리 레이어 트리 JSON 을 다시 받아 정규식으로 훑을 이유가 없다.
     ///
     /// 안정된 신원이 없는 그림(`bin_data_id == 0`)은 목록에서 빠지는 대신 `null` 로 자리를
-    /// 남긴다 — 개수가 달라지면 서명이 달라져야 하기 때문이다.
+    /// 남기고 `cacheable:false`를 반환한다. 소비자는 이런 페이지의 prefetch 서명을 저장하지
+    /// 않아야 하므로, 키를 만들 수 없는 합성 그림이 바뀌어도 이전 decode를 재사용하지 않는다.
     pub fn get_page_source_image_keys_native(&self, page_num: u32) -> Result<String, HwpError> {
-        use crate::paint::{LayerNode, LayerNodeKind, PaintOp};
+        use crate::renderer::render_tree::{RenderNode, RenderNodeType};
 
-        fn collect(node: &LayerNode, epoch: u32, out: &mut Vec<Option<String>>) {
-            match &node.kind {
-                LayerNodeKind::Group { children, .. } => {
-                    for child in children {
-                        collect(child, epoch, out);
-                    }
+        fn collect(node: &RenderNode, epoch: u32, out: &mut Vec<Option<String>>) {
+            // LayerBuilder와 같은 pre-order/visibility 계약을 써야 compact API와 JSON의
+            // 키 순서가 같다. Screen profile은 editor-only 노드도 표시한다.
+            if !node.visible {
+                return;
+            }
+            if let RenderNodeType::Image(image) = &node.node_type {
+                if image.data.is_some() {
+                    out.push(crate::paint::source_image_key(epoch, image));
                 }
-                LayerNodeKind::ClipRect { child, .. } => collect(child, epoch, out),
-                LayerNodeKind::Leaf { ops } => {
-                    for op in ops {
-                        let PaintOp::Image {
-                            image, resolved, ..
-                        } = op
-                        else {
-                            continue;
-                        };
-                        if image.data.is_none() && resolved.is_none() {
-                            continue;
-                        }
-                        out.push(crate::paint::source_image_key(
-                            epoch,
-                            image,
-                            resolved.as_deref(),
-                        ));
-                    }
-                }
+            }
+            for child in &node.children {
+                collect(child, epoch, out);
             }
         }
 
-        let tree = self.build_page_layer_tree(page_num)?;
         let mut keys = Vec::new();
-        collect(&tree.root, tree.bin_data_epoch, &mut keys);
+        self.with_page_tree_cached(page_num, |tree| {
+            collect(&tree.root, self.bin_data_epoch, &mut keys);
+            Ok(())
+        })?;
 
-        let mut buf = String::from("{\"keys\":[");
+        let cacheable = keys.iter().all(Option::is_some);
+        let mut buf = format!("{{\"cacheable\":{cacheable},\"keys\":[");
         for (index, key) in keys.iter().enumerate() {
             if index > 0 {
                 buf.push(',');
@@ -6107,10 +6096,10 @@ mod tests {
         let loaded = load_bounded_embedded_font_bytes(&contents, &[1, 2, 3, 1], 4, 6);
 
         assert_eq!(loaded.len(), 2);
-        assert_eq!(loaded.get(&1).map(|b| b.len()), Some(4));
+        assert_eq!(loaded.get(&1).map(Vec::len), Some(4));
         assert!(!loaded.contains_key(&2));
-        assert_eq!(loaded.get(&3).map(|b| b.len()), Some(2));
-        assert_eq!(loaded.values().map(|b| b.len()).sum::<usize>(), 6);
+        assert_eq!(loaded.get(&3).map(Vec::len), Some(2));
+        assert_eq!(loaded.values().map(Vec::len).sum::<usize>(), 6);
     }
 
     #[test]

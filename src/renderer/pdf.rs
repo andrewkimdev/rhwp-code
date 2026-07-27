@@ -1095,7 +1095,7 @@ mod tests {
                 None,
                 vec![PaintOp::image(
                     BoundingBox::new(8.0, 8.0, 32.0, 32.0),
-                    ImageNode::new(1, Some(corrupt_png.into())),
+                    ImageNode::new(1, Some(corrupt_png)),
                     None,
                 )],
             ),
@@ -1116,10 +1116,7 @@ mod tests {
                 None,
                 vec![PaintOp::image(
                     BoundingBox::new(8.0, 8.0, 32.0, 32.0),
-                    ImageNode::new(
-                        2,
-                        Some(b"GIF89a\x01\x00\x01\x00\x80\x00\x00".to_vec().into()),
-                    ),
+                    ImageNode::new(2, Some(b"GIF89a\x01\x00\x01\x00\x80\x00\x00".to_vec())),
                     None,
                 )],
             ),
@@ -1139,7 +1136,7 @@ mod tests {
                 None,
                 vec![PaintOp::image(
                     BoundingBox::new(8.0, 8.0, 32.0, 32.0),
-                    ImageNode::new(3, Some(b"unrecognized image payload".to_vec().into())),
+                    ImageNode::new(3, Some(b"unrecognized image payload".to_vec())),
                     None,
                 )],
             ),

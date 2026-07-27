@@ -2277,7 +2277,7 @@ mod tests {
     }
 
     fn image_node(bin_data_id: u16) -> ImageNode {
-        ImageNode::new(bin_data_id, Some(fixture_png().into()))
+        ImageNode::new(bin_data_id, Some(fixture_png()))
     }
 
     fn page_background(
@@ -2493,7 +2493,7 @@ mod tests {
             bbox(),
             image,
             Some(ResolvedImagePayload {
-                data: fixture_png().into(),
+                data: fixture_png(),
                 mime: "image/png",
                 kind: ResolvedImageKind::BakedWatermark,
                 suppress_effects: true,
@@ -2604,7 +2604,7 @@ mod tests {
         for bytes in [vec![1, 2, 3], tiff.into_inner()] {
             let tree = tree_with_ops(vec![PaintOp::image(
                 bbox(),
-                ImageNode::new(1, Some(bytes.into())),
+                ImageNode::new(1, Some(bytes)),
                 None,
             )]);
 
@@ -2638,7 +2638,7 @@ mod tests {
     fn page_background_image_and_gradient_are_policy_visible() {
         let image_background = page_background(
             Some(PageBackgroundImage {
-                data: vec![1, 2, 3].into(),
+                data: vec![1, 2, 3],
                 fill_mode: ImageFillMode::FitToSize,
                 brightness: 0,
                 contrast: 0,

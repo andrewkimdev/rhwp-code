@@ -102,7 +102,7 @@ impl PageLayerTree {
             &mut buf,
             &mut text_source_state,
             &self.resources,
-            self.bin_data_epoch,
+            self.resources.source_image_epoch(),
         );
         buf.push_str(",\"textSources\":");
         write_text_source_entries(&mut buf, &self.text_sources);
@@ -874,9 +874,7 @@ impl PaintOp {
                     let _ = write!(buf, ",\"mime\":\"{}\",\"base64\":", final_mime);
                     write_json_base64(buf, &final_data);
                 }
-                if let Some(key) =
-                    crate::paint::source_image_key(bin_data_epoch, image, resolved.as_deref())
-                {
+                if let Some(key) = crate::paint::source_image_key(bin_data_epoch, image) {
                     let _ = write!(buf, ",\"sourceImageKey\":{}", json_escape(&key));
                 }
                 if let Some(fill_mode) = image.fill_mode {
@@ -4298,7 +4296,7 @@ mod tests {
 
         let json = tree.to_json();
 
-        assert!(json.contains("\"schemaMinorVersion\":19"));
+        assert!(json.contains("\"schemaMinorVersion\":20"));
         assert!(json.contains("\"payloadResourceKey\":\"glyphPayload:bitmapGlyph:imageRef:0"));
         assert!(json.contains("placement:0.123,0.568,10.988,10.543"));
         assert!(json.contains(&format!(":resource:{image_resource_key}\"")));
@@ -4394,7 +4392,7 @@ mod tests {
         path.connector_endpoints = Some((1.0, 2.0, 3.0, 4.0));
         path.line_style = Some(LineStyle::default());
 
-        let mut image = ImageNode::new(7, Some(vec![1, 2, 3].into()));
+        let mut image = ImageNode::new(7, Some(vec![1, 2, 3]));
         image.effect = ImageEffect::BlackWhite;
         image.brightness = -50;
         image.contrast = 70;

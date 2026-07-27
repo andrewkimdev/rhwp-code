@@ -54,7 +54,7 @@ pub fn bin_data_bytes(document: &Document, bin_data_id: u16) -> Option<(Vec<u8>,
         .bin_data_content
         .iter()
         .find(|c| c.id == bin_data_id && !c.data.is_empty())
-        .map(|c| (c.data.load().to_vec(), c.extension.as_str()))
+        .map(|c| (c.data.load(), c.extension.as_str()))
 }
 
 /// Look up a font name by language index and font ID.
@@ -118,12 +118,12 @@ mod tests {
             bin_data_content: vec![
                 BinDataContent {
                     id: 1,
-                    data: BinDataBytes::Loaded(vec![0xFF, 0xD8].into()),
+                    data: BinDataBytes::Loaded(vec![0xFF, 0xD8]),
                     extension: "jpg".to_string(),
                 },
                 BinDataContent {
                     id: 2,
-                    data: BinDataBytes::Loaded(vec![0x89, 0x50].into()),
+                    data: BinDataBytes::Loaded(vec![0x89, 0x50]),
                     extension: "png".to_string(),
                 },
             ],
@@ -145,7 +145,7 @@ mod tests {
         let doc = Document {
             bin_data_content: vec![BinDataContent {
                 id: 3,
-                data: BinDataBytes::Loaded(Vec::new().into()),
+                data: BinDataBytes::Loaded(Vec::new()),
                 extension: "png".to_string(),
             }],
             ..Default::default()

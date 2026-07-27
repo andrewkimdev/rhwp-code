@@ -18,6 +18,8 @@ export interface PrefetchSignature {
    * 서로의 서명이 맞아떨어진다.
    */
   documentDigest: string;
+  /** 같은 원본 파일을 다시 연 경우까지 구분하는 문서 인스턴스 세대. */
+  documentGeneration: number;
   /** `getPageSourceImageKeys` 응답 원문. */
   imageKeys: string;
   /**
@@ -26,6 +28,17 @@ export interface PrefetchSignature {
    * rawSvg 내용은 그림 신원 키가 덮지 못하므로, 하나라도 있으면 건너뛰지 않는다.
    */
   hadRawSvg: boolean;
+}
+
+/** 안정된 키가 없는 합성 이미지가 하나라도 있으면 페이지 전체를 캐시하지 않는다. */
+export function cacheableImageKeySignature(raw: string | null): string | null {
+  if (raw === null) return null;
+  try {
+    const parsed = JSON.parse(raw) as { cacheable?: unknown };
+    return parsed.cacheable === false ? null : raw;
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -40,9 +53,36 @@ export function shouldSkipImagePrefetch(
   cached: PrefetchSignature | undefined,
   imageKeys: string | null,
   documentDigest: string | null,
+  documentGeneration: number,
+  currentRawSvgCount: number,
 ): boolean {
   if (imageKeys === null || documentDigest === null || !cached) return false;
   if (cached.documentDigest !== documentDigest) return false;
+  if (cached.documentGeneration !== documentGeneration) return false;
+  // 그림 키가 덮지 못하는 rawSvg가 현재 새로 생긴 경우도 전체 JSON을 다시 읽어야 한다.
+  if (currentRawSvgCount > 0) return false;
   if (cached.hadRawSvg) return false;
   return cached.imageKeys === imageKeys;
+}
+
+/**
+ * 모든 이미지 decode가 실제로 끝난 뒤에만 prefetch 서명을 기록한다.
+ * 실패나 빈 작업을 완료로 캐시하면 다음 편집이 재시도를 건너뛰어 빈 그림이 고착된다.
+ */
+export async function completeImagePrefetch(
+  tasks: readonly Promise<boolean>[],
+  isCurrent: () => boolean,
+  recordSignature: () => void,
+): Promise<boolean> {
+  if (tasks.length === 0) return false;
+  let results: boolean[];
+  try {
+    results = await Promise.all(tasks);
+  } catch {
+    return false;
+  }
+  if (!results.every(Boolean)) return false;
+  if (!isCurrent()) return false;
+  recordSignature();
+  return true;
 }

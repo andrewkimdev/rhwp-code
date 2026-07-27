@@ -1308,7 +1308,7 @@ impl DocumentCore {
         let storage_id = self.document.next_bin_data_storage_id();
         self.document.bin_data_content.push(BinDataContent {
             id: storage_id,
-            data: image_data.to_vec().into(),
+            data: crate::model::bin_data::BinDataBytes::from_shared(image_data.to_vec()),
             extension: extension.to_string(),
         });
         // attr: bits 0-3=1(Embedding), bits 4-5=0(Default), bits 8-9=1(Success)
@@ -4022,13 +4022,13 @@ mod bindata_storage_id_collision_tests {
         let by_position = &core.document.bin_data_content[(new_bin_id - 1) as usize];
         assert_eq!(
             by_position.data.load(),
-            minimal_png().into(),
+            minimal_png(),
             "위치 기반 조회로 신규 그림 데이터가 나와야 함"
         );
         // 기존 이미지 데이터 불변
         assert_eq!(
             core.document.bin_data_content[0].data.load(),
-            EXISTING_IMAGE.into()
+            EXISTING_IMAGE
         );
     }
 
@@ -4054,7 +4054,7 @@ mod bindata_storage_id_collision_tests {
 
         let saved = core.export_hwp_with_adapter().expect("export_hwp");
         let reloaded = DocumentCore::from_bytes(&saved).expect("재로드");
-        let datas: Vec<std::sync::Arc<[u8]>> = reloaded
+        let datas: Vec<Vec<u8>> = reloaded
             .document()
             .bin_data_content
             .iter()

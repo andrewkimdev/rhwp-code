@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { balancedFrom, callsOf, matchesOutside } from './support/source-guard.ts';
+import { balancedFrom, callsOf, functionBodyFrom, matchesOutside } from './support/source-guard.ts';
 
 // [Task #2343] 메뉴/도구상자 개체 조작 히스토리 라우팅 소스 가드.
 //
@@ -32,7 +32,7 @@ const OBJECT_MUTATORS = [
 ];
 
 test('recordObjectMutation 은 executeOperation snapshot 으로 위임한다', () => {
-  const block = balancedFrom(insertSrc, 'function recordObjectMutation', '{');
+  const block = functionBodyFrom(insertSrc, 'function recordObjectMutation');
   assert.match(block, /ih\.executeOperation\(/, 'executeOperation 에 위임');
   assert.match(block, /kind:\s*'snapshot'/, 'snapshot 커맨드로 기록(undo/redo 보장)');
 });

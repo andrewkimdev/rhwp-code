@@ -196,21 +196,19 @@ fn write_hwp_cfb(
             && bin_data_list
                 .iter()
                 .any(|bd| bd.data_type == BinDataType::Storage && bd.storage_id == content.id);
-        // `bytes` 는 문서와 공유하는 `Arc` 라 소유값이 필요한 자리에서만 복사한다.
-        // 압축 경로는 `&[u8]` 만 읽으므로 빌려 쓰면 사본이 아예 생기지 않는다.
-        let payload: std::borrow::Cow<'_, [u8]> = if is_ole_storage {
+        let payload: Vec<u8> = if is_ole_storage {
             let mut v = Vec::with_capacity(bytes.len() + 4);
             v.extend_from_slice(&(bytes.len() as u32).to_le_bytes());
             v.extend_from_slice(&bytes);
-            std::borrow::Cow::Owned(v)
+            v
         } else {
-            std::borrow::Cow::Borrowed(&bytes[..])
+            bytes
         };
 
         let data = if should_compress {
-            compress_stream(&payload).unwrap_or_else(|_| payload.into_owned())
+            compress_stream(&payload).unwrap_or_else(|_| payload.clone())
         } else {
-            payload.into_owned()
+            payload
         };
         streams.push((path, data));
     }

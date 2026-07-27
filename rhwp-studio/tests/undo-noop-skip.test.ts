@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { balancedFrom, callsOf, functionBodyFrom } from './support/source-guard.ts';
 
 // [Task #2370 클러스터 A] 무변경 연산 기록 스킵 장치의 소스 가드.
 //
@@ -66,9 +67,7 @@ test('executeOperation 의 snapshot 분기는 무변경이면 커서 이동·리
 
 test('경계 z순서는 반환 zOrder 비교로 무변경을 보고한다', () => {
   const insertSrc = src('src/command/commands/insert.ts');
-  const start = insertSrc.indexOf('function changeZOrder');
-  assert.notEqual(start, -1, 'changeZOrder 헬퍼가 존재해야 함');
-  const body = insertSrc.slice(start, start + 700);
+  const body = functionBodyFrom(insertSrc, 'function changeZOrder');
 
   assert.match(body, /getProps\(services, ref\)/, '호출 전 zOrder 를 읽어야 함');
   assert.match(body, /r\.zOrder !== zBefore/, '반환 zOrder 와 호출 전 값을 비교해 변경 여부를 판정해야 함');
@@ -104,9 +103,7 @@ test('레이아웃 setter 의 {ok:false} 는 도달 불가 — 없는 신호를 
 test('미주 모양은 값이 안 바뀌면 뮤테이션도 기록도 하지 않는다', () => {
   const dialogSrc = src('src/ui/endnote-shape-dialog.ts');
   assert.match(dialogSrc, /const unchanged = \(Object\.keys\(next\)/, '변경 여부를 next 의 전 키로 판정해야 함');
-  const idx = dialogSrc.indexOf('operation: (ih) => {');
-  assert.notEqual(idx, -1, 'snapshot operation 콜백이 존재해야 함');
-  const block = dialogSrc.slice(idx, idx + 400);
+  const block = balancedFrom(dialogSrc, 'operation: (ih) => {', '{');
   assert.match(block, /if \(unchanged\) return null/, '무변경이면 null 로 기록을 취소해야 함');
   assert.ok(
     block.indexOf('if (unchanged) return null') < block.indexOf('apply()'),
@@ -123,11 +120,12 @@ test('선택 해제가 뒤따르는 개체 조작은 스냅샷 리프레시를 �
   );
   // exitPictureObjectSelectionAndAfterEdit 가 뒤따르는 recordObjectMutation 은
   // 스냅샷 쪽 'full' refresh 를 꺼야 afterEdit 이 두 번 돌지 않는다.
+  const routed = callsOf(insertSrc, 'recordObjectMutation');
   for (const op of ['deleteObject', 'groupShapes', 'ungroupShape']) {
-    const idx = insertSrc.indexOf(`recordObjectMutation(ih, '${op}'`);
-    assert.notEqual(idx, -1, `${op} 라우팅이 존재해야 함`);
+    const call = routed.find((candidate) => candidate.includes(`'${op}'`));
+    assert.ok(call, `${op} 라우팅이 존재해야 함`);
     assert.match(
-      insertSrc.slice(idx, idx + 600),
+      call,
       /DEFER_REFRESH_TO_EXIT/,
       `${op} 는 선택 해제 afterEdit 과 중복되지 않도록 refresh 를 미뤄야 함`,
     );

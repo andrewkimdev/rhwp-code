@@ -2,7 +2,12 @@ import { WasmBridge } from '@/core/wasm-bridge';
 import type { LayerRenderProfile } from '@/core/types';
 import { layerPaintOpReplayPlane } from './canvaskit/replay-plane';
 import type { CanvasKitLayerRenderer, CanvasKitRenderDiagnostics } from './canvaskit-renderer';
-import { shouldSkipImagePrefetch, type PrefetchSignature } from './image-prefetch-signature.ts';
+import {
+  cacheableImageKeySignature,
+  completeImagePrefetch,
+  shouldSkipImagePrefetch,
+  type PrefetchSignature,
+} from './image-prefetch-signature.ts';
 import { collectVectorRawSvgDataUrls } from './raw-svg-prefetch';
 import {
   collectFlowImagePaintOps,
@@ -72,6 +77,8 @@ export class PageRenderer {
    * 비우기에 기대지 않고 항목 자체가 어느 문서의 것인지 말하게 한다.
    */
   private prefetchedImageSignatures = new Map<number, PrefetchSignature>();
+  private prefetchRequestTokens = new Map<number, number>();
+  private nextPrefetchRequestToken = 0;
   private flowSplitSupported: boolean | null = null;
 
   constructor(
@@ -869,6 +876,8 @@ export class PageRenderer {
 
     this.cancelReRender(pageIdx);
     this.imageRetryCounts.set(pageIdx, retryKey);
+    const prefetchRequestToken = ++this.nextPrefetchRequestToken;
+    this.prefetchRequestTokens.set(pageIdx, prefetchRequestToken);
 
     const job: ReRenderJob = {
       fallbackTimer: 0 as unknown as ReturnType<typeof setTimeout>,
@@ -902,7 +911,7 @@ export class PageRenderer {
 
     // 자체 prefetch로 실제 decode를 마친 경우에만 fallback보다 먼저 다시 그린다.
     queueMicrotask(() => {
-      this.prefetchLayerImages(pageIdx)
+      this.prefetchLayerImages(pageIdx, rawSvgCount, prefetchRequestToken)
         .then((decoded) => {
           if (decoded) finish();
         })
@@ -978,16 +987,23 @@ export class PageRenderer {
    * 자체 prefetch 하여 모든 이미지가 브라우저에 디코드 완료될 때까지 대기.
    * Task #1154 — IMAGE_CACHE 의 비동기 디코드 누락 안전망.
    */
-  private async prefetchLayerImages(pageIdx: number): Promise<boolean> {
+  private async prefetchLayerImages(
+    pageIdx: number,
+    rawSvgCount: number,
+    prefetchRequestToken: number,
+  ): Promise<boolean> {
     // [#3315] 그림이 그대로면 다시 디코드시킬 것이 없다. 서명 조회는 수백 바이트인데
     // 아래의 전체 레이어 트리 조회는 그림 1장에 수 MB 라, 편집마다 되풀이할 값이 아니다.
-    const imageKeys = this.wasm.getPageSourceImageKeys(pageIdx);
+    const imageKeys = cacheableImageKeySignature(this.wasm.getPageSourceImageKeys(pageIdx));
     const documentDigest = this.wasm.documentDigest;
+    const documentGeneration = this.wasm.documentGeneration;
     if (
       shouldSkipImagePrefetch(
         this.prefetchedImageSignatures.get(pageIdx),
         imageKeys,
         documentDigest,
+        documentGeneration,
+        rawSvgCount,
       )
     ) {
       return true;
@@ -999,20 +1015,33 @@ export class PageRenderer {
     } catch {
       return false;
     }
-    const tasks: Promise<unknown>[] = [];
+    const tasks: Promise<boolean>[] = [];
     const seen = new Set<string>();
     const enqueue = (dataUrl: string) => {
       if (seen.has(dataUrl)) return;
       seen.add(dataUrl);
       tasks.push(
-        new Promise<void>((resolve) => {
+        new Promise<boolean>((resolve) => {
           const img = new Image();
-          img.onload = () => resolve();
-          img.onerror = () => resolve();
+          let settled = false;
+          const finish = (ok: boolean) => {
+            if (settled) return;
+            settled = true;
+            resolve(ok);
+          };
+          const supportsDecode = typeof img.decode === 'function';
+          img.onload = () => {
+            if (!supportsDecode) finish(true);
+          };
+          img.onerror = () => finish(false);
           img.src = dataUrl;
           // decode() 이 더 정확하지만 일부 브라우저 미지원
-          if (typeof img.decode === 'function') {
-            img.decode().then(() => resolve()).catch(() => resolve());
+          if (supportsDecode) {
+            try {
+              img.decode().then(() => finish(true)).catch(() => finish(false));
+            } catch {
+              finish(false);
+            }
           }
         }),
       );
@@ -1045,19 +1074,24 @@ export class PageRenderer {
         // 파싱 실패 시 raster 프리페치 결과만 사용한다.
       }
     }
-    if (imageKeys !== null && documentDigest !== null) {
-      this.prefetchedImageSignatures.set(pageIdx, { documentDigest, imageKeys, hadRawSvg });
-    }
-    if (tasks.length === 0) {
-      // URL을 수집하지 못한 순수 rawSvg는 upstream의 조기 재렌더 경로를 사용한다.
-      return true;
-    }
-    await Promise.all(tasks);
-    return true;
+    return completeImagePrefetch(tasks, () => (
+      this.prefetchRequestTokens.get(pageIdx) === prefetchRequestToken
+      && this.wasm.documentGeneration === documentGeneration
+    ), () => {
+      if (imageKeys !== null && documentDigest !== null) {
+        this.prefetchedImageSignatures.set(pageIdx, {
+          documentDigest,
+          documentGeneration,
+          imageKeys,
+          hadRawSvg,
+        });
+      }
+    });
   }
 
   /** 특정 페이지의 지연 재렌더링을 취소한다 */
   cancelReRender(pageIdx: number): void {
+    this.prefetchRequestTokens.delete(pageIdx);
     const job = this.reRenderJobs.get(pageIdx);
     if (job) {
       job.completed = true;
@@ -1075,10 +1109,12 @@ export class PageRenderer {
       for (const timer of job.earlyRawSvgTimers) clearTimeout(timer);
     }
     this.reRenderJobs.clear();
+    this.prefetchRequestTokens.clear();
   }
 
   resetImageRetryState(): void {
     this.imageRetryCounts.clear();
+    this.prefetchRequestTokens.clear();
     this.layerSummaryCache.clear();
     this.canvaskitDiagnosticsByPage.clear();
   }
@@ -1086,6 +1122,7 @@ export class PageRenderer {
   dispose(): void {
     this.cancelAll();
     this.prefetchedImageSignatures.clear();
+    this.prefetchRequestTokens.clear();
     this.layerSummaryCache.clear();
     this.canvaskitDiagnosticsByPage.clear();
     this.canvaskitRenderer = null;

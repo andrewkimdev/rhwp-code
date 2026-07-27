@@ -1559,6 +1559,7 @@ mod tests {
             vec![b'"', b'\\', b'\n', b'\r', b'\t', 0x08, 0x0C],
             all_bytes.clone(),
             // 길이 % 3 을 모두 훑어 패딩(`=`) 유무를 전부 통과시킨다.
+            all_bytes[..255].to_vec(),
             all_bytes[..254].to_vec(),
             all_bytes[..253].to_vec(),
         ];

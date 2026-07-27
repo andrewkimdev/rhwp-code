@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { applyThroughRouter } from '../src/ui/dialog-apply.ts';
 
 // [Task #2370 클러스터 C] 다이얼로그 [확인] 실패 처리 표준화 가드.
 //
@@ -49,6 +50,37 @@ test('공용 헬퍼는 실패를 삼키지 않고 false 로 알려 다이얼로�
     /const shouldClose = this\.onConfirm\(\);\s*\n\s*if \(shouldClose !== false\) this\.hide\(\);/,
     'ModalDialog 는 onConfirm() === false 일 때 닫지 않아야 함(헬퍼의 전제)',
   );
+});
+
+test('라우터와 fallback 예외를 실제로 false로 바꾼다', () => {
+  const originalWarn = console.warn;
+  const warnings: unknown[][] = [];
+  console.warn = (...args: unknown[]) => { warnings.push(args); };
+  try {
+    const routed = applyThroughRouter({
+      services: {
+        getInputHandler: () => ({
+          executeOperation: () => { throw new Error('router failure'); },
+        }),
+      } as never,
+      label: 'router-test',
+      operationType: 'test',
+      operation: () => null,
+      fallback: () => { throw new Error('fallback must not run'); },
+    });
+    const fallback = applyThroughRouter({
+      services: undefined,
+      label: 'fallback-test',
+      operationType: 'test',
+      operation: () => null,
+      fallback: () => { throw new Error('fallback failure'); },
+    });
+    assert.equal(routed, false);
+    assert.equal(fallback, false);
+    assert.equal(warnings.length, 2);
+  } finally {
+    console.warn = originalWarn;
+  }
 });
 
 test('라우팅된 다이얼로그 여섯은 모두 공용 헬퍼를 통과한다', () => {

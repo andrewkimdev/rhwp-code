@@ -15,6 +15,18 @@ export function balancedFrom(src: string, from: string, open: '(' | '{'): string
   return src.slice(start, matchingIndex(src, openIdx) + 1);
 }
 
+/** 함수 선언의 매개변수 목록 뒤에 있는 실제 본문 블록을 잘라낸다. */
+export function functionBodyFrom(src: string, from: string): string {
+  const start = src.indexOf(from);
+  if (start === -1) throw new Error(`소스에서 찾지 못함: ${from}`);
+  const paramsOpen = src.indexOf('(', start);
+  if (paramsOpen === -1) throw new Error(`${from} 뒤에 매개변수 목록이 없음`);
+  const paramsClose = matchingIndex(src, paramsOpen);
+  const bodyOpen = src.indexOf('{', paramsClose + 1);
+  if (bodyOpen === -1) throw new Error(`${from} 뒤에 함수 본문이 없음`);
+  return src.slice(start, matchingIndex(src, bodyOpen) + 1);
+}
+
 /** `openIdx` 의 괄호와 짝이 맞는 닫는 괄호의 인덱스. 문자열·주석 내부는 무시한다. */
 export function matchingIndex(src: string, openIdx: number): number {
   const open = src[openIdx];
