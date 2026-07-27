@@ -65,5 +65,5 @@ Issue: [#3481](https://github.com/edwardkim/rhwp/issues/3481)
   Chrome HWP3/HWP5 암호 열기 E2E, E2E manifest 검사, Studio node test 674건과 production build,
   Chrome·Firefox 확장 production build를 모두 통과했다. 두 확장 빌드는 새 `pkg` WASM을 각각
   `dist/wasm/`에 복사해 검증했다.
-- 용어는 fixture 이름·기록·보관 문서를 포함해 `HWP3`로 통일했고, 저장소 전체에서 `HWP97` 및
-  `HWPW97` 표기가 남지 않음을 확인했다.
+- 용어는 fixture 이름·기록·보관 문서를 포함해 `HWP3`로 통일했고, 저장소 전체에 이전 형식 표기가
+  남지 않음을 확인했다.
