@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 
 import {
   cacheableImageKeySignature,
+  collectImagePrefetchDataUrls,
   completeImagePrefetch,
   shouldSkipImagePrefetch,
 } from '../src/view/image-prefetch-signature.ts';
@@ -12,6 +13,23 @@ const DOC_A = 'blake3:aaaa';
 const DOC_B = 'blake3:bbbb';
 const GENERATION_A = 1;
 const GENERATION_B = 2;
+
+test('중첩 bbox가 mime 앞에 있어도 image prefetch URL을 수집한다', () => {
+  const urls: string[] = [];
+  collectImagePrefetchDataUrls({
+    root: {
+      kind: 'leaf',
+      ops: [{
+        type: 'image',
+        bbox: { x: 12, y: 34, width: 56, height: 78 },
+        wrap: 'flow',
+        mime: 'image/png',
+        base64: 'AA==',
+      }],
+    },
+  }, urls);
+  assert.deepEqual(urls, ['data:image/png;base64,AA==']);
+});
 
 test('같은 그림 집합을 이미 디코드했으면 prefetch 를 건너뛴다', () => {
   assert.equal(

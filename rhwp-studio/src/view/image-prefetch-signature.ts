@@ -30,6 +30,36 @@ export interface PrefetchSignature {
   hadRawSvg: boolean;
 }
 
+/**
+ * PageLayerTree 안의 raster image op를 찾아 브라우저 prefetch용 data URL로 바꾼다.
+ *
+ * image op에는 `bbox`처럼 중첩 객체가 들어가므로 직렬화 JSON을 `[^}]*` 정규식으로
+ * 훑으면 첫 닫는 중괄호에서 멈춘다. 구조를 직접 순회해 필드 순서와 중첩 깊이에
+ * 의존하지 않게 한다.
+ */
+export function collectImagePrefetchDataUrls(node: unknown, out: string[]): void {
+  if (!node || typeof node !== 'object') return;
+  if (Array.isArray(node)) {
+    for (const child of node) collectImagePrefetchDataUrls(child, out);
+    return;
+  }
+
+  const record = node as Record<string, unknown>;
+  if (
+    record.type === 'image'
+    && typeof record.mime === 'string'
+    && record.mime.startsWith('image/')
+    && typeof record.base64 === 'string'
+    && record.base64.length > 0
+  ) {
+    out.push(`data:${record.mime};base64,${record.base64}`);
+  }
+
+  for (const value of Object.values(record)) {
+    collectImagePrefetchDataUrls(value, out);
+  }
+}
+
 /** 안정된 키가 없는 합성 이미지가 하나라도 있으면 페이지 전체를 캐시하지 않는다. */
 export function cacheableImageKeySignature(raw: string | null): string | null {
   if (raw === null) return null;

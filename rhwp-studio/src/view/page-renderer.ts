@@ -4,6 +4,7 @@ import { layerPaintOpReplayPlane } from './canvaskit/replay-plane';
 import type { CanvasKitLayerRenderer, CanvasKitRenderDiagnostics } from './canvaskit-renderer';
 import {
   cacheableImageKeySignature,
+  collectImagePrefetchDataUrls,
   completeImagePrefetch,
   shouldSkipImagePrefetch,
   type PrefetchSignature,
@@ -1046,11 +1047,14 @@ export class PageRenderer {
         }),
       );
     };
-    // image 항목들의 mime + base64 추출 (간단한 정규식)
-    const re = /"type":"image"[^}]*?(?:"wrap":"(behindText|inFrontOfText)")?[^}]*?"mime":"([^"]+)","base64":"([^"]+)"/g;
-    let m: RegExpExecArray | null;
-    while ((m = re.exec(json)) !== null) {
-      enqueue(`data:${m[2]};base64,${m[3]}`);
+    let layerTree: unknown = null;
+    try {
+      layerTree = JSON.parse(json);
+      const imageDataUrls: string[] = [];
+      collectImagePrefetchDataUrls(layerTree, imageDataUrls);
+      for (const dataUrl of imageDataUrls) enqueue(dataUrl);
+    } catch {
+      // 유효한 PageLayerTree JSON이 아니면 완료 서명을 기록하지 않고 다음 렌더에서 재시도한다.
     }
     // rawSvg 항목 (OLE/차트 미리보기) 의 embedded data URL 추출.
     // svg 필드는 JSON 인코딩 문자열이며 내부에 data:image/MIME;base64,... 가 등장한다.
@@ -1065,14 +1069,10 @@ export class PageRenderer {
     // 을 프리페치해야 비동기 로드 완료 신호를 얻어 지연 재렌더(finish)가 발동하고,
     // WASM 캐시의 SVG 이미지가 로드 완료 상태로 flow-static overlay 에 그려진다.
     const hadRawSvg = json.includes('"type":"rawSvg"');
-    if (hadRawSvg) {
-      try {
-        const vectorRawSvgUrls: string[] = [];
-        collectVectorRawSvgDataUrls(JSON.parse(json), vectorRawSvgUrls);
-        for (const dataUrl of vectorRawSvgUrls) enqueue(dataUrl);
-      } catch {
-        // 파싱 실패 시 raster 프리페치 결과만 사용한다.
-      }
+    if (hadRawSvg && layerTree !== null) {
+      const vectorRawSvgUrls: string[] = [];
+      collectVectorRawSvgDataUrls(layerTree, vectorRawSvgUrls);
+      for (const dataUrl of vectorRawSvgUrls) enqueue(dataUrl);
     }
     return completeImagePrefetch(tasks, () => (
       this.prefetchRequestTokens.get(pageIdx) === prefetchRequestToken
