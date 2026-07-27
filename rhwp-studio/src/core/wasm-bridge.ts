@@ -110,6 +110,57 @@ export interface DeferredPaginationResult {
   pageCount: number;
 }
 
+export interface CursorPageTreeCallDiagnostic {
+  pageNum: number;
+  cacheHit: boolean;
+  totalMs: number;
+  cacheLookupMs: number;
+  buildPageTreeMs: number;
+  cacheHitCloneMs: number;
+  cacheStoreCloneMs: number;
+  cacheStoreMs: number;
+}
+
+export interface CursorRectPathDiagnosticProfile {
+  totalMs: number;
+  parsePathMs: number;
+  resolveParagraphMs: number;
+  findPagesMs: number;
+  orderPagesMs: number;
+  formatRectMs: number;
+  otherMs: number;
+  hintPage: number | null;
+  pageCandidates: number;
+  matchedPage: number | null;
+  resultSource: 'primary' | 'fallback' | null;
+  fallbackUsed: boolean;
+  primaryPagesVisited: number;
+  fallbackPagesVisited: number;
+  pageTreeCalls: number;
+  pageTreeCacheHits: number;
+  pageTreeCacheMisses: number;
+  pageTreeCachedMs: number;
+  pageTreeCacheLookupMs: number;
+  pageTreeBuildMs: number;
+  pageTreeCloneMs: number;
+  pageTreeStoreMs: number;
+  treeTraversalInclusiveMs: number;
+  treeTraversalExclusiveMs: number;
+  computeCharPositionsCalls: number;
+  computeCharPositionsChars: number;
+  computeCharPositionsMs: number;
+  primaryNodesVisited: number;
+  primaryTextRunsVisited: number;
+  matchingTextRuns: number;
+  pageTree: CursorPageTreeCallDiagnostic[];
+}
+
+export interface CursorRectPathDiagnosticResult {
+  schemaVersion: number;
+  rect: CursorRect;
+  profile: CursorRectPathDiagnosticProfile;
+}
+
 import { fontFamilyChainForDisplay } from './font-substitution';
 import type { FileSystemFileHandleLike } from '@/command/file-system-access';
 import {
@@ -2068,6 +2119,20 @@ export class WasmBridge {
     }
     return JSON.parse(
       this.doc.getCursorRectByPathNear(sec, parentPara, pathJson, charOffset, hintPage),
+    );
+  }
+
+  /** [#3137] normal path-near query와 같은 좌표를 한 번만 계산하고 Rust 내부 구간을 계측한다. */
+  getCursorRectByPathNearDiagnostic(
+    sec: number, parentPara: number, pathJson: string, charOffset: number, hintPage: number,
+  ): CursorRectPathDiagnosticResult {
+    if (!this.doc) throw new Error('문서가 로드되지 않았습니다');
+    const diagnostic = (this.doc as any).getCursorRectByPathNearDiagnostic;
+    if (typeof diagnostic !== 'function') {
+      throw new Error('현재 WASM에 #3137 cursor diagnostic API가 없습니다');
+    }
+    return JSON.parse(
+      diagnostic.call(this.doc, sec, parentPara, pathJson, charOffset, hintPage),
     );
   }
 
