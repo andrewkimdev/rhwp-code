@@ -87,7 +87,62 @@ fn actual_hwp3_password_fixture_requires_the_password_and_preserves_structure() 
             .sum::<usize>(),
         365
     );
-    assert_eq!(document.bin_data_content.len(), 2);
+    // 추가정보 블록 #6의 쪽 배경 BMP까지 BinData로 복원한다. 이전에는 이
+    // 배경을 버려 HWP3 원본만 본문 중간의 큰 색상 그림이 사라졌다.
+    assert_eq!(document.bin_data_content.len(), 3);
+    let page_border_fill_id = document.sections[0]
+        .section_def
+        .page_border_fill
+        .border_fill_id;
+    assert!(
+        page_border_fill_id > 0,
+        "HWP3 쪽 배경 BorderFill을 연결해야 함"
+    );
+    let page_border_fill = &document.doc_info.border_fills[(page_border_fill_id - 1) as usize];
+    let page_background = page_border_fill
+        .fill
+        .image
+        .as_ref()
+        .expect("HWP3 쪽 배경 이미지 채우기를 복원해야 함");
+    assert_eq!(
+        page_background.fill_mode,
+        rhwp::model::style::ImageFillMode::Center
+    );
+    assert_eq!(
+        (page_background.brightness, page_background.contrast),
+        (-15, 50)
+    );
+    assert_eq!(
+        page_background.effect, 0,
+        "원본 REAL_PIC 효과를 보존해야 함"
+    );
+    let background_bin = &document.bin_data_content[(page_background.bin_data_id - 1) as usize];
+    assert_eq!(background_bin.extension, "bmp");
+    assert!(
+        background_bin.data.load().starts_with(b"BM"),
+        "복원한 쪽 배경은 BMP payload여야 함"
+    );
+
+    // HWP3 원문의 본문 첫 도형은 화면에서는 U+FFFC 하나의 마커로 표현되지만,
+    // 공통 IR stream에서는 HWP5와 동일하게 8 code unit을 차지해야 한다.
+    // 그렇지 않으면 뒤에 저장된 HWP3 LineInfo.start_pos가 도형 뒤 본문에서
+    // 7 unit 앞당겨져 줄 경계·글자 모양이 어긋난다.
+    let body_with_floating_shape = document.sections[0]
+        .paragraphs
+        .iter()
+        .find(|paragraph| paragraph.text.contains("감사드립니다. \u{FFFC}저희"))
+        .expect("첫 본문 떠다니는 도형 문단을 찾아야 함");
+    let marker_index = body_with_floating_shape
+        .text
+        .chars()
+        .position(|ch| ch == '\u{FFFC}')
+        .expect("떠다니는 도형 마커를 찾아야 함");
+    assert_eq!(
+        body_with_floating_shape.char_offsets[marker_index + 1]
+            - body_with_floating_shape.char_offsets[marker_index],
+        8,
+        "HWP3 가시 개체 컨트롤은 IR stream에서 8 code unit을 차지해야 함"
+    );
 
     let comparison =
         parse_document(&comparison_hwpx_bytes()).expect("비교용 HWPX fixture를 열어야 함");
@@ -106,6 +161,29 @@ fn actual_hwp3_password_fixture_requires_the_password_and_preserves_structure() 
     // 같은 문서의 HWPX는 이 자모열을 명시하므로 두 fixture로 회귀를 고정한다.
     assert!(hwp3_text.contains("ᄒᆞᆫ글 97 안내문"));
     assert!(hwpx_text.contains("ᄒᆞᆫ글\u{2007}97 안내문"));
+
+    // HWP3 원본 머리말의 0x37C0..=0x37C5 graphic char는 HWPX 변환본과
+    // 같은 한컴 PUA로 보존해야 한다. 이후 렌더러 공통 표가 이를
+    // "한글과컴퓨터"로 투영한다. 이 회귀가 없으면 HWP3만 머리말 좌측이 빈다.
+    let hwp3_header_text: String = document.sections[0]
+        .paragraphs
+        .iter()
+        .flat_map(|paragraph| paragraph.controls.iter())
+        .filter_map(|control| match control {
+            rhwp::model::control::Control::Header(header) => Some(
+                header
+                    .paragraphs
+                    .iter()
+                    .map(|paragraph| paragraph.text.as_str())
+                    .collect::<String>(),
+            ),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        hwp3_header_text.contains("\u{F03EF}\u{F03F0}\u{F03F1}\u{F03F2}\u{F03F3}\u{F03F4}"),
+        "HWP3 머리말 PUA: {hwp3_header_text:?}"
+    );
 
     let hwp_document = HwpDocument::from_bytes_with_password(&bytes, FIXTURE_PASSWORD)
         .expect("공개 HwpDocument API도 fixture를 열어야 함");

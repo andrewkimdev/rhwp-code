@@ -1105,6 +1105,27 @@ fn compute_line_extra_spacing(
     }
 }
 
+/// `한글 97 안내문` 머리말의 한컴 회사명 PUA 여섯 글자와 뒤따르는 inline
+/// logo 그림은, HWPX상 `DISTRIBUTE_SPACE` 문단 하나로 저장돼 있다.
+///
+/// 한컴은 회사명 내부 글자에는 나눔 자간을 넣지 않고, 그 뒤 공백 하나로 logo를
+/// 오른쪽에 보낸다. 일반 `DISTRIBUTE_SPACE` 규칙(모든 글자에 자간 분배)을 그대로
+/// 적용하면 PUA가 공개 글꼴에서 tofu로 보일 뿐 아니라, 표준 한글로 투영한 뒤에도
+/// `한 글 과 컴 퓨 터`처럼 흩어진다. header/footer 내부 문단은 원문 문단 번호를
+/// 재사용하므로 호출부의 header 플래그에 의존하지 않고, 확인된 **완전한** 원문
+/// 시퀀스와 정렬값만으로 좁게 판별한다.
+fn is_hancom_company_pua_logo_line(comp_line: &ComposedLine, alignment: Alignment) -> bool {
+    // OWPML `DISTRIBUTE_SPACE`는 parser에서 `Split`(공백에만 나눔)으로
+    // 보존한다. `Distribute`는 글자마다 나눔인 별도 값이다.
+    if alignment != Alignment::Split {
+        return false;
+    }
+
+    let raw: String = comp_line.runs.iter().map(|run| run.text.as_str()).collect();
+    let company_pua = "\u{F03EF}\u{F03F0}\u{F03F1}\u{F03F2}\u{F03F3}\u{F03F4}";
+    raw == format!("{company_pua} ")
+}
+
 /// 문단 정렬이 현재 줄의 공백 폭을 끝까지 배분해야 하는지 판정한다.
 ///
 /// `Justify`는 마지막 줄과 강제 줄바꿈 줄을 제외하지만, HWP5 `Split`
@@ -3438,21 +3459,30 @@ impl LayoutEngine {
                 .sum();
             let suppress_cell_overflow_spacing =
                 cell_ctx.is_some() && total_text_width > available_width * 1.15;
+            let is_hancom_company_pua_logo_line =
+                is_hancom_company_pua_logo_line(comp_line, alignment);
 
-            let (extra_word_sp, extra_char_sp, extra_dash_sp) = compute_line_extra_spacing(
-                comp_line,
-                styles,
-                alignment,
-                cell_ctx.is_some(),
-                needs_justify,
-                needs_distribute,
-                has_tabs,
-                suppress_cell_overflow_spacing,
-                total_char_count,
-                total_text_width,
-                available_width,
-                tab_width,
-            );
+            let (extra_word_sp, extra_char_sp, extra_dash_sp) = if is_hancom_company_pua_logo_line {
+                // 이 줄의 trailing space는 뒤의 treat-as-char logo 그림 앞 공백이다.
+                // 회사명 자체에는 자간을 추가하지 않고 이 공백 하나가 남는 폭을 전부
+                // 흡수하게 해야 Hancom PDF의 좌측 회사명·우측 logo 배치가 유지된다.
+                ((available_width - total_text_width).max(0.0), 0.0, 0.0)
+            } else {
+                compute_line_extra_spacing(
+                    comp_line,
+                    styles,
+                    alignment,
+                    cell_ctx.is_some(),
+                    needs_justify,
+                    needs_distribute,
+                    has_tabs,
+                    suppress_cell_overflow_spacing,
+                    total_char_count,
+                    total_text_width,
+                    available_width,
+                    tab_width,
+                )
+            };
 
             let line_plain_text: String = comp_line.runs.iter().map(|r| r.text.as_str()).collect();
             let is_answer_sheet_number_label =
@@ -6634,6 +6664,46 @@ mod issue_2809_split_alignment_tests {
         assert!((advance + trailing_ink_overhang - 90.0).abs() < 0.001);
         assert_eq!(extra_char, 0.0);
         assert_eq!(extra_dash, 0.0);
+    }
+}
+
+#[cfg(test)]
+mod issue_3486_hancom_company_pua_alignment_tests {
+    use super::is_hancom_company_pua_logo_line;
+    use crate::model::style::Alignment;
+    use crate::renderer::composer::{ComposedLine, ComposedTextRun};
+
+    fn company_line(text: &str) -> ComposedLine {
+        ComposedLine {
+            runs: vec![ComposedTextRun {
+                text: text.to_string(),
+                ..Default::default()
+            }],
+            line_height: 1_000,
+            baseline_distance: 850,
+            segment_width: 42_520,
+            column_start: 0,
+            line_spacing: 500,
+            has_line_break: false,
+            char_start: 0,
+        }
+    }
+
+    #[test]
+    fn company_pua_logo_line_uses_its_space_not_internal_character_distribution() {
+        let line = company_line("\u{F03EF}\u{F03F0}\u{F03F1}\u{F03F2}\u{F03F3}\u{F03F4} ");
+        assert!(is_hancom_company_pua_logo_line(&line, Alignment::Split));
+        assert!(
+            !is_hancom_company_pua_logo_line(&line, Alignment::Left),
+            "나눔 정렬이 아닌 문단에는 보정을 적용하면 안 됨",
+        );
+        assert!(
+            !is_hancom_company_pua_logo_line(
+                &company_line("\u{F03EF}\u{F03F0}\u{F03F1}\u{F03F2}\u{F03F3}\u{F03F4} 본문"),
+                Alignment::Split,
+            ),
+            "회사명 뒤의 logo-gap 공백까지 일치할 때만 보정한다",
+        );
     }
 }
 

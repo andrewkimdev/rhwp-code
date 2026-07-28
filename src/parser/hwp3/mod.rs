@@ -125,6 +125,127 @@ fn hwp3_page_border_fill(
     }
 }
 
+/// HWP3 추가 정보 블록 #6(배경이미지)의 파싱 결과.
+///
+/// HWP3은 쪽 배경을 본문 도형이 아니라 추가 정보 스트림에 독립 저장한다. 따라서
+/// 이 정보를 BorderFill의 이미지 채우기로 정규화해야 HWP5/HWPX와 같은 쪽 배경
+/// 렌더 경로를 탄다.
+#[derive(Debug)]
+struct Hwp3BackgroundImageInfo {
+    name: String,
+    fill_mode: crate::model::style::ImageFillMode,
+    brightness: i8,
+    contrast: i8,
+    effect: u8,
+    data: Vec<u8>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct Hwp3BackgroundImageRef {
+    bin_data_id: u16,
+    fill_mode: crate::model::style::ImageFillMode,
+    brightness: i8,
+    contrast: i8,
+    effect: u8,
+}
+
+/// HWP3 스펙 §8.6 배경이미지 정보의 display option을 공통 이미지 채우기 모드로
+/// 변환한다. 0=바둑판, 1=가운데, 3=쪽 크기다.
+fn hwp3_background_fill_mode(display_option: u32) -> crate::model::style::ImageFillMode {
+    match display_option {
+        0 => crate::model::style::ImageFillMode::TileAll,
+        1 => crate::model::style::ImageFillMode::Center,
+        3 => crate::model::style::ImageFillMode::Total,
+        _ => crate::model::style::ImageFillMode::TileAll,
+    }
+}
+
+/// HWP3 추가 정보 블록 #6(배경이미지)을 안전하게 해석한다.
+///
+/// 표 24의 오프셋은 블록 ID/길이(8바이트)를 포함하므로 `data`에서는 8을 뺀다.
+/// 한컴 97이 기록한 예약 영역의 8/12/16바이트는 각각 contrast/brightness/effect이며,
+/// 동일 문서를 한컴에서 HWP5로 변환한 BorderFill 값과 대조해 확인했다.
+fn parse_hwp3_background_image_info(data: &[u8]) -> Option<Hwp3BackgroundImageInfo> {
+    const NAME_OFFSET: usize = 24;
+    const NAME_LEN: usize = 256;
+    const IMAGE_TYPE_OFFSET: usize = 280;
+    const DISPLAY_OPTION_OFFSET: usize = 288;
+    const CONTRAST_OFFSET: usize = 8;
+    const BRIGHTNESS_OFFSET: usize = 12;
+    const EFFECT_OFFSET: usize = 16;
+    const PAYLOAD_LEN_OFFSET: usize = 320;
+    const PAYLOAD_OFFSET: usize = 324;
+
+    if data.len() < PAYLOAD_OFFSET {
+        return None;
+    }
+
+    let read_u32 = |offset| {
+        data.get(offset..offset + 4)
+            .and_then(|bytes| bytes.try_into().ok())
+            .map(u32::from_le_bytes)
+    };
+    let read_i32 = |offset| {
+        data.get(offset..offset + 4)
+            .and_then(|bytes| bytes.try_into().ok())
+            .map(i32::from_le_bytes)
+    };
+
+    // 0=연결, 2=삽입. 연결 그림은 외부 경로 해석을 이 경로에서 새로 만들지 않는다.
+    if read_u32(IMAGE_TYPE_OFFSET)? != 2 {
+        return None;
+    }
+    let payload_len = usize::try_from(read_u32(PAYLOAD_LEN_OFFSET)?).ok()?;
+    if payload_len == 0 || payload_len > data.len().saturating_sub(PAYLOAD_OFFSET) {
+        return None;
+    }
+
+    let to_i8 = |value: i32| value.clamp(i8::MIN as i32, i8::MAX as i32) as i8;
+    let raw_effect = read_i32(EFFECT_OFFSET)?;
+    let effect = match raw_effect {
+        0..=3 => raw_effect as u8,
+        _ => 0,
+    };
+    let name = crate::parser::hwp3::encoding::decode_hwp3_string(
+        data.get(NAME_OFFSET..NAME_OFFSET + NAME_LEN)?,
+    )
+    .trim_end_matches('\0')
+    .to_string();
+
+    Some(Hwp3BackgroundImageInfo {
+        name,
+        fill_mode: hwp3_background_fill_mode(read_u32(DISPLAY_OPTION_OFFSET)?),
+        brightness: to_i8(read_i32(BRIGHTNESS_OFFSET)?),
+        contrast: to_i8(read_i32(CONTRAST_OFFSET)?),
+        effect,
+        data: data[PAYLOAD_OFFSET..PAYLOAD_OFFSET + payload_len].to_vec(),
+    })
+}
+
+/// HWP3 포함 그림의 실제 포맷을 magic으로 판별한다.
+fn hwp3_embedded_image_extension(img_data: &[u8]) -> String {
+    if img_data.starts_with(b"\xFF\xD8\xFF") {
+        "jpg"
+    } else if img_data.starts_with(b"\x89PNG\r\n\x1a\n") {
+        "png"
+    } else if img_data.starts_with(b"GIF87a") || img_data.starts_with(b"GIF89a") {
+        "gif"
+    } else if img_data.starts_with(b"BM") {
+        "bmp"
+    } else if img_data.starts_with(b"\xD7\xCD\xC6\x9A") || img_data.starts_with(b"\x01\x00\x09\x00")
+    {
+        "wmf"
+    } else if img_data.len() >= 44
+        && img_data.starts_with(b"\x01\x00\x00\x00")
+        && &img_data[40..44] == b" EMF"
+    {
+        "emf"
+    } else {
+        "bin"
+    }
+    .to_string()
+}
+
 /// HWP3 개체의 CommonObjAttr 필드들에서 HWP5 attr 비트필드를 계산한다.
 /// serialize_common_obj_attr이 common.attr 값을 직접 기록하므로,
 /// 필드를 설정한 뒤 반드시 이 함수로 attr을 갱신해야 저장→재열기 후 속성이 유지된다.
@@ -236,6 +357,13 @@ fn hwp3_picture_image_effect(info_buf: &[u8]) -> (i8, i8, crate::model::image::I
 }
 
 const HWP3_TO_IR_PARA_UNIT: i32 = 8;
+// HWP3 문단 여백(left/right/indent)과 문단 앞뒤 간격은 같은 `hunit`으로
+// 표기되지만, 공통 ParaShape IR의 저장 계약은 다르다. 여백은 LINE_SEG의
+// column_start와 대응하도록 2배 저장값(×8)을 유지하고, 문단 앞뒤 간격은
+// HWP5 변환본의 ParaShape 저장값과 대응하도록 ×4를 사용한다. 렌더러가
+// ParaShape 간격을 다시 2로 나누므로, 양쪽 모두 최종 유효 HWPUNIT는 ×2가
+// 된다.
+const HWP3_TO_IR_PARA_SPACING_UNIT: i32 = 4;
 
 fn hwp3_para_metric_to_ir(value: i16) -> i32 {
     (value as i32) * HWP3_TO_IR_PARA_UNIT
@@ -243,6 +371,10 @@ fn hwp3_para_metric_to_ir(value: i16) -> i32 {
 
 fn hwp3_para_metric_u16_to_ir(value: u16) -> i32 {
     (value as i32) * HWP3_TO_IR_PARA_UNIT
+}
+
+fn hwp3_para_spacing_to_ir(value: u16) -> i32 {
+    (value as i32) * HWP3_TO_IR_PARA_SPACING_UNIT
 }
 
 fn hwp3_tab_position_to_ir(value: u16) -> u32 {
@@ -356,8 +488,8 @@ pub(crate) fn convert_para_shape(
         ps.line_spacing = hwp3_ps.line_spacing as i32;
     }
 
-    ps.spacing_after = hwp3_para_metric_u16_to_ir(hwp3_ps.margin_bottom);
-    ps.spacing_before = hwp3_para_metric_u16_to_ir(hwp3_ps.margin_top);
+    ps.spacing_after = hwp3_para_spacing_to_ir(hwp3_ps.margin_bottom);
+    ps.spacing_before = hwp3_para_spacing_to_ir(hwp3_ps.margin_top);
     ps.alignment = match hwp3_ps.align {
         0 => crate::model::style::Alignment::Justify,
         1 => crate::model::style::Alignment::Left,
@@ -478,10 +610,10 @@ fn hwp3_para_flow_spacing(para_shape: Option<&crate::model::style::ParaShape>) -
         return (0, 0);
     };
 
-    (
-        hwp3_ir_para_metric_to_line_box(ps.spacing_before).max(0),
-        hwp3_ir_para_metric_to_line_box(ps.spacing_after).max(0),
-    )
+    // spacing_*은 이미 HWP5 저장 LineSeg.vpos와 같은 좌표 스케일(×4)이다.
+    // 여백/들여쓰기처럼 line box 전용 2배 저장값이 아니므로 여기서 다시
+    // 절반으로 줄이면 vpos 사다리와 실제 렌더링 흐름이 어긋난다.
+    (ps.spacing_before.max(0), ps.spacing_after.max(0))
 }
 
 /// HWP3 스펙 offset 111 각주 분리선 길이 종류(0=5cm, 1=본문 폭의 1/3, 2=단 너비,
@@ -1563,7 +1695,12 @@ fn parse_object_control_char(
         }
     } else {
         char_offsets.push(utf16_len);
-        utf16_len += 1;
+        // HWP5 PARA_TEXT의 인라인 컨트롤은 실제 화면 마커(U+FFFC) 하나로
+        // 표현되더라도 UTF-16 stream에서는 8 code unit 슬롯을 차지한다.
+        // HWP3의 LineInfo.start_pos·inline CharShape도 이 stream 좌표로
+        // 변환되므로, 1로 누적하면 도형/표 뒤의 줄 시작과 글자 모양이 앞당겨진다.
+        // 탭(ch=9)과 같은 공통 IR 계약을 여기의 가시 개체 컨트롤에도 적용한다.
+        utf16_len += 8;
         text_string.push('\u{FFFC}');
     }
 
@@ -3245,6 +3382,7 @@ pub fn parse_hwp3(data: &[u8]) -> Result<Document, Hwp3Error> {
     let mut temp_bin_data_content = Vec::new();
     let mut processed_ids = std::collections::HashSet::new();
     let mut hyperlink_urls: Vec<String> = Vec::new();
+    let mut background_image: Option<Hwp3BackgroundImageRef> = None;
 
     for block in additional_info_blocks {
         if block.id == 1 {
@@ -3264,33 +3402,9 @@ pub fn parse_hwp3(data: &[u8]) -> Result<Document, Hwp3Error> {
 
                 let img_data = block.data[32..].to_vec();
 
-                // [Task #877 Stage 4] WMF/EMF magic detection 추가.
-                // sample16 의 16쪽 다이어그램 등은 WMF format (magic 01 00 09 00 = 표준 WMF
-                // mtType=1, mtHeaderSize=9) 인데 ext="bin" 으로 저장되어 렉더러가 미지원.
-                // 정확한 ext 부여로 rhwp/wmf 모듈이 SVG 변환하도록.
-                let ext = if img_data.starts_with(b"\xFF\xD8\xFF") {
-                    "jpg"
-                } else if img_data.starts_with(b"\x89PNG\r\n\x1a\n") {
-                    "png"
-                } else if img_data.starts_with(b"GIF87a") || img_data.starts_with(b"GIF89a") {
-                    "gif"
-                } else if img_data.starts_with(b"BM") {
-                    "bmp"
-                } else if img_data.starts_with(b"\xD7\xCD\xC6\x9A")
-                    || img_data.starts_with(b"\x01\x00\x09\x00")
-                {
-                    // Placeable WMF / Standard WMF magic
-                    "wmf"
-                } else if img_data.len() >= 44
-                    && img_data.starts_with(b"\x01\x00\x00\x00")
-                    && &img_data[40..44] == b" EMF"
-                {
-                    // EMF magic (record_type=1, " EMF" signature at offset 40)
-                    "emf"
-                } else {
-                    "bin"
-                }
-                .to_string();
+                // WMF/EMF도 포함한 magic 기반 확장자 판별. 배경 이미지(#6)도 같은
+                // BinData 경로를 사용하므로 공용 helper로 유지한다.
+                let ext = hwp3_embedded_image_extension(&img_data);
 
                 let content = crate::model::bin_data::BinDataContent {
                     id,
@@ -3308,6 +3422,42 @@ pub fn parse_hwp3(data: &[u8]) -> Result<Document, Hwp3Error> {
                 temp_bin_data_content.push(content);
                 doc_bin_data_list.push(bin_data);
                 processed_ids.insert(id);
+            }
+        } else if block.id == 6 {
+            // HWP3 스펙 §8.6: 본문 개체와 별도로 저장된 쪽 배경 이미지.
+            // 종전에는 블록을 소비만 하고 버려 HWP3 원본에서만 큰 배경 그림이 사라졌다.
+            if let Some(bg) = parse_hwp3_background_image_info(&block.data) {
+                let id = if let Some(&id) = pic_name_to_id.get(&bg.name) {
+                    id
+                } else {
+                    let next_id = (pic_name_to_id.len() + 1) as u16;
+                    pic_name_to_id.insert(bg.name.clone(), next_id);
+                    next_id
+                };
+                let ext = hwp3_embedded_image_extension(&bg.data);
+                let content = crate::model::bin_data::BinDataContent {
+                    id,
+                    extension: ext.clone(),
+                    data: bg.data.into(),
+                };
+                let bin_data = crate::model::bin_data::BinData {
+                    storage_id: id,
+                    extension: Some(ext),
+                    data_type: crate::model::bin_data::BinDataType::Embedding,
+                    compression: crate::model::bin_data::BinDataCompression::Default,
+                    attr: 1,
+                    ..Default::default()
+                };
+                temp_bin_data_content.push(content);
+                doc_bin_data_list.push(bin_data);
+                processed_ids.insert(id);
+                background_image = Some(Hwp3BackgroundImageRef {
+                    bin_data_id: id,
+                    fill_mode: bg.fill_mode,
+                    brightness: bg.brightness,
+                    contrast: bg.contrast,
+                    effect: bg.effect,
+                });
             }
         } else if block.id == 2 {
             // [#3363] OLE 정보 (스펙 표 82): 인식 정보(4B) + CFB 스토리지.
@@ -3463,33 +3613,43 @@ pub fn parse_hwp3(data: &[u8]) -> Result<Document, Hwp3Error> {
     // 미주(endnote_shape)는 0 을 유지한다 (PR #3036 검토에서 적용처 정정).
     section_def.footnote_shape.raw_unknown = doc_info.footnote_between_margin.saturating_mul(4);
 
-    // [Task #877 Stage 4] HWP3 doc_info.border_type / border_margin → SectionDef.page_border_fill
-    // 변환. HWP3 spec §3.2 (문서 정보) offset 112-121 의 페이지 테두리 정보. type=0 이면 없음,
-    // 그 외 = 실선 등. 한컴 viewer 의 PDF 출력에 페이지 외곽선 박스 표시 (sample16 표지/목차/
-    // 본문 모두 페이지 외곽 box). rhwp 가 누락하면 시각 차이.
-    if doc_info.border_type > 0 {
+    // HWP3 문서 정보의 테두리와 추가 정보 #6 배경이미지는 HWP5/HWPX에서 하나의
+    // BorderFill로 표현된다. 둘 중 하나라도 있으면 같은 쪽 배경 채우기로 정규화한다.
+    if doc_info.border_type > 0 || background_image.is_some() {
         use crate::model::style::{BorderFill, BorderLine, BorderLineType};
         let mut page_border = BorderFill::default();
-        // HWP3 spec (한글문서파일구조3.0.md:850) 선 종류 체계:
-        //   0=없음, 1=실선, 2=굵은 실선, 3=점선, 4=2중 실선
-        // sample16 border_type=4 → 한컴 정답지 이중 실선 (Task #987).
-        // 주의: 2=굵은 실선이 스펙이나 현재 Dash 매핑 — 범위 외라 본 타스크에서 미수정,
-        //       보고서에 후속 과제로 기록.
-        let line_type = match doc_info.border_type {
-            1 => BorderLineType::Solid,
-            2 => BorderLineType::Dash,
-            3 => BorderLineType::Dot,
-            4 => BorderLineType::Double,
-            _ => BorderLineType::Solid, // 5 이상: 미정의 → Solid fallback
-        };
-        // width: HWP5 BorderLine.width 는 인덱스 (0=0.1mm, 1=0.12mm, ..., 6=0.5mm).
-        // HWP3 raw 의 border 두께 별도 정보 없음 → 기본 1 (얇은 실선) 적용.
-        let bl = BorderLine {
-            line_type,
-            width: 1,
-            color: 0x00000000,
-        };
-        page_border.borders = [bl, bl, bl, bl];
+        if doc_info.border_type > 0 {
+            // HWP3 spec (한글문서파일구조3.0.md:850) 선 종류 체계:
+            //   0=없음, 1=실선, 2=굵은 실선, 3=점선, 4=2중 실선
+            // sample16 border_type=4 → 한컴 정답지 이중 실선 (Task #987).
+            // 주의: 2=굵은 실선이 스펙이나 현재 Dash 매핑 — 범위 외라 본 타스크에서 미수정,
+            //       보고서에 후속 과제로 기록.
+            let line_type = match doc_info.border_type {
+                1 => BorderLineType::Solid,
+                2 => BorderLineType::Dash,
+                3 => BorderLineType::Dot,
+                4 => BorderLineType::Double,
+                _ => BorderLineType::Solid, // 5 이상: 미정의 → Solid fallback
+            };
+            // width: HWP5 BorderLine.width 는 인덱스 (0=0.1mm, 1=0.12mm, ..., 6=0.5mm).
+            // HWP3 raw 의 border 두께 별도 정보 없음 → 기본 1 (얇은 실선) 적용.
+            let bl = BorderLine {
+                line_type,
+                width: 1,
+                color: 0x00000000,
+            };
+            page_border.borders = [bl, bl, bl, bl];
+        }
+        if let Some(background) = background_image {
+            page_border.fill.fill_type = crate::model::style::FillType::Image;
+            page_border.fill.image = Some(crate::model::style::ImageFill {
+                fill_mode: background.fill_mode,
+                brightness: background.brightness,
+                contrast: background.contrast,
+                effect: background.effect,
+                bin_data_id: background.bin_data_id,
+            });
+        }
         doc_border_fills.push(page_border);
         // 1-based ID (렌더러 규칙). 렌더러 layout.rs 는 border_fill_id - 1 로 인덱싱하므로
         // push 직후 len() 이 방금 넣은 항목의 1-based ID. mod.rs:310/1043 과 동일 규칙.
@@ -4299,6 +4459,29 @@ mod tests {
             (ps.attr1 >> 28) & 1,
             1,
             "border_connection이 attr1 bit 28로 배선되어야 함"
+        );
+    }
+
+    #[test]
+    fn hwp3_para_spacing_uses_hwp5_storage_scale_and_preserves_vpos_flow() {
+        // HWP3 원본의 hunit 문단 간격 71/142는 한컴 HWP3→HWP5 변환본에서
+        // ParaShape 284/568으로 저장된다. 여백은 LINE_SEG column_start와의
+        // 계약 때문에 ×8을 유지하지만, spacing을 같은 ×8로 넣으면 렌더러가
+        // 실제 흐름을 두 배로 벌린다.
+        let mut hwp3_ps = crate::parser::hwp3::records::Hwp3ParaShape::default();
+        hwp3_ps.left_margin = 875;
+        hwp3_ps.margin_top = 71;
+        hwp3_ps.margin_bottom = 142;
+
+        let mut doc_tab_defs = Vec::new();
+        let ps = convert_para_shape(&hwp3_ps, &mut doc_tab_defs);
+        assert_eq!(ps.margin_left, 7000, "여백은 line box 계약의 ×8을 유지");
+        assert_eq!(ps.spacing_before, 284, "문단 앞 간격은 71×4");
+        assert_eq!(ps.spacing_after, 568, "문단 뒤 간격은 142×4");
+        assert_eq!(
+            hwp3_para_flow_spacing(Some(&ps)),
+            (284, 568),
+            "문단 간격은 저장 vpos와 같은 스케일로 누적해야 한다"
         );
     }
 
