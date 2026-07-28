@@ -152,7 +152,10 @@ impl std::error::Error for ParseError {}
 
 impl From<hwpx::HwpxError> for ParseError {
     fn from(e: hwpx::HwpxError) -> Self {
-        ParseError::HwpxError(e)
+        match e {
+            hwpx::HwpxError::Encrypted(_) => ParseError::EncryptedDocument,
+            other => ParseError::HwpxError(other),
+        }
     }
 }
 
@@ -1239,9 +1242,9 @@ pub fn parse_document_with_metadata(data: &[u8]) -> Result<ParsedDocument, Parse
 
 /// 포맷 자동 감지 후 비밀번호와 함께 파싱한다.
 ///
-/// HWP5 EncryptVersion 4 및 압축 HWP3 비밀번호 암호 문서를 연다.
+/// HWP5 EncryptVersion 4, 압축 HWP3, ODF AES-256-CBC HWPX 비밀번호 암호 문서를 연다.
 /// 비밀번호가 틀리면 암호 불일치/손상 오류를 반환한다. 암호화되지 않은 HWPX는 기존
-/// 파서로 읽지만 암호화 HWPX는 감지만 하며 복호화하지 않는다.
+/// 파서 결과를 그대로 반환한다.
 pub fn parse_document_with_metadata_password(
     data: &[u8],
     password: &[u8],
@@ -1255,7 +1258,12 @@ fn parse_document_inner(
 ) -> Result<ParsedDocument, ParseError> {
     match detect_format(data) {
         FileFormat::Hwp => parse_hwp_inner(data, password).map(without_hml_metadata),
-        FileFormat::Hwpx => HwpxParser.parse(data).map(without_hml_metadata),
+        FileFormat::Hwpx => match password {
+            Some(password) => hwpx::parse_hwpx_with_password(data, password),
+            None => hwpx::parse_hwpx(data),
+        }
+        .map_err(ParseError::from)
+        .map(without_hml_metadata),
         FileFormat::Hwp3 => match password {
             Some(password) => hwp3::parse_hwp3_with_password(data, password),
             None => hwp3::parse_hwp3(data),
@@ -1311,7 +1319,7 @@ pub fn parse_document(data: &[u8]) -> Result<Document, ParseError> {
 ///
 /// 비암호 문서와 다른 지원 포맷에서는 비밀번호를 무시한다. 암호화된 HWP5의
 /// EncryptVersion이 4가 아니면 `UnsupportedScheme`을 반환하며, HWP3는 압축
-/// 압축 HWP3 암호 본문만 지원한다.
+/// 암호 본문, HWPX는 ODF AES-256-CBC/PBKDF2 패키지를 지원한다.
 pub fn parse_document_with_password(data: &[u8], password: &[u8]) -> Result<Document, ParseError> {
     parse_document_with_metadata_password(data, password).map(|parsed| parsed.document)
 }

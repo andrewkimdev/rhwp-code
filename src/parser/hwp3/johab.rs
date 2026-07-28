@@ -5,6 +5,47 @@
 
 use crate::parser::hwp3::johab_map;
 
+/// KSSM 조합형의 아래아(중성 인덱스 30)를 Unicode 옛한글 자모로 푼다.
+///
+/// HWP3은 이 음절을 한 개 hchar로 저장하지만, HWP5/HWPX 변환본은
+/// 초성·아래아·종성 자모열로 보존한다. `decode_johab`의 완성형 반환 계약을
+/// 바꾸지 않기 위해, 가변 길이 텍스트가 필요한 호출자만 이 함수를 사용한다.
+pub fn decode_johab_araea_jamo(ch: u16) -> Option<(char, char, Option<char>)> {
+    if ch < 0x8000 {
+        return None;
+    }
+
+    let cho_idx = ((ch >> 10) & 0x1F) as usize;
+    let jung_idx = (ch >> 5) & 0x1F;
+    let jong_idx = (ch & 0x1F) as usize;
+    if jung_idx != 30 {
+        return None;
+    }
+
+    let cho_map: [i32; 32] = [
+        -1, -1, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, -1, -1, -1, -1,
+        -1, -1, -1, -1, -1, -1, -1,
+    ];
+    let jong_map: [i32; 32] = [
+        -1, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, -1, 17, 18, 19, 20, 21, 22,
+        23, 24, 25, 26, 27, -1, -1,
+    ];
+    let cho = *cho_map.get(cho_idx)?;
+    let jong = *jong_map.get(jong_idx)?;
+    if cho < 0 || jong < 0 {
+        return None;
+    }
+
+    let leading = char::from_u32(0x1100 + cho as u32)?;
+    let araea = char::from_u32(0x119E)?;
+    let trailing = if jong == 0 {
+        None
+    } else {
+        char::from_u32(0x11A7 + jong as u32)
+    };
+    Some((leading, araea, trailing))
+}
+
 pub fn decode_johab(ch: u16) -> char {
     if ch < 0x80 {
         return ch as u8 as char;
@@ -113,5 +154,11 @@ mod tests {
         let jong_idx = 0;
         let ch: u16 = 0x8000 | (2 << 10) | (3 << 5) | jong_idx;
         assert_ne!(decode_johab(ch), '가');
+    }
+
+    #[test]
+    fn decode_johab_araea_preserves_legacy_jamo_sequence() {
+        // HWP3 fixture의 첫 글자. 한컴 HWPX 변환본은 "ᄒᆞᆫ"으로 보존한다.
+        assert_eq!(decode_johab_araea_jamo(0xD3C5), Some(('ᄒ', 'ᆞ', Some('ᆫ'))));
     }
 }
