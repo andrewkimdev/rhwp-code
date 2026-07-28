@@ -29,6 +29,18 @@ Stage 2는 확인된 원본 구조 손실만 다룬다. HWP3의 추가 정보 �
    예외는 추가하지 않는다.
 4. 전용 HFT·폰트 glyph가 없는 데서 비롯된 글자 모양 차이는 renderer 색조 결함과 섞지 않는다.
 
+### 확인된 원인과 다음 구현 경계
+
+HWPX `Contents/header.xml`의 `bright="50" contrast="-15"`는 HWP5 legacy `ImageFill` raw 저장
+순서에 맞춰 `(brightness=-15, contrast=50)`으로 모델에 보존한다. 이는 구조/round-trip의 올바른
+값이다. 그러나 현재 SVG와 Web Canvas는 그 raw 순서를 화면 의미로 그대로 넘겨 두 포맷 모두
+`rhwp-img-bc-b-15c50` 필터를 생성한다. 따라서 실제 화면 의미는 `(50, -15)`이어야 한다.
+
+다음 구현은 `PageBackgroundImage`의 명시적 display 변환을 한 곳에 두고 SVG·Web Canvas·Skia가 그
+값을 공통으로 사용하게 한다. `ImageNode`의 일반 그림 속성은 다른 parser 계약을 가지므로 이 변경에
+포함하지 않는다. `is_watermark()`와 REAL_PIC preset 판정은 raw 계약에 의존하므로, 색조 변환과
+함께 임의로 바꾸지 않고 기준 PDF 대조로 opacity를 별도 판정한다.
+
 ## 회귀·시각 검증 계약
 
 - 구조 변경마다 가장 가까운 HWP3 parser/renderer focused test를 먼저 추가하거나 갱신한다.

@@ -101,3 +101,4 @@ samples/issue836/
 # Python 바이트코드 캐시 (tools/render_page_gate.py 등 실행 시 생성)
 __pycache__/
 *.pyc
+tmp/
