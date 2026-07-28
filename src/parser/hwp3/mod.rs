@@ -1948,13 +1948,20 @@ fn parse_field_control_char(
                 }
             }
             i += 3;
-            char_offsets.push(utf16_len);
-            utf16_len += 1;
-            // AutoNumber(ch=18)은 HWP5 패턴("  ")과 일치하도록 공백으로 저장
-            if ch == 18 {
-                text_string.push(' ');
-            } else {
-                text_string.push('\u{FFFC}');
+            // 쪽번호 위치(ch=20)는 문서/구역 설정 control이며 본문의 인라인
+            // 개체가 아니다. HWP5 변환본도 같은 PageNumberPos control을
+            // 보존하면서 PARA_TEXT에는 marker를 남기지 않는다. HWP3에서
+            // U+FFFC와 1-unit offset을 만들면 title 첫 글자 앞에 가시 공백/
+            // 세로선이 생기고 뒤 text의 CharShape 위치까지 어긋난다.
+            if ch != 20 {
+                char_offsets.push(utf16_len);
+                utf16_len += 1;
+                // AutoNumber(ch=18)은 HWP5 패턴("  ")과 일치하도록 공백으로 저장
+                if ch == 18 {
+                    text_string.push(' ');
+                } else {
+                    text_string.push('\u{FFFC}');
+                }
             }
 
             let ctrl = match ch {
