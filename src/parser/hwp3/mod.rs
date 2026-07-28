@@ -342,6 +342,24 @@ fn hwp3_color_index_to_color_ref(color: u8) -> crate::model::ColorRef {
     }
 }
 
+/// HWP3 표 42의 셀 색상(word)과 음영 비율을 공통 ColorRef로 합성한다.
+///
+/// 이 세대의 실제 표 셀 색상은 글자 모양과 같은 기본 8색 팔레트 인덱스다.
+/// 음영은 선택한 셀 색상을 흰 바탕에 적용하는 비율이므로, 흰색(7)의 100%는
+/// 흰색이어야 한다. 정의되지 않은 확장 값은 기존 동작과 호환되게 검정으로
+/// 처리한다.
+fn hwp3_table_cell_shade_color(cell_color: u16, shade: u8) -> crate::model::ColorRef {
+    let palette_index = u8::try_from(cell_color).unwrap_or(0);
+    let base = hwp3_color_index_to_color_ref(palette_index);
+    let shade = u32::from(shade.min(100));
+    let blend = |component: u32| 255 - ((255 - component) * shade / 100);
+
+    let red = blend(base & 0xFF);
+    let green = blend((base >> 8) & 0xFF);
+    let blue = blend((base >> 16) & 0xFF);
+    red | (green << 8) | (blue << 16)
+}
+
 /// [#2984] HWP3 그림 정보 레코드(348바이트) offset 339~341 의 밝기/명암/그림효과를
 /// 읽는다. (`mydocs/tech/한글문서파일구조3.0.md` 10.7절, 표 43 "그림 식별 정보")
 fn hwp3_picture_image_effect(info_buf: &[u8]) -> (i8, i8, crate::model::image::ImageEffect) {
@@ -1037,8 +1055,8 @@ fn parse_hwp3_object_dispatch(
             if shade > 0 && shade <= 100 {
                 let mut fill = crate::model::style::Fill::default();
                 fill.fill_type = crate::model::style::FillType::Solid;
-                let c = 255 - (shade as u32 * 255 / 100) as u8;
-                let color = u32::from_le_bytes([c, c, c, 0]);
+                let cell_color = (&cell_info[2..4]).read_u16::<LittleEndian>().unwrap_or(0);
+                let color = hwp3_table_cell_shade_color(cell_color, shade);
                 fill.solid = Some(crate::model::style::SolidFill {
                     background_color: color,
                     pattern_color: 0,
@@ -4834,6 +4852,13 @@ mod tests {
         assert_eq!(hwp3_color_index_to_color_ref(6), 0x0000FFFF);
         assert_eq!(hwp3_color_index_to_color_ref(7), 0x00FFFFFF);
         assert_eq!(hwp3_color_index_to_color_ref(255), 0x00000000);
+    }
+
+    #[test]
+    fn hwp3_table_cell_shade_uses_the_declared_palette_color() {
+        assert_eq!(hwp3_table_cell_shade_color(7, 100), 0x00FF_FFFF);
+        assert_eq!(hwp3_table_cell_shade_color(0, 100), 0x0000_0000);
+        assert_eq!(hwp3_table_cell_shade_color(6, 10), 0x00E6_FFFF);
     }
 
     #[test]

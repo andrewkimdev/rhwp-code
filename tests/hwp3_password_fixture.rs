@@ -10,6 +10,8 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 
+use rhwp::model::control::Control;
+use rhwp::model::style::FillType;
 use rhwp::parser::{parse_document, ParseError};
 use rhwp::{parse_document_with_password, wasm_api::HwpDocument};
 
@@ -203,6 +205,37 @@ fn actual_hwp3_password_fixture_requires_the_password_and_preserves_structure() 
             .sum::<usize>(),
         365
     );
+}
+
+#[test]
+fn actual_hwp3_password_fixture_keeps_white_shaded_table_cells_white() {
+    let document = parse_document_with_password(&fixture_bytes(), FIXTURE_PASSWORD)
+        .expect("실제 HWP3 fixture를 열어야 함");
+    let table = document.sections[0]
+        .paragraphs
+        .iter()
+        .flat_map(|paragraph| paragraph.controls.iter())
+        .find_map(|control| match control {
+            Control::Table(table) if table.row_count == 4 && table.col_count == 2 => {
+                Some(table.as_ref())
+            }
+            _ => None,
+        })
+        .expect("운영 체제/권장 사양 4×2 표를 찾아야 함");
+
+    for cell in table.cells.iter().filter(|cell| cell.col == 1) {
+        let fill = &document.doc_info.border_fills[(cell.border_fill_id - 1) as usize].fill;
+        assert_eq!(
+            fill.fill_type,
+            FillType::Solid,
+            "우측 셀은 단색 채움이어야 함"
+        );
+        assert_eq!(
+            fill.solid.expect("우측 셀 단색 채움").background_color,
+            0x00FF_FFFF,
+            "HWP3 표의 색상=흰색·음영=100%는 검정이 아니라 흰 배경이어야 함"
+        );
+    }
 }
 
 #[test]
