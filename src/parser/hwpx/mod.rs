@@ -12,6 +12,7 @@
 
 pub mod content;
 mod contract_streams;
+mod crypto;
 pub mod header;
 pub mod reader;
 pub mod section;
@@ -141,8 +142,14 @@ pub enum HwpxError {
     /// 데이터 변환 오류
     ConversionError(String),
     /// [Issue #1946] 비밀번호 암호화 HWPX(ODF encryption-data, AES-256-CBC).
-    /// 복호화 미지원 — 암호문을 UTF-8 로 오독하는 대신 명확히 분류한다.
+    /// 비밀번호 없이 열었으므로 암호문을 UTF-8 로 오독하지 않고 명확히 분류한다.
     Encrypted(String),
+    /// ODF 암호화 방식이 현재 지원 계약과 다르거나 manifest가 손상됐다.
+    UnsupportedEncryption(String),
+    /// 비밀번호 불일치 또는 암호문/압축 payload 손상.
+    WrongPasswordOrCorruptPayload,
+    /// 복호화 뒤 raw-deflate payload가 HWPX 기존 엔트리 상한을 넘었다.
+    DecryptedEntryLimitExceeded { path: String, max_bytes: usize },
 }
 
 impl HwpxError {
@@ -159,7 +166,21 @@ impl std::fmt::Display for HwpxError {
             HwpxError::XmlError(e) => write!(f, "XML 파싱 오류: {}", e),
             HwpxError::MissingFile(e) => write!(f, "필수 파일 누락: {}", e),
             HwpxError::ConversionError(e) => write!(f, "변환 오류: {}", e),
-            HwpxError::Encrypted(e) => write!(f, "암호화된 문서(복호화 미지원): {}", e),
+            HwpxError::Encrypted(e) => write!(f, "암호화된 문서: {}", e),
+            HwpxError::UnsupportedEncryption(e) => {
+                write!(f, "지원하지 않는 HWPX 암호화 방식: {}", e)
+            }
+            HwpxError::WrongPasswordOrCorruptPayload => {
+                write!(
+                    f,
+                    "비밀번호가 일치하지 않거나 암호화 데이터가 손상되었습니다"
+                )
+            }
+            HwpxError::DecryptedEntryLimitExceeded { path, max_bytes } => write!(
+                f,
+                "HWPX 암호화 엔트리 '{}'의 복호화 결과가 {} byte 제한을 넘었습니다",
+                path, max_bytes
+            ),
         }
     }
 }
@@ -537,6 +558,18 @@ pub fn parse_hwpx(data: &[u8]) -> Result<Document, HwpxError> {
     super::populate_link_image_paths(&mut doc);
 
     Ok(doc)
+}
+
+/// 비밀번호와 함께 HWPX를 연다.
+///
+/// ODF `encryption-data`가 있는 패키지는 AES-256-CBC/PKDF2 복호화 뒤 기존
+/// `parse_hwpx` 경로로 들어간다. 비암호 HWPX에 비밀번호를 넘기면 원본 바이트를
+/// 다시 쓰지 않고 종전 파서 결과를 그대로 반환한다.
+pub fn parse_hwpx_with_password(data: &[u8], password: &[u8]) -> Result<Document, HwpxError> {
+    match crypto::decrypt_hwpx_package(data, password)? {
+        Some(decrypted) => parse_hwpx(&decrypted),
+        None => parse_hwpx(data),
+    }
 }
 
 fn resolve_embedded_font_references(

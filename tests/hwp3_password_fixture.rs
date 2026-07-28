@@ -14,6 +14,7 @@ use rhwp::parser::{parse_document, ParseError};
 use rhwp::{parse_document_with_password, wasm_api::HwpDocument};
 
 const FIXTURE: &str = "samples/HWP3-password-123456.hwp";
+const HWPX_COMPARISON_FIXTURE: &str = "samples/HWP5-nopassword-123456.hwpx";
 const WRONG_PASSWORD_MESSAGE: &str = "비밀번호가 일치하지 않거나 암호화 데이터가 손상되었습니다";
 const FIXTURE_PASSWORD: &[u8] = &[49, 50, 51, 52, 53, 54];
 
@@ -23,6 +24,11 @@ fn fixture_path() -> PathBuf {
 
 fn fixture_bytes() -> Vec<u8> {
     std::fs::read(fixture_path()).expect("암호 HWP3 fixture를 읽어야 함")
+}
+
+fn comparison_hwpx_bytes() -> Vec<u8> {
+    std::fs::read(Path::new(env!("CARGO_MANIFEST_DIR")).join(HWPX_COMPARISON_FIXTURE))
+        .expect("HWP3 비교용 HWPX fixture를 읽어야 함")
 }
 
 fn rhwp_bin() -> String {
@@ -82,6 +88,24 @@ fn actual_hwp3_password_fixture_requires_the_password_and_preserves_structure() 
         365
     );
     assert_eq!(document.bin_data_content.len(), 2);
+
+    let comparison =
+        parse_document(&comparison_hwpx_bytes()).expect("비교용 HWPX fixture를 열어야 함");
+    let hwp3_text = document.sections[0]
+        .paragraphs
+        .iter()
+        .map(|paragraph| paragraph.text.as_str())
+        .collect::<String>();
+    let hwpx_text = comparison.sections[0]
+        .paragraphs
+        .iter()
+        .map(|paragraph| paragraph.text.as_str())
+        .collect::<String>();
+    // HWP3 조합형 0xD3C5는 아래아를 포함한 "ᄒᆞᆫ"이다. 기존에는 지원하지
+    // 않는 중성으로 간주해 첫 글자를 버렸고, 제목이 "글 97"로 시작했다.
+    // 같은 문서의 HWPX는 이 자모열을 명시하므로 두 fixture로 회귀를 고정한다.
+    assert!(hwp3_text.contains("ᄒᆞᆫ글 97 안내문"));
+    assert!(hwpx_text.contains("ᄒᆞᆫ글\u{2007}97 안내문"));
 
     let hwp_document = HwpDocument::from_bytes_with_password(&bytes, FIXTURE_PASSWORD)
         .expect("공개 HwpDocument API도 fixture를 열어야 함");
