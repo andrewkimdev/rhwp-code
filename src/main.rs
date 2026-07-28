@@ -7405,6 +7405,47 @@ fn diff_table(
         ));
     }
     diff_common_obj(diffs, ci, "tbl", &a.common, &b.common);
+    // [#3469] 셀 문단 재귀 비교 — 표 속성만 보면 셀 안의 텍스트 변경이 보이지 않는다.
+    // 글상자는 #1807 이 같은 구멍(#1795 "소거망 구멍")을 이미 막았는데 표는 열려 있었다.
+    // ir-diff 는 `convert --verify` 게이트의 근거이고 한국 문서는 표가 본체라,
+    // 이 구멍은 변환이 표 안의 모든 텍스트를 손상시켜도 통과시킨다.
+    diff_table_cells(diffs, ci, a, b);
+}
+
+/// [#3469] 표 셀 안의 문단을 재귀 비교한다.
+///
+/// 셀 목록 길이가 다르면 그 사실만 보고하고, 공통 구간의 셀은 문단 단위로
+/// `diff_textbox_paragraph_lists`(글상자와 같은 비교기)로 내려간다. 셀 문단 안의
+/// 중첩 표는 그 안에서 다시 이 경로를 타므로 임의 깊이가 자연히 커버된다.
+fn diff_table_cells(
+    diffs: &mut Vec<String>,
+    ci: usize,
+    a: &rhwp::model::table::Table,
+    b: &rhwp::model::table::Table,
+) {
+    use rhwp::model::control::Control;
+
+    if a.cells.len() != b.cells.len() {
+        diffs.push(format!(
+            "ctrl[{}] tbl 셀 수: A={} vs B={}",
+            ci,
+            a.cells.len(),
+            b.cells.len()
+        ));
+    }
+    for (k, (ca, cb)) in a.cells.iter().zip(b.cells.iter()).enumerate() {
+        let prefix = format!("ctrl[{}] tbl cell[{}:{},{}]", ci, k, ca.row, ca.col);
+        diff_textbox_paragraph_lists(diffs, &prefix, &ca.paragraphs, &cb.paragraphs);
+        // 셀 문단이 품은 중첩 표도 같은 규칙으로 내려간다.
+        for (pi, (pa, pb)) in ca.paragraphs.iter().zip(cb.paragraphs.iter()).enumerate() {
+            for (cj, (na, nb)) in pa.controls.iter().zip(pb.controls.iter()).enumerate() {
+                if let (Control::Table(ta), Control::Table(tb)) = (na, nb) {
+                    diff_table_cells(diffs, ci, ta, tb);
+                    let _ = (pi, cj);
+                }
+            }
+        }
+    }
 }
 
 fn diff_common_obj(
@@ -8388,11 +8429,21 @@ fn edit_fill_fields(args: &[String]) -> i32 {
     }
 
     let output_path = out_path.unwrap_or_else(|| {
-        let stem = Path::new(file_path)
+        // [#3469] 기본 산출물은 **입력 파일 옆**에 만든다. 종전에는 파일명만 써서
+        // 현재 작업 디렉터리에 떨어졌는데, 임의 경로의 문서를 다루는 에이전트·MCP
+        // 클라이언트에게는 산출물이 엉뚱한 곳에 생기는 셈이었다.
+        let input = Path::new(file_path);
+        let stem = input
             .file_stem()
             .map(|s| s.to_string_lossy().to_string())
             .unwrap_or_else(|| "output".to_string());
-        format!("{}_filled.hwp", stem)
+        let name = format!("{}_filled.hwp", stem);
+        match input.parent() {
+            Some(dir) if !dir.as_os_str().is_empty() => {
+                dir.join(name).to_string_lossy().to_string()
+            }
+            _ => name,
+        }
     });
 
     if !dry_run {
