@@ -2,7 +2,7 @@
 kind: guide
 status: active
 canonical: mydocs/manual/bug_hunting_playbook.md
-last_verified: 2026-07-26
+last_verified: 2026-07-29
 ---
 
 # 버그 헌팅 playbook — 실사례 여정 기반 탑다운
@@ -21,11 +21,15 @@ last_verified: 2026-07-26
 은폐하고(#3353), 산출은 됐지만 렌더가 깨진다(#3355·#3385). 이건 여정을 끝까지 밟고 진짜
 정답과 대조할 때만 드러난다.
 
-기록값·종료 코드·JSON 계약처럼 결정적인 항목은 기계 검증으로 판정한다. 픽셀 diff·sweep은
-시각 후보 검출과 무회귀 근거이며, [시각 검증 거버넌스](verification/visual_verification_governance.md)에
-따라 최종 시각 판정은 작업지시자/maintainer가 한다. 한컴 출력물은 도구·버전·출력 경로·폰트에
-따라 달라질 수 있으므로 해당 환경과 provenance를 기록한 비교 기준으로 쓰고 보편적 절대
-오라클로 간주하지 않는다.
+기록값·종료 코드·JSON 계약처럼 결정적인 항목은 기계 검증으로 판정한다. 한컴 기준 PDF
+텍스트층과 SVG `<text>`의 **쪽별 문자 멀티셋 대조**는 공백·순서·NFC 차이를 정규화해
+소실·과잉·치환 후보를 찾는 보조 기계 판정이다. 폰트 대체가 픽셀 diff 전체를 흔들어도
+쪽번호·채움점 소실, 숨김 대상의 과잉 출력, PUA 치환은 문자 수 차이로 드러날 수 있다.
+다만 PDF가 글자를 path로 그렸거나 텍스트층 매핑이 손상된 경우도 후보로 잡히므로 단독 최종
+판정으로 쓰지 않는다. 픽셀 diff·sweep도 시각 후보 검출과 무회귀 근거이며,
+[시각 검증 거버넌스](verification/visual_verification_governance.md)에 따라 최종 시각 판정은
+작업지시자/maintainer가 한다. 한컴 출력물은 도구·버전·출력 경로·폰트에 따라 달라질 수 있으므로
+해당 환경과 provenance를 기록한 비교 기준으로 쓰고 보편적 절대 오라클로 간주하지 않는다.
 
 ## 예시 구조 (매 여정 4단)
 
@@ -72,16 +76,22 @@ last_verified: 2026-07-26
 
 - **문제 정의**: rhwp 렌더가 기록된 한컴 출력 기준과 같은가. 비교 기준 = 해당 환경에서
   출력한 PDF와 페이지별로 배치·내용·강조가 일치.
-- **예시(실물)**: `samples/` 의 한컴 출력 PDF 쌍(업무계획 35쪽·수학 20쪽·법학적성시험
-  언어이해 15쪽 A3).
+- **예시(실물)**: `samples/` 원본과 `pdf/`의 버전 표기 한컴 기준 PDF 쌍(업무계획 35쪽·
+  수학 20쪽·법학적성시험 언어이해 15쪽 A3). `samples/` 동반 PDF만 있는 등록 쌍은 도구·버전·
+  provenance를 별도 확인하기 전에는 참고 자료로만 쓴다.
 - **흐름**: `tools/fidelity_compare`(#3389)로 한컴 PDF ↔ rhwp export-svg 를 페이지별 나란히
-  시트 + 픽셀 diff% 랭킹. 최악 페이지부터 사람이 감사.
+  시트 + 픽셀 diff% 랭킹으로 만들고, 같은 실행의 `text-report.tsv`에서 PDF 텍스트층 ↔
+  SVG `<text>` 문자 멀티셋 차이를 확인한다. 픽셀 상위 쪽과 문자 소실·과잉 쪽을 합쳐 후보를
+  좁힌 뒤 사람이 감사한다. 저장소 트리를 깨끗하게 유지해야 하면 `--out-dir`로 외부 경로를 쓴다.
   ```bash
-  python tools/fidelity_compare/fidelity_compare.py plan 0 34
+  python tools/fidelity_compare/fidelity_compare.py plan 0 34 \
+    --out-dir /tmp/rhwp-fidelity-plan
+  sort -t $'\t' -k2,2nr -k3,3nr /tmp/rhwp-fidelity-plan/text-report.tsv | head
   ```
 - **방식(무엇을 찾나)**: diff% 상위 페이지에서 비교 기준과 다른 지점. 단계별(10→전수→고난도
   A3·수식)로 올려 한계를 탐색. diff% 는 절대값이 아니라 **랭킹 + 사람 감사**용(자간 미세차가
-  픽셀로 누적됨).
+  픽셀로 누적됨). `reference_only`은 소실, `svg_only`은 과잉, 같은 쪽의 양쪽 차이는 치환
+  후보로 분류한다. 문자 순서와 공백을 무시하므로 배치·줄바꿈은 픽셀/시각 대조로 확인한다.
 - → **발견**: #3385(한컴 PUA 원문자가 CharOverlap 문맥에서 tofu) · #3382(제어문자를
   이스케이프 없이 방출 → 불법 XML) · #3389(하네스 자체를 상시 게이트로).
 
