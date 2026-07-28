@@ -1124,8 +1124,8 @@ def write_reports(
                 f"- mode: `{browser_replay_diagnostics.get('mode', '-')}`",
                 f"- hard-gate violations: {browser_replay_diagnostics.get('hardGateViolationCount', 0)}",
                 "",
-                "| Backend | Profile | Captures | Items | Direct | Direct Required | Text Fallback | Unsupported | Compat Overlay | Hidden Overlay Violations | Runtime Errors | Unexpected Runtime Ops |",
-                "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+                "| Backend | Profile | Captures | Items | Direct | Direct Required | Text Fallback | Unsupported | Compat Overlay | Hidden Overlay Violations | Runtime Errors | Unexpected Runtime Ops | Image Replay Failures |",
+                "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
             ]
         )
         for item in replay_summary_rows:
@@ -1145,6 +1145,7 @@ def write_reports(
                         format_count(item.get("hiddenOverlayViolations")),
                         format_count(item.get("runtimeRenderErrors")),
                         format_count(item.get("runtimeUnexpectedUnsupportedOps")),
+                        format_count(item.get("runtimeImageReplayFailures")),
                     ]
                 )
                 + " |"
@@ -1155,8 +1156,8 @@ def write_reports(
                 "",
                 "### Replay Diagnostic Inventory",
                 "",
-                "| Backend | Profile | Plan Statuses | Plan Reasons | Plan Features | Expected Runtime Ops | Unexpected Runtime Ops |",
-                "| --- | --- | --- | --- | --- | --- | --- |",
+                "| Backend | Profile | Plan Statuses | Plan Reasons | Plan Features | Expected Runtime Ops | Unexpected Runtime Ops | Image Failure Reasons | Image Failure Sources |",
+                "| --- | --- | --- | --- | --- | --- | --- | --- | --- |",
             ]
         )
         for item in replay_summary_rows:
@@ -1167,6 +1168,8 @@ def write_reports(
                 "planFeatureCounts",
                 "expectedUnsupportedOpCounts",
                 "unexpectedUnsupportedOpCounts",
+                "imageFailureReasonCounts",
+                "imageFailureSourceCounts",
             ):
                 counts = item.get(field) or {}
                 inventory_columns.append(

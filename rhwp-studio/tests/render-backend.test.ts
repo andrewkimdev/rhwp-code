@@ -11,6 +11,7 @@ import {
   resolveRenderProfile,
 } from '../src/view/render-backend.ts';
 import {
+  boundedCanvasKitSourceImageKey,
   canvasKitImageCacheKey,
   canvasKitImageFillModeTiles,
   canvasKitImageFillModeStretches,
@@ -189,14 +190,23 @@ test('CanvasKit auto preflight permits text marks but blocks missing structural 
 
 test('CanvasKit contains malformed images and bounds both decode caches', () => {
   const source = readFileSync(new URL('../src/view/canvaskit-renderer.ts', import.meta.url), 'utf8');
+  const admissionSource = readFileSync(
+    new URL('../src/view/canvaskit/image-header.ts', import.meta.url),
+    'utf8',
+  );
   assert.match(source, /try \{\s*image = this\.canvasKit\.MakeImageFromEncoded/);
   assert.match(source, /image:decodeFailed/);
   assert.match(source, /MAX_IMAGE_CACHE_ENTRIES = 128/);
   assert.match(source, /MAX_IMAGE_FAILURE_CACHE_ENTRIES = 128/);
-  assert.match(source, /encodedImageDimensions\(bytes\)/);
-  assert.match(source, /MAX_DECODED_IMAGE_PIXELS = 32 \* 1024 \* 1024/);
+  assert.match(source, /replayableEncodedImageHeader\(bytes\)/);
+  assert.match(admissionSource, /CANVASKIT_MAX_IMAGE_DIMENSION = 8192/);
+  assert.match(admissionSource, /CANVASKIT_MAX_DECODED_IMAGE_PIXELS = 32 \* 1024 \* 1024/);
   assert.match(source, /MAX_IMAGE_CACHE_PIXELS = 64 \* 1024 \* 1024/);
   assert.match(source, /oldest\?\.image\.delete\?\.\(\)/);
+  assert.match(source, /'base64DecodeFailed'/);
+  assert.match(source, /'encodedImageRejected'/);
+  assert.match(source, /'decodedDimensionsMismatch'/);
+  assert.match(source, /imageFailureCacheHits/);
   assert.match(source, /generation !== this\.documentGeneration/);
   assert.match(source, /resetDocumentResources\(\): void/);
 });
@@ -542,6 +552,48 @@ test('CanvasKit image replay cache key includes payload fingerprint with repeate
   const second = canvasKitImageCacheKey({ imageRef: 7, mime: 'image/png', base64: 'BBBB' });
   assert.notEqual(first, second);
   assert.ok((first ?? '').startsWith('ref:7|image/png:4:'));
+
+  const stable = canvasKitImageCacheKey(
+    { imageRef: 7, sourceImageKey: 'bin:3:7:src', mime: 'image/png', base64: 'AAAA' },
+    11,
+  );
+  const sameSource = canvasKitImageCacheKey(
+    { imageRef: 7, sourceImageKey: 'bin:3:7:src', mime: 'image/png', base64: 'BBBB' },
+    11,
+  );
+  const nextDocument = canvasKitImageCacheKey(
+    { imageRef: 7, sourceImageKey: 'bin:3:7:src', mime: 'image/png', base64: 'AAAA' },
+    12,
+  );
+  assert.equal(stable, sameSource, 'producer source key avoids rehashing unchanged image identity');
+  assert.equal(stable, 'document:11|source:bin:3:7:src');
+  assert.notEqual(stable, nextDocument, 'document generation isolates source and failure caches');
+
+  assert.equal(boundedCanvasKitSourceImageKey(' bin:3:7:src '), ' bin:3:7:src ');
+  assert.equal(boundedCanvasKitSourceImageKey('bin:\n3'), null);
+  assert.equal(boundedCanvasKitSourceImageKey('x'.repeat(257)), null);
+  assert.notEqual(
+    canvasKitImageCacheKey(
+      { sourceImageKey: ' bin:3:7:src ', mime: 'image/png', base64: 'AAAA' },
+      11,
+    ),
+    stable,
+    'opaque source identities must not be trimmed into cache collisions',
+  );
+  assert.ok(
+    canvasKitImageCacheKey(
+      { imageRef: 'x'.repeat(257), mime: 'image/png', base64: 'AAAA' },
+      11,
+    )?.includes('image/png:4:'),
+    'unbounded resource labels should fall back to the bounded payload fingerprint',
+  );
+  assert.ok(
+    canvasKitImageCacheKey(
+      { imageRef: 7, mime: 'x'.repeat(129), base64: 'AAAA' },
+      11,
+    )?.includes('application/octet-stream:4:'),
+    'unbounded MIME labels should not be copied into cache keys',
+  );
 });
 
 test('CanvasKit image crop source follows the same HWPUNIT crop scale as SVG replay', () => {

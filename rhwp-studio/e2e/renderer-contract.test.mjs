@@ -1342,8 +1342,15 @@ function runExecutableFontNativeGlyphReplay() {
       isDefaultFallback: true,
     },
   };
-  const bitmapBase64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB';
-  const bitmapBytes = new Uint8Array(Buffer.from(bitmapBase64, 'base64'));
+  const bitmapBytes = new Uint8Array(33);
+  bitmapBytes.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+  const bitmapView = new DataView(bitmapBytes.buffer);
+  bitmapView.setUint32(8, 13);
+  bitmapBytes.set([0x49, 0x48, 0x44, 0x52], 12);
+  bitmapView.setUint32(16, 1);
+  bitmapView.setUint32(20, 1);
+  bitmapBytes.set([8, 6, 0, 0, 0], 24);
+  const bitmapBase64 = Buffer.from(bitmapBytes).toString('base64');
   const bitmapResourceKey = `img:blake3:${bitmapBytes.byteLength}:${bytesToHex(blake3(bitmapBytes))}`;
   const bitmap = {
     type: 'glyphOutline',
@@ -1402,6 +1409,31 @@ function runExecutableFontNativeGlyphReplay() {
 
   const corrupt = { ...bitmap, payloadResourceKey: 'glyphPayload:bitmapGlyph:resource:img:missing' };
   assert.equal(renderer.glyphOutlineVariantReplayable(corrupt), false);
+  const imageDecodeEventsBeforeRejection = events.filter(
+    (event) => event.startsWith('image.decode:'),
+  ).length;
+  const rejectedImage = {
+    type: 'image',
+    bbox: { x: 0, y: 0, width: 16, height: 16 },
+    sourceImageKey: 'bin:1:7:src',
+    imageRef: 7,
+    base64: Buffer.from([1, 2, 3]).toString('base64'),
+  };
+  assert.equal(renderer.imageForOp(rejectedImage), null);
+  assert.equal(renderer.imageForOp(rejectedImage), null);
+  assert.equal(
+    events.filter((event) => event.startsWith('image.decode:')).length,
+    imageDecodeEventsBeforeRejection,
+    'malformed headers must not reach the CanvasKit decoder',
+  );
+  const imageFailureDiagnostics = renderer.diagnostics();
+  assert.equal(imageFailureDiagnostics.imageFailureCacheHits, 1);
+  assert.deepEqual(imageFailureDiagnostics.imageFailures, [{
+    source: 'sourceKey',
+    sourceImageKey: 'bin:1:7:src',
+    imageRef: 7,
+    reason: 'encodedImageRejected',
+  }]);
   renderer.lastRenderCompleted = true;
   renderer.localTypefacePending.set('pending:test-face', 1);
   assert.ok(renderer.diagnostics().readinessBlockers.includes('localFontsPending'));
@@ -2224,18 +2256,23 @@ assert(
     && rendererBaselineSource.includes("code: 'runtimeRenderIncomplete'")
     && rendererBaselineSource.includes("code: 'runtimeRenderError'")
     && rendererBaselineSource.includes("code: 'runtimeUnexpectedUnsupportedOps'")
+    && rendererBaselineSource.includes("code: 'runtimeImageReplayFailure'")
     && rendererBaselineSource.includes("code: 'runtimeBackendMismatch'")
     && rendererBaselineSource.includes("code: 'runtimeProfileMismatch'")
     && rendererBaselineSource.includes('contractGateAndReportInventory')
     && rendererBaselineSource.includes('planReasonCounts')
-    && rendererBaselineSource.includes('planFeatureCounts'),
+    && rendererBaselineSource.includes('planFeatureCounts')
+    && rendererBaselineSource.includes('imageFailureReasonCounts')
+    && rendererBaselineSource.includes('imageFailureSourceCounts'),
   'browser baseline must gate replay-plan/runtime contract failures and inventory known gaps',
 );
 assert(
   rendererBaselineDriverSource.includes('CanvasKit Replay Diagnostics')
     && rendererBaselineDriverSource.includes('Replay Diagnostic Inventory')
     && rendererBaselineDriverSource.includes('expectedUnsupportedOpCounts')
-    && rendererBaselineDriverSource.includes('unexpectedUnsupportedOpCounts'),
+    && rendererBaselineDriverSource.includes('unexpectedUnsupportedOpCounts')
+    && rendererBaselineDriverSource.includes('runtimeImageReplayFailures')
+    && rendererBaselineDriverSource.includes('imageFailureReasonCounts'),
   'renderer baseline report must preserve replay-plan and runtime diagnostic inventories',
 );
 assert(
