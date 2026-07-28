@@ -239,6 +239,37 @@ fn actual_hwp3_password_fixture_keeps_white_shaded_table_cells_white() {
 }
 
 #[test]
+fn actual_hwp3_password_fixture_anchors_inline_folder_table_to_paragraph() {
+    let document = parse_document_with_password(&fixture_bytes(), FIXTURE_PASSWORD)
+        .expect("실제 HWP3 fixture를 열어야 함");
+    let table = document.sections[0].paragraphs[30]
+        .controls
+        .iter()
+        .find_map(|control| match control {
+            Control::Table(table) if table.row_count == 1 && table.col_count == 4 => {
+                Some(table.as_ref())
+            }
+            _ => None,
+        })
+        .expect("폴더 구성 1×4 표를 찾아야 함");
+
+    assert!(
+        table.common.treat_as_char,
+        "HWP3 ref_pos=0 표는 inline이어야 함"
+    );
+    assert_eq!(
+        table.common.horz_rel_to,
+        rhwp::model::shape::HorzRelTo::Para,
+        "inline 표의 수평 기준은 종이가 아니라 문단이어야 함"
+    );
+    assert_eq!(
+        table.common.vert_rel_to,
+        rhwp::model::shape::VertRelTo::Para,
+        "inline 표의 수직 기준은 종이가 아니라 문단이어야 함"
+    );
+}
+
+#[test]
 fn cli_password_exit_contract_uses_the_actual_hwp3_fixture() {
     let fixture = fixture_path();
     let fixture = fixture.to_str().expect("utf-8 fixture path");

@@ -847,6 +847,14 @@ fn parse_hwp3_object_dispatch(
         let ref_pos = info_buf[8];
         table.common.treat_as_char = ref_pos == 0;
         match ref_pos {
+            0 => {
+                // HWP3의 글자처럼 취급되는 표는 문단 안에서 배치한다. 공통
+                // 속성의 기본값(Paper)을 그대로 두면 표 뒤 문단이 종이 기준
+                // 좌표로 계산되어, 같은 문서의 HWP5 변환본보다 오른쪽으로
+                // 밀린다.
+                table.common.horz_rel_to = crate::model::shape::HorzRelTo::Para;
+                table.common.vert_rel_to = crate::model::shape::VertRelTo::Para;
+            }
             1 => {
                 table.common.horz_rel_to = crate::model::shape::HorzRelTo::Para;
                 table.common.vert_rel_to = crate::model::shape::VertRelTo::Para;
