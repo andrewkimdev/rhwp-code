@@ -493,7 +493,16 @@ pub(crate) fn convert_para_shape(
     let mut ps = crate::model::style::ParaShape::default();
     // HWP3 여백/들여쓰기 단위는 hunit(1/1800인치)이다. 공통 ParaShape IR은
     // HWP5/HWPX와 같이 실제 HWPUNIT 값의 2배 스케일로 저장하므로 4*2를 곱한다.
-    ps.margin_left = hwp3_para_metric_u16_to_ir(hwp3_ps.left_margin);
+    // HWP3의 음수 들여쓰기는 `left_margin`을 후속 줄 기준으로 저장하고,
+    // 첫 줄을 `left_margin + indent`에 둔다. 공통 IR/renderer는 음수 indent에서
+    // margin_left를 첫 줄 기준으로 사용하므로, 여기서 legacy 표현을 정규화한다.
+    // 양수 들여쓰기와 0은 기존처럼 left_margin 자체가 첫 줄의 기준이다.
+    let first_line_margin = if hwp3_ps.indent < 0 {
+        (i32::from(hwp3_ps.left_margin) + i32::from(hwp3_ps.indent)).max(0) as u16
+    } else {
+        hwp3_ps.left_margin
+    };
+    ps.margin_left = hwp3_para_metric_u16_to_ir(first_line_margin);
     ps.margin_right = hwp3_para_metric_u16_to_ir(hwp3_ps.right_margin);
     ps.indent = hwp3_para_metric_to_ir(hwp3_ps.indent);
 
@@ -4509,6 +4518,21 @@ mod tests {
             (284, 568),
             "문단 간격은 저장 vpos와 같은 스케일로 누적해야 한다"
         );
+    }
+
+    #[test]
+    fn hwp3_negative_indent_normalizes_continuation_margin_to_first_line() {
+        // `한글 97 안내문` 3쪽 설명 문단: HWP3은 후속 줄 margin=2932 hunit과
+        // 내어쓰기=-2057 hunit을 저장한다. 한컴 변환 HWP5와 공통 renderer의
+        // 표현에서는 첫 줄 기준 875 hunit(=7000 HU)이어야 한다.
+        let mut hwp3_ps = crate::parser::hwp3::records::Hwp3ParaShape::default();
+        hwp3_ps.left_margin = 2932;
+        hwp3_ps.indent = -2057;
+
+        let ps = convert_para_shape(&hwp3_ps, &mut Vec::new());
+        assert_eq!(ps.margin_left, 7000);
+        assert_eq!(ps.indent, -16456);
+        assert_eq!(ps.margin_right, 0, "오른쪽 여백은 이 정규화 범위 밖");
     }
 
     #[test]

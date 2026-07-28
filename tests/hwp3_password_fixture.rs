@@ -270,6 +270,24 @@ fn actual_hwp3_password_fixture_anchors_inline_folder_table_to_paragraph() {
 }
 
 #[test]
+fn actual_hwp3_password_fixture_normalizes_hanging_indent_first_line_margin() {
+    let document = parse_document_with_password(&fixture_bytes(), FIXTURE_PASSWORD)
+        .expect("실제 HWP3 fixture를 열어야 함");
+    let paragraph = &document.sections[0].paragraphs[32];
+    assert!(paragraph.text.starts_with("\\HNC\t\t\t"));
+
+    let para_shape = &document.doc_info.para_shapes[paragraph.para_shape_id as usize];
+    assert_eq!(
+        para_shape.margin_left, 7000,
+        "HWP3 음수 들여쓰기의 첫 줄은 raw left_margin+indent 기준이어야 함"
+    );
+    assert_eq!(
+        para_shape.indent, -16456,
+        "내어쓰기 폭은 원시 HWP3 값을 그대로 보존해야 함"
+    );
+}
+
+#[test]
 fn cli_password_exit_contract_uses_the_actual_hwp3_fixture() {
     let fixture = fixture_path();
     let fixture = fixture.to_str().expect("utf-8 fixture path");
