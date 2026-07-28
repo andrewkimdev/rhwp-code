@@ -1,4 +1,5 @@
 import { WasmBridge } from '@/core/wasm-bridge';
+import type { DeferredFocusedPagePatch } from '@/core/wasm-bridge';
 import { EventBus } from '@/core/event-bus';
 import { CursorState } from './cursor';
 import { CaretRenderer } from './caret-renderer';
@@ -323,6 +324,7 @@ export class InputHandler {
   private deferredPaginationPending = false;
   private readonly deferredPaginationRunner: DeferredPaginationRunner;
   private rawTextMutationEffects = new TextMutationEffectAccumulator();
+  private pendingFocusedPagePatch: DeferredFocusedPagePatch | null = null;
 
   // 표 경계선 리사이즈 드래그 상태
   private isResizeDragging = false;
@@ -2411,6 +2413,7 @@ export class InputHandler {
 
   /** 편집 후 처리: 재렌더링 + 캐럿 갱신 */
   private afterEdit(flushDeferredPagination = true): void {
+    this.pendingFocusedPagePatch = null;
     if (flushDeferredPagination) {
       this.flushDeferredPaginationIfNeeded('before-full-edit', false);
     } else if (this.deferredPaginationPending) {
@@ -2433,6 +2436,8 @@ export class InputHandler {
 
   /** 셀 내부 단일 텍스트 편집 후 처리: 현재 페이지 canvas만 갱신한다. */
   private afterPageLocalEdit(): void {
+    const focusedPagePatch = this.pendingFocusedPagePatch;
+    this.pendingFocusedPagePatch = null;
     if (this.flushDeferredPaginationForCellOverflow()) return;
 
     // 텍스트 입력은 셀 폭을 바꾸지 않으므로 눈금자 셀 bbox 캐시를 무효화하지 않는다.
@@ -2440,7 +2445,11 @@ export class InputHandler {
     this.eventBus.emit('document-mutated', 'input-handler-edit');
     const pageIndex = this.cursor.getRect()?.pageIndex;
     if (typeof pageIndex === 'number' && Number.isInteger(pageIndex) && pageIndex >= 0) {
-      this.eventBus.emit('document-page-invalidated', { pageIndex, reason: 'text-edit' });
+      this.eventBus.emit('document-page-invalidated', {
+        pageIndex,
+        reason: 'text-edit',
+        ...(focusedPagePatch?.pageIndex === pageIndex ? { focusedPagePatch } : {}),
+      });
     } else {
       this.eventBus.emit('document-changed');
     }
@@ -2505,6 +2514,9 @@ export class InputHandler {
 
   /** deferred mutation을 cursor lookup 전에 등록하고 flow 경계에서는 resumable job을 시작한다. */
   private prepareTextMutationBeforeCursor(effects: TextMutationEffects): boolean {
+    this.pendingFocusedPagePatch = effects.focusedPagePatch
+      ? { ...effects.focusedPagePatch }
+      : null;
     const hasTextMutation = effects.documentPaginationPending
       || effects.flowChanged
       || effects.paginationCompleted;

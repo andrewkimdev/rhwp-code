@@ -25782,6 +25782,115 @@ fn issue2214_scoped_cache_coherence_preserves_transient_pagination() {
 /// cache miss page-tree rebuild로 얻은 exact rect와 같아야 한다.
 #[test]
 fn issue3137_focused_cell_geometry_matches_exact_rect() {
+    #[derive(Debug, PartialEq, Eq)]
+    struct FocusedRunSnapshot {
+        text: String,
+        char_start: Option<usize>,
+        char_shape_id: Option<u32>,
+        para_shape_id: Option<u16>,
+        is_para_end: bool,
+        border_fill_id: u16,
+        bbox_bits: [u64; 4],
+        baseline_bits: u64,
+        font_family: String,
+        font_size_bits: u64,
+        letter_spacing_bits: u64,
+        ratio_bits: u64,
+        line_x_offset_bits: u64,
+        available_width_bits: u64,
+    }
+
+    fn focused_line_snapshot(
+        tree: &crate::renderer::render_tree::PageRenderTree,
+    ) -> ([u64; 4], Vec<FocusedRunSnapshot>) {
+        use crate::renderer::render_tree::{RenderNode, RenderNodeType};
+
+        fn visit(node: &RenderNode) -> Option<([u64; 4], Vec<FocusedRunSnapshot>)> {
+            if let RenderNodeType::TextLine(line) = &node.node_type {
+                if line.section_index == Some(0)
+                    && line.para_index == Some(5)
+                    && line.line_index == Some(3)
+                    && node.children.iter().all(|child| {
+                        matches!(
+                            &child.node_type,
+                            RenderNodeType::TextRun(run)
+                                if run.cell_context.as_ref().is_some_and(|context| {
+                                    context.parent_para_index == 0
+                                        && context.path.len() == 1
+                                        && context.path[0].control_index == 2
+                                        && context.path[0].cell_index == 2
+                                        && context.path[0].cell_para_index == 5
+                                })
+                        )
+                    })
+                {
+                    let runs = node
+                        .children
+                        .iter()
+                        .map(|child| {
+                            let RenderNodeType::TextRun(run) = &child.node_type else {
+                                unreachable!("focused line children were validated as TextRun");
+                            };
+                            FocusedRunSnapshot {
+                                text: run.text.clone(),
+                                char_start: run.char_start,
+                                char_shape_id: run.char_shape_id,
+                                para_shape_id: run.para_shape_id,
+                                is_para_end: run.is_para_end,
+                                border_fill_id: run.border_fill_id,
+                                bbox_bits: [
+                                    child.bbox.x.to_bits(),
+                                    child.bbox.y.to_bits(),
+                                    child.bbox.width.to_bits(),
+                                    child.bbox.height.to_bits(),
+                                ],
+                                baseline_bits: run.baseline.to_bits(),
+                                font_family: run.style.font_family.clone(),
+                                font_size_bits: run.style.font_size.to_bits(),
+                                letter_spacing_bits: run.style.letter_spacing.to_bits(),
+                                ratio_bits: run.style.ratio.to_bits(),
+                                line_x_offset_bits: run.style.line_x_offset.to_bits(),
+                                available_width_bits: run.style.available_width.to_bits(),
+                            }
+                        })
+                        .collect();
+                    return Some((
+                        [
+                            node.bbox.x.to_bits(),
+                            node.bbox.y.to_bits(),
+                            node.bbox.width.to_bits(),
+                            node.bbox.height.to_bits(),
+                        ],
+                        runs,
+                    ));
+                }
+            }
+            node.children.iter().find_map(visit)
+        }
+
+        visit(&tree.root).expect("focused final TextLine")
+    }
+
+    fn assert_cached_line_matches_fresh(doc: &HwpDocument, label: &str, operation: &str) {
+        let cached = {
+            let cache = doc.core.page_tree_cache.borrow();
+            focused_line_snapshot(
+                cache
+                    .first()
+                    .and_then(Option::as_ref)
+                    .expect("focused page tree cache"),
+            )
+        };
+        let fresh = focused_line_snapshot(
+            &doc.build_page_render_tree(0)
+                .expect("fresh focused page render tree"),
+        );
+        assert_eq!(
+            cached, fresh,
+            "{label} {operation}: patched TextLine must equal a fresh page build"
+        );
+    }
+
     fn rect_number(rect: &Value, key: &str) -> f64 {
         rect[key]
             .as_f64()
@@ -25802,6 +25911,35 @@ fn issue3137_focused_cell_geometry_matches_exact_rect() {
             Some(false),
             "{label} {operation}: stable flow"
         );
+        assert_eq!(
+            mutation["focusedPageTreePatched"].as_bool(),
+            Some(true),
+            "{label} {operation}: focused page tree patch"
+        );
+        let page_patch = &mutation["focusedPagePatch"];
+        assert!(
+            page_patch.is_object(),
+            "{label} {operation}: focused page repaint patch missing: {mutation}"
+        );
+        assert_eq!(
+            page_patch["pageIndex"], before_rect["pageIndex"],
+            "{label} {operation}: focused page repaint page"
+        );
+        for key in ["x", "y", "width", "height"] {
+            let value = page_patch[key]
+                .as_f64()
+                .unwrap_or_else(|| panic!("{label} {operation}: page patch {key}"));
+            assert!(
+                value.is_finite(),
+                "{label} {operation}: non-finite page patch {key}={value}"
+            );
+            if key == "width" || key == "height" {
+                assert!(
+                    value > 0.0,
+                    "{label} {operation}: non-positive page patch {key}={value}"
+                );
+            }
+        }
         let geometry = &mutation["focusedCursorGeometry"];
         assert!(
             geometry.is_object(),
@@ -25860,6 +25998,14 @@ fn issue3137_focused_cell_geometry_matches_exact_rect() {
                 .expect("initial exact rect"),
         )
         .expect("initial rect json");
+        doc.get_cursor_rect_by_path_with_hint(
+            0,
+            0,
+            r#"[{"controlIndex":2,"cellIndex":2,"cellParaIndex":5}]"#,
+            130,
+            Some(0),
+        )
+        .expect("warm initial page tree cache");
         let insert_1: Value = serde_json::from_str(
             &doc.insert_text_in_cell_native_deferred_pagination(0, 0, 2, 2, 5, 130, "1")
                 .expect("first stable insert"),
@@ -25880,12 +26026,21 @@ fn issue3137_focused_cell_geometry_matches_exact_rect() {
         if insert_1["focusedCursorGeometry"].is_object() {
             assert_geometry(label, "insert-1", &rect_130, &insert_1, &rect_131, 130, 131);
         }
+        doc.get_cursor_rect_by_path_with_hint(
+            0,
+            0,
+            r#"[{"controlIndex":2,"cellIndex":2,"cellParaIndex":5}]"#,
+            131,
+            Some(0),
+        )
+        .expect("warm post-normalization page tree cache");
 
         let insert_2: Value = serde_json::from_str(
             &doc.insert_text_in_cell_native_deferred_pagination(0, 0, 2, 2, 5, 131, "a")
                 .expect("second stable insert"),
         )
         .expect("second insert json");
+        assert_cached_line_matches_fresh(&doc, label, "insert-a");
         let rect_132: Value = serde_json::from_str(
             &doc.get_cursor_rect_in_cell_native(0, 0, 2, 2, 5, 132)
                 .expect("second exact rect"),
@@ -25898,6 +26053,7 @@ fn issue3137_focused_cell_geometry_matches_exact_rect() {
                 .expect("stable IME replace"),
         )
         .expect("replace json");
+        assert_cached_line_matches_fresh(&doc, label, "replace-ime");
         let rect_replaced: Value = serde_json::from_str(
             &doc.get_cursor_rect_in_cell_native(0, 0, 2, 2, 5, 132)
                 .expect("replace exact rect"),
@@ -25918,6 +26074,7 @@ fn issue3137_focused_cell_geometry_matches_exact_rect() {
                 .expect("stable backspace"),
         )
         .expect("delete json");
+        assert_cached_line_matches_fresh(&doc, label, "delete-backward");
         let rect_deleted: Value = serde_json::from_str(
             &doc.get_cursor_rect_in_cell_native(0, 0, 2, 2, 5, 131)
                 .expect("delete exact rect"),
@@ -25931,6 +26088,94 @@ fn issue3137_focused_cell_geometry_matches_exact_rect() {
             &rect_deleted,
             132,
             131,
+        );
+
+        // 중간 오프셋 편집은 후속 TextRun char_start까지 바꾸므로 보수적으로 전체
+        // 캐시 무효화한다. 같은 text를 되돌린 뒤 page tree를 다시 warm한다.
+        let middle_insert: Value = serde_json::from_str(
+            &doc.insert_text_in_cell_native_deferred_pagination(0, 0, 2, 2, 5, 125, "x")
+                .expect("middle insert fallback"),
+        )
+        .expect("middle insert json");
+        assert_eq!(
+            middle_insert["focusedPageTreePatched"].as_bool(),
+            Some(false),
+            "{label}: middle edit must not patch the cached tail line"
+        );
+        assert!(
+            middle_insert["focusedPagePatch"].is_null(),
+            "{label}: middle edit must not expose a repaint patch"
+        );
+        assert!(
+            doc.core
+                .page_tree_cache
+                .borrow()
+                .iter()
+                .all(Option::is_none),
+            "{label}: middle edit must invalidate cached page trees"
+        );
+        let middle_delete: Value = serde_json::from_str(
+            &doc.delete_text_in_cell_native_deferred_pagination(0, 0, 2, 2, 5, 125, 1)
+                .expect("restore middle insert"),
+        )
+        .expect("middle delete json");
+        assert_eq!(
+            middle_delete["focusedPageTreePatched"].as_bool(),
+            Some(false),
+            "{label}: uncached restore must keep the full invalidation fallback"
+        );
+        doc.get_cursor_rect_by_path_with_hint(
+            0,
+            0,
+            r#"[{"controlIndex":2,"cellIndex":2,"cellParaIndex":5}]"#,
+            131,
+            Some(0),
+        )
+        .expect("rewarm after middle-edit fallback");
+
+        // 원본 뒤 첫 숫자가 이미 들어간 상태다. 55개를 더 넣으면 마지막 입력에서
+        // 4→5줄 flow 경계가 발생하고, 그 경계만 page-tree patch를 중단해야 한다.
+        for inserted in 0..55 {
+            let mutation: Value = serde_json::from_str(
+                &doc.insert_text_in_cell_native_deferred_pagination(
+                    0,
+                    0,
+                    2,
+                    2,
+                    5,
+                    131 + inserted,
+                    "1",
+                )
+                .expect("tail insert through flow boundary"),
+            )
+            .expect("tail boundary json");
+            let boundary = inserted == 54;
+            assert_eq!(
+                mutation["cellFlowChanged"].as_bool(),
+                Some(boundary),
+                "{label}: tail input {} flow signal",
+                inserted + 2
+            );
+            assert_eq!(
+                mutation["focusedPageTreePatched"].as_bool(),
+                Some(!boundary),
+                "{label}: tail input {} patch signal",
+                inserted + 2
+            );
+            assert_eq!(
+                mutation["focusedPagePatch"].is_object(),
+                !boundary,
+                "{label}: tail input {} repaint patch signal",
+                inserted + 2
+            );
+        }
+        assert!(
+            doc.core
+                .page_tree_cache
+                .borrow()
+                .iter()
+                .all(Option::is_none),
+            "{label}: flow boundary must invalidate the focused page tree"
         );
     }
 }

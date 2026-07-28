@@ -1,4 +1,4 @@
-import { WasmBridge } from '@/core/wasm-bridge';
+import { WasmBridge, type DeferredFocusedPagePatch } from '@/core/wasm-bridge';
 import type { LayerRenderProfile } from '@/core/types';
 import { layerPaintOpReplayPlane } from './canvaskit/replay-plane';
 import type { CanvasKitLayerRenderer, CanvasKitRenderDiagnostics } from './canvaskit-renderer';
@@ -33,6 +33,7 @@ interface LayerPlaneSummary {
 export interface PageRenderContext {
   reason?: 'text-edit' | 'unknown';
   allowStaticOverlayReuse?: boolean;
+  focusedPagePatch?: DeferredFocusedPagePatch;
 }
 
 export interface PageRenderResult {
@@ -157,6 +158,14 @@ export class PageRenderer {
       this.layerSummaryCache.delete(pageIdx);
       const renderedCanvas = this.renderPageCanvasKit(pageIdx, canvas, renderScale);
       return { needsTextEditStaticLayerVerification: false, renderedCanvas };
+    }
+
+    if (
+      context.reason === 'text-edit'
+      && context.focusedPagePatch?.pageIndex === pageIdx
+      && this.renderFocusedPagePatch(pageIdx, canvas, renderScale, context)
+    ) {
+      return { needsTextEditStaticLayerVerification: false };
     }
 
     const layers = this.getLayerPlaneSummary(pageIdx, canvas, renderScale, context);
@@ -743,6 +752,44 @@ export class PageRenderer {
       this.flowSplitSupported = false;
       console.warn('[PageRenderer] flow-dynamic 렌더 미지원, 기존 flow 렌더로 fallback:', error);
       this.wasm.renderPageToCanvasFiltered(pageIdx, canvas, renderScale, 'flow', this.renderProfile);
+      return false;
+    }
+  }
+
+  /**
+   * [#3137 Stage 4] stable same-line edit가 제공한 좁은 dirty rect만 다시 재생한다.
+   *
+   * 이미지/RawSvg는 비동기 decode와 별도 static layer 계약이 있으므로 보수적으로
+   * full repaint에 남긴다. 실패하면 caller가 기존 renderPage 경로를 그대로 수행한다.
+   */
+  private renderFocusedPagePatch(
+    pageIdx: number,
+    canvas: HTMLCanvasElement,
+    renderScale: number,
+    context: PageRenderContext,
+  ): boolean {
+    const patch = context.focusedPagePatch;
+    if (!patch || !canvas.parentElement) return false;
+
+    const layers = this.getLayerPlaneSummary(pageIdx, canvas, renderScale, context);
+    if (layers.imageCount > 0 || layers.rawSvgCount > 0) return false;
+
+    try {
+      this.wasm.renderPagePatchToCanvasFiltered(
+        pageIdx,
+        canvas,
+        renderScale,
+        'flow',
+        patch,
+        this.renderProfile,
+      );
+      this.drawMarginGuides(pageIdx, canvas, renderScale);
+      this.rememberLayerPlaneSummary(pageIdx, canvas, renderScale, layers);
+      this.cancelReRender(pageIdx);
+      this.imageRetryCounts.delete(pageIdx);
+      return true;
+    } catch (error) {
+      console.warn('[PageRenderer] focused page patch 실패, 전체 repaint로 fallback:', error);
       return false;
     }
   }

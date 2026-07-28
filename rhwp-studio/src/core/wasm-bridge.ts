@@ -101,12 +101,23 @@ export interface DeferredFocusedCellCursorGeometry {
   deltaX: number;
 }
 
+export interface DeferredFocusedPagePatch {
+  pageIndex: number;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
 export interface DeferredCellTextMutationResult {
   ok: boolean;
   charOffset: number;
   paginationDeferred: boolean;
   cellFlowChanged: boolean;
+  /** stable tail edit가 focused page tree의 TextLine 캐시를 직접 갱신했는지. */
+  focusedPageTreePatched: boolean;
   focusedCursorGeometry?: DeferredFocusedCellCursorGeometry;
+  focusedPagePatch?: DeferredFocusedPagePatch;
 }
 
 function parseDeferredFocusedCellCursorGeometry(
@@ -134,6 +145,33 @@ function parseDeferredFocusedCellCursorGeometry(
     sourceCharOffset: candidate.sourceCharOffset as number,
     targetCharOffset: candidate.targetCharOffset as number,
     deltaX: candidate.deltaX,
+  };
+}
+
+function parseDeferredFocusedPagePatch(value: unknown): DeferredFocusedPagePatch | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  const candidate = value as Partial<DeferredFocusedPagePatch>;
+  const numbers = [
+    candidate.x,
+    candidate.y,
+    candidate.width,
+    candidate.height,
+  ];
+  if (
+    !Number.isSafeInteger(candidate.pageIndex)
+    || (candidate.pageIndex as number) < 0
+    || !numbers.every((item) => typeof item === 'number' && Number.isFinite(item))
+    || (candidate.width as number) <= 0
+    || (candidate.height as number) <= 0
+  ) {
+    return undefined;
+  }
+  return {
+    pageIndex: candidate.pageIndex as number,
+    x: candidate.x as number,
+    y: candidate.y as number,
+    width: candidate.width as number,
+    height: candidate.height as number,
   };
 }
 
@@ -765,6 +803,45 @@ export class WasmBridge {
     this.doc.renderPageToCanvas(pageNum, canvas, scale);
   }
 
+  /** 기존 Canvas를 유지한 채 page-space 일부만 filtered replay한다 (#3137 Stage 4). */
+  renderPagePatchToCanvasFiltered(
+    pageNum: number,
+    canvas: HTMLCanvasElement,
+    scale: number,
+    layerKind: 'flow' | 'flow-dynamic',
+    patch: DeferredFocusedPagePatch,
+    profile: LayerRenderProfile = 'screen',
+  ): void {
+    if (!this.doc) throw new Error('문서가 로드되지 않았습니다');
+    const d = this.doc as unknown as {
+      renderPagePatchToCanvasFilteredWithProfile?: (
+        p: number,
+        c: HTMLCanvasElement,
+        s: number,
+        k: string,
+        profile: string,
+        x: number,
+        y: number,
+        width: number,
+        height: number,
+      ) => void;
+    };
+    if (typeof d.renderPagePatchToCanvasFilteredWithProfile !== 'function') {
+      throw new Error('[WasmBridge] 현재 WASM은 focused page patch 렌더링을 지원하지 않습니다');
+    }
+    d.renderPagePatchToCanvasFilteredWithProfile(
+      pageNum,
+      canvas,
+      scale,
+      layerKind,
+      profile,
+      patch.x,
+      patch.y,
+      patch.width,
+      patch.height,
+    );
+  }
+
   /**
    * PageLayerTree JSON 가져오기 (Task #516, Stage 5.2).
    * BehindText/InFrontOfText 그림의 메타정보 (bin_id, bbox, transform, effect, brightness, contrast,
@@ -1271,11 +1348,14 @@ export class WasmBridge {
       // Stage 3 이전 deferred API는 신호가 없다. mutation 후 예외로
       // history/cursor를 놓치지 않도록 누락 시 보수적 경계 flush로 복구한다.
       cellFlowChanged: paginationDeferred && parsed.cellFlowChanged !== false,
+      focusedPageTreePatched:
+        paginationDeferred && parsed.focusedPageTreePatched === true,
       ...(paginationDeferred
         ? {
             focusedCursorGeometry: parseDeferredFocusedCellCursorGeometry(
               parsed.focusedCursorGeometry,
             ),
+            focusedPagePatch: parseDeferredFocusedPagePatch(parsed.focusedPagePatch),
           }
         : {}),
     };
@@ -1360,11 +1440,14 @@ export class WasmBridge {
       charOffset: parsedCharOffset,
       paginationDeferred,
       cellFlowChanged: paginationDeferred && parsed.cellFlowChanged !== false,
+      focusedPageTreePatched:
+        paginationDeferred && parsed.focusedPageTreePatched === true,
       ...(paginationDeferred
         ? {
             focusedCursorGeometry: parseDeferredFocusedCellCursorGeometry(
               parsed.focusedCursorGeometry,
             ),
+            focusedPagePatch: parseDeferredFocusedPagePatch(parsed.focusedPagePatch),
           }
         : {}),
     };
@@ -1410,11 +1493,14 @@ export class WasmBridge {
       charOffset: parsedCharOffset,
       paginationDeferred,
       cellFlowChanged: paginationDeferred && parsed.cellFlowChanged !== false,
+      focusedPageTreePatched:
+        paginationDeferred && parsed.focusedPageTreePatched === true,
       ...(paginationDeferred
         ? {
             focusedCursorGeometry: parseDeferredFocusedCellCursorGeometry(
               parsed.focusedCursorGeometry,
             ),
+            focusedPagePatch: parseDeferredFocusedPagePatch(parsed.focusedPagePatch),
           }
         : {}),
     };

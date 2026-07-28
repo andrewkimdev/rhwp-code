@@ -30,6 +30,11 @@
  * focused geometry 최적화 게이트(Stage 3):
  *
  *   npm run e2e:issue-3137-perf -- --require-focused-geometry
+ *
+ * focused page-tree repaint 최적화 게이트(Stage 4):
+ *
+ *   npm run e2e:issue-3137-perf -- \
+ *     --require-focused-geometry --require-focused-repaint
  */
 
 import assert from 'node:assert/strict';
@@ -134,6 +139,10 @@ const EVENT_TYPES = Object.freeze({
   cursorCell: 'wasm.getCursorRectInCell',
   cursorPrepare: 'CursorState.prepareFocusedCellCursorGeometry',
   cursorUpdate: 'CursorState.updateRect',
+  pageRefresh: 'CanvasView.refreshInvalidatedPageNow',
+  pageRender: 'PageRenderer.renderPage',
+  pagePatchRender: 'WasmBridge.renderPagePatchToCanvasFiltered',
+  pageFullRender: 'WasmBridge.renderPageToCanvasFiltered',
   begin: 'wasm.beginDeferredPagination',
   step: 'wasm.stepDeferredPagination',
   flush: 'wasm.flushDeferredPagination',
@@ -202,6 +211,7 @@ function parseConfig() {
     enforceFrameBudget: hasFlag('enforce-frame-budget'),
     cursorBreakdown: hasFlag('cursor-breakdown'),
     requireFocusedGeometry: hasFlag('require-focused-geometry'),
+    requireFocusedRepaint: hasFlag('require-focused-repaint'),
   };
 }
 
@@ -512,6 +522,8 @@ async function installTrace(page, { cursorBreakdown = false } = {}) {
         paginationDeferred: result?.paginationDeferred ?? null,
         cellFlowChanged: result?.cellFlowChanged ?? null,
         focusedGeometryProvided: Boolean(result?.focusedCursorGeometry),
+        focusedPageTreePatched: result?.focusedPageTreePatched === true,
+        focusedPagePatchProvided: Boolean(result?.focusedPagePatch),
       }),
     );
     wrap(
@@ -533,6 +545,8 @@ async function installTrace(page, { cursorBreakdown = false } = {}) {
         paginationDeferred: result?.paginationDeferred ?? null,
         cellFlowChanged: result?.cellFlowChanged ?? null,
         focusedGeometryProvided: Boolean(result?.focusedCursorGeometry),
+        focusedPageTreePatched: result?.focusedPageTreePatched === true,
+        focusedPagePatchProvided: Boolean(result?.focusedPagePatch),
       }),
     );
     wrap(
@@ -688,6 +702,27 @@ async function installTrace(page, { cursorBreakdown = false } = {}) {
         renderScale: args[2],
         zoom: args[3],
         dpr: args[4],
+      }),
+    );
+    wrap(
+      wasm,
+      'renderPagePatchToCanvasFiltered',
+      'WasmBridge.renderPagePatchToCanvasFiltered',
+      (args) => ({
+        pageIndex: args[0],
+        renderScale: args[2],
+        layerKind: args[3],
+        patch: args[4] ?? null,
+      }),
+    );
+    wrap(
+      wasm,
+      'renderPageToCanvasFiltered',
+      'WasmBridge.renderPageToCanvasFiltered',
+      (args) => ({
+        pageIndex: args[0],
+        renderScale: args[2],
+        layerKind: args[3],
       }),
     );
 
@@ -962,6 +997,8 @@ function buildSampleMetrics(trace) {
       ...sample,
       stable: mutationEvents.every((event) => event.cellFlowChanged === false),
       focusedGeometryProvided: mutationEvents[0].focusedGeometryProvided === true,
+      focusedPageTreePatched: mutationEvents[0].focusedPageTreePatched === true,
+      focusedPagePatchProvided: mutationEvents[0].focusedPagePatchProvided === true,
       focusedGeometryPrepared: cursorPrepareEvents[0].prepared === true,
       mutationKind: mutationEvents[0].type,
       mutationMs: sumDurations(mutationEvents),
@@ -1082,6 +1119,25 @@ function summarizeSampleMetrics(sampleMetrics) {
   };
 }
 
+function summarizeRepaintMetrics(trace) {
+  const refresh = trace.events.filter((event) => event.type === EVENT_TYPES.pageRefresh);
+  const renderPage = trace.events.filter((event) => event.type === EVENT_TYPES.pageRender);
+  const focusedPatch = trace.events.filter(
+    (event) => event.type === EVENT_TYPES.pagePatchRender,
+  );
+  const fullPage = trace.events.filter((event) => event.type === EVENT_TYPES.pageFullRender);
+  return {
+    refresh: summarize(refresh.map((event) => event.durationMs)),
+    renderPage: summarize(renderPage.map((event) => event.durationMs)),
+    focusedPatch: summarize(focusedPatch.map((event) => event.durationMs)),
+    fullPage: summarize(fullPage.map((event) => event.durationMs)),
+    refreshCount: refresh.length,
+    renderPageCount: renderPage.length,
+    focusedPatchCount: focusedPatch.length,
+    fullPageCount: fullPage.length,
+  };
+}
+
 function traceCount(trace, type) {
   return trace.counts[type] ?? 0;
 }
@@ -1189,6 +1245,18 @@ async function runScenario(page, fixture, config, scenario, pageErrors) {
       `${scenarioSlug(scenario)}: stable focused geometry exact cursor fallback count`,
     );
   }
+  if (config.requireFocusedRepaint) {
+    assert.equal(
+      sampleMetrics.filter((value) => value.focusedPageTreePatched).length,
+      expectedSampleCount,
+      `${scenarioSlug(scenario)}: focused page-tree patch count`,
+    );
+    assert.equal(
+      sampleMetrics.filter((value) => value.focusedPagePatchProvided).length,
+      expectedSampleCount,
+      `${scenarioSlug(scenario)}: focused page repaint payload count`,
+    );
+  }
 
   const flushCount = traceCount(trace, EVENT_TYPES.flush);
   const inputFlushCount = traceCount(trace, EVENT_TYPES.inputFlush);
@@ -1212,10 +1280,26 @@ async function runScenario(page, fixture, config, scenario, pageErrors) {
     `${scenarioSlug(scenario)}: duplicate direct cell cursor lookup count`,
   );
 
-  const metrics = summarizeSampleMetrics(sampleMetrics);
+  const metrics = {
+    ...summarizeSampleMetrics(sampleMetrics),
+    repaint: summarizeRepaintMetrics(trace),
+  };
+  if (config.requireFocusedRepaint) {
+    assert.equal(
+      metrics.repaint.focusedPatchCount,
+      metrics.repaint.renderPageCount,
+      `${scenarioSlug(scenario)}: every measured repaint must use the focused patch renderer`,
+    );
+    assert.equal(
+      metrics.repaint.fullPageCount,
+      0,
+      `${scenarioSlug(scenario)}: stable focused repaint must not use full-page Canvas replay`,
+    );
+  }
   const frameBudgetMet = (
     (metrics.stable.operation.p95Ms ?? Infinity) <= FRAME_BUDGET_MS
     && (metrics.stable.cursorUpdate.p95Ms ?? Infinity) <= FRAME_BUDGET_MS
+    && (metrics.repaint.renderPage.p95Ms ?? Infinity) <= FRAME_BUDGET_MS
   );
   const rawFile = path.join('raw', `${scenarioSlug(scenario)}.json`);
   const result = {
@@ -1239,6 +1323,14 @@ async function runScenario(page, fixture, config, scenario, pageErrors) {
       focusedGeometryPrepared: sampleMetrics.filter(
         (value) => value.focusedGeometryPrepared,
       ).length,
+      focusedPageTreePatched: sampleMetrics.filter(
+        (value) => value.focusedPageTreePatched,
+      ).length,
+      focusedPagePatchProvided: sampleMetrics.filter(
+        (value) => value.focusedPagePatchProvided,
+      ).length,
+      focusedPagePatchRendered: metrics.repaint.focusedPatchCount,
+      fullPageRendered: metrics.repaint.fullPageCount,
       cursorDiagnostic: sampleMetrics.filter((value) => value.cursorDiagnostic !== null).length,
       wasmFlush: flushCount,
       inputFlush: inputFlushCount,
@@ -1264,6 +1356,8 @@ async function runScenario(page, fixture, config, scenario, pageErrors) {
       + `op p95=${formatMs(metrics.stable.operation.p95Ms)}ms, `
       + `cursor update p95=${formatMs(metrics.stable.cursorUpdate.p95Ms)}ms, `
       + `exact=${traceCount(trace, EVENT_TYPES.cursorNear)}, `
+      + `render p95=${formatMs(metrics.repaint.renderPage.p95Ms)}ms `
+      + `(patch=${metrics.repaint.focusedPatchCount}, full=${metrics.repaint.fullPageCount}), `
       + (config.cursorBreakdown
         ? `build p95=${formatMs(metrics.stable.cursorDiagnostic.pageTreeBuild.p95Ms)}ms, `
           + `traverse p95=${formatMs(
@@ -1297,6 +1391,14 @@ function summaryTsv(summary) {
     'cursor_update_p95_ms',
     'exact_cursor_count',
     'focused_geometry_count',
+    'focused_page_tree_patch_count',
+    'focused_page_patch_payload_count',
+    'focused_page_patch_render_count',
+    'focused_page_patch_render_p95_ms',
+    'full_page_render_count',
+    'full_page_render_p95_ms',
+    'page_refresh_p95_ms',
+    'page_render_p95_ms',
     'cursor_rust_total_p95_ms',
     'find_pages_p95_ms',
     'page_tree_cached_p95_ms',
@@ -1339,6 +1441,14 @@ function summaryTsv(summary) {
       stable.cursorUpdate.p95Ms,
       scenario.counts.cursorNear + scenario.counts.cursorPath + scenario.counts.cursorCell,
       scenario.counts.focusedGeometryPrepared,
+      scenario.counts.focusedPageTreePatched,
+      scenario.counts.focusedPagePatchProvided,
+      scenario.counts.focusedPagePatchRendered,
+      scenario.metrics.repaint.focusedPatch.p95Ms,
+      scenario.counts.fullPageRendered,
+      scenario.metrics.repaint.fullPage.p95Ms,
+      scenario.metrics.repaint.refresh.p95Ms,
+      scenario.metrics.repaint.renderPage.p95Ms,
       stable.cursorDiagnostic.total.p95Ms,
       stable.cursorDiagnostic.findPages.p95Ms,
       stable.cursorDiagnostic.pageTreeCached.p95Ms,
@@ -1402,7 +1512,7 @@ async function main() {
   });
 
   const summary = {
-    schemaVersion: '3.0',
+    schemaVersion: '5.0',
     issue: 3137,
     status: 'running',
     startedAt: new Date().toISOString(),
@@ -1419,6 +1529,7 @@ async function main() {
       enforceFrameBudget: config.enforceFrameBudget,
       cursorBreakdown: config.cursorBreakdown,
       requireFocusedGeometry: config.requireFocusedGeometry,
+      requireFocusedRepaint: config.requireFocusedRepaint,
     },
     environment: {
       gitHead: commandOutput('git', ['rev-parse', 'HEAD']),

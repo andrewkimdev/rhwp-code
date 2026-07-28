@@ -128,6 +128,27 @@ fn scaled_canvas_extent(page_extent: f64, scale: f64) -> u32 {
 }
 
 #[cfg(target_arch = "wasm32")]
+fn canvas_layer_filter(
+    layer_kind: &str,
+) -> Result<crate::renderer::web_canvas::LayerFilter, JsValue> {
+    use crate::model::shape::TextWrap;
+    use crate::renderer::web_canvas::LayerFilter;
+
+    match layer_kind {
+        "all" => Ok(LayerFilter::All),
+        "background" => Ok(LayerFilter::BackgroundOnly),
+        "flow" => Ok(LayerFilter::FlowOnly),
+        "flow-dynamic" => Ok(LayerFilter::FlowDynamic),
+        "flow-static" => Ok(LayerFilter::FlowStatic),
+        "behind" => Ok(LayerFilter::WrapOnly(TextWrap::BehindText)),
+        "front" => Ok(LayerFilter::WrapOnly(TextWrap::InFrontOfText)),
+        _ => Err(JsValue::from_str(
+            "invalid layer_kind: 'all' | 'background' | 'flow' | 'flow-dynamic' | 'flow-static' | 'behind' | 'front'",
+        )),
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
 fn render_page_to_canvas_filtered_with_profile_impl(
     document: &HwpDocument,
     page_num: u32,
@@ -136,25 +157,11 @@ fn render_page_to_canvas_filtered_with_profile_impl(
     layer_kind: &str,
     profile: &str,
 ) -> Result<(), JsValue> {
-    use crate::model::shape::TextWrap;
     use crate::paint::RenderProfile;
     use crate::renderer::layer_renderer::LayerRenderer;
-    use crate::renderer::web_canvas::{LayerFilter, WebCanvasRenderer};
+    use crate::renderer::web_canvas::WebCanvasRenderer;
 
-    let filter = match layer_kind {
-        "all" => LayerFilter::All,
-        "background" => LayerFilter::BackgroundOnly,
-        "flow" => LayerFilter::FlowOnly,
-        "flow-dynamic" => LayerFilter::FlowDynamic,
-        "flow-static" => LayerFilter::FlowStatic,
-        "behind" => LayerFilter::WrapOnly(TextWrap::BehindText),
-        "front" => LayerFilter::WrapOnly(TextWrap::InFrontOfText),
-        _ => {
-            return Err(JsValue::from_str(
-                "invalid layer_kind: 'all' | 'background' | 'flow' | 'flow-dynamic' | 'flow-static' | 'behind' | 'front'",
-            ))
-        }
-    };
+    let filter = canvas_layer_filter(layer_kind)?;
 
     let profile = RenderProfile::parse(profile)
         .ok_or_else(|| JsValue::from_str(&format!("unsupported render profile: {profile}")))?;
@@ -173,6 +180,66 @@ fn render_page_to_canvas_filtered_with_profile_impl(
     renderer.show_control_codes = document.show_control_codes;
     renderer.set_scale(scale);
     renderer.set_layer_filter(filter);
+    renderer.render_page(&tree).map_err(JsValue::from)?;
+    Ok(())
+}
+
+#[cfg(target_arch = "wasm32")]
+#[allow(clippy::too_many_arguments)]
+fn render_page_patch_to_canvas_filtered_with_profile_impl(
+    document: &HwpDocument,
+    page_num: u32,
+    canvas: &HtmlCanvasElement,
+    scale: f64,
+    layer_kind: &str,
+    profile: &str,
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+) -> Result<(), JsValue> {
+    use crate::paint::RenderProfile;
+    use crate::renderer::layer_renderer::LayerRenderer;
+    use crate::renderer::render_tree::BoundingBox;
+    use crate::renderer::web_canvas::WebCanvasRenderer;
+
+    if ![x, y, width, height].into_iter().all(f64::is_finite) || width <= 0.0 || height <= 0.0 {
+        return Err(JsValue::from_str("invalid page patch rectangle"));
+    }
+
+    let filter = canvas_layer_filter(layer_kind)?;
+    let profile = RenderProfile::parse(profile)
+        .ok_or_else(|| JsValue::from_str(&format!("unsupported render profile: {profile}")))?;
+    let tree = document
+        .build_page_layer_tree_with_profile(page_num, profile)
+        .map_err(JsValue::from)?;
+    let scale = normalize_canvas_scale(tree.page_width, tree.page_height, scale)
+        .map_err(JsValue::from_str)?;
+
+    let expected_width = scaled_canvas_extent(tree.page_width, scale);
+    let expected_height = scaled_canvas_extent(tree.page_height, scale);
+    if canvas.width() != expected_width || canvas.height() != expected_height {
+        return Err(JsValue::from_str(
+            "page patch canvas extent does not match the current page render",
+        ));
+    }
+
+    let left = x.max(0.0).min(tree.page_width);
+    let top = y.max(0.0).min(tree.page_height);
+    let right = (x + width).max(left).min(tree.page_width);
+    let bottom = (y + height).max(top).min(tree.page_height);
+    if right <= left || bottom <= top {
+        return Err(JsValue::from_str(
+            "page patch rectangle does not intersect the page",
+        ));
+    }
+
+    let mut renderer = WebCanvasRenderer::new(canvas)?;
+    renderer.show_paragraph_marks = document.show_paragraph_marks;
+    renderer.show_control_codes = document.show_control_codes;
+    renderer.set_scale(scale);
+    renderer.set_layer_filter(filter);
+    renderer.set_partial_clip(BoundingBox::new(left, top, right - left, bottom - top));
     renderer.render_page(&tree).map_err(JsValue::from)?;
     Ok(())
 }
@@ -669,6 +736,30 @@ impl HwpDocument {
         #[cfg(not(feature = "subsecond-dev"))]
         render_page_to_canvas_filtered_with_profile_impl(
             self, page_num, canvas, scale, layer_kind, profile,
+        )
+    }
+
+    /// [#3137 Stage 4] 기존 Canvas의 page-space 일부만 다시 재생한다.
+    ///
+    /// Canvas 크기와 나머지 픽셀은 유지한다. 호출 조건이나 크기가 맞지 않으면 오류를
+    /// 반환하며 Studio는 기존 full-page repaint로 폴백한다.
+    #[cfg(target_arch = "wasm32")]
+    #[wasm_bindgen(js_name = renderPagePatchToCanvasFilteredWithProfile)]
+    #[allow(clippy::too_many_arguments)]
+    pub fn render_page_patch_to_canvas_filtered_with_profile(
+        &self,
+        page_num: u32,
+        canvas: &HtmlCanvasElement,
+        scale: f64,
+        layer_kind: &str,
+        profile: &str,
+        x: f64,
+        y: f64,
+        width: f64,
+        height: f64,
+    ) -> Result<(), JsValue> {
+        render_page_patch_to_canvas_filtered_with_profile_impl(
+            self, page_num, canvas, scale, layer_kind, profile, x, y, width, height,
         )
     }
 

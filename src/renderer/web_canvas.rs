@@ -350,6 +350,12 @@ pub struct WebCanvasRenderer {
     /// independent of raw tree child order.
     active_replay_plane: Option<PaintReplayPlane>,
     render_profile: RenderProfile,
+    /// [#3137 Stage 4] 기존 Canvas의 좁은 영역만 다시 그릴 때 사용하는 page-space clip.
+    ///
+    /// full render는 `None`을 유지한다. partial render는 canvas 크기를 바꾸지 않고
+    /// 이 영역만 clear/replay하며, 영역 밖 text op는 Canvas 호출 전에 건너뛴다.
+    partial_clip: Option<BoundingBox>,
+    partial_context_saved: bool,
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -372,6 +378,8 @@ impl WebCanvasRenderer {
             transparent_page_background: false,
             active_replay_plane: None,
             render_profile: RenderProfile::Screen,
+            partial_clip: None,
+            partial_context_saved: false,
         })
     }
 
@@ -383,6 +391,11 @@ impl WebCanvasRenderer {
     /// 다층 레이어 필터 설정 (Task #516, Stage 5.2)
     pub fn set_layer_filter(&mut self, filter: LayerFilter) {
         self.layer_filter = filter;
+    }
+
+    /// 기존 Canvas를 유지한 채 page-space의 좁은 영역만 다시 그린다.
+    pub fn set_partial_clip(&mut self, clip: BoundingBox) {
+        self.partial_clip = Some(clip);
     }
 
     /// PaintOp replay plane 이 현재 layer_filter 와 일치하는지 판정.
@@ -462,6 +475,10 @@ impl WebCanvasRenderer {
             self.active_replay_plane = prev;
         } else {
             self.render_layer_node(&tree.root, None);
+        }
+        if self.partial_context_saved {
+            self.ctx.restore();
+            self.partial_context_saved = false;
         }
         self.transparent_page_background = false;
     }
@@ -1336,6 +1353,24 @@ impl WebCanvasRenderer {
                     if !self.should_render_op(op, active_layer) {
                         continue;
                     }
+                    // 좁은 repaint에서 페이지 밖의 text/glyph 호출까지 브라우저에 넘기면
+                    // clip되어도 font shaping 비용이 남는다. bbox 계약이 명확한 text 계열만
+                    // 보수적으로 cull하고, 배경/선/도형/이미지는 clip 안에서 그대로 재생한다.
+                    if self.partial_clip.is_some_and(|clip| {
+                        matches!(
+                            op,
+                            PaintOp::TextRun { .. }
+                                | PaintOp::GlyphRun { .. }
+                                | PaintOp::GlyphOutline { .. }
+                                | PaintOp::CharOverlap { .. }
+                                | PaintOp::TextControlMark { .. }
+                                | PaintOp::TabLeader { .. }
+                                | PaintOp::TextDecoration { .. }
+                                | PaintOp::FootnoteMarker { .. }
+                        ) && !op.bounds().intersects(&clip)
+                    }) {
+                        continue;
+                    }
                     self.render_paint_op(op);
                 }
             }
@@ -2124,11 +2159,23 @@ impl Renderer for WebCanvasRenderer {
     fn begin_page(&mut self, width: f64, height: f64) {
         self.width = width;
         self.height = height;
+        if self.partial_clip.is_some() {
+            self.ctx.save();
+            self.partial_context_saved = true;
+            let _ = self.ctx.set_transform(1.0, 0.0, 0.0, 1.0, 0.0, 0.0);
+        }
         // 줌 스케일 적용: 렌더트리 좌표(문서 단위)를 캔버스 해상도에 맞게 확대
         if self.scale != 1.0 {
             let _ = self.ctx.scale(self.scale, self.scale);
         }
-        self.ctx.clear_rect(0.0, 0.0, width, height);
+        if let Some(clip) = self.partial_clip {
+            self.ctx.begin_path();
+            self.ctx.rect(clip.x, clip.y, clip.width, clip.height);
+            self.ctx.clip();
+            self.ctx.clear_rect(clip.x, clip.y, clip.width, clip.height);
+        } else {
+            self.ctx.clear_rect(0.0, 0.0, width, height);
+        }
         // 캔버스 초기화 (흰색 배경). 분리된 flow/behind/front layer 는
         // HTML 합성 순서가 페이지 배경을 담당하므로 투명하게 유지한다.
         if self.should_render_page_background() {

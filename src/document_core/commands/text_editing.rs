@@ -2,6 +2,7 @@
 
 use super::super::helpers::get_textbox_from_shape;
 use super::super::queries::field_query::rebuild_char_offsets;
+use super::super::queries::rendering::FocusedPageTreePatch;
 use crate::document_core::{
     ActiveFieldInfo, DeferredPaginationDescriptor, DeferredPaginationTargetStatus, DocumentCore,
 };
@@ -294,6 +295,17 @@ fn focused_cursor_geometry_json_suffix(
     format!(
         ",\"focusedCursorGeometry\":{{\"baseRevision\":{},\"revision\":{},\"sourceCharOffset\":{},\"targetCharOffset\":{},\"deltaX\":{}}}",
         base_revision, revision, source_char_offset, target_char_offset, delta_x
+    )
+}
+
+fn focused_page_tree_patch_json_suffix(patch: Option<&FocusedPageTreePatch>) -> String {
+    let Some(patch) = patch else {
+        return String::new();
+    };
+    let rect = patch.dirty_rect;
+    format!(
+        ",\"focusedPagePatch\":{{\"pageIndex\":{},\"x\":{},\"y\":{},\"width\":{},\"height\":{}}}",
+        patch.page_index, rect.x, rect.y, rect.width, rect.height
     )
 }
 
@@ -1393,6 +1405,7 @@ impl DocumentCore {
             cell_idx,
             cell_para_idx,
         )?;
+        let old_text_len = cell_para.text.chars().count();
         let flow_advance_before = relative_paragraph_flow_advance(cell_para);
         let local_contribution_before =
             crate::renderer::layout::LayoutEngine::paragraph_contributes_to_table_nested_text_flag(
@@ -1564,7 +1577,33 @@ impl DocumentCore {
             self.compute_render_normalized();
         }
         self.mark_section_pagination_dirty(section_idx);
-        self.invalidate_page_tree_cache_from(0);
+        let new_text_len = old_text_len - deleted_count + new_chars_count;
+        let focused_page_tree_patched = if !paginate_immediately
+            && !cell_flow_changed
+            && !had_pending_flow_change
+            && focused_delta_x.is_some()
+            && focused_source_offset == old_text_len
+            && new_offset == new_text_len
+        {
+            focused_after.and_then(|geometry| {
+                self.try_patch_cached_focused_cell_tail_line(
+                    section_idx,
+                    parent_para_idx,
+                    control_idx,
+                    cell_idx,
+                    cell_para_idx,
+                    geometry.line_index,
+                    geometry.line_start,
+                    old_text_len,
+                    new_text_len,
+                )
+            })
+        } else {
+            None
+        };
+        if focused_page_tree_patched.is_none() {
+            self.invalidate_page_tree_cache_from(0);
+        }
         if paginate_immediately {
             self.paginate_if_needed();
         }
@@ -1593,9 +1632,15 @@ impl DocumentCore {
             } else {
                 String::new()
             };
+            let focused_page_patch =
+                focused_page_tree_patch_json_suffix(focused_page_tree_patched.as_ref());
             format!(
-                "\"charOffset\":{},\"cellFlowChanged\":{}{}",
-                new_offset, cell_flow_changed, focused_geometry
+                "\"charOffset\":{},\"cellFlowChanged\":{},\"focusedPageTreePatched\":{}{}{}",
+                new_offset,
+                cell_flow_changed,
+                focused_page_tree_patched.is_some(),
+                focused_page_patch,
+                focused_geometry
             )
         };
         Ok(super::super::helpers::json_ok_with(&result_fields))
@@ -1686,6 +1731,7 @@ impl DocumentCore {
             cell_idx,
             cell_para_idx,
         )?;
+        let old_text_len = cell_para.text.chars().count();
         let flow_advance_before = relative_paragraph_flow_advance(cell_para);
         let local_contribution_before =
             crate::renderer::layout::LayoutEngine::paragraph_contributes_to_table_nested_text_flag(
@@ -1823,7 +1869,33 @@ impl DocumentCore {
             self.compute_render_normalized();
         }
         self.mark_section_pagination_dirty(section_idx);
-        self.invalidate_page_tree_cache_from(0);
+        let new_text_len = old_text_len.saturating_sub(deleted_count);
+        let focused_page_tree_patched = if !paginate_immediately
+            && !cell_flow_changed
+            && !had_pending_flow_change
+            && focused_delta_x.is_some()
+            && focused_source_offset == old_text_len
+            && char_offset == new_text_len
+        {
+            focused_after.and_then(|geometry| {
+                self.try_patch_cached_focused_cell_tail_line(
+                    section_idx,
+                    parent_para_idx,
+                    control_idx,
+                    cell_idx,
+                    cell_para_idx,
+                    geometry.line_index,
+                    geometry.line_start,
+                    old_text_len,
+                    new_text_len,
+                )
+            })
+        } else {
+            None
+        };
+        if focused_page_tree_patched.is_none() {
+            self.invalidate_page_tree_cache_from(0);
+        }
         if paginate_immediately {
             self.paginate_if_needed();
         }
@@ -1852,9 +1924,15 @@ impl DocumentCore {
             } else {
                 String::new()
             };
+            let focused_page_patch =
+                focused_page_tree_patch_json_suffix(focused_page_tree_patched.as_ref());
             format!(
-                "\"charOffset\":{},\"cellFlowChanged\":{}{}",
-                char_offset, cell_flow_changed, focused_geometry
+                "\"charOffset\":{},\"cellFlowChanged\":{},\"focusedPageTreePatched\":{}{}{}",
+                char_offset,
+                cell_flow_changed,
+                focused_page_tree_patched.is_some(),
+                focused_page_patch,
+                focused_geometry
             )
         };
         Ok(super::super::helpers::json_ok_with(&result_fields))

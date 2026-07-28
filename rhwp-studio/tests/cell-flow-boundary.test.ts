@@ -217,6 +217,40 @@ test('TextMutationEffectAccumulator는 묶음 effect를 OR 누적하고 한 번�
   assert.deepEqual(accumulator.consume(), NO_TEXT_MUTATION_EFFECTS);
 });
 
+test('#3137 repaint patch accumulator는 같은 페이지 dirty rect를 합치고 불일치면 버린다', () => {
+  const accumulator = new TextMutationEffectAccumulator();
+  const base = {
+    documentPaginationPending: true,
+    flowChanged: false,
+    paginationCompleted: false,
+  };
+  accumulator.add({
+    ...base,
+    focusedPagePatch: { pageIndex: 0, x: 10, y: 20, width: 30, height: 10 },
+  });
+  accumulator.add({
+    ...base,
+    focusedPagePatch: { pageIndex: 0, x: 8, y: 22, width: 40, height: 12 },
+  });
+  assert.deepEqual(accumulator.consume().focusedPagePatch, {
+    pageIndex: 0,
+    x: 8,
+    y: 20,
+    width: 40,
+    height: 14,
+  });
+
+  accumulator.add({
+    ...base,
+    focusedPagePatch: { pageIndex: 0, x: 0, y: 0, width: 10, height: 10 },
+  });
+  accumulator.add({
+    ...base,
+    focusedPagePatch: { pageIndex: 1, x: 0, y: 0, width: 10, height: 10 },
+  });
+  assert.equal(accumulator.consume().focusedPagePatch, undefined);
+});
+
 test('flat 셀 삭제는 deferred effect를 반환하고 undo는 즉시 pagination을 사용한다', () => {
   const wasm = new FakeWasm(mutationResult(true));
   const history = new CommandHistory();
@@ -413,6 +447,14 @@ test('#3137 stable deferred 결과는 source/target cell path와 revision geomet
     charOffset: 8,
     paginationDeferred: true,
     cellFlowChanged: false,
+    focusedPageTreePatched: true,
+    focusedPagePatch: {
+      pageIndex: 0,
+      x: 100,
+      y: 200,
+      width: 300,
+      height: 24,
+    },
     focusedCursorGeometry: {
       baseRevision: 11,
       revision: 12,
@@ -433,6 +475,13 @@ test('#3137 stable deferred 결과는 source/target cell path와 revision geomet
   assert.deepEqual(effects.focusedCursorGeometry?.target, {
     ...depth1Position(8),
     cursorRect: undefined,
+  });
+  assert.deepEqual(effects.focusedPagePatch, {
+    pageIndex: 0,
+    x: 100,
+    y: 200,
+    width: 300,
+    height: 24,
   });
 });
 

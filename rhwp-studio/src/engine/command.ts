@@ -1,5 +1,6 @@
 import type {
   DeferredCellTextMutationResult,
+  DeferredFocusedPagePatch,
   RemovedParaMeta,
   WasmBridge,
 } from '@/core/wasm-bridge';
@@ -83,6 +84,7 @@ export interface TextMutationEffects {
   readonly flowChanged: boolean;
   readonly paginationCompleted: boolean;
   readonly focusedCursorGeometry?: FocusedCellCursorGeometry;
+  readonly focusedPagePatch?: DeferredFocusedPagePatch;
 }
 
 export const NO_TEXT_MUTATION_EFFECTS: TextMutationEffects = Object.freeze({
@@ -113,12 +115,20 @@ export class TextMutationEffectAccumulator {
     const focusedCursorGeometry = accumulatedMutation
       ? (incomingMutation ? undefined : this.effects.focusedCursorGeometry)
       : (incomingMutation ? effects.focusedCursorGeometry : undefined);
+    const focusedPagePatch = accumulatedMutation
+      ? (
+          incomingMutation
+            ? mergeFocusedPagePatches(this.effects.focusedPagePatch, effects.focusedPagePatch)
+            : this.effects.focusedPagePatch
+        )
+      : (incomingMutation ? effects.focusedPagePatch : undefined);
     this.effects = {
       documentPaginationPending:
         this.effects.documentPaginationPending || effects.documentPaginationPending,
       flowChanged: this.effects.flowChanged || effects.flowChanged,
       paginationCompleted: this.effects.paginationCompleted || effects.paginationCompleted,
       ...(focusedCursorGeometry ? { focusedCursorGeometry } : {}),
+      ...(focusedPagePatch ? { focusedPagePatch } : {}),
     };
   }
 
@@ -131,6 +141,24 @@ export class TextMutationEffectAccumulator {
   clear(): void {
     this.effects = NO_TEXT_MUTATION_EFFECTS;
   }
+}
+
+function mergeFocusedPagePatches(
+  first: DeferredFocusedPagePatch | undefined,
+  second: DeferredFocusedPagePatch | undefined,
+): DeferredFocusedPagePatch | undefined {
+  if (!first || !second || first.pageIndex !== second.pageIndex) return undefined;
+  const x = Math.min(first.x, second.x);
+  const y = Math.min(first.y, second.y);
+  const right = Math.max(first.x + first.width, second.x + second.width);
+  const bottom = Math.max(first.y + first.height, second.y + second.height);
+  return {
+    pageIndex: first.pageIndex,
+    x,
+    y,
+    width: right - x,
+    height: bottom - y,
+  };
 }
 
 // ─── 편집 작업 서술자 (라우팅 통합) ────────────────────
@@ -351,6 +379,20 @@ function focusedCellCursorGeometryFromResult(
   };
 }
 
+function focusedPagePatchFromResult(
+  result: DeferredCellTextMutationResult,
+): DeferredFocusedPagePatch | undefined {
+  if (
+    !result.paginationDeferred
+    || result.cellFlowChanged
+    || !result.focusedPageTreePatched
+    || !result.focusedPagePatch
+  ) {
+    return undefined;
+  }
+  return { ...result.focusedPagePatch };
+}
+
 export function insertTextWithMutationEffects(
   wasm: WasmBridge,
   pos: DocumentPosition,
@@ -362,11 +404,13 @@ export function insertTextWithMutationEffects(
     if (canUseDeferredCellTextInsert(pos, text)) {
       const result = wasm.insertTextInCellDeferredPagination(pos.sectionIndex, pos.parentParaIndex!, pos.controlIndex!, pos.cellIndex!, pos.cellParaIndex!, pos.charOffset, text);
       const focusedCursorGeometry = focusedCellCursorGeometryFromResult(pos, result);
+      const focusedPagePatch = focusedPagePatchFromResult(result);
       return {
         documentPaginationPending: result.paginationDeferred,
         flowChanged: result.cellFlowChanged,
         paginationCompleted: !result.paginationDeferred,
         ...(focusedCursorGeometry ? { focusedCursorGeometry } : {}),
+        ...(focusedPagePatch ? { focusedPagePatch } : {}),
       };
     } else {
       wasm.insertTextInCell(pos.sectionIndex, pos.parentParaIndex!, pos.controlIndex!, pos.cellIndex!, pos.cellParaIndex!, pos.charOffset, text);
@@ -416,11 +460,13 @@ export function replaceCellTextWithMutationEffects(
     text,
   );
   const focusedCursorGeometry = focusedCellCursorGeometryFromResult(pos, result);
+  const focusedPagePatch = focusedPagePatchFromResult(result);
   return {
     documentPaginationPending: result.paginationDeferred,
     flowChanged: result.paginationDeferred && result.cellFlowChanged,
     paginationCompleted: !result.paginationDeferred,
     ...(focusedCursorGeometry ? { focusedCursorGeometry } : {}),
+    ...(focusedPagePatch ? { focusedPagePatch } : {}),
   };
 }
 
@@ -446,11 +492,13 @@ export function deleteTextWithMutationEffects(
     if (canUseDeferredCellTextDelete(pos, count)) {
       const result = wasm.deleteTextInCellDeferredPagination(pos.sectionIndex, pos.parentParaIndex!, pos.controlIndex!, pos.cellIndex!, pos.cellParaIndex!, pos.charOffset, count);
       const focusedCursorGeometry = focusedCellCursorGeometryFromResult(pos, result);
+      const focusedPagePatch = focusedPagePatchFromResult(result);
       return {
         documentPaginationPending: result.paginationDeferred,
         flowChanged: result.cellFlowChanged,
         paginationCompleted: !result.paginationDeferred,
         ...(focusedCursorGeometry ? { focusedCursorGeometry } : {}),
+        ...(focusedPagePatch ? { focusedPagePatch } : {}),
       };
     }
     wasm.deleteTextInCell(pos.sectionIndex, pos.parentParaIndex!, pos.controlIndex!, pos.cellIndex!, pos.cellParaIndex!, pos.charOffset, count);
