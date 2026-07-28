@@ -288,6 +288,26 @@ fn actual_hwp3_password_fixture_normalizes_hanging_indent_first_line_margin() {
 }
 
 #[test]
+fn actual_hwp3_password_fixture_keeps_hyperlink_internal_vpos_reset_on_next_page() {
+    let document = HwpDocument::from_bytes_with_password(&fixture_bytes(), FIXTURE_PASSWORD)
+        .expect("실제 HWP3 fixture를 열어야 함");
+
+    // 문단 258은 hyperlink marker 하나를 포함하지만, 저장 LINE_SEG는 두 번째 줄을
+    // 다음 쪽 상단(vpos=0)으로 명시한다. marker를 flow 개체처럼 취급하면 17쪽에
+    // 두 줄을 과배치하고 18쪽 첫 줄이 사라진다.
+    let page_17 = document.dump_page_items(Some(16));
+    let page_18 = document.dump_page_items(Some(17));
+    assert!(
+        page_17.contains("PartialParagraph  pi=258  lines=0..1"),
+        "17쪽에는 reset 전 첫 줄만 남아야 함\n--- page 17 ---\n{page_17}"
+    );
+    assert!(
+        page_18.contains("PartialParagraph  pi=258  lines=1..3"),
+        "18쪽은 hyperlink 뒤 저장 reset 줄부터 시작해야 함\n--- page 18 ---\n{page_18}"
+    );
+}
+
+#[test]
 fn cli_password_exit_contract_uses_the_actual_hwp3_fixture() {
     let fixture = fixture_path();
     let fixture = fixture.to_str().expect("utf-8 fixture path");
