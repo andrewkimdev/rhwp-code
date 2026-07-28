@@ -25778,6 +25778,163 @@ fn issue2214_scoped_cache_coherence_preserves_transient_pagination() {
     }
 }
 
+/// #3137 Stage 3: stable cell edit가 돌려준 local x delta는 직전 absolute rect에 적용했을 때
+/// cache miss page-tree rebuild로 얻은 exact rect와 같아야 한다.
+#[test]
+fn issue3137_focused_cell_geometry_matches_exact_rect() {
+    fn rect_number(rect: &Value, key: &str) -> f64 {
+        rect[key]
+            .as_f64()
+            .unwrap_or_else(|| panic!("cursor rect field {key}: {rect}"))
+    }
+
+    fn assert_geometry(
+        label: &str,
+        operation: &str,
+        before_rect: &Value,
+        mutation: &Value,
+        after_rect: &Value,
+        expected_source: u64,
+        expected_target: u64,
+    ) {
+        assert_eq!(
+            mutation["cellFlowChanged"].as_bool(),
+            Some(false),
+            "{label} {operation}: stable flow"
+        );
+        let geometry = &mutation["focusedCursorGeometry"];
+        assert!(
+            geometry.is_object(),
+            "{label} {operation}: focused geometry missing: {mutation}"
+        );
+        assert_eq!(
+            geometry["sourceCharOffset"].as_u64(),
+            Some(expected_source),
+            "{label} {operation}: source offset"
+        );
+        assert_eq!(
+            geometry["targetCharOffset"].as_u64(),
+            Some(expected_target),
+            "{label} {operation}: target offset"
+        );
+        assert!(
+            geometry["revision"].as_u64().unwrap_or(0)
+                > geometry["baseRevision"].as_u64().unwrap_or(u64::MAX),
+            "{label} {operation}: revision chain"
+        );
+
+        for key in ["pageIndex", "y", "height", "cellOverflowed"] {
+            assert_eq!(
+                before_rect.get(key),
+                after_rect.get(key),
+                "{label} {operation}: stable cursor field {key}"
+            );
+        }
+        assert_eq!(
+            before_rect.get("cellBounds"),
+            after_rect.get("cellBounds"),
+            "{label} {operation}: stable cell bounds"
+        );
+        let predicted_x = rect_number(before_rect, "x") + rect_number(geometry, "deltaX");
+        let exact_x = rect_number(after_rect, "x");
+        assert!(
+            // 공개 rect는 0.1px로 직렬화되므로 직전 rounded 원점의 최대 반올림 오차를 허용한다.
+            (predicted_x - exact_x).abs() <= 0.051,
+            "{label} {operation}: predicted x={predicted_x}, exact x={exact_x}, geometry={geometry}"
+        );
+    }
+
+    for (label, relative) in [
+        ("hwp", "samples/issue1949_giant_cell_nested_tables_perf.hwp"),
+        (
+            "hwpx",
+            "samples/issue1949_giant_cell_nested_tables_perf.hwpx",
+        ),
+    ] {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(relative);
+        let bytes = std::fs::read(path).expect("read #3137 fixture");
+        let mut doc = HwpDocument::from_bytes(&bytes).expect("load #3137 fixture");
+
+        let rect_130: Value = serde_json::from_str(
+            &doc.get_cursor_rect_in_cell_native(0, 0, 2, 2, 5, 130)
+                .expect("initial exact rect"),
+        )
+        .expect("initial rect json");
+        let insert_1: Value = serde_json::from_str(
+            &doc.insert_text_in_cell_native_deferred_pagination(0, 0, 2, 2, 5, 130, "1")
+                .expect("first stable insert"),
+        )
+        .expect("first insert json");
+        let rect_131: Value = serde_json::from_str(
+            &doc.get_cursor_rect_in_cell_native(0, 0, 2, 2, 5, 131)
+                .expect("first exact rect"),
+        )
+        .expect("first exact rect json");
+        assert_eq!(
+            insert_1["cellFlowChanged"].as_bool(),
+            Some(false),
+            "{label} first insert flow"
+        );
+        // 원본 LineSeg가 첫 local reflow에서 합성 metrics로 정규화되는 문서는 첫 입력을
+        // exact fallback한다. 그 exact rect가 다음 revision의 재사용 기준점이 된다.
+        if insert_1["focusedCursorGeometry"].is_object() {
+            assert_geometry(label, "insert-1", &rect_130, &insert_1, &rect_131, 130, 131);
+        }
+
+        let insert_2: Value = serde_json::from_str(
+            &doc.insert_text_in_cell_native_deferred_pagination(0, 0, 2, 2, 5, 131, "a")
+                .expect("second stable insert"),
+        )
+        .expect("second insert json");
+        let rect_132: Value = serde_json::from_str(
+            &doc.get_cursor_rect_in_cell_native(0, 0, 2, 2, 5, 132)
+                .expect("second exact rect"),
+        )
+        .expect("second exact rect json");
+        assert_geometry(label, "insert-a", &rect_131, &insert_2, &rect_132, 131, 132);
+
+        let replace: Value = serde_json::from_str(
+            &doc.replace_text_in_cell_native_deferred_pagination(0, 0, 2, 2, 5, 131, 1, "한")
+                .expect("stable IME replace"),
+        )
+        .expect("replace json");
+        let rect_replaced: Value = serde_json::from_str(
+            &doc.get_cursor_rect_in_cell_native(0, 0, 2, 2, 5, 132)
+                .expect("replace exact rect"),
+        )
+        .expect("replace exact rect json");
+        assert_geometry(
+            label,
+            "replace-ime",
+            &rect_132,
+            &replace,
+            &rect_replaced,
+            132,
+            132,
+        );
+
+        let delete: Value = serde_json::from_str(
+            &doc.delete_text_in_cell_native_deferred_pagination(0, 0, 2, 2, 5, 131, 1)
+                .expect("stable backspace"),
+        )
+        .expect("delete json");
+        let rect_deleted: Value = serde_json::from_str(
+            &doc.get_cursor_rect_in_cell_native(0, 0, 2, 2, 5, 131)
+                .expect("delete exact rect"),
+        )
+        .expect("delete exact rect json");
+        assert_geometry(
+            label,
+            "delete-backward",
+            &rect_replaced,
+            &delete,
+            &rect_deleted,
+            132,
+            131,
+        );
+    }
+}
+
 /// #2424 Stage D: 공개 pagination을 유지한 채 한 호출당 한 fragment만 전진하고,
 /// 마지막 step에서만 full-pagination oracle과 같은 cut chain을 원자적으로 commit한다.
 #[test]

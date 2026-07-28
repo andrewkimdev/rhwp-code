@@ -2459,6 +2459,7 @@ export class InputHandler {
     try {
       this.wasm.flushDeferredPagination();
       this.deferredPaginationPending = false;
+      this.cursor.invalidateFocusedCellCursorGeometry();
       this.lastCellKey = null;
       this.protectedCellHitCache = null;
       if (this.isComposing) {
@@ -2504,6 +2505,15 @@ export class InputHandler {
 
   /** deferred mutation을 cursor lookup 전에 등록하고 flow 경계에서는 resumable job을 시작한다. */
   private prepareTextMutationBeforeCursor(effects: TextMutationEffects): boolean {
+    const hasTextMutation = effects.documentPaginationPending
+      || effects.flowChanged
+      || effects.paginationCompleted;
+    if (effects.focusedCursorGeometry) {
+      this.cursor.prepareFocusedCellCursorGeometry(effects.focusedCursorGeometry);
+    } else if (hasTextMutation) {
+      this.cursor.invalidateFocusedCellCursorGeometry();
+    }
+
     if (effects.paginationCompleted) {
       this.cancelDeferredPaginationFlush();
       this.deferredPaginationRunner.cancel();
@@ -2533,6 +2543,7 @@ export class InputHandler {
     this.eventBus.emit('document-mutated', 'input-handler-resumable-pagination');
     this.eventBus.emit('document-changed', 'deferred-pagination-complete');
     const position = this.cursor.getPosition();
+    this.cursor.invalidateFocusedCellCursorGeometry();
     this.cursor.moveTo(position);
     this.updateCaret();
   }
@@ -2565,6 +2576,7 @@ export class InputHandler {
       this.deferredPaginationRunner.cancel();
       this.wasm.flushDeferredPagination();
       this.deferredPaginationPending = false;
+      this.cursor.invalidateFocusedCellCursorGeometry();
       if (this.isComposing) {
         this.compositionAnchorRect = null;
       }

@@ -26,6 +26,10 @@
  * Rust 내부 구간 계측(Stage 2):
  *
  *   npm run e2e:issue-3137-perf -- --cursor-breakdown
+ *
+ * focused geometry 최적화 게이트(Stage 3):
+ *
+ *   npm run e2e:issue-3137-perf -- --require-focused-geometry
  */
 
 import assert from 'node:assert/strict';
@@ -128,6 +132,8 @@ const EVENT_TYPES = Object.freeze({
   cursorNear: 'wasm.getCursorRectByPathNear',
   cursorPath: 'wasm.getCursorRectByPath',
   cursorCell: 'wasm.getCursorRectInCell',
+  cursorPrepare: 'CursorState.prepareFocusedCellCursorGeometry',
+  cursorUpdate: 'CursorState.updateRect',
   begin: 'wasm.beginDeferredPagination',
   step: 'wasm.stepDeferredPagination',
   flush: 'wasm.flushDeferredPagination',
@@ -195,6 +201,7 @@ function parseConfig() {
     allowSyncFlush: hasFlag('allow-sync-flush'),
     enforceFrameBudget: hasFlag('enforce-frame-budget'),
     cursorBreakdown: hasFlag('cursor-breakdown'),
+    requireFocusedGeometry: hasFlag('require-focused-geometry'),
   };
 }
 
@@ -504,6 +511,7 @@ async function installTrace(page, { cursorBreakdown = false } = {}) {
         resultCharOffset: result?.charOffset ?? null,
         paginationDeferred: result?.paginationDeferred ?? null,
         cellFlowChanged: result?.cellFlowChanged ?? null,
+        focusedGeometryProvided: Boolean(result?.focusedCursorGeometry),
       }),
     );
     wrap(
@@ -524,6 +532,7 @@ async function installTrace(page, { cursorBreakdown = false } = {}) {
         resultCharOffset: result?.charOffset ?? null,
         paginationDeferred: result?.paginationDeferred ?? null,
         cellFlowChanged: result?.cellFlowChanged ?? null,
+        focusedGeometryProvided: Boolean(result?.focusedCursorGeometry),
       }),
     );
     wrap(
@@ -648,6 +657,16 @@ async function installTrace(page, { cursorBreakdown = false } = {}) {
         paginationCompleted: args[0]?.paginationCompleted ?? null,
       }),
       (result) => ({ result }),
+    );
+    wrap(
+      input.cursor,
+      'prepareFocusedCellCursorGeometry',
+      'CursorState.prepareFocusedCellCursorGeometry',
+      (args) => ({
+        baseRevision: args[0]?.baseRevision ?? null,
+        revision: args[0]?.revision ?? null,
+      }),
+      (result) => ({ prepared: result === true }),
     );
     wrap(input.cursor, 'updateRect', 'CursorState.updateRect');
     wrap(input, 'updateCaret', 'InputHandler.updateCaret');
@@ -886,6 +905,12 @@ function buildSampleMetrics(trace) {
       EVENT_TYPES.cursorPath,
       EVENT_TYPES.cursorCell,
     ]);
+    const cursorPrepareEvents = eventsForSample(trace, sample.sampleId, [
+      EVENT_TYPES.cursorPrepare,
+    ]);
+    const cursorUpdateEvents = eventsForSample(trace, sample.sampleId, [
+      EVENT_TYPES.cursorUpdate,
+    ]);
     const longTasks = overlappingLongTasks(trace, sample);
 
     assert.equal(
@@ -910,12 +935,21 @@ function buildSampleMetrics(trace) {
       true,
       `${sample.sampleId}: mutation must keep pagination deferred`,
     );
-    assert.equal(
-      cursorNearEvents.length,
-      1,
-      `${sample.sampleId}: expected exactly one path-near cursor query`,
+    assert.ok(
+      cursorNearEvents.length <= 1,
+      `${sample.sampleId}: duplicate path-near cursor query`,
     );
-    const cursorDiagnostic = cursorNearEvents[0].cursorDiagnostic ?? null;
+    assert.equal(
+      cursorPrepareEvents.length,
+      1,
+      `${sample.sampleId}: expected exactly one focused geometry prepare`,
+    );
+    assert.equal(
+      cursorUpdateEvents.length,
+      1,
+      `${sample.sampleId}: expected exactly one cursor update`,
+    );
+    const cursorDiagnostic = cursorNearEvents[0]?.cursorDiagnostic ?? null;
     if (cursorDiagnostic) {
       assert.equal(
         cursorDiagnostic.pageTreeCalls,
@@ -927,6 +961,8 @@ function buildSampleMetrics(trace) {
     return {
       ...sample,
       stable: mutationEvents.every((event) => event.cellFlowChanged === false),
+      focusedGeometryProvided: mutationEvents[0].focusedGeometryProvided === true,
+      focusedGeometryPrepared: cursorPrepareEvents[0].prepared === true,
       mutationKind: mutationEvents[0].type,
       mutationMs: sumDurations(mutationEvents),
       // IME updates mutate through the raw input path and only compositionend
@@ -942,6 +978,9 @@ function buildSampleMetrics(trace) {
       cursorQueryCount: cursorNearEvents.length,
       cursorAllMs: sumDurations(cursorAllEvents),
       cursorAllCount: cursorAllEvents.length,
+      cursorPrepareMs: sumDurations(cursorPrepareEvents),
+      cursorUpdateMs: sumDurations(cursorUpdateEvents),
+      cursorUpdateCount: cursorUpdateEvents.length,
       cursorDiagnostic,
       longTaskCount: longTasks.length,
       longTaskTotalMs: sumDurations(longTasks),
@@ -1010,6 +1049,8 @@ function summarizeSampleMetrics(sampleMetrics) {
       mutation: summarize(values.map((value) => value.mutationMs)),
       cursorQuery: summarize(values.map((value) => value.cursorQueryMs)),
       cursorAll: summarize(values.map((value) => value.cursorAllMs)),
+      cursorPrepare: summarize(values.map((value) => value.cursorPrepareMs)),
+      cursorUpdate: summarize(values.map((value) => value.cursorUpdateMs)),
       cursorDiagnostic: summarizeCursorDiagnostics(values),
       syncDispatch: summarize(values.map((value) => value.syncDispatchMs)),
       inputToFirstRaf: summarize(values.map((value) => value.inputToFirstRafMs)),
@@ -1115,7 +1156,7 @@ async function runScenario(page, fixture, config, scenario, pageErrors) {
   if (config.cursorBreakdown) {
     assert.equal(
       sampleMetrics.filter((value) => value.cursorDiagnostic !== null).length,
-      expectedSampleCount,
+      sampleMetrics.reduce((sum, value) => sum + value.cursorQueryCount, 0),
       `${scenarioSlug(scenario)}: Rust cursor diagnostic sample count`,
     );
   }
@@ -1129,6 +1170,23 @@ async function runScenario(page, fixture, config, scenario, pageErrors) {
       sample.cursorOffset,
       TARGET.charOffset + config.warmups + sample.logicalIndex + 1,
       `${sample.sampleId}: cursor offset`,
+    );
+  }
+  if (config.requireFocusedGeometry) {
+    assert.equal(
+      sampleMetrics.filter((value) => value.focusedGeometryProvided).length,
+      expectedSampleCount,
+      `${scenarioSlug(scenario)}: focused geometry mutation payload count`,
+    );
+    assert.equal(
+      sampleMetrics.filter((value) => value.focusedGeometryPrepared).length,
+      expectedSampleCount,
+      `${scenarioSlug(scenario)}: focused geometry prepared count`,
+    );
+    assert.equal(
+      sampleMetrics.reduce((sum, value) => sum + value.cursorAllCount, 0),
+      0,
+      `${scenarioSlug(scenario)}: stable focused geometry exact cursor fallback count`,
     );
   }
 
@@ -1157,7 +1215,7 @@ async function runScenario(page, fixture, config, scenario, pageErrors) {
   const metrics = summarizeSampleMetrics(sampleMetrics);
   const frameBudgetMet = (
     (metrics.stable.operation.p95Ms ?? Infinity) <= FRAME_BUDGET_MS
-    && (metrics.stable.cursorQuery.p95Ms ?? Infinity) <= FRAME_BUDGET_MS
+    && (metrics.stable.cursorUpdate.p95Ms ?? Infinity) <= FRAME_BUDGET_MS
   );
   const rawFile = path.join('raw', `${scenarioSlug(scenario)}.json`);
   const result = {
@@ -1173,6 +1231,14 @@ async function runScenario(page, fixture, config, scenario, pageErrors) {
       cursorNear: traceCount(trace, EVENT_TYPES.cursorNear),
       cursorPath: traceCount(trace, EVENT_TYPES.cursorPath),
       cursorCell: traceCount(trace, EVENT_TYPES.cursorCell),
+      cursorPrepare: traceCount(trace, EVENT_TYPES.cursorPrepare),
+      cursorUpdate: traceCount(trace, EVENT_TYPES.cursorUpdate),
+      focusedGeometryProvided: sampleMetrics.filter(
+        (value) => value.focusedGeometryProvided,
+      ).length,
+      focusedGeometryPrepared: sampleMetrics.filter(
+        (value) => value.focusedGeometryPrepared,
+      ).length,
       cursorDiagnostic: sampleMetrics.filter((value) => value.cursorDiagnostic !== null).length,
       wasmFlush: flushCount,
       inputFlush: inputFlushCount,
@@ -1196,7 +1262,8 @@ async function runScenario(page, fixture, config, scenario, pageErrors) {
   console.log(
     `[${scenario.format.toUpperCase()} ${scenario.kind} ${scenario.cadenceMs}ms run ${scenario.runNumber}] `
       + `op p95=${formatMs(metrics.stable.operation.p95Ms)}ms, `
-      + `cursor p95=${formatMs(metrics.stable.cursorQuery.p95Ms)}ms, `
+      + `cursor update p95=${formatMs(metrics.stable.cursorUpdate.p95Ms)}ms, `
+      + `exact=${traceCount(trace, EVENT_TYPES.cursorNear)}, `
       + (config.cursorBreakdown
         ? `build p95=${formatMs(metrics.stable.cursorDiagnostic.pageTreeBuild.p95Ms)}ms, `
           + `traverse p95=${formatMs(
@@ -1226,6 +1293,10 @@ function summaryTsv(summary) {
     'mutation_p95_ms',
     'cursor_p50_ms',
     'cursor_p95_ms',
+    'cursor_update_p50_ms',
+    'cursor_update_p95_ms',
+    'exact_cursor_count',
+    'focused_geometry_count',
     'cursor_rust_total_p95_ms',
     'find_pages_p95_ms',
     'page_tree_cached_p95_ms',
@@ -1264,6 +1335,10 @@ function summaryTsv(summary) {
       stable.mutation.p95Ms,
       stable.cursorQuery.p50Ms,
       stable.cursorQuery.p95Ms,
+      stable.cursorUpdate.p50Ms,
+      stable.cursorUpdate.p95Ms,
+      scenario.counts.cursorNear + scenario.counts.cursorPath + scenario.counts.cursorCell,
+      scenario.counts.focusedGeometryPrepared,
       stable.cursorDiagnostic.total.p95Ms,
       stable.cursorDiagnostic.findPages.p95Ms,
       stable.cursorDiagnostic.pageTreeCached.p95Ms,
@@ -1327,7 +1402,7 @@ async function main() {
   });
 
   const summary = {
-    schemaVersion: '2.0',
+    schemaVersion: '3.0',
     issue: 3137,
     status: 'running',
     startedAt: new Date().toISOString(),
@@ -1343,6 +1418,7 @@ async function main() {
       allowSyncFlush: config.allowSyncFlush,
       enforceFrameBudget: config.enforceFrameBudget,
       cursorBreakdown: config.cursorBreakdown,
+      requireFocusedGeometry: config.requireFocusedGeometry,
     },
     environment: {
       gitHead: commandOutput('git', ['rev-parse', 'HEAD']),

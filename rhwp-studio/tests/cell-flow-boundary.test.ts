@@ -407,6 +407,35 @@ test('atomic API fallback 결과는 immediate-completed effect다', () => {
   );
 });
 
+test('#3137 stable deferred 결과는 source/target cell path와 revision geometry를 전달한다', () => {
+  const wasm = new FakeWasm({
+    ok: true,
+    charOffset: 8,
+    paginationDeferred: true,
+    cellFlowChanged: false,
+    focusedCursorGeometry: {
+      baseRevision: 11,
+      revision: 12,
+      sourceCharOffset: 7,
+      targetCharOffset: 8,
+      deltaX: 6.25,
+    },
+  });
+
+  const effects = insertTextWithMutationEffects(wasm, depth1Position(7), '1');
+  assert.equal(effects.focusedCursorGeometry?.baseRevision, 11);
+  assert.equal(effects.focusedCursorGeometry?.revision, 12);
+  assert.equal(effects.focusedCursorGeometry?.deltaX, 6.25);
+  assert.deepEqual(effects.focusedCursorGeometry?.source, {
+    ...depth1Position(7),
+    cursorRect: undefined,
+  });
+  assert.deepEqual(effects.focusedCursorGeometry?.target, {
+    ...depth1Position(8),
+    cursorRect: undefined,
+  });
+});
+
 test('본문 insert와 delete command는 stable local replace effect를 반환한다', () => {
   const wasm = new FakeWasm();
   const position = { sectionIndex: 0, paragraphIndex: 2, charOffset: 3 };

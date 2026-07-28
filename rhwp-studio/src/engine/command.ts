@@ -1,4 +1,8 @@
-import type { RemovedParaMeta, WasmBridge } from '@/core/wasm-bridge';
+import type {
+  DeferredCellTextMutationResult,
+  RemovedParaMeta,
+  WasmBridge,
+} from '@/core/wasm-bridge';
 import type { DocumentPosition, CharProperties, ParaProperties, CellPathLike, CellPathEntry } from '@/core/types';
 import { MAX_PAGE_LOCAL_TEXT_EDIT_CHARS } from './input-edit-invalidation';
 import type { LineEndpoints as LineEndpointsLike } from './object-drag-record';
@@ -66,10 +70,19 @@ export type EditContext =
     };
 
 /** text mutation의 document pagination/flow 경계와 immediate 완료를 함께 전달한다. */
+export interface FocusedCellCursorGeometry {
+  readonly baseRevision: number;
+  readonly revision: number;
+  readonly source: DocumentPosition;
+  readonly target: DocumentPosition;
+  readonly deltaX: number;
+}
+
 export interface TextMutationEffects {
   readonly documentPaginationPending: boolean;
   readonly flowChanged: boolean;
   readonly paginationCompleted: boolean;
+  readonly focusedCursorGeometry?: FocusedCellCursorGeometry;
 }
 
 export const NO_TEXT_MUTATION_EFFECTS: TextMutationEffects = Object.freeze({
@@ -89,11 +102,23 @@ export class TextMutationEffectAccumulator {
   private effects: TextMutationEffects = NO_TEXT_MUTATION_EFFECTS;
 
   add(effects: TextMutationEffects): void {
+    const accumulatedMutation = this.effects.documentPaginationPending
+      || this.effects.flowChanged
+      || this.effects.paginationCompleted;
+    const incomingMutation = effects.documentPaginationPending
+      || effects.flowChanged
+      || effects.paginationCompleted;
+    // 두 mutation을 한 번에 묶으면 중간 source rect를 보장할 수 없다. 단일 mutation이거나
+    // 앞뒤가 NO effect인 경우에만 focused geometry를 전달한다.
+    const focusedCursorGeometry = accumulatedMutation
+      ? (incomingMutation ? undefined : this.effects.focusedCursorGeometry)
+      : (incomingMutation ? effects.focusedCursorGeometry : undefined);
     this.effects = {
       documentPaginationPending:
         this.effects.documentPaginationPending || effects.documentPaginationPending,
       flowChanged: this.effects.flowChanged || effects.flowChanged,
       paginationCompleted: this.effects.paginationCompleted || effects.paginationCompleted,
+      ...(focusedCursorGeometry ? { focusedCursorGeometry } : {}),
     };
   }
 
@@ -298,6 +323,34 @@ function cellParagraphPosition(
   };
 }
 
+function focusedCellCursorGeometryFromResult(
+  pos: DocumentPosition,
+  result: DeferredCellTextMutationResult,
+): FocusedCellCursorGeometry | undefined {
+  const geometry = result.focusedCursorGeometry;
+  if (
+    !result.paginationDeferred
+    || result.cellFlowChanged
+    || !geometry
+    || geometry.targetCharOffset !== result.charOffset
+  ) {
+    return undefined;
+  }
+  const cloneAt = (charOffset: number): DocumentPosition => ({
+    ...pos,
+    charOffset,
+    cellPath: pos.cellPath?.map((entry) => ({ ...entry })),
+    cursorRect: undefined,
+  });
+  return {
+    baseRevision: geometry.baseRevision,
+    revision: geometry.revision,
+    source: cloneAt(geometry.sourceCharOffset),
+    target: cloneAt(geometry.targetCharOffset),
+    deltaX: geometry.deltaX,
+  };
+}
+
 export function insertTextWithMutationEffects(
   wasm: WasmBridge,
   pos: DocumentPosition,
@@ -308,10 +361,12 @@ export function insertTextWithMutationEffects(
   } else if (isCell(pos)) {
     if (canUseDeferredCellTextInsert(pos, text)) {
       const result = wasm.insertTextInCellDeferredPagination(pos.sectionIndex, pos.parentParaIndex!, pos.controlIndex!, pos.cellIndex!, pos.cellParaIndex!, pos.charOffset, text);
+      const focusedCursorGeometry = focusedCellCursorGeometryFromResult(pos, result);
       return {
         documentPaginationPending: result.paginationDeferred,
         flowChanged: result.cellFlowChanged,
         paginationCompleted: !result.paginationDeferred,
+        ...(focusedCursorGeometry ? { focusedCursorGeometry } : {}),
       };
     } else {
       wasm.insertTextInCell(pos.sectionIndex, pos.parentParaIndex!, pos.controlIndex!, pos.cellIndex!, pos.cellParaIndex!, pos.charOffset, text);
@@ -360,10 +415,12 @@ export function replaceCellTextWithMutationEffects(
     deleteCount,
     text,
   );
+  const focusedCursorGeometry = focusedCellCursorGeometryFromResult(pos, result);
   return {
     documentPaginationPending: result.paginationDeferred,
     flowChanged: result.paginationDeferred && result.cellFlowChanged,
     paginationCompleted: !result.paginationDeferred,
+    ...(focusedCursorGeometry ? { focusedCursorGeometry } : {}),
   };
 }
 
@@ -388,10 +445,12 @@ export function deleteTextWithMutationEffects(
   } else if (isCell(pos)) {
     if (canUseDeferredCellTextDelete(pos, count)) {
       const result = wasm.deleteTextInCellDeferredPagination(pos.sectionIndex, pos.parentParaIndex!, pos.controlIndex!, pos.cellIndex!, pos.cellParaIndex!, pos.charOffset, count);
+      const focusedCursorGeometry = focusedCellCursorGeometryFromResult(pos, result);
       return {
         documentPaginationPending: result.paginationDeferred,
         flowChanged: result.cellFlowChanged,
         paginationCompleted: !result.paginationDeferred,
+        ...(focusedCursorGeometry ? { focusedCursorGeometry } : {}),
       };
     }
     wasm.deleteTextInCell(pos.sectionIndex, pos.parentParaIndex!, pos.controlIndex!, pos.cellIndex!, pos.cellParaIndex!, pos.charOffset, count);

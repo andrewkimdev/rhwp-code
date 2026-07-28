@@ -93,11 +93,48 @@ export interface TableTransposeResult {
 }
 
 /** deferred cell text mutation의 pagination 경계 결과 (#2214/#2424). */
+export interface DeferredFocusedCellCursorGeometry {
+  baseRevision: number;
+  revision: number;
+  sourceCharOffset: number;
+  targetCharOffset: number;
+  deltaX: number;
+}
+
 export interface DeferredCellTextMutationResult {
   ok: boolean;
   charOffset: number;
   paginationDeferred: boolean;
   cellFlowChanged: boolean;
+  focusedCursorGeometry?: DeferredFocusedCellCursorGeometry;
+}
+
+function parseDeferredFocusedCellCursorGeometry(
+  value: unknown,
+): DeferredFocusedCellCursorGeometry | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  const candidate = value as Partial<DeferredFocusedCellCursorGeometry>;
+  const integers = [
+    candidate.baseRevision,
+    candidate.revision,
+    candidate.sourceCharOffset,
+    candidate.targetCharOffset,
+  ];
+  if (
+    !integers.every((item) => Number.isSafeInteger(item) && (item as number) >= 0)
+    || (candidate.revision as number) <= (candidate.baseRevision as number)
+    || typeof candidate.deltaX !== 'number'
+    || !Number.isFinite(candidate.deltaX)
+  ) {
+    return undefined;
+  }
+  return {
+    baseRevision: candidate.baseRevision as number,
+    revision: candidate.revision as number,
+    sourceCharOffset: candidate.sourceCharOffset as number,
+    targetCharOffset: candidate.targetCharOffset as number,
+    deltaX: candidate.deltaX,
+  };
 }
 
 export type DeferredPaginationStatus = 'none' | 'pending' | 'complete' | 'fallback' | 'stale';
@@ -1234,6 +1271,13 @@ export class WasmBridge {
       // Stage 3 이전 deferred API는 신호가 없다. mutation 후 예외로
       // history/cursor를 놓치지 않도록 누락 시 보수적 경계 flush로 복구한다.
       cellFlowChanged: paginationDeferred && parsed.cellFlowChanged !== false,
+      ...(paginationDeferred
+        ? {
+            focusedCursorGeometry: parseDeferredFocusedCellCursorGeometry(
+              parsed.focusedCursorGeometry,
+            ),
+          }
+        : {}),
     };
   }
 
@@ -1316,6 +1360,13 @@ export class WasmBridge {
       charOffset: parsedCharOffset,
       paginationDeferred,
       cellFlowChanged: paginationDeferred && parsed.cellFlowChanged !== false,
+      ...(paginationDeferred
+        ? {
+            focusedCursorGeometry: parseDeferredFocusedCellCursorGeometry(
+              parsed.focusedCursorGeometry,
+            ),
+          }
+        : {}),
     };
   }
 
@@ -1359,6 +1410,13 @@ export class WasmBridge {
       charOffset: parsedCharOffset,
       paginationDeferred,
       cellFlowChanged: paginationDeferred && parsed.cellFlowChanged !== false,
+      ...(paginationDeferred
+        ? {
+            focusedCursorGeometry: parseDeferredFocusedCellCursorGeometry(
+              parsed.focusedCursorGeometry,
+            ),
+          }
+        : {}),
     };
   }
 
