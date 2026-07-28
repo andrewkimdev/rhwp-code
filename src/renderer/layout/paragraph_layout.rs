@@ -3163,13 +3163,26 @@ impl LayoutEngine {
                 && composed.numbering_text.is_none()
                 && para.map(|p| p.controls.is_empty()).unwrap_or(false)
                 && profile.native_hwp5_layout();
-            let effective_margin_left = authoritative_stored_line_start_px(
-                styled_margin_left,
-                para.and_then(|p| p.line_segs.get(line_idx)),
-                col_area_w_hu,
-                self.dpi,
-                hwp5_stored_line_start_eligible,
-            );
+            // HWP3 계보의 Square-wrap Picture/Shape 저장 cs/sw는 문단 좌·우 inset까지
+            // 포함한 완성 line box다. 여기서 ParaShape margin을 다시 더하거나 빼면
+            // 그림과 글자 사이에 여백이 한 번 더 생기고 right edge도 불필요하게 줄어든다.
+            // 일반 HWP5의 저장 segment는 이 계약이 달라 기존 여백 처리를 유지한다.
+            let hwp3_stored_segment_line_box =
+                uses_stored_segment_geometry && self.profile.get().hwp3_layout();
+            let (effective_margin_left, effective_margin_right) = if hwp3_stored_segment_line_box {
+                (0.0, 0.0)
+            } else {
+                (
+                    authoritative_stored_line_start_px(
+                        styled_margin_left,
+                        para.and_then(|p| p.line_segs.get(line_idx)),
+                        col_area_w_hu,
+                        self.dpi,
+                        hwp5_stored_line_start_eligible,
+                    ),
+                    margin_right,
+                )
+            };
 
             // 인라인 Shape가 있는 줄: 텍스트 y를 Shape 하단 baseline에 맞춤
             let text_y = if has_tac_shape
@@ -3270,8 +3283,9 @@ impl LayoutEngine {
                         effective_col_x + effective_margin_left
                     },
                     text_y,
-                    line_avail_w_override
-                        .unwrap_or(effective_col_w - effective_margin_left - margin_right),
+                    line_avail_w_override.unwrap_or(
+                        effective_col_w - effective_margin_left - effective_margin_right,
+                    ),
                     line_height,
                 ),
             );
@@ -3292,7 +3306,7 @@ impl LayoutEngine {
                 .unwrap_or(
                     effective_col_w
                         - effective_margin_left
-                        - margin_right
+                        - effective_margin_right
                         - inline_offset
                         - num_offset,
                 );
@@ -3324,7 +3338,7 @@ impl LayoutEngine {
                 .unwrap_or(
                     effective_col_w
                         - equation_first_effective_margin_left
-                        - margin_right
+                        - effective_margin_right
                         - inline_offset
                         - num_offset,
                 );
@@ -3333,7 +3347,7 @@ impl LayoutEngine {
                 .unwrap_or(
                     effective_col_w
                         - equation_continuation_effective_margin_left
-                        - margin_right
+                        - effective_margin_right
                         - inline_offset
                         - num_offset,
                 );

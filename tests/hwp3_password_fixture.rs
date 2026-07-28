@@ -270,6 +270,104 @@ fn actual_hwp3_password_fixture_anchors_inline_folder_table_to_paragraph() {
 }
 
 #[test]
+fn actual_hwp3_password_fixture_keeps_icon_outline_at_column_origin_without_fill() {
+    let document = parse_document_with_password(&fixture_bytes(), FIXTURE_PASSWORD)
+        .expect("실제 HWP3 fixture를 열어야 함");
+    let paragraph = &document.sections[0].paragraphs[8];
+
+    let picture = paragraph
+        .controls
+        .iter()
+        .find_map(|control| match control {
+            Control::Picture(picture) => Some(picture.as_ref()),
+            _ => None,
+        })
+        .expect("아이콘 그림을 찾아야 함");
+    assert_eq!(
+        picture.common.horz_rel_to,
+        rhwp::model::shape::HorzRelTo::Column,
+        "HWP3 ref_pos=1 그림은 문단 여백을 중복 적용하지 않는 단 기준이어야 함"
+    );
+
+    let rectangle = paragraph
+        .controls
+        .iter()
+        .find_map(|control| match control {
+            Control::Shape(shape) => match shape.as_ref() {
+                rhwp::model::shape::ShapeObject::Rectangle(rectangle) => Some(rectangle),
+                _ => None,
+            },
+            _ => None,
+        })
+        .expect("아이콘 테두리 사각형을 찾아야 함");
+    assert_eq!(
+        rectangle.common.horz_rel_to,
+        rhwp::model::shape::HorzRelTo::Column,
+        "테두리도 그림과 같은 단 기준 원점이어야 함"
+    );
+    assert_eq!(
+        rectangle.drawing.fill.fill_type,
+        FillType::None,
+        "0x10000000 HWP3 사각형 marker는 아이콘을 덮는 흰 채움이 아니라 no-fill이어야 함"
+    );
+    assert!(
+        rectangle.drawing.fill.solid.is_none(),
+        "no-fill 사각형은 단색 채움 데이터를 만들면 안 됨"
+    );
+    assert_eq!(
+        paragraph
+            .line_segs
+            .iter()
+            .take(2)
+            .map(|line| (line.column_start, line.segment_width))
+            .collect::<Vec<_>>(),
+        vec![(3500, 36520), (3500, 36520)],
+        "Square 그림 옆 첫 두 줄은 한컴 HWP5 변환본과 같은 cs/sw를 가져야 함"
+    );
+
+    let heading_rectangles = document.sections[0].paragraphs[10]
+        .controls
+        .iter()
+        .filter_map(|control| match control {
+            Control::Shape(shape) => match shape.as_ref() {
+                rhwp::model::shape::ShapeObject::Rectangle(rectangle) => Some(rectangle),
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        heading_rectangles.len(),
+        2,
+        "차례 제목 양쪽의 inline 사각형 두 개를 찾아야 함"
+    );
+    assert!(
+        heading_rectangles
+            .iter()
+            .all(|rectangle| rectangle.drawing.border_line.attr & 0x3F == 0),
+        "0x10000000 선색 marker는 검정 테두리가 아니라 no-line이어야 함"
+    );
+}
+
+#[test]
+fn actual_hwp3_password_fixture_keeps_regular_page_background_opaque() {
+    let mut document = HwpDocument::from_bytes_with_password(&fixture_bytes(), FIXTURE_PASSWORD)
+        .expect("실제 HWP3 fixture를 열어야 함");
+    let svg = document
+        .render_page_svg(0)
+        .expect("첫 쪽 SVG를 렌더해야 함");
+
+    assert!(
+        svg.contains("rhwp-img-bc-b50c-15"),
+        "배경의 HWP 밝기 50·대비 -15 색조는 유지해야 함"
+    );
+    assert!(
+        !svg.contains("<g opacity=\"0.17\">"),
+        "일반 쪽 배경의 밝기·대비를 legacy watermark opacity로 처리하면 안 됨"
+    );
+}
+
+#[test]
 fn actual_hwp3_password_fixture_normalizes_hanging_indent_first_line_margin() {
     let document = parse_document_with_password(&fixture_bytes(), FIXTURE_PASSWORD)
         .expect("실제 HWP3 fixture를 열어야 함");
