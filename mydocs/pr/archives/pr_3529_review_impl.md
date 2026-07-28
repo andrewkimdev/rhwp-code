@@ -11,8 +11,9 @@ last_verified: 2026-07-29
 
 - HWP3 rectangle의 `0x10000000` no-fill marker와 line color의 동일 no-line marker를 IR 기본값과
   구분해, 채움·테두리를 임의로 그리지 않게 했다.
-- HWP3 floating object의 reference position 1을 column origin으로 매핑하고, 암호 원본의
-  Square-wrap line box만 문단 inset·기본 gap 계약을 적용했다.
+- 암호 HWP3 floating object의 reference position 1만 column origin으로 매핑하고, 일반 HWP3는
+  기존 paragraph origin을 유지했다. Square-wrap line box의 문단 inset·기본 gap도 암호 원본 계약으로
+  한정했다.
 - `PageBackgroundImage`의 raw legacy brightness/contrast를 화면 표현용 순서로 투영하고,
   일반 `RealPic` 배경을 watermark opacity로 낮추지 않도록 SVG·Canvas·Skia를 일치시켰다.
 - `scaled_canvas_extent()`는 truncation 대신 ceil을 써 A4 fractional CSS pixel의 우·하단 clipping을
@@ -24,12 +25,17 @@ last_verified: 2026-07-29
   원본 `LineInfo`·`CharShape`와 같은 marker 1칸으로 누적하고, 실제 암호 HWP3만 HWP5 변환본의
   8-unit control 계약을 사용한다. 문단 앞뒤 간격·음수 들여쓰기·추가 정보 #6 배경 이미지도 이 암호
   원본 계약에만 한정해 일반 HWP3 저장 왕복을 바꾸지 않는다.
+- HWPX `HwpUnitChar`의 앞·뒤 문단 간격은 다른 margin과 같은 공통 2배 IR 스케일을 유지한다. 이를
+  HWP3 암호 문서의 spacing 계약으로 전역 반감하면 SO-SUEOP HWP3/HWPX 기준 위치가 함께 회귀하므로,
+  암호 HWP3 전용 보정은 HWP3 복호화 parser와 레이아웃 profile로 분리했다.
 
 ## baseline 갱신 사유
 
 `samples/HWP5-nopassword-123456.hwp`가 field-sweep corpus에 들어온 뒤 baseline에 없던 HWP5
-round-trip divergence 경로와, 현재 HWPX 정규화의 stable 결과를 792행 TSV로 재생성했다. rebase 후
-`ir_field_sweep_baseline`을 다시 실행해 baseline 초과가 없음을 확인했다.
+round-trip divergence 경로를 등록했다. 이어 HWPX `HwpUnitChar` spacing을 공통 2배 IR 스케일로
+정규화하면서 `spacing_*` 발산 129건은 사라지고 `raw_header_extra` 20개 집계가 달라졌다. 현재
+683 divergence path(684 TSV 행)를 덤프한 뒤 `ir_field_sweep_baseline` 2건을 다시 실행해 baseline
+초과가 없음을 확인했다.
 
 ## 수용하지 않은 변경
 

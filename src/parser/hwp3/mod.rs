@@ -310,13 +310,13 @@ fn build_common_obj_attr(common: &crate::model::shape::CommonObjAttr) -> u32 {
 
 /// HWP3 개체 기준 위치를 공통 IR 기준점으로 바꾼다.
 ///
-/// HWP3 스펙은 값 1을 "문단"으로 이름 붙이지만, 실제 HWP3 이진 개체의
-/// offset은 문단 왼쪽 여백을 다시 더하지 않은 단(column) 원점 기준으로
-/// 저장된다. 같은 문서를 한컴에서 HWP5로 변환한 제어 레코드와 기준 PDF도
-/// `Column` 원점에 일치한다. 이를 `Para`로 두면 문단 여백만큼 도형이
-/// 오른쪽으로 이중 이동한다.
+/// 실제 암호 HWP3 원본은 값 1의 offset을 문단 왼쪽 여백을 다시 더하지 않은
+/// 단(column) 원점 기준으로 저장한다. 이 계약은 같은 문서의 HWP5 변환본과
+/// 기준 PDF에서 확인했다. 일반 HWP3에는 기존 `Para` 해석을 보존한다. 이를
+/// 전역 `Column`으로 바꾸면 일반 서식의 floating table 폭·flow가 달라진다.
 fn hwp3_object_reference_position(
     reference_position: u8,
+    use_password_layout_contract: bool,
 ) -> Option<(
     crate::model::shape::HorzRelTo,
     crate::model::shape::VertRelTo,
@@ -326,8 +326,9 @@ fn hwp3_object_reference_position(
     match reference_position {
         // 글자처럼 취급은 별도 inline 경로이지만, 비상 fallback 좌표는 문단이다.
         0 => Some((HorzRelTo::Para, VertRelTo::Para)),
-        // HWP3 raw offset은 paragraph margin을 포함하지 않는 column origin이다.
-        1 => Some((HorzRelTo::Column, VertRelTo::Para)),
+        // 암호 HWP3만 raw offset이 paragraph margin을 포함하지 않는 column origin이다.
+        1 if use_password_layout_contract => Some((HorzRelTo::Column, VertRelTo::Para)),
+        1 => Some((HorzRelTo::Para, VertRelTo::Para)),
         2 => Some((HorzRelTo::Page, VertRelTo::Page)),
         3 => Some((HorzRelTo::Paper, VertRelTo::Paper)),
         _ => None,
@@ -962,7 +963,9 @@ fn parse_hwp3_object_dispatch(
 
         let ref_pos = info_buf[8];
         table.common.treat_as_char = ref_pos == 0;
-        if let Some((horz_rel_to, vert_rel_to)) = hwp3_object_reference_position(ref_pos) {
+        if let Some((horz_rel_to, vert_rel_to)) =
+            hwp3_object_reference_position(ref_pos, use_password_layout_contract)
+        {
             table.common.horz_rel_to = horz_rel_to;
             table.common.vert_rel_to = vert_rel_to;
         }
@@ -1280,7 +1283,9 @@ fn parse_hwp3_object_dispatch(
 
         let ref_pos = info_buf[8];
         pic.common.treat_as_char = ref_pos == 0;
-        if let Some((horz_rel_to, vert_rel_to)) = hwp3_object_reference_position(ref_pos) {
+        if let Some((horz_rel_to, vert_rel_to)) =
+            hwp3_object_reference_position(ref_pos, use_password_layout_contract)
+        {
             pic.common.horz_rel_to = horz_rel_to;
             pic.common.vert_rel_to = vert_rel_to;
         }
@@ -1497,10 +1502,11 @@ fn parse_hwp3_object_dispatch(
 
         let mut line = crate::model::shape::LineShape::default();
         let base_pos = info_buf.get(8).copied().unwrap_or(0);
-        let (horz_rel_to, vert_rel_to) = hwp3_object_reference_position(base_pos).unwrap_or((
-            crate::model::shape::HorzRelTo::Para,
-            crate::model::shape::VertRelTo::Para,
-        ));
+        let (horz_rel_to, vert_rel_to) =
+            hwp3_object_reference_position(base_pos, use_password_layout_contract).unwrap_or((
+                crate::model::shape::HorzRelTo::Para,
+                crate::model::shape::VertRelTo::Para,
+            ));
         line.common.horz_rel_to = horz_rel_to;
         line.common.vert_rel_to = vert_rel_to;
         line.common.treat_as_char = base_pos == 0;
@@ -2007,7 +2013,7 @@ fn parse_field_control_char(
         hwp3_char_to_utf16_pos,
         controls,
         ctrl_data_records,
-        ..
+        use_password_layout_contract,
     } = scan;
     match ch {
         18..=21 => {
@@ -2021,12 +2027,11 @@ fn parse_field_control_char(
                 }
             }
             i += 3;
-            // 쪽번호 위치(ch=20)는 문서/구역 설정 control이며 본문의 인라인
-            // 개체가 아니다. HWP5 변환본도 같은 PageNumberPos control을
-            // 보존하면서 PARA_TEXT에는 marker를 남기지 않는다. HWP3에서
-            // U+FFFC와 1-unit offset을 만들면 title 첫 글자 앞에 가시 공백/
-            // 세로선이 생기고 뒤 text의 CharShape 위치까지 어긋난다.
-            if ch != 20 {
+            // 암호 HWP3의 쪽번호 위치(ch=20)는 문서/구역 설정 control이며 본문의
+            // 인라인 개체가 아니다. 같은 문서의 HWP5 변환본도 PARA_TEXT marker를
+            // 남기지 않는다. 일반 HWP3는 기존 marker를 보존한다. 이를 전역으로
+            // 제거하면 기존 서식의 본문 흐름과 CharShape 위치가 달라진다.
+            if ch != 20 || !*use_password_layout_contract {
                 char_offsets.push(utf16_len);
                 utf16_len += 1;
                 // AutoNumber(ch=18)은 HWP5 패턴("  ")과 일치하도록 공백으로 저장
@@ -5527,24 +5532,29 @@ mod tests {
     }
 
     #[test]
-    fn hwp3_floating_paragraph_reference_uses_column_origin() {
+    fn hwp3_floating_paragraph_reference_uses_password_contract_only_when_requested() {
         use crate::model::shape::{HorzRelTo, VertRelTo};
 
         assert_eq!(
-            hwp3_object_reference_position(1),
+            hwp3_object_reference_position(1, true),
             Some((HorzRelTo::Column, VertRelTo::Para)),
-            "HWP3 floating object offset must not add paragraph left margin twice"
+            "암호 HWP3 floating object offset은 paragraph left margin을 다시 더하지 않는다"
         );
         assert_eq!(
-            hwp3_object_reference_position(0),
+            hwp3_object_reference_position(1, false),
+            Some((HorzRelTo::Para, VertRelTo::Para)),
+            "일반 HWP3는 기존 Para 기준을 보존한다"
+        );
+        assert_eq!(
+            hwp3_object_reference_position(0, false),
             Some((HorzRelTo::Para, VertRelTo::Para))
         );
         assert_eq!(
-            hwp3_object_reference_position(2),
+            hwp3_object_reference_position(2, false),
             Some((HorzRelTo::Page, VertRelTo::Page))
         );
         assert_eq!(
-            hwp3_object_reference_position(3),
+            hwp3_object_reference_position(3, false),
             Some((HorzRelTo::Paper, VertRelTo::Paper))
         );
     }

@@ -61,9 +61,11 @@ modifiers: intake_and_review.md, local_validation.md,
 | `cargo fmt --check`, `git diff --check` | passed |
 | `cargo clippy --all-targets -- -D warnings` | passed |
 | `hwp3_password_fixture` | 8 passed |
+| `hwpx_password_fixture` | 3 passed |
 | `issue_1892` HWP3 drawing/tab round-trip | 4 passed (CI 회귀 보정 후 재실행) |
+| `issue_1692_so_sueop_hwp3_page22_relationship_box_uses_table_flow` | passed (일반 HWP3/HWPX spacing 회귀 보정 후 재실행) |
 | HWP3 암호·일반 문단 계약 unit test | 2 passed |
-| `ir_field_sweep_baseline` | 2 passed; 792행 baseline 확인 |
+| `ir_field_sweep_baseline` | 2 passed; 683 divergence path(684 TSV 행) baseline 재생성·재검증 |
 | `test_scaled_canvas_extent_keeps_fractional_a4_edge` | passed |
 | native-Skia 3개 게이트 | passed |
 | `wasm-pack build --target web --out-dir pkg` | passed |
@@ -73,10 +75,13 @@ modifiers: intake_and_review.md, local_validation.md,
 | Studio `npm run build` | passed |
 | CanvasKit readiness corpus | 별도 7777 포트의 현재 작업본에서 7/7 Canvas2D↔CanvasKit parity 및 readiness passed |
 
-`cargo test --profile release-test --tests`는 #1692의 3개 기존 실패에서 중단했다. 같은 실패
-(`line_box_reflects_para_margins`, `answer_endnote_pages_match_pdf_ranges`,
-`page22_relationship_box_uses_table_flow`)는 현재 보정 전 Stage 9 head `e94194556`의 깨끗한 별도
-worktree에서도 동일하게 재현했다. 이번 PR 회귀로 판정하지 않으며 #3486 수용 근거에도 사용하지 않는다.
+최신 head CI에서 `issue_1692_so_sueop_hwp3_page22_relationship_box_uses_table_flow` 실패를 기준
+`upstream/devel` 별도 worktree에서 대조했다. 기준은 통과했고, 이번 변경의 HWPX
+`HwpUnitChar` 앞·뒤 간격 전역 반감이 일반 HWPX와 HWP3 변환본을 함께 위로 밀어 만든 회귀였다.
+HWPX는 공통 2배 IR 스케일을 복원하고, 암호 HWP3의 별도 spacing 계약은 HWP3 복호화 parser에만
+한정했다. 이 정규화로 field-sweep의 `doc_info.para_shapes[].spacing_*` 발산 129건이 사라지고
+`raw_header_extra` 20개 집계가 의도적으로 달라져 baseline을 재생성했다(순개선 109건). 보정 후
+#1692, #1892, HWP3/HWPX 암호 fixture와 재생성한 field-sweep를 모두 재실행해 통과했다.
 
 최초 최신-head CI의 Canvas visual diff는 Canvas2D가 `794×1123`, CanvasKit이 `793×1122` bitmap을 만들어
 7개 readiness 비교를 오류 처리한 것을 확인했다. `e999f7a9f`에서 CanvasKit과 비교 창도 `ceil` 경계를 쓰도록
@@ -89,6 +94,13 @@ CI를 다시 통과 기준으로 사용한다.
 밀렸다. 일반 HWP3는 1칸을 유지하고, HWP5 변환본과 대조한 실제 암호 HWP3 복호화 경로만 8칸 계약을
 사용하도록 분리했다. 이 변경 뒤 `issue_1892` 4건과 `hwp3_password_fixture` 8건을 모두 재실행해
 통과했다. 이 기록을 포함한 새 head의 CI만 merge 기준으로 사용한다.
+
+## PUBLIC_WEB_ADMIN_GUIDE 영향 확인
+
+이 PR은 parser·renderer·Studio 내부 렌더 경로와 fixture만 변경한다. 공개 웹사이트의 HWP 링크
+인식(`data-hwp-*`), hover preview, 다운로드 URL, 관리자용 HTML/CMS 적용 예시는 변경하지 않는다.
+따라서 `PUBLIC_WEB_ADMIN_GUIDE.md`의 공개 통합 계약에는 영향이 없으며, 해당 속성이나 외부 URL의
+호환성 검증·문서 갱신 대상도 없다.
 
 ## 위험과 후속 보완
 

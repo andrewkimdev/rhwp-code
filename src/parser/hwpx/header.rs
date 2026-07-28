@@ -1233,19 +1233,18 @@ fn parse_para_shape_switch(
                                 if attr.key.as_ref() == b"value" {
                                     let val = parse_i32(&attr);
                                     if in_hwpunitchar_case {
-                                        // HwpUnitChar의 좌우 여백·들여쓰기는 HWP5
-                                        // binary ParaShape와 맞추기 위해 2× 스케일로
-                                        // 정규화한다. 단 문단 앞/뒤 간격은 HWP3 계열의
-                                        // HWP5 변환본에서 이미 2×로 저장되었다가 로드 시
-                                        // 반감되는 별도 계약이다. 여기서 다시 2× 하면
-                                        // HWPX만 spacing이 두 배가 되어 페이지가 밀린다.
+                                        // HwpUnitChar 값은 실제 HWPUNIT(1× 스케일)이므로
+                                        // HWP 바이너리와 동일한 2× IR 스케일로 정규화한다.
+                                        // HWP3 암호 원본의 별도 spacing 계약은 HWP3 parser
+                                        // 안에서만 처리한다. HWPX 전체에 반감 적용하면
+                                        // 일반 HWPX 문단 흐름과 기준 HWP3 변환본이 함께 밀린다.
                                         let val2x = val * 2;
                                         match tag_name {
                                             b"left" => ps.margin_left = val2x,
                                             b"right" => ps.margin_right = val2x,
                                             b"intent" => ps.indent = val2x,
-                                            b"prev" => ps.spacing_before = val,
-                                            b"next" => ps.spacing_after = val,
+                                            b"prev" => ps.spacing_before = val2x,
+                                            b"next" => ps.spacing_after = val2x,
                                             _ => {}
                                         }
                                         found_case = true;
@@ -2526,7 +2525,7 @@ mod tests {
     }
 
     #[test]
-    fn hwpunitchar_spacing_keeps_hwp3_lineage_storage_scale() {
+    fn hwpunitchar_spacing_uses_common_hwp5_ir_scale() {
         let xml = r##"<?xml version="1.0" encoding="UTF-8"?>
 <hh:head xmlns:hh="http://www.hancom.co.kr/hwpml/2011/head"
   xmlns:hc="http://www.hancom.co.kr/hwpml/2011/core"
@@ -2555,8 +2554,8 @@ mod tests {
         assert_eq!(ps.margin_left, 7000);
         assert_eq!(ps.margin_right, 5000);
         assert_eq!(ps.indent, -4520);
-        assert_eq!(ps.spacing_before, 284);
-        assert_eq!(ps.spacing_after, 568);
+        assert_eq!(ps.spacing_before, 568);
+        assert_eq!(ps.spacing_after, 1136);
     }
 
     #[test]
