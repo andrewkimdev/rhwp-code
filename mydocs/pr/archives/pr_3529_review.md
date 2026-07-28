@@ -10,7 +10,7 @@ last_verified: 2026-07-29
 - PR: [#3529](https://github.com/edwardkim/rhwp/pull/3529)
 - 관련 이슈: [#3486](https://github.com/edwardkim/rhwp/issues/3486) (`Closes` 미사용)
 - 역할: `jangster77` collaborator self-review
-- 구현 보정 source head: `e999f7a9f`
+- 구현 보정 source head: #3529 최신 head (CI 회귀 보정 포함)
 
 ## 라우팅과 merge 조건
 
@@ -61,6 +61,8 @@ modifiers: intake_and_review.md, local_validation.md,
 | `cargo fmt --check`, `git diff --check` | passed |
 | `cargo clippy --all-targets -- -D warnings` | passed |
 | `hwp3_password_fixture` | 8 passed |
+| `issue_1892` HWP3 drawing/tab round-trip | 4 passed (CI 회귀 보정 후 재실행) |
+| HWP3 암호·일반 문단 계약 unit test | 2 passed |
 | `ir_field_sweep_baseline` | 2 passed; 792행 baseline 확인 |
 | `test_scaled_canvas_extent_keeps_fractional_a4_edge` | passed |
 | native-Skia 3개 게이트 | passed |
@@ -80,6 +82,13 @@ worktree에서도 동일하게 재현했다. 이번 PR 회귀로 판정하지 �
 7개 readiness 비교를 오류 처리한 것을 확인했다. `e999f7a9f`에서 CanvasKit과 비교 창도 `ceil` 경계를 쓰도록
 보정했고, 위 별도 포트 readiness 재현으로 크기 불일치가 해소됐음을 확인했다. 이 보정이 포함된 새 head의
 CI를 다시 통과 기준으로 사용한다.
+
+그 뒤 최신 head CI의 `issue_1892_hwp3_drawing_group_roundtrip_render_is_self_consistent` 실패를
+로컬에서 재현했다. 원인은 HWP3의 가시 개체 제어문자를 파싱 단계부터 전역 8 UTF-16 슬롯으로 계산한
+것이었다. 일반 HWP3의 `LineInfo`·`CharShape`는 화면 marker 1칸 기준이므로 도형 문단의 y 좌표가
+밀렸다. 일반 HWP3는 1칸을 유지하고, HWP5 변환본과 대조한 실제 암호 HWP3 복호화 경로만 8칸 계약을
+사용하도록 분리했다. 이 변경 뒤 `issue_1892` 4건과 `hwp3_password_fixture` 8건을 모두 재실행해
+통과했다. 이 기록을 포함한 새 head의 CI만 merge 기준으로 사용한다.
 
 ## 위험과 후속 보완
 

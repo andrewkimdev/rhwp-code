@@ -20,6 +20,10 @@ last_verified: 2026-07-29
 - CanvasKit `PageRenderer`와 결과 비교 창도 같은 ceil bitmap 경계를 적용했다. 이는 Canvas2D의
   `794×1123`와 CanvasKit의 `793×1122` 불일치로 readiness corpus 전체가 비교 오류가 된 CI 결과를
   직접 보정한 것이며, 7개 representative corpus의 Canvas2D↔CanvasKit readiness 재현으로 확인했다.
+- CI의 HWP3 drawing-group round-trip 회귀를 보정했다. 일반 HWP3의 가시 개체 control은 파싱 시
+  원본 `LineInfo`·`CharShape`와 같은 marker 1칸으로 누적하고, 실제 암호 HWP3만 HWP5 변환본의
+  8-unit control 계약을 사용한다. 문단 앞뒤 간격·음수 들여쓰기·추가 정보 #6 배경 이미지도 이 암호
+  원본 계약에만 한정해 일반 HWP3 저장 왕복을 바꾸지 않는다.
 
 ## baseline 갱신 사유
 

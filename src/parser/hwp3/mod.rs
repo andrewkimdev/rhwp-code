@@ -402,12 +402,11 @@ fn hwp3_picture_image_effect(info_buf: &[u8]) -> (i8, i8, crate::model::image::I
 
 const HWP3_TO_IR_PARA_UNIT: i32 = 8;
 // HWP3 문단 여백(left/right/indent)과 문단 앞뒤 간격은 같은 `hunit`으로
-// 표기되지만, 공통 ParaShape IR의 저장 계약은 다르다. 여백은 LINE_SEG의
-// column_start와 대응하도록 2배 저장값(×8)을 유지하고, 문단 앞뒤 간격은
-// HWP5 변환본의 ParaShape 저장값과 대응하도록 ×4를 사용한다. 렌더러가
-// ParaShape 간격을 다시 2로 나누므로, 양쪽 모두 최종 유효 HWPUNIT는 ×2가
-// 된다.
-const HWP3_TO_IR_PARA_SPACING_UNIT: i32 = 4;
+// 표기되지만, 일반 HWP3의 HWP5 저장 왕복 계약은 둘 다 ×8이다. 한글 97 암호
+// 원본은 별도 검증에서 문단 앞뒤 간격만 ×4로 해석해야 한컴 PDF와 일치했다.
+// 따라서 이 차이는 암호 복호화 경로에서만 선택한다. 전역 ×4 정규화는 일반 HWP3
+// 문서를 HWP5로 저장한 뒤의 기하를 바꿔 #1892 라운드트립 회귀를 만들었다.
+const HWP3_PASSWORD_TO_IR_PARA_SPACING_UNIT: i32 = 4;
 
 fn hwp3_para_metric_to_ir(value: i16) -> i32 {
     (value as i32) * HWP3_TO_IR_PARA_UNIT
@@ -417,8 +416,13 @@ fn hwp3_para_metric_u16_to_ir(value: u16) -> i32 {
     (value as i32) * HWP3_TO_IR_PARA_UNIT
 }
 
-fn hwp3_para_spacing_to_ir(value: u16) -> i32 {
-    (value as i32) * HWP3_TO_IR_PARA_SPACING_UNIT
+fn hwp3_para_spacing_to_ir(value: u16, use_password_layout_contract: bool) -> i32 {
+    let unit = if use_password_layout_contract {
+        HWP3_PASSWORD_TO_IR_PARA_SPACING_UNIT
+    } else {
+        HWP3_TO_IR_PARA_UNIT
+    };
+    (value as i32) * unit
 }
 
 fn hwp3_tab_position_to_ir(value: u16) -> u32 {
@@ -516,14 +520,27 @@ pub(crate) fn convert_para_shape(
     hwp3_ps: &crate::parser::hwp3::records::Hwp3ParaShape,
     doc_tab_defs: &mut Vec<crate::model::style::TabDef>,
 ) -> crate::model::style::ParaShape {
+    convert_para_shape_with_layout_contract(hwp3_ps, doc_tab_defs, false)
+}
+
+/// HWP3 문단 모양을 공통 IR로 변환한다.
+///
+/// 평문 HWP3는 기존 ×8 저장 계약을 보존한다. 실제 암호 HWP3 원본에서만
+/// `use_password_layout_contract`를 켜 HWP5 변환본·한컴 PDF로 확인한 ×4 문단
+/// 간격 계약을 적용한다.
+fn convert_para_shape_with_layout_contract(
+    hwp3_ps: &crate::parser::hwp3::records::Hwp3ParaShape,
+    doc_tab_defs: &mut Vec<crate::model::style::TabDef>,
+    use_password_layout_contract: bool,
+) -> crate::model::style::ParaShape {
     let mut ps = crate::model::style::ParaShape::default();
     // HWP3 여백/들여쓰기 단위는 hunit(1/1800인치)이다. 공통 ParaShape IR은
     // HWP5/HWPX와 같이 실제 HWPUNIT 값의 2배 스케일로 저장하므로 4*2를 곱한다.
-    // HWP3의 음수 들여쓰기는 `left_margin`을 후속 줄 기준으로 저장하고,
-    // 첫 줄을 `left_margin + indent`에 둔다. 공통 IR/renderer는 음수 indent에서
-    // margin_left를 첫 줄 기준으로 사용하므로, 여기서 legacy 표현을 정규화한다.
-    // 양수 들여쓰기와 0은 기존처럼 left_margin 자체가 첫 줄의 기준이다.
-    let first_line_margin = if hwp3_ps.indent < 0 {
+    // 일반 HWP3의 저장 왕복은 `left_margin` 원값을 보존한다. 실제 암호 HWP3
+    // fixture만 한컴 PDF/HWP5 변환본에서 음수 들여쓰기의 첫 줄을
+    // `left_margin + indent`로 해석한다는 계약이 확인됐다. 이를 전역 정규화하면
+    // 다른 HWP3 문서의 HWP5 라운드트립 x좌표가 달라진다.
+    let first_line_margin = if use_password_layout_contract && hwp3_ps.indent < 0 {
         (i32::from(hwp3_ps.left_margin) + i32::from(hwp3_ps.indent)).max(0) as u16
     } else {
         hwp3_ps.left_margin
@@ -541,8 +558,8 @@ pub(crate) fn convert_para_shape(
         ps.line_spacing = hwp3_ps.line_spacing as i32;
     }
 
-    ps.spacing_after = hwp3_para_spacing_to_ir(hwp3_ps.margin_bottom);
-    ps.spacing_before = hwp3_para_spacing_to_ir(hwp3_ps.margin_top);
+    ps.spacing_after = hwp3_para_spacing_to_ir(hwp3_ps.margin_bottom, use_password_layout_contract);
+    ps.spacing_before = hwp3_para_spacing_to_ir(hwp3_ps.margin_top, use_password_layout_contract);
     ps.alignment = match hwp3_ps.align {
         0 => crate::model::style::Alignment::Justify,
         1 => crate::model::style::Alignment::Left,
@@ -714,15 +731,21 @@ fn hwp3_square_wrap_line_box(
     }
 }
 
-fn hwp3_para_flow_spacing(para_shape: Option<&crate::model::style::ParaShape>) -> (i32, i32) {
+fn hwp3_para_flow_spacing(
+    para_shape: Option<&crate::model::style::ParaShape>,
+    use_password_layout_contract: bool,
+) -> (i32, i32) {
     let Some(ps) = para_shape else {
         return (0, 0);
     };
 
-    // spacing_*은 이미 HWP5 저장 LineSeg.vpos와 같은 좌표 스케일(×4)이다.
-    // 여백/들여쓰기처럼 line box 전용 2배 저장값이 아니므로 여기서 다시
-    // 절반으로 줄이면 vpos 사다리와 실제 렌더링 흐름이 어긋난다.
-    (ps.spacing_before.max(0), ps.spacing_after.max(0))
+    // 평문 HWP3는 ParaShape에 ×8로 보존한 뒤 흐름 좌표에서 절반(×4)을 쓴다.
+    // 실제 암호 HWP3만 ParaShape·흐름 모두 ×4 계약이므로 추가 축소가 없다.
+    let scale = if use_password_layout_contract { 1 } else { 2 };
+    (
+        ps.spacing_before.max(0).saturating_div(scale),
+        ps.spacing_after.max(0).saturating_div(scale),
+    )
 }
 
 /// HWP3 스펙 offset 111 각주 분리선 길이 종류(0=5cm, 1=본문 폭의 1/3, 2=단 너비,
@@ -1779,12 +1802,12 @@ fn parse_object_control_char(
         }
     } else {
         char_offsets.push(utf16_len);
-        // HWP5 PARA_TEXT의 인라인 컨트롤은 실제 화면 마커(U+FFFC) 하나로
-        // 표현되더라도 UTF-16 stream에서는 8 code unit 슬롯을 차지한다.
-        // HWP3의 LineInfo.start_pos·inline CharShape도 이 stream 좌표로
-        // 변환되므로, 1로 누적하면 도형/표 뒤의 줄 시작과 글자 모양이 앞당겨진다.
-        // 탭(ch=9)과 같은 공통 IR 계약을 여기의 가시 개체 컨트롤에도 적용한다.
-        utf16_len += 8;
+        // 일반 HWP3의 가시 개체 제어문자는 원본 LineInfo와 CharShape에서 화면
+        // 마커 하나로 좌표가 계산된다. HWP5 저장 시에만 확장 슬롯으로 쓰므로
+        // 여기서 전역으로 8칸을 늘리면 원본 HWP3 도형 문단의 줄 위치가 밀린다.
+        // 실제 암호 HWP3 fixture는 HWP5 변환본의 8-unit control contract를
+        // 사용하므로, 복호화 경로로 한정해 그 슬롯 폭을 보존한다.
+        utf16_len += if *use_password_layout_contract { 8 } else { 1 };
         text_string.push('\u{FFFC}');
     }
 
@@ -2407,7 +2430,11 @@ pub(crate) fn parse_paragraph_list(
 
         if para_info.follow_prev_para_shape == 0 {
             if let Some(ref hwp3_ps) = para_info.para_shape {
-                let mut ps = convert_para_shape(hwp3_ps, doc_tab_defs);
+                let mut ps = convert_para_shape_with_layout_contract(
+                    hwp3_ps,
+                    doc_tab_defs,
+                    use_password_layout_contract,
+                );
                 if let Some(bf) = hwp3_para_shape_border_fill(hwp3_ps) {
                     doc_border_fills.push(bf);
                     ps.border_fill_id = doc_border_fills.len() as u16; // 1-based (렌더러 규칙)
@@ -2698,7 +2725,7 @@ pub(crate) fn parse_paragraph_list(
         }
         let para_shape = doc_para_shapes.get(para_shape_id as usize);
         let para_line_box = hwp3_para_line_box(para_shape, column_width_hu);
-        let para_flow_spacing = hwp3_para_flow_spacing(para_shape);
+        let para_flow_spacing = hwp3_para_flow_spacing(para_shape, use_password_layout_contract);
 
         let fallback_text_height = base_size as i32;
         // [Task #604 Stage D-2] HWP5 IR 정합: percent 줄간격도 lh=th, ls=th*(ratio-100)/100
@@ -3405,7 +3432,11 @@ fn parse_hwp3_inner(
         doc_char_shapes.push(convert_char_shape(&style.char_shape));
         let c_id = (doc_char_shapes.len() - 1) as u16;
 
-        doc_para_shapes.push(convert_para_shape(&style.para_shape, &mut doc_tab_defs));
+        doc_para_shapes.push(convert_para_shape_with_layout_contract(
+            &style.para_shape,
+            &mut doc_tab_defs,
+            use_password_layout_contract,
+        ));
         let p_id = (doc_para_shapes.len() - 1) as u16;
 
         use crate::model::style::Style;
@@ -3505,9 +3536,12 @@ fn parse_hwp3_inner(
                 doc_bin_data_list.push(bin_data);
                 processed_ids.insert(id);
             }
-        } else if block.id == 6 {
+        } else if use_password_layout_contract && block.id == 6 {
             // HWP3 스펙 §8.6: 본문 개체와 별도로 저장된 쪽 배경 이미지.
-            // 종전에는 블록을 소비만 하고 버려 HWP3 원본에서만 큰 배경 그림이 사라졌다.
+            // 한글 97 암호 원본에서 HWP5 변환본·PDF와 대조해 확정한 레이아웃
+            // 계약이다. 같은 ID가 있는 일반 HWP3의 추가 정보 블록은 구조가
+            // 호환된다는 근거가 없으므로 여기서 배경으로 승격하지 않는다.
+            // 종전에는 암호 HWP3의 블록을 소비만 하고 버려 큰 배경 그림이 사라졌다.
             if let Some(bg) = parse_hwp3_background_image_info(&block.data) {
                 let id = if let Some(&id) = pic_name_to_id.get(&bg.name) {
                     id
@@ -4545,11 +4579,10 @@ mod tests {
     }
 
     #[test]
-    fn hwp3_para_spacing_uses_hwp5_storage_scale_and_preserves_vpos_flow() {
-        // HWP3 원본의 hunit 문단 간격 71/142는 한컴 HWP3→HWP5 변환본에서
-        // ParaShape 284/568으로 저장된다. 여백은 LINE_SEG column_start와의
-        // 계약 때문에 ×8을 유지하지만, spacing을 같은 ×8로 넣으면 렌더러가
-        // 실제 흐름을 두 배로 벌린다.
+    fn hwp3_para_spacing_uses_password_contract_only_when_requested() {
+        // 일반 HWP3 저장 왕복은 모든 문단 metric을 ×8로 보존한다. 한글 97 암호
+        // fixture의 PDF/HWP5 대조에서만 문단 간격 ×4 계약이 필요하다. 둘을
+        // 전역으로 섞으면 #1892 HWP3 도형 문서의 라운드트립 기하가 달라진다.
         let mut hwp3_ps = crate::parser::hwp3::records::Hwp3ParaShape::default();
         hwp3_ps.left_margin = 875;
         hwp3_ps.margin_top = 71;
@@ -4558,12 +4591,27 @@ mod tests {
         let mut doc_tab_defs = Vec::new();
         let ps = convert_para_shape(&hwp3_ps, &mut doc_tab_defs);
         assert_eq!(ps.margin_left, 7000, "여백은 line box 계약의 ×8을 유지");
-        assert_eq!(ps.spacing_before, 284, "문단 앞 간격은 71×4");
-        assert_eq!(ps.spacing_after, 568, "문단 뒤 간격은 142×4");
+        assert_eq!(ps.spacing_before, 568, "일반 HWP3 문단 앞 간격은 71×8");
+        assert_eq!(ps.spacing_after, 1136, "일반 HWP3 문단 뒤 간격은 142×8");
         assert_eq!(
-            hwp3_para_flow_spacing(Some(&ps)),
+            hwp3_para_flow_spacing(Some(&ps), false),
             (284, 568),
-            "문단 간격은 저장 vpos와 같은 스케일로 누적해야 한다"
+            "일반 HWP3 문단 간격은 저장 vpos와 같은 스케일로 누적해야 한다"
+        );
+
+        let password_ps = convert_para_shape_with_layout_contract(&hwp3_ps, &mut Vec::new(), true);
+        assert_eq!(
+            password_ps.spacing_before, 284,
+            "암호 HWP3 문단 앞 간격은 71×4"
+        );
+        assert_eq!(
+            password_ps.spacing_after, 568,
+            "암호 HWP3 문단 뒤 간격은 142×4"
+        );
+        assert_eq!(
+            hwp3_para_flow_spacing(Some(&password_ps), true),
+            (284, 568),
+            "암호 HWP3 문단 간격은 PDF 대조 계약의 ×4로 누적해야 한다"
         );
     }
 
@@ -4584,7 +4632,7 @@ mod tests {
     }
 
     #[test]
-    fn hwp3_negative_indent_normalizes_continuation_margin_to_first_line() {
+    fn hwp3_negative_indent_uses_password_contract_only_when_requested() {
         // `한글 97 안내문` 3쪽 설명 문단: HWP3은 후속 줄 margin=2932 hunit과
         // 내어쓰기=-2057 hunit을 저장한다. 한컴 변환 HWP5와 공통 renderer의
         // 표현에서는 첫 줄 기준 875 hunit(=7000 HU)이어야 한다.
@@ -4593,9 +4641,16 @@ mod tests {
         hwp3_ps.indent = -2057;
 
         let ps = convert_para_shape(&hwp3_ps, &mut Vec::new());
-        assert_eq!(ps.margin_left, 7000);
+        assert_eq!(ps.margin_left, 23456, "일반 HWP3는 저장 left_margin을 보존");
         assert_eq!(ps.indent, -16456);
         assert_eq!(ps.margin_right, 0, "오른쪽 여백은 이 정규화 범위 밖");
+
+        let password_ps = convert_para_shape_with_layout_contract(&hwp3_ps, &mut Vec::new(), true);
+        assert_eq!(
+            password_ps.margin_left, 7000,
+            "암호 HWP3만 첫 줄 기준으로 정규화"
+        );
+        assert_eq!(password_ps.indent, -16456);
     }
 
     #[test]
