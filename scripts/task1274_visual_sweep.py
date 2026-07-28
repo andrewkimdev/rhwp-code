@@ -165,6 +165,7 @@ def run(
     cwd: Path,
     log_path: Path | None = None,
     verbose: bool = True,
+    allow_failure: bool = False,
 ) -> subprocess.CompletedProcess[str]:
     if verbose:
         print("+ " + " ".join(cmd), flush=True)
@@ -173,6 +174,8 @@ def run(
         log_path.parent.mkdir(parents=True, exist_ok=True)
         log_path.write_text(proc.stdout + proc.stderr, encoding="utf-8")
     if proc.returncode != 0:
+        if allow_failure:
+            return proc
         if proc.stdout:
             print(proc.stdout, file=sys.stdout)
         if proc.stderr:
@@ -410,7 +413,25 @@ def render_target(
 
     pdf_prefix = pdf_png_dir / "pdf"
     run(["pdftoppm", "-r", str(dpi), "-png", str(pdf), str(pdf_prefix)], cwd=root)
-    run(["pdftotext", "-bbox-layout", str(pdf), str(pdf_bbox_html)], cwd=root)
+    # PDF text layer is a candidate-only input for question-marker drift. Some
+    # legacy HWP PDFs contain PUA strings that make Poppler's pdftotext abort,
+    # while their raster pages remain valid visual oracles. Keep the raster
+    # compare/overlay path available and omit only marker analysis in that case.
+    if pdf_bbox_html.exists():
+        pdf_bbox_html.unlink()
+    pdf_bbox_proc = run(
+        ["pdftotext", "-bbox-layout", str(pdf), str(pdf_bbox_html)],
+        cwd=root,
+        allow_failure=True,
+    )
+    if pdf_bbox_proc.returncode != 0:
+        if pdf_bbox_html.exists():
+            pdf_bbox_html.unlink()
+        print(
+            "경고: pdftotext bbox 추출에 실패해 PDF 문항 marker 분석은 생략합니다 "
+            f"(exit {pdf_bbox_proc.returncode}).",
+            flush=True,
+        )
 
     all_svg_paths = sorted(svg_dir.glob("*.svg"), key=page_num)
     all_tree_paths = sorted(tree_dir.glob("*.json"), key=page_num)

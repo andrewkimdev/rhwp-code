@@ -2308,6 +2308,20 @@ pub(crate) fn parse_paragraph_list(
                     }
                 }
             } else if ch != 0 && ch != 13 {
+                if let Some((leading, araea, trailing)) =
+                    crate::parser::hwp3::johab::decode_johab_araea_jamo(ch)
+                {
+                    // HWP3의 한 hchar가 HWPX에서는 옛한글 자모 2~3개가 된다.
+                    // char_offsets는 출력 문자마다 하나여야 하고, source hchar 위치는
+                    // 이미 loop 시작에서 hwp3_char_to_utf16_pos에 기록했으므로 둘을
+                    // 각각 갱신해 글자 모양·줄 시작 오프셋도 뒤따르게 한다.
+                    for decoded in [Some(leading), Some(araea), trailing].into_iter().flatten() {
+                        char_offsets.push(utf16_len);
+                        utf16_len += decoded.len_utf16() as u32;
+                        text_string.push(decoded);
+                    }
+                    continue;
+                }
                 let s = crate::parser::hwp3::johab::decode_johab(ch);
                 // ch 0x0080..0x7FFF 범위: decode_johab가 매핑 못 하면 '?'를 반환한다.
                 // ASCII '?'(=0x003F)와 달리, 이 범위의 미지원 코드는 한글/한자/필드

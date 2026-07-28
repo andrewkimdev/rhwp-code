@@ -2,7 +2,7 @@
 kind: canonical
 status: active
 canonical: mydocs/manual/cli_commands.md
-last_verified: 2026-07-26
+last_verified: 2026-07-28
 ---
 
 # rhwp CLI 명령어 매뉴얼
@@ -51,7 +51,8 @@ HWP5 FileHeader의 `encrypted` 플래그와 `EncryptVersion=4`가 설정된 문�
 | HWP3 비밀번호 암호화, 비압축 본문 | 미지원 | 비밀번호를 시도해도 종료 코드 1 |
 | HWP5 EncryptVersion 1~3 | 미지원 | 비밀번호를 시도하지 않고 종료 코드 1 |
 | 암호화되지 않은 HWPX | 지원 | 기존 HWPX 파서 사용, 비밀번호 옵션 불필요 |
-| 암호화 HWPX(ODF `encryption-data`) | 감지·분류만 지원 | 복호화하지 않고 종료 코드 1 |
+| 암호화 HWPX(ODF `encryption-data`, AES-256-CBC/PBKDF2) | 읽기 지원 | `--password` 또는 `--password-stdin` 필요 |
+| 암호화 HWPX(그 외 ODF 암호화 계약) | 미지원 | 지원하지 않는 암호화 방식으로 종료 코드 1 |
 | DRM(Fasoo/SoftCamp 등) | 미지원 | 비밀번호 암호화와 다른 보호 방식 |
 
 ```bash
