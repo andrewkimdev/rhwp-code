@@ -17,6 +17,9 @@ last_verified: 2026-07-29
   일반 `RealPic` 배경을 watermark opacity로 낮추지 않도록 SVG·Canvas·Skia를 일치시켰다.
 - `scaled_canvas_extent()`는 truncation 대신 ceil을 써 A4 fractional CSS pixel의 우·하단 clipping을
   방지하고 Studio E2E로 1191×1684 bitmap을 확인했다.
+- CanvasKit `PageRenderer`와 결과 비교 창도 같은 ceil bitmap 경계를 적용했다. 이는 Canvas2D의
+  `794×1123`와 CanvasKit의 `793×1122` 불일치로 readiness corpus 전체가 비교 오류가 된 CI 결과를
+  직접 보정한 것이며, 7개 representative corpus의 Canvas2D↔CanvasKit readiness 재현으로 확인했다.
 
 ## baseline 갱신 사유
 

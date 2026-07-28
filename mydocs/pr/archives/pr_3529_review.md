@@ -10,7 +10,7 @@ last_verified: 2026-07-29
 - PR: [#3529](https://github.com/edwardkim/rhwp/pull/3529)
 - 관련 이슈: [#3486](https://github.com/edwardkim/rhwp/issues/3486) (`Closes` 미사용)
 - 역할: `jangster77` collaborator self-review
-- 작성 시점 source head: `f049683a8671197320b47873d1821c769887aa8a`
+- 구현 보정 source head: `e999f7a9f`
 
 ## 라우팅과 merge 조건
 
@@ -31,8 +31,8 @@ modifiers: intake_and_review.md, local_validation.md,
 2. 페이지 배경 이미지는 raw legacy brightness/contrast의 저장 순서와 화면 투영 순서를 분리하고,
    일반 `RealPic` 배경을 watermark opacity로 잘못 낮추지 않는다. SVG·Web Canvas·Skia가 같은 규칙을
    사용한다.
-3. 실제 Studio Canvas bitmap 경계는 fractional CSS A4 크기를 올림해 144dpi에서 마지막 물리 pixel을
-   보존한다.
+3. 실제 Studio Canvas2D·CanvasKit·비교 창의 bitmap 경계는 fractional CSS A4 크기를 같은 방식으로
+   올림해 144dpi에서 마지막 물리 pixel을 보존한다.
 4. 새 HWP5 비교 fixture와 현재 HWPX IR 정규화 결과를 field-sweep baseline에 등록했다.
 
 **조건부 수용 권고.** 실제 fixture의 암호 열기·도형·배경·A4 경계 계약은 수용 가능하나, 한컴 전용
@@ -67,11 +67,19 @@ modifiers: intake_and_review.md, local_validation.md,
 | `wasm-pack build --target web --out-dir pkg` | passed |
 | Chrome·Firefox extension `npm run build` | passed |
 | Studio `npm run e2e:hwp-password-open` | passed; HWP3 144dpi A4 경계 확인 |
+| Studio `npm test` | 675 passed |
+| Studio `npm run build` | passed |
+| CanvasKit readiness corpus | 별도 7777 포트의 현재 작업본에서 7/7 Canvas2D↔CanvasKit parity 및 readiness passed |
 
 `cargo test --profile release-test --tests`는 #1692의 3개 기존 실패에서 중단했다. 같은 실패
 (`line_box_reflects_para_margins`, `answer_endnote_pages_match_pdf_ranges`,
 `page22_relationship_box_uses_table_flow`)는 현재 보정 전 Stage 9 head `e94194556`의 깨끗한 별도
 worktree에서도 동일하게 재현했다. 이번 PR 회귀로 판정하지 않으며 #3486 수용 근거에도 사용하지 않는다.
+
+최초 최신-head CI의 Canvas visual diff는 Canvas2D가 `794×1123`, CanvasKit이 `793×1122` bitmap을 만들어
+7개 readiness 비교를 오류 처리한 것을 확인했다. `e999f7a9f`에서 CanvasKit과 비교 창도 `ceil` 경계를 쓰도록
+보정했고, 위 별도 포트 readiness 재현으로 크기 불일치가 해소됐음을 확인했다. 이 보정이 포함된 새 head의
+CI를 다시 통과 기준으로 사용한다.
 
 ## 위험과 후속 보완
 
