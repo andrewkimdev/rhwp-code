@@ -761,6 +761,14 @@ impl Paragraph {
                 cs.start_pos = utf16_start;
             }
         }
+        // [#3576] 클램핑으로 같은 start_pos 에 몰린 ref 를 정리한다. char_shapes 는
+        // start_pos 오름차순의 '서로 다른' 경계여야 하는데, 삭제 범위 안에 있던 ref 가
+        // 전부 utf16_start 로 클램핑되면 중복이 남는다. 그 상태에서 다시 텍스트를
+        // 삽입하면 뒤쪽(보조) 글자모양이 새 텍스트 일부를 덮어 의도하지 않은 크기·굵기로
+        // 렌더된다 — 양식 채우기의 전체삭제→재삽입 경로에서 발현했다.
+        // 첫 ref 를 남긴다: 삭제 범위 '앞' 의 주 글자모양이 앞에 오기 때문이다.
+        // (오름차순 불변식이 유지되므로 dedup_by_key 로 인접 중복만 보면 충분하다.)
+        self.char_shapes.dedup_by_key(|cs| cs.start_pos);
 
         // 4. line_segs: 삭제 범위 이후 → utf16_delta만큼 감소
         for ls in &mut self.line_segs {
