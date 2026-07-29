@@ -2,7 +2,7 @@
 kind: canonical
 status: active
 canonical: mydocs/manual/cli_commands.md
-last_verified: 2026-07-28
+last_verified: 2026-07-29
 ---
 
 # rhwp CLI 명령어 매뉴얼
@@ -388,13 +388,13 @@ rhwp fields 신청서.hwp --json | jq -r '.fields[] | "\(.name): \(.memo // .gui
   `{"피규제집단명[0]":"…","피규제집단명[13]":"…"}`. 순번은 `fields --json` 목록 순서와 같다.
   순번 없는 키는 **종전대로 첫 매치**를 채우고, 여러 곳에 해당하면 `ambiguous` 로 보고한다.
   범위를 벗어난 순번은 `notFound` 에 그대로 실린다.
-- `-o, --output <파일>` — 출력 파일 (기본 `<입력명>_filled.hwp`)
+- `-o, --output <파일>` — 출력 파일 (기본 `<입력명>_filled.<입력과 같은 확장자>`, §edit 산출 형식)
 - `--dry-run` — **파일을 쓰지 않고** 변경 예정 내역만 보고. 에이전트의 사전 확인 장치.
-- `--json` 봉투: `{"schemaVersion":"1.0","source","dryRun","filledCount","filled":[{name,occurrence,value}],"notFound":[…],"ambiguous":[…],"output"?}`
+- `--json` 봉투: `{"schemaVersion":"1.0","source","dryRun","filledCount","filled":[{name,occurrence,value}],"notFound":[…],"ambiguous":[…],"output"?,"outputFormat"?}`
   - `notFound` — 문서에 없는 필드 이름(또는 범위를 벗어난 순번). 조용히 무시하지 않으므로 오타를 즉시 안다.
   - `ambiguous` — 순번 없이 준 이름이 **여러 곳에 해당**할 때 `{name, matched, total}` 로 보고한다.
     이 신호가 없으면 소비자가 "14개 중 1개만 채운 문서"를 완성본으로 오판한다.
-  - `output` 은 실제 저장했을 때만 실린다(`--dry-run` 이면 없음).
+  - `output`/`outputFormat` 은 실제 저장했을 때만 실린다(`--dry-run` 이면 없음).
 - **실패 시 원본 불변**: 필드 설정이 하나라도 실패하면 출력 파일을 쓰지 않고 종료 코드 1.
 - 종료 코드는 §종료 코드 계약 (없는 파일·직렬화/쓰기 실패 1 · 인자/JSON 오류 2)
 
@@ -411,10 +411,10 @@ rhwp fields out.hwp --json | jq -c '[.fields[]|select(.value!="")|{name,value}]'
 - `--find <문자열>` — 찾을 문자열 (빈 문자열은 exit 2)
 - `--replace <문자열>` — 바꿀 문자열 (`""` 이면 삭제)
 - `--ignore-case` — 대소문자 무시
-- `-o, --output <파일>` — 출력 파일 (기본 `<입력명>_replaced.hwp`)
+- `-o, --output <파일>` — 출력 파일 (기본 `<입력명>_replaced.<입력과 같은 확장자>`, §edit 산출 형식)
 - `--dry-run` — **파일을 쓰지 않고** 읽기 전용 검색으로 치환 예정 건수만 보고
-- `--json` 봉투: `{"schemaVersion":"1.0","source","find","replace","caseSensitive","dryRun","replacedCount","output"?}`
-  - `output` 은 실제 저장했을 때만 실린다 — **치환 0건이면 출력 파일을 만들지 않는다**
+- `--json` 봉투: `{"schemaVersion":"1.0","source","find","replace","caseSensitive","dryRun","replacedCount","output"?,"outputFormat"?}`
+  - `output`/`outputFormat` 은 실제 저장했을 때만 실린다 — **치환 0건이면 출력 파일을 만들지 않는다**
     (무변경 산출물 금지, dry-run 과 동일하게 파일 경로를 타지 않음).
 - **실패 시 원본 불변**: 치환·직렬화·쓰기 실패 시 출력 파일 없이 종료 코드 1.
 
@@ -432,9 +432,9 @@ rhwp search 개정본.hwp "2025년" --json | jq .matchCount     # → 0 이어�
 - `--text <문자열>` — 셀에 넣을 값. 빈 문자열은 비우기이며 줄바꿈·탭은 v1에서 허용하지 않는다.
 - `--keep-style` — 셀 안내문의 글자 모양을 유지한다. 기본은 검정·비이탤릭·비진하게로 기록해,
   제출용 양식의 파란 안내문 스타일을 실값이 상속하지 않게 한다 (#3391).
-- `-o, --output <파일>` — 출력 파일 (기본 `<입력명>_cell.hwp`)
+- `-o, --output <파일>` — 출력 파일 (기본 `<입력명>_cell.<입력과 같은 확장자>`, §edit 산출 형식)
 - `--dry-run` — 파일을 쓰지 않고 `oldText` → `newText` 변경 예정만 보고한다.
-- `--json` 봉투: `{"schemaVersion":"1.0","source","table","row","col","oldText","newText","dryRun","keepStyle","overflow":[…],"output"?}`
+- `--json` 봉투: `{"schemaVersion":"1.0","source","table","row","col","oldText","newText","dryRun","keepStyle","overflow":[…],"output"?,"outputFormat"?}`
 - **맞춤 검사(#3480)** — 넣은 값이 칸 폭을 넘치면 `overflow` 로 알린다:
   `[{"target":"table0[2,3]","text":"…","cellWidthPx":214.63,"textWidthPx":440.0,"lines":3}]`
   - 에이전트는 렌더 결과를 보지 않으므로, 신호가 없으면 표 경계를 벗어난 문서를
@@ -450,9 +450,25 @@ rhwp search 개정본.hwp "2025년" --json | jq .matchCount     # → 0 이어�
 ```bash
 # 발견 → 기록 → 재독 검증
 rhwp export-tables 양식.hwpx --json | jq '.tables[0].cells[:4]'
-rhwp edit set-cell 양식.hwpx --table 0 --row 2 --col 1 --text "1,234" -o 작성본.hwp --json
-rhwp export-tables 작성본.hwp --json | jq '.tables[0].cells[] | select(.row==2 and .col==1).text'
+rhwp edit set-cell 양식.hwpx --table 0 --row 2 --col 1 --text "1,234" -o 작성본.hwpx --json
+rhwp export-tables 작성본.hwpx --json | jq '.tables[0].cells[] | select(.row==2 and .col==1).text'
 ```
+
+### `edit` 산출 형식 (#3383)
+`edit` 3종(`fill-fields`/`replace-text`/`set-cell`)은 **입력 형식을 보존**한다.
+
+- HWPX 입력 → HWPX 산출(`export_hwpx_native`), 기본 확장자도 `.hwpx`
+- 그 밖의 입력(HWP5/HWP3) → HWP5 산출. 이때 직렬화는 **어댑터 경유**
+  (`export_hwp_with_adapter`)라 HWPX→HWP IR 매핑(#178)을 건너뛰지 않는다.
+- `--json` 봉투의 `outputFormat` 이 실제 저장 형식을 보고한다. 값은 `info --json` 의
+  `format` 과 같은 어휘(`"hwp5"`/`"hwpx"`)라 두 봉투를 그대로 대조할 수 있다.
+- 예외 하나: HWPX 입력에 `-o ….hwp` 를 **명시**하면 그 경로를 그대로 존중해 HWP5 로
+  저장하되(기존 스크립트 호환), 형식이 바뀐다는 사실과 이미지·차트 유실 가능성을
+  stderr 로 경고한다. 반대로 HWP 입력에 `-o ….hwpx` 를 줘도 형식은 바뀌지 않으며
+  (경고만 출력) 형식 변환은 `export-hwpx` 가 담당한다.
+
+종전에는 세 명령 모두 HWP5 를 강제 산출해 HWPX 양식이 조용히 `.hwp` 로 바뀌었고,
+어댑터 없는 경로라 실물 정부 양식에서 차트·이미지 페이지가 유실됐다(#3383).
 
 ---
 
