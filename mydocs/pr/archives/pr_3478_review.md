@@ -19,5 +19,8 @@
 - `cli_json_contract`: 22 passed — MCP/capabilities 계약 drift를 검증했다.
 - #3541과 같은 `main.rs` 충돌은 `ambiguous`와 `outputFormat`을 함께 노출하도록 해소했다. 원 PR의
   occurrence·모호성 의미를 잃지 않았다.
+- #3550 CI의 #2724 guard는 compatibility wrapper `set_field_value_by_name`의 위임 사실을 ledger에
+  등록하라고 요구했다. `d0b42ae18`은 실제 무효화를 수행하는 `set_field_value_by_name_at`을
+  검증되는 DelegatesTo 대상으로 명시하며, 중복 raw-stream 무효화를 넣지 않는다.
 
 중복 필드 이름의 실제 제출 위험을 JSON 응답에 드러내며 기존 단일 매치 API를 보존한다. **기술적 수용 가능**이다.

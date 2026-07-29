@@ -88,3 +88,12 @@ warnings`를 막는 것을 확인했다. 동작을 바꾸지 않고 그 체인�
 - `wasm-pack build --target web`: 검토 전용 `wasm-pkg` 출력으로 통과.
 - `cargo fmt --all -- --check`, `git diff --check`,
   `cargo clippy --all-targets -- -D warnings`, `cargo test --doc` (**4 passed / 2 ignored**) 모두 통과.
+
+## CI 재검증 보정
+
+최초 #3550 CI의 default-feature shard 8/8은 #2724 source guard에서
+`set_field_value_by_name()`을 미분류 뮤테이터로 보고 실패했다. 이 public 메서드는 occurrence 0을
+고르는 호환 래퍼이며, 실제 `set_field_value_by_name_at()`가 section `raw_stream`을 무효화한다.
+무효화를 중복 추가하지 않고, guard의 검증되는 `DelegatesTo("set_field_value_by_name_at")` ledger에
+근거와 함께 등록한 `d0b42ae18`로 보정했다. targeted guard 5/5, field occurrence 4/4, CLI JSON
+22/22, fmt·clippy를 재통과한 뒤 CI를 다시 실행한다.
