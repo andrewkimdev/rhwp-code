@@ -4,12 +4,15 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import html as html_lib
 import json
+import os
 import re
 import shutil
 import subprocess
 import sys
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -48,6 +51,8 @@ FRAME_TAIL_LINE_OVERFLOW_MIN_PX = 4.0
 COLUMN_X_OVERLAP_LIMIT = 0.55
 QUESTION_MARKER_Y_DRIFT_LIMIT_PX = 42.0
 DEFAULT_PIXEL_DIFF_THRESHOLD = 32
+VISUAL_SWEEP_RUN_SCHEMA_VERSION = 1
+VISUAL_SWEEP_PAGE_SCHEMA_VERSION = 1
 LARGE_INK_TILE_SIZE = 16
 LARGE_INK_TILE_MIN_PIXELS = 20
 LARGE_INK_REGION_MIN_WIDTH_PX = 72.0
@@ -404,6 +409,541 @@ def first_endnote_shape(compact_shapes: list[dict[str, object]]) -> dict[str, ob
     return {}
 
 
+def write_json_atomic(path: Path, value: object) -> None:
+    """Write JSON without exposing a partial checkpoint to --resume."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    serialized = json.dumps(value, ensure_ascii=False, indent=2) + "\n"
+    file_descriptor, temp_name = tempfile.mkstemp(
+        prefix=f".{path.name}.", suffix=".tmp", dir=path.parent
+    )
+    try:
+        with os.fdopen(file_descriptor, "w", encoding="utf-8") as handle:
+            handle.write(serialized)
+            handle.flush()
+            os.fsync(handle.fileno())
+        Path(temp_name).replace(path)
+    except BaseException:
+        Path(temp_name).unlink(missing_ok=True)
+        raise
+
+
+def load_json_object(path: Path, label: str) -> dict[str, object]:
+    try:
+        loaded = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise SystemExit(f"{label} JSON을 읽을 수 없습니다: {path}: {exc}") from exc
+    if not isinstance(loaded, dict):
+        raise SystemExit(f"{label} JSON 최상위 값은 객체여야 합니다: {path}")
+    return loaded
+
+
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while chunk := handle.read(1024 * 1024):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def git_head_identifier(root: Path) -> str:
+    proc = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=root,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if proc.returncode != 0:
+        raise SystemExit(f"Git HEAD를 확인할 수 없습니다: {proc.stderr.strip()}")
+    head = proc.stdout.strip()
+    if not head:
+        raise SystemExit("Git HEAD가 비어 있습니다.")
+    return head
+
+
+def rhwp_binary_identifier(root: Path, rhwp_bin: str) -> dict[str, str]:
+    configured = Path(rhwp_bin)
+    if configured.is_absolute():
+        resolved = configured
+    else:
+        local_path = root / configured
+        found_on_path = shutil.which(rhwp_bin)
+        resolved = local_path if local_path.exists() else Path(found_on_path or rhwp_bin)
+    if not resolved.exists() or not resolved.is_file():
+        raise SystemExit(f"rhwp 실행 파일을 식별할 수 없습니다: {rhwp_bin}")
+    return {
+        "configured": rhwp_bin,
+        "path": safe_rel_str(root, resolved.resolve()),
+        "sha256": sha256_file(resolved),
+    }
+
+
+def sweep_provenance(
+    root: Path,
+    hwp: Path,
+    pdf: Path,
+    rhwp_bin: str,
+) -> dict[str, object]:
+    return {
+        "hwp": {"path": safe_rel_str(root, hwp), "sha256": sha256_file(hwp)},
+        "pdf": {"path": safe_rel_str(root, pdf), "sha256": sha256_file(pdf)},
+        "git_head": git_head_identifier(root),
+        "sweep_script": {
+            "path": safe_rel_str(root, Path(__file__).resolve()),
+            "sha256": sha256_file(Path(__file__).resolve()),
+        },
+        "rhwp_binary": rhwp_binary_identifier(root, rhwp_bin),
+    }
+
+
+def run_manifest_path(base: Path) -> Path:
+    return base / "run_manifest.json"
+
+
+def page_manifest_dir(base: Path) -> Path:
+    return base / "pages"
+
+
+def run_manifest_for_target(
+    base: Path,
+    target: Target,
+    provenance: dict[str, object],
+    dpi: int,
+    pixel_diff_threshold: int,
+    *,
+    resume: bool,
+) -> dict[str, object]:
+    path = run_manifest_path(base)
+    immutable = {
+        "schema_version": VISUAL_SWEEP_RUN_SCHEMA_VERSION,
+        "key": target.key,
+        "provenance": provenance,
+        "dpi": dpi,
+        "pixel_diff_threshold": pixel_diff_threshold,
+    }
+    if not resume:
+        manifest = {
+            **immutable,
+            "requested_pages": [],
+            "requested_page_shards": [],
+            "run_state": "incomplete",
+        }
+        write_json_atomic(path, manifest)
+        return manifest
+
+    if not path.exists():
+        raise SystemExit(f"--resume 출력에 run manifest가 없습니다: {path}")
+    manifest = load_json_object(path, "run manifest")
+    mismatches = [key for key, expected in immutable.items() if manifest.get(key) != expected]
+    if mismatches:
+        raise SystemExit(
+            "--resume provenance가 기존 실행과 다릅니다: " + ", ".join(mismatches)
+        )
+    return manifest
+
+
+def page_numbers_from_manifest(value: object) -> list[int]:
+    if not isinstance(value, list):
+        return []
+    return sorted({item for item in value if isinstance(item, int) and item >= 1})
+
+
+def record_requested_page_shard(
+    base: Path,
+    run_manifest: dict[str, object],
+    requested_pages: list[int],
+) -> dict[str, object]:
+    previous_pages = page_numbers_from_manifest(run_manifest.get("requested_pages"))
+    merged_pages = sorted(set(previous_pages) | set(requested_pages))
+    raw_shards = run_manifest.get("requested_page_shards")
+    shards = (
+        [page_numbers_from_manifest(item) for item in raw_shards if isinstance(item, list)]
+        if isinstance(raw_shards, list)
+        else []
+    )
+    if requested_pages and requested_pages not in shards:
+        shards.append(requested_pages)
+    run_manifest["requested_pages"] = merged_pages
+    run_manifest["requested_page_shards"] = shards
+    run_manifest["run_state"] = "incomplete"
+    write_json_atomic(run_manifest_path(base), run_manifest)
+    return run_manifest
+
+
+def relative_artifact(base: Path, path: Path) -> str:
+    return str(path.relative_to(base))
+
+
+REQUIRED_PAGE_ARTIFACTS = (
+    "svg",
+    "render_tree",
+    "rhwp_png",
+    "pdf_png",
+    "compare",
+    "overlay",
+    "review",
+    "analysis",
+)
+
+
+def valid_page_manifests(base: Path) -> dict[int, dict[str, object]]:
+    completed: dict[int, dict[str, object]] = {}
+    for path in sorted(page_manifest_dir(base).glob("page-*.json")):
+        try:
+            manifest = load_json_object(path, "page manifest")
+        except SystemExit:
+            print(f"경고: 손상된 page manifest를 재생성합니다: {path}", flush=True)
+            continue
+        page = manifest.get("page")
+        artifacts = manifest.get("artifacts")
+        if not isinstance(page, int) or page < 1 or not isinstance(artifacts, dict):
+            print(f"경고: 불완전한 page manifest를 재생성합니다: {path}", flush=True)
+            continue
+        valid = True
+        for key in REQUIRED_PAGE_ARTIFACTS:
+            artifact = artifacts.get(key)
+            if not isinstance(artifact, str):
+                valid = False
+                break
+            artifact_path = base / artifact
+            try:
+                artifact_path.relative_to(base)
+            except ValueError:
+                valid = False
+                break
+            if not artifact_path.is_file():
+                valid = False
+                break
+        if valid:
+            completed[page] = manifest
+        else:
+            print(f"경고: 산출물이 빠진 page manifest를 재생성합니다: {path}", flush=True)
+    return completed
+
+
+def page_artifact_path(base: Path, manifest: dict[str, object], key: str) -> Path:
+    artifacts = manifest.get("artifacts")
+    if not isinstance(artifacts, dict) or not isinstance(artifacts.get(key), str):
+        raise SystemExit(f"page manifest에 {key} 산출물이 없습니다.")
+    return base / str(artifacts[key])
+
+
+def overlay_summary_for_metrics(
+    metrics: list[dict[str, object]], pixel_diff_threshold: int
+) -> dict[str, object]:
+    pixel_matches = [
+        float(item["pixel_match_percent"])
+        for item in metrics
+        if isinstance(item.get("pixel_match_percent"), (int, float))
+    ]
+    ink_matches = [
+        float(item["ink_match_percent"])
+        for item in metrics
+        if isinstance(item.get("ink_match_percent"), (int, float))
+    ]
+    proxy_matches = [
+        float(item["visual_accuracy_proxy_percent"])
+        for item in metrics
+        if isinstance(item.get("visual_accuracy_proxy_percent"), (int, float))
+    ]
+    worst_pixel = min(pixel_matches) if pixel_matches else None
+    worst_ink = min(ink_matches) if ink_matches else None
+    worst_proxy = min(proxy_matches) if proxy_matches else None
+    return {
+        "compared_pages": len(metrics),
+        "pixel_diff_threshold": pixel_diff_threshold,
+        "average_pixel_match_percent": round(sum(pixel_matches) / len(pixel_matches), 5)
+        if pixel_matches
+        else None,
+        "worst_pixel_match_percent": round(worst_pixel, 5)
+        if worst_pixel is not None
+        else None,
+        "average_ink_match_percent": round(sum(ink_matches) / len(ink_matches), 5)
+        if ink_matches
+        else None,
+        "worst_ink_match_percent": round(worst_ink, 5)
+        if worst_ink is not None
+        else None,
+        "average_visual_accuracy_proxy_percent": round(sum(proxy_matches) / len(proxy_matches), 5)
+        if proxy_matches
+        else None,
+        "worst_visual_accuracy_proxy_percent": round(worst_proxy, 5)
+        if worst_proxy is not None
+        else None,
+        "worst_pages": [
+            item["page"]
+            for item in sorted(
+                metrics,
+                key=lambda row: float(row.get("visual_accuracy_proxy_percent", 100.0)),
+            )[:10]
+        ],
+    }
+
+
+def select_source_page_paths(
+    all_svg_paths: list[Path],
+    all_tree_paths: list[Path],
+    all_pdf_paths: list[Path],
+    selected_pages: list[int] | None,
+) -> list[tuple[int, Path, Path, Path]]:
+    svg_paths = filter_paths_by_pages(all_svg_paths, selected_pages)
+    tree_paths = filter_paths_by_pages(all_tree_paths, selected_pages)
+    pdf_paths = filter_paths_by_pages(all_pdf_paths, selected_pages)
+    if selected_pages:
+        selected_groups = {
+            "svg": svg_paths,
+            "render_tree": tree_paths,
+            "pdf_png": pdf_paths,
+        }
+        all_groups = {
+            "svg": all_svg_paths,
+            "render_tree": all_tree_paths,
+            "pdf_png": all_pdf_paths,
+        }
+        if use_singleton_page_fallback(selected_pages, all_groups, selected_groups):
+            print(
+                (
+                    "Selected page singleton fallback: 산출물 파일명 숫자가 선택 페이지와 "
+                    "다르지만 모든 비교 그룹이 단일 페이지라 1:1로 매칭합니다."
+                ),
+                flush=True,
+            )
+            svg_paths = all_svg_paths
+            tree_paths = all_tree_paths
+            pdf_paths = all_pdf_paths
+        else:
+            ensure_selected_pages_available(selected_pages, selected_groups)
+
+    if not (len(svg_paths) == len(tree_paths) == len(pdf_paths)):
+        raise SystemExit(
+            "SVG, render tree, PDF raster의 선택 페이지 수가 일치하지 않습니다: "
+            f"svg={len(svg_paths)}, tree={len(tree_paths)}, pdf={len(pdf_paths)}"
+        )
+    pages: list[tuple[int, Path, Path, Path]] = []
+    seen: set[int] = set()
+    for svg_path, tree_path, pdf_path in zip(svg_paths, tree_paths, pdf_paths):
+        page = page_num(svg_path)
+        if page in seen:
+            raise SystemExit(f"선택 페이지 번호가 중복되었습니다: {page}")
+        seen.add(page)
+        pages.append((page, svg_path, tree_path, pdf_path))
+    return pages
+
+
+def page_has_flag(page: dict[str, object], flag: str) -> bool:
+    flags = page.get("flags")
+    return isinstance(flags, list) and flag in flags
+
+
+def visual_summary_for_pages(
+    pages: list[dict[str, object]],
+    metrics_path: Path,
+    question_flow_path: Path,
+) -> tuple[dict[str, object], list[dict[str, object]]]:
+    flagged_pages = [page for page in pages if page_has_flag(page, "") or bool(page.get("flags"))]
+
+    def flagged_numbers(flag: str) -> list[object]:
+        return [page.get("page") for page in flagged_pages if page_has_flag(page, flag)]
+
+    def separator_visible(page: dict[str, object]) -> bool:
+        shape = page.get("endnote_shape_ui")
+        return isinstance(shape, dict) and bool(shape.get("separator_visible"))
+
+    def separator_selected(page: dict[str, object], side: str) -> bool:
+        gap = page.get("endnote_separator_gap")
+        if not isinstance(gap, dict):
+            return False
+        target = gap.get(side)
+        return isinstance(target, dict) and bool(target.get("selected"))
+
+    def no_separator_has_content(page: dict[str, object]) -> bool:
+        value = page.get("endnote_no_separator_content_start")
+        if not isinstance(value, dict):
+            return False
+        for side in ("rhwp", "pdf"):
+            side_value = value.get(side)
+            if isinstance(side_value, dict) and side_value.get("content_start_y") is not None:
+                return True
+        return False
+
+    def paired_marker_gap(page: dict[str, object]) -> bool:
+        value = page.get("between_notes_marker_gap")
+        return isinstance(value, dict) and int(value.get("paired_gap_count", 0)) > 0
+
+    summary = {
+        "analyzed_pages": len(pages),
+        "flagged_page_count": len(flagged_pages),
+        "frame_overflow_pages": flagged_numbers("frame_overflow_pixels"),
+        "content_bottom_drift_pages": flagged_numbers("content_bottom_drift"),
+        "red_marker_drift_pages": flagged_numbers("red_marker_drift"),
+        "question_marker_flow_drift_pages": flagged_numbers("question_marker_flow_drift"),
+        "line_band_drift_pages": flagged_numbers("line_band_drift"),
+        "column_line_band_drift_pages": flagged_numbers("column_line_band_drift"),
+        "large_ink_region_drift_pages": flagged_numbers("large_ink_region_drift"),
+        "endnote_separator_gap_drift_pages": flagged_numbers("endnote_separator_gap_drift"),
+        "endnote_separator_observed_pages": [
+            page.get("page")
+            for page in pages
+            if separator_visible(page)
+            and (separator_selected(page, "rhwp") or separator_selected(page, "pdf"))
+        ],
+        "endnote_separator_gap_pages": [
+            page.get("page")
+            for page in pages
+            if isinstance(page.get("endnote_separator_gap"), dict)
+            and page["endnote_separator_gap"].get("gap_delta_px") is not None
+        ],
+        "endnote_no_separator_content_pages": [
+            page.get("page")
+            for page in pages
+            if not separator_visible(page) and no_separator_has_content(page)
+        ],
+        "between_notes_marker_gap_pages": [page.get("page") for page in pages if paired_marker_gap(page)],
+        "equation_text_overlap_pages": flagged_numbers("equation_text_overlap"),
+        "question_title_text_overlap_pages": flagged_numbers("question_title_text_overlap"),
+        "line_order_overlap_pages": flagged_numbers("line_order_overlap"),
+        "render_tree_frame_tail_overflow_pages": flagged_numbers("render_tree_frame_tail_overflow"),
+        "question_marker_drift_pages": flagged_numbers("question_marker_drift"),
+        "legacy_glyph_visual_pages": flagged_numbers("legacy_glyph_visual_mismatch"),
+        "metrics_json": str(metrics_path),
+        "question_flow_json": str(question_flow_path),
+    }
+    return summary, flagged_pages
+
+
+def update_root_summary(out_root: Path, manifest: dict[str, object]) -> None:
+    summary_path = out_root / "summary.json"
+    existing: list[object] = []
+    if summary_path.exists():
+        try:
+            loaded = json.loads(summary_path.read_text(encoding="utf-8"))
+            if isinstance(loaded, list):
+                existing = loaded
+        except (OSError, json.JSONDecodeError):
+            pass
+    key = manifest.get("key")
+    next_items = [
+        item for item in existing if not isinstance(item, dict) or item.get("key") != key
+    ]
+    next_items.append(manifest)
+    write_json_atomic(summary_path, next_items)
+
+
+def write_target_status(
+    root: Path,
+    out_root: Path,
+    base: Path,
+    target: Target,
+    run_manifest: dict[str, object],
+    all_svg_paths: list[Path],
+    all_tree_paths: list[Path],
+    all_pdf_paths: list[Path],
+    compact_shapes: list[dict[str, object]],
+    pdf_question_markers: list[dict[str, object]],
+    pixel_diff_threshold: int,
+) -> dict[str, object]:
+    completed = valid_page_manifests(base)
+    completed_pages = sorted(completed)
+    requested_pages = page_numbers_from_manifest(run_manifest.get("requested_pages"))
+    missing_pages = sorted(set(requested_pages) - set(completed_pages))
+    run_state = "complete" if requested_pages and not missing_pages else "incomplete"
+
+    ordered_manifests = [completed[page] for page in completed_pages]
+    compare_pages = [page_artifact_path(base, page, "compare") for page in ordered_manifests]
+    overlay_pages = [page_artifact_path(base, page, "overlay") for page in ordered_manifests]
+    review_pages = [page_artifact_path(base, page, "review") for page in ordered_manifests]
+    overlay_metrics = [
+        page.get("overlay_metrics")
+        for page in ordered_manifests
+        if isinstance(page.get("overlay_metrics"), dict)
+    ]
+    visual_pages = [
+        page.get("visual_metrics")
+        for page in ordered_manifests
+        if isinstance(page.get("visual_metrics"), dict)
+    ]
+    overlay_summary = overlay_summary_for_metrics(overlay_metrics, pixel_diff_threshold)
+    overlay_metrics_path = base / "overlay" / "overlay_metrics.json"
+    write_json_atomic(
+        overlay_metrics_path,
+        {"summary": overlay_summary, "pages": overlay_metrics},
+    )
+
+    analysis_dir = base / "analysis"
+    metrics_path = analysis_dir / "metrics.json"
+    flagged_path = analysis_dir / "flagged_pages.json"
+    question_flow_path = analysis_dir / "question_flow.json"
+    tree_paths = [page_artifact_path(base, page, "render_tree") for page in ordered_manifests]
+    rhwp_pngs = [page_artifact_path(base, page, "rhwp_png") for page in ordered_manifests]
+    question_markers = collect_render_tree_question_markers(
+        tree_paths,
+        rhwp_pngs,
+        completed_pages,
+    )
+    question_drifts = build_question_marker_drifts(question_markers, pdf_question_markers)
+    write_json_atomic(
+        question_flow_path,
+        {
+            "rhwp_question_markers": question_markers,
+            "pdf_question_markers": pdf_question_markers,
+            "question_marker_drifts_by_page": question_drifts,
+        },
+    )
+    write_json_atomic(metrics_path, visual_pages)
+    visual_summary, flagged_pages = visual_summary_for_pages(
+        visual_pages, metrics_path, question_flow_path
+    )
+    write_json_atomic(flagged_path, flagged_pages)
+
+    contact = None
+    overlay_contact = None
+    review_contact = None
+    if compare_pages:
+        contact = make_contact_sheet(compare_pages, base / "contact_sheet.png")
+        overlay_contact = make_contact_sheet(overlay_pages, base / "overlay_contact_sheet.png")
+        review_contact = make_contact_sheet(review_pages, base / "review_contact_sheet.png")
+
+    run_manifest["run_state"] = run_state
+    write_json_atomic(run_manifest_path(base), run_manifest)
+    manifest = {
+        "key": target.key,
+        "hwp": run_manifest["provenance"]["hwp"]["path"],
+        "pdf": run_manifest["provenance"]["pdf"]["path"],
+        "requested_pages": requested_pages,
+        "completed_pages": completed_pages,
+        "missing_pages": missing_pages,
+        "run_state": run_state,
+        "run_manifest": safe_rel_str(root, run_manifest_path(base)),
+        "exported_svg_pages": len(all_svg_paths),
+        "exported_render_tree_pages": len(all_tree_paths),
+        "exported_pdf_pages": len(all_pdf_paths),
+        "rasterized_svg_pages": len(completed_pages),
+        "rasterized_pdf_pages": len(all_pdf_paths),
+        "svg_pages": len(completed_pages),
+        "render_tree_pages": len(completed_pages),
+        "pdf_pages": len(completed_pages),
+        "compare_pages": len(compare_pages),
+        "overlay_pages": len(overlay_pages),
+        "review_pages": len(review_pages),
+        "pdf_question_markers": len(pdf_question_markers),
+        "contact_sheet": safe_rel_str(root, contact) if contact else None,
+        "overlay_contact_sheet": safe_rel_str(root, overlay_contact) if overlay_contact else None,
+        "review_contact_sheet": safe_rel_str(root, review_contact) if review_contact else None,
+        "analysis_dir": safe_rel_str(root, analysis_dir),
+        "overlay_dir": safe_rel_str(root, base / "overlay"),
+        "review_dir": safe_rel_str(root, base / "review"),
+        "note_shape": compact_shapes,
+        "note_shape_json": safe_rel_str(root, analysis_dir / "note_shape.json"),
+        "overlay_metrics": overlay_summary,
+        "overlay_metrics_json": safe_rel_str(root, overlay_metrics_path),
+        "visual_metrics": visual_summary,
+        "flagged_pages": flagged_pages,
+    }
+    write_json_atomic(base / "manifest.json", manifest)
+    update_root_summary(out_root, manifest)
+    return manifest
+
+
 def render_target(
     root: Path,
     target: Target,
@@ -412,6 +952,8 @@ def render_target(
     dpi: int,
     pixel_diff_threshold: int,
     selected_pages: list[int] | None,
+    *,
+    resume: bool,
 ) -> dict[str, object]:
     print(f"== {target.key} ==", flush=True)
     if dpi <= 0:
@@ -433,35 +975,71 @@ def render_target(
     analysis_dir = base / "analysis"
     tree_dir = base / "render_tree"
     pdf_bbox_html = base / "pdf_bbox.html"
-    clean_dir(svg_dir)
-    clean_dir(rhwp_png_dir)
-    clean_dir(pdf_png_dir)
-    clean_dir(compare_dir)
-    clean_dir(overlay_dir)
-    clean_dir(review_dir)
-    clean_dir(analysis_dir)
-    clean_dir(tree_dir)
+    if resume:
+        base.mkdir(parents=True, exist_ok=True)
+    else:
+        # 기본 실행은 이 target의 이전 산출물을 새 실행과 섞지 않는다. 기존과 달리
+        # --resume일 때만 이 디렉터리를 보존한다.
+        clean_dir(base)
+    for directory in (
+        svg_dir,
+        rhwp_png_dir,
+        pdf_png_dir,
+        compare_dir,
+        overlay_dir,
+        review_dir,
+        analysis_dir,
+        tree_dir,
+        page_manifest_dir(base),
+    ):
+        directory.mkdir(parents=True, exist_ok=True)
+
+    provenance = sweep_provenance(root, hwp, pdf, rhwp_bin)
+    run_manifest = run_manifest_for_target(
+        base,
+        target,
+        provenance,
+        dpi,
+        pixel_diff_threshold,
+        resume=resume,
+    )
 
     note_shape_path = analysis_dir / "note_shape.json"
-    note_shape = load_note_shape(root, hwp, rhwp_bin, note_shape_path)
+    if resume and note_shape_path.exists():
+        note_shape = load_json_object(note_shape_path, "미주 모양")
+    else:
+        note_shape = load_note_shape(root, hwp, rhwp_bin, note_shape_path)
     compact_shapes = compact_note_shape(note_shape)
     export_log = base / "export.log"
-    run([rhwp_bin, "export-svg", str(hwp), "-o", str(svg_dir)], cwd=root, log_path=export_log)
     tree_log = base / "render_tree.log"
-    run(
-        [rhwp_bin, "export-render-tree", str(hwp), "-o", str(tree_dir)],
-        cwd=root,
-        log_path=tree_log,
-    )
+    if not any(svg_dir.glob("*.svg")):
+        run(
+            [rhwp_bin, "export-svg", str(hwp), "-o", str(svg_dir)],
+            cwd=root,
+            log_path=export_log,
+        )
+    if not any(tree_dir.glob("*.json")):
+        run(
+            [rhwp_bin, "export-render-tree", str(hwp), "-o", str(tree_dir)],
+            cwd=root,
+            log_path=tree_log,
+        )
 
     all_svg_paths = sorted(svg_dir.glob("*.svg"), key=page_num)
     all_tree_paths = sorted(tree_dir.glob("*.json"), key=page_num)
     print(f"SVG export pages: {len(all_svg_paths)}", flush=True)
-    raster_svg_paths = raster_paths_for_selected_pages(all_svg_paths, selected_pages)
+    if not all_svg_paths or not all_tree_paths:
+        raise SystemExit("SVG 또는 render tree export 산출물이 없습니다.")
 
     pdf_prefix = pdf_png_dir / "pdf"
-    for command in pdf_raster_commands(pdf, dpi, pdf_prefix, selected_pages):
-        run(command, cwd=root)
+    if not resume and selected_pages is None:
+        run(pdf_raster_commands(pdf, dpi, pdf_prefix, None)[0], cwd=root)
+    else:
+        existing_pdf_pages = {page_num(path) for path in pdf_png_dir.glob("*.png")}
+        requested_pdf_pages = selected_pages or [page_num(path) for path in all_svg_paths]
+        for page in requested_pdf_pages:
+            if page not in existing_pdf_pages:
+                run(pdf_raster_commands(pdf, dpi, pdf_prefix, [page])[0], cwd=root)
     # PDF text layer is a candidate-only input for question-marker drift. Some
     # legacy HWP PDFs contain PUA strings that make Poppler's pdftotext abort,
     # while their raster pages remain valid visual oracles. Keep the raster
@@ -482,9 +1060,43 @@ def render_target(
             flush=True,
         )
 
+    all_pdf_pngs = sorted(pdf_png_dir.glob("*.png"), key=page_num)
+    source_pages = select_source_page_paths(
+        all_svg_paths,
+        all_tree_paths,
+        all_pdf_pngs,
+        selected_pages,
+    )
+    if not source_pages:
+        raise SystemExit("선택한 페이지의 SVG/render tree/PDF 산출물이 없습니다.")
+    requested_page_numbers = [page for page, _, _, _ in source_pages]
+    if selected_pages:
+        print(f"Selected pages: {selected_pages}", flush=True)
+    run_manifest = record_requested_page_shard(base, run_manifest, requested_page_numbers)
+    pdf_question_markers = extract_pdf_question_markers(pdf_bbox_html, all_pdf_pngs)
+    # 첫 checkpoint 전에 incomplete summary를 남긴다. 이후 SIGTERM으로 종료돼도
+    # 요청·완료·누락 상태가 함께 남아 완료 sweep처럼 보이지 않는다.
+    write_target_status(
+        root,
+        out_root,
+        base,
+        target,
+        run_manifest,
+        all_svg_paths,
+        all_tree_paths,
+        all_pdf_pngs,
+        compact_shapes,
+        pdf_question_markers,
+        pixel_diff_threshold,
+    )
+
     svg_zoom = dpi / 96.0
-    for svg in raster_svg_paths:
-        png = rhwp_png_dir / f"rhwp_{page_num(svg):03d}.png"
+    completed = valid_page_manifests(base)
+    for page, svg_path, tree_path, pdf_path in source_pages:
+        if page in completed:
+            print(f"resume: p{page:03d} checkpoint를 재사용합니다.", flush=True)
+            continue
+        png = rhwp_png_dir / f"rhwp_{page:03d}.png"
         # export-svg의 unitless width/height는 CSS px(96dpi)다. rsvg-convert의
         # --dpi-*만 바꾸면 unitless 크기는 그대로이므로, PDF와 같은 목표 DPI로
         # 래스터하려면 zoom도 함께 적용해야 한다.
@@ -497,138 +1109,98 @@ def render_target(
                 f"{svg_zoom:.8f}",
                 "-o",
                 str(png),
-                str(svg),
+                str(svg_path),
             ],
             cwd=root,
             verbose=False,
         )
+        compare_pages = make_compares([png], [pdf_path], compare_dir, target.key)
+        if len(compare_pages) != 1:
+            raise SystemExit(f"p{page:03d} compare 산출물을 만들지 못했습니다.")
+        overlay_path = overlay_dir / f"overlay_{page:03d}.png"
+        overlay_metrics = make_overlay_page(
+            png,
+            pdf_path,
+            overlay_path,
+            target.key,
+            page - 1,
+            pixel_diff_threshold=pixel_diff_threshold,
+        )
+        review_pages = make_review_panels(
+            compare_pages,
+            [overlay_path],
+            [overlay_metrics],
+            review_dir,
+        )
+        if len(review_pages) != 1:
+            raise SystemExit(f"p{page:03d} review 산출물을 만들지 못했습니다.")
+        page_markers = collect_render_tree_question_markers([tree_path], [png], [page])
+        question_drifts = build_question_marker_drifts(
+            page_markers, pdf_question_markers
+        ).get(page, [])
+        visual_metrics = analyze_page(
+            png,
+            pdf_path,
+            svg_path,
+            tree_path,
+            analysis_dir,
+            target.key,
+            page - 1,
+            question_drifts,
+            first_endnote_shape(compact_shapes),
+            pixel_diff_threshold,
+        )
+        analysis_path = analysis_dir / f"page_{page:03d}.json"
+        write_json_atomic(analysis_path, visual_metrics)
+        page_manifest = {
+            "schema_version": VISUAL_SWEEP_PAGE_SCHEMA_VERSION,
+            "page": page,
+            "artifacts": {
+                "svg": relative_artifact(base, svg_path),
+                "render_tree": relative_artifact(base, tree_path),
+                "rhwp_png": relative_artifact(base, png),
+                "pdf_png": relative_artifact(base, pdf_path),
+                "compare": relative_artifact(base, compare_pages[0]),
+                "overlay": relative_artifact(base, overlay_path),
+                "review": relative_artifact(base, review_pages[0]),
+                "analysis": relative_artifact(base, analysis_path),
+            },
+            "overlay_metrics": overlay_metrics,
+            "visual_metrics": visual_metrics,
+        }
+        # 위 산출물이 모두 성공한 뒤에만 이 page를 완료로 공개한다.
+        write_json_atomic(page_manifest_dir(base) / f"page-{page:03d}.json", page_manifest)
+        completed[page] = page_manifest
+        write_target_status(
+            root,
+            out_root,
+            base,
+            target,
+            run_manifest,
+            all_svg_paths,
+            all_tree_paths,
+            all_pdf_pngs,
+            compact_shapes,
+            pdf_question_markers,
+            pixel_diff_threshold,
+        )
 
-    all_rhwp_pngs = sorted(rhwp_png_dir.glob("*.png"), key=page_num)
-    all_pdf_pngs = sorted(pdf_png_dir.glob("*.png"), key=page_num)
-    pdf_question_markers = extract_pdf_question_markers(pdf_bbox_html, all_pdf_pngs)
-    print(
-        f"Raster PNG pages: rhwp={len(all_rhwp_pngs)}, pdf={len(all_pdf_pngs)}",
-        flush=True,
-    )
-    svg_paths = filter_paths_by_pages(all_svg_paths, selected_pages)
-    tree_paths = filter_paths_by_pages(all_tree_paths, selected_pages)
-    rhwp_pngs = filter_paths_by_pages(all_rhwp_pngs, selected_pages)
-    pdf_pngs = filter_paths_by_pages(all_pdf_pngs, selected_pages)
-    if selected_pages:
-        print(f"Selected pages: {selected_pages}", flush=True)
-        selected_groups = {
-            "svg": svg_paths,
-            "render_tree": tree_paths,
-            "rhwp_png": rhwp_pngs,
-            "pdf_png": pdf_pngs,
-        }
-        all_groups = {
-            "svg": all_svg_paths,
-            "render_tree": all_tree_paths,
-            "rhwp_png": all_rhwp_pngs,
-            "pdf_png": all_pdf_pngs,
-        }
-        if use_singleton_page_fallback(selected_pages, all_groups, selected_groups):
-            print(
-                (
-                    "Selected page singleton fallback: 산출물 파일명 숫자가 선택 페이지와 "
-                    "다르지만 모든 비교 그룹이 단일 페이지라 1:1로 매칭합니다."
-                ),
-                flush=True,
-            )
-            svg_paths = all_svg_paths
-            tree_paths = all_tree_paths
-            rhwp_pngs = all_rhwp_pngs
-            pdf_pngs = all_pdf_pngs
-        else:
-            ensure_selected_pages_available(
-                selected_pages,
-                {
-                    "svg": svg_paths,
-                    "render_tree": tree_paths,
-                    "rhwp_png": rhwp_pngs,
-                    "pdf_png": pdf_pngs,
-                },
-            )
-    compare_pages = make_compares(rhwp_pngs, pdf_pngs, compare_dir, target.key)
-    overlay_result = make_overlay_compares(
-        rhwp_pngs,
-        pdf_pngs,
-        overlay_dir,
-        target.key,
-        pixel_diff_threshold=pixel_diff_threshold,
-    )
-    contact = make_contact_sheet(compare_pages, base / "contact_sheet.png")
-    overlay_contact = make_contact_sheet(
-        overlay_result["pages"],
-        base / "overlay_contact_sheet.png",
-    ) if overlay_result["pages"] else None
-    review_pages = make_review_panels(
-        compare_pages,
-        overlay_result["pages"],
-        overlay_result["metrics"],
-        review_dir,
-    )
-    review_contact = make_contact_sheet(
-        review_pages,
-        base / "review_contact_sheet.png",
-    ) if review_pages else None
-    visual_analysis = analyze_pages(
-        rhwp_pngs,
-        pdf_pngs,
-        svg_paths,
-        tree_paths,
-        analysis_dir,
-        target.key,
+    manifest = write_target_status(
+        root,
+        out_root,
+        base,
+        target,
+        run_manifest,
+        all_svg_paths,
+        all_tree_paths,
+        all_pdf_pngs,
+        compact_shapes,
         pdf_question_markers,
-        first_endnote_shape(compact_shapes),
         pixel_diff_threshold,
     )
-
-    log_text = export_log.read_text(encoding="utf-8") if export_log.exists() else ""
-    overflow_lines = [
-        line
-        for line in log_text.splitlines()
-        if "LAYOUT_OVERFLOW" in line or "overflow" in line.lower()
-    ]
-    manifest = {
-        "key": target.key,
-        "hwp": safe_rel_str(root, hwp),
-        "pdf": safe_rel_str(root, pdf),
-        "requested_pages": selected_pages,
-        "exported_svg_pages": len(all_svg_paths),
-        "exported_render_tree_pages": len(all_tree_paths),
-        "exported_pdf_pages": len(all_pdf_pngs),
-        "rasterized_svg_pages": len(all_rhwp_pngs),
-        "rasterized_pdf_pages": len(all_pdf_pngs),
-        "svg_pages": len(svg_paths),
-        "render_tree_pages": len(tree_paths),
-        "pdf_pages": len(pdf_pngs),
-        "compare_pages": len(compare_pages),
-        "overlay_pages": len(overlay_result["pages"]),
-        "review_pages": len(review_pages),
-        "pdf_question_markers": len(pdf_question_markers),
-        "overflow_lines": overflow_lines,
-        "contact_sheet": safe_rel_str(root, contact),
-        "overlay_contact_sheet": safe_rel_str(root, overlay_contact)
-        if overlay_contact is not None
-        else None,
-        "review_contact_sheet": safe_rel_str(root, review_contact)
-        if review_contact is not None
-        else None,
-        "analysis_dir": safe_rel_str(root, analysis_dir),
-        "overlay_dir": safe_rel_str(root, overlay_dir),
-        "review_dir": safe_rel_str(root, review_dir),
-        "note_shape": compact_shapes,
-        "note_shape_json": safe_rel_str(root, note_shape_path),
-        "overlay_metrics": overlay_result["summary"],
-        "overlay_metrics_json": safe_rel_str(root, overlay_result["metrics_path"]),
-        "visual_metrics": visual_analysis["summary"],
-        "flagged_pages": visual_analysis["flagged_pages"],
-    }
-    (base / "manifest.json").write_text(
-        json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
+    print(
+        f"Raster PNG pages: rhwp={len(valid_page_manifests(base))}, pdf={len(all_pdf_pngs)}",
+        flush=True,
     )
     return manifest
 
@@ -1594,12 +2166,14 @@ def render_tree_bbox(node: dict[str, object]) -> tuple[float, float, float, floa
 
 
 def legacy_glyph_codepoints(text: str) -> list[str]:
-    """Return visible legacy-Jamo/PUA code points in stable source order.
+    """Return visible legacy-Jamo/PUA code points in stable display order.
 
-    The render tree intentionally preserves source text. A Hancom reference can
-    nevertheless paint a product-name convention or private glyph differently.
-    Restrict this detector to the legacy ranges so normal font raster variance
-    does not turn every text run into a visual-review candidate.
+    A render-tree TextRun keeps source text for model offsets but may also carry
+    ``displayText`` for its actual paint projection. The caller must pass that
+    visual value when present: an already-projected legacy product name is not
+    a remaining legacy-glyph candidate. Restrict the detector to legacy ranges
+    so normal font raster variance does not turn every text run into a review
+    candidate.
     """
 
     codepoints: list[str] = []
@@ -1614,6 +2188,22 @@ def legacy_glyph_codepoints(text: str) -> list[str]:
         if (is_old_hangul or is_private_use) and f"U+{codepoint:04X}" not in codepoints:
             codepoints.append(f"U+{codepoint:04X}")
     return codepoints
+
+
+def render_tree_visual_text(node: dict[str, object]) -> str | None:
+    """Return the text actually painted by a render-tree TextRun.
+
+    ``text`` remains the model/offset source. ``displayText`` is an explicitly
+    projected visual value (for example, field markers, PUA expansion, or a
+    legacy product-name glyph convention) and therefore takes precedence for
+    visual-sweep semantic checks.
+    """
+
+    display_text = node.get("displayText")
+    if isinstance(display_text, str):
+        return display_text
+    text = node.get("text")
+    return text if isinstance(text, str) else None
 
 
 def raster_bbox_for_render_tree_bbox(
@@ -1698,9 +2288,10 @@ def render_tree_legacy_glyph_visual_candidates(
 
     def visit(node: dict[str, object], path: str) -> None:
         bbox = render_tree_bbox(node)
-        text = node.get("text")
-        if node.get("type") == "TextRun" and isinstance(text, str) and bbox is not None:
-            codepoints = legacy_glyph_codepoints(text)
+        source_text = node.get("text")
+        visual_text = render_tree_visual_text(node)
+        if node.get("type") == "TextRun" and isinstance(visual_text, str) and bbox is not None:
+            codepoints = legacy_glyph_codepoints(visual_text)
             raster_bbox = raster_bbox_for_render_tree_bbox(page_tree, bbox, rhwp)
             if codepoints and raster_bbox is not None:
                 metrics = ink_match_in_bbox(
@@ -1719,7 +2310,10 @@ def render_tree_legacy_glyph_visual_candidates(
                         {
                             "path": path,
                             "pi": node.get("pi"),
-                            "text": text[:96],
+                            "text": visual_text[:96],
+                            "source_text": source_text[:96]
+                            if isinstance(source_text, str) and source_text != visual_text
+                            else None,
                             "codepoints": codepoints,
                             "render_tree_bbox": [round(value, 1) for value in bbox],
                             "bbox": raster_bbox,
@@ -1820,7 +2414,7 @@ def collect_render_tree_text_lines(
                 if not isinstance(child, dict):
                     continue
                 if child.get("type") == "TextRun":
-                    text = child.get("text")
+                    text = render_tree_visual_text(child)
                     if isinstance(text, str):
                         parts.append(text)
                 elif child.get("type") == "Equation":
@@ -2135,7 +2729,7 @@ def render_tree_equation_overlap_candidates(
                 }
             )
         elif bbox is not None and node_type == "TextRun":
-            text = node.get("text")
+            text = render_tree_visual_text(node)
             if isinstance(text, str) and strip_render_tree_invisible_text(text).strip():
                 text_runs.append(
                     {
@@ -3482,6 +4076,14 @@ def main() -> None:
     parser.add_argument("--rhwp-bin", default="target/debug/rhwp")
     parser.add_argument("--dpi", type=int, default=96)
     parser.add_argument(
+        "--resume",
+        action="store_true",
+        help=(
+            "동일 HWP/PDF hash·Git HEAD·rhwp binary·DPI·diff threshold provenance의 "
+            "기존 checkpoint를 재사용합니다. 기본 실행은 target output을 새로 만듭니다."
+        ),
+    )
+    parser.add_argument(
         "--page",
         action="append",
         type=int,
@@ -3531,7 +4133,7 @@ def main() -> None:
     selected = dedupe_target_keys([*selected, *custom_targets])
     out_root = root / args.out
     out_root.mkdir(parents=True, exist_ok=True)
-    manifests = [
+    for target in selected:
         render_target(
             root,
             target,
@@ -3540,11 +4142,9 @@ def main() -> None:
             args.dpi,
             args.pixel_diff_threshold,
             selected_pages,
+            resume=args.resume,
         )
-        for target in selected
-    ]
     summary_path = out_root / "summary.json"
-    summary_path.write_text(json.dumps(manifests, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     print(f"summary: {summary_path}")
 
 

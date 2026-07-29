@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -48,6 +50,130 @@ class SelectedRasterTests(unittest.TestCase):
         )
 
         self.assertEqual(commands, [["pdftoppm", "-r", "144", "-png", "reference.pdf", "out/pdf"]])
+
+
+class ResumeCheckpointTests(unittest.TestCase):
+    def test_run_manifest_rejects_changed_provenance(self) -> None:
+        target = SWEEP.Target("fixture", Path("source.hwp"), Path("reference.pdf"))
+        provenance = {
+            "hwp": {"path": "source.hwp", "sha256": "hwp-a"},
+            "pdf": {"path": "reference.pdf", "sha256": "pdf-a"},
+            "git_head": "commit-a",
+            "rhwp_binary": {"configured": "rhwp", "path": "rhwp", "sha256": "bin-a"},
+        }
+        with tempfile.TemporaryDirectory() as temp_dir:
+            base = Path(temp_dir)
+            manifest = SWEEP.run_manifest_for_target(
+                base, target, provenance, 144, 32, resume=False
+            )
+            self.assertEqual(manifest["run_state"], "incomplete")
+            resumed = SWEEP.run_manifest_for_target(
+                base, target, provenance, 144, 32, resume=True
+            )
+            self.assertEqual(resumed["provenance"], provenance)
+            with self.assertRaises(SystemExit):
+                SWEEP.run_manifest_for_target(
+                    base, target, provenance, 144, 33, resume=True
+                )
+
+    def test_page_shards_accumulate_in_same_run(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            base = Path(temp_dir)
+            manifest = {
+                "requested_pages": [],
+                "requested_page_shards": [],
+                "run_state": "incomplete",
+            }
+            first = SWEEP.record_requested_page_shard(base, manifest, [1, 2, 3, 4])
+            second = SWEEP.record_requested_page_shard(base, first, [5, 6, 7, 8])
+
+            self.assertEqual(second["requested_pages"], list(range(1, 9)))
+            self.assertEqual(second["requested_page_shards"], [[1, 2, 3, 4], [5, 6, 7, 8]])
+            stored = json.loads((base / "run_manifest.json").read_text(encoding="utf-8"))
+            self.assertEqual(stored["requested_pages"], list(range(1, 9)))
+
+    def test_incomplete_page_manifest_is_not_reused(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            base = Path(temp_dir)
+            artifacts = {
+                key: f"artifacts/{key}.bin" for key in SWEEP.REQUIRED_PAGE_ARTIFACTS
+            }
+            page_manifest = {"page": 1, "artifacts": artifacts}
+            page_path = base / "pages" / "page-001.json"
+            SWEEP.write_json_atomic(page_path, page_manifest)
+
+            self.assertEqual(SWEEP.valid_page_manifests(base), {})
+
+            for relative_path in artifacts.values():
+                artifact = base / relative_path
+                artifact.parent.mkdir(parents=True, exist_ok=True)
+                artifact.write_bytes(b"checkpoint")
+            self.assertEqual(set(SWEEP.valid_page_manifests(base)), {1})
+
+    def test_summary_marks_uncheckpointed_requested_pages_incomplete(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            base = Path(temp_dir) / "fixture"
+            artifacts = {
+                "svg": "artifacts/page.svg",
+                "render_tree": "artifacts/page.json",
+                "rhwp_png": "artifacts/rhwp.png",
+                "pdf_png": "artifacts/pdf.png",
+                "compare": "artifacts/compare.png",
+                "overlay": "artifacts/overlay.png",
+                "review": "artifacts/review.png",
+                "analysis": "artifacts/analysis.json",
+            }
+            for key in ("rhwp_png", "pdf_png", "compare", "overlay", "review"):
+                path = base / artifacts[key]
+                path.parent.mkdir(parents=True, exist_ok=True)
+                Image.new("RGB", (24, 24), "white").save(path)
+            (base / artifacts["svg"]).write_text("<svg/>", encoding="utf-8")
+            (base / artifacts["render_tree"]).write_text(
+                '{"type":"Page","children":[]}', encoding="utf-8"
+            )
+            visual_metrics = {"page": 1, "flags": []}
+            SWEEP.write_json_atomic(base / artifacts["analysis"], visual_metrics)
+            page_manifest = {
+                "page": 1,
+                "artifacts": artifacts,
+                "overlay_metrics": {
+                    "page": 1,
+                    "pixel_match_percent": 100.0,
+                    "ink_match_percent": 100.0,
+                    "visual_accuracy_proxy_percent": 100.0,
+                },
+                "visual_metrics": visual_metrics,
+            }
+            SWEEP.write_json_atomic(base / "pages" / "page-001.json", page_manifest)
+            run_manifest = {
+                "provenance": {
+                    "hwp": {"path": "source.hwp"},
+                    "pdf": {"path": "reference.pdf"},
+                },
+                "requested_pages": [1, 2],
+                "requested_page_shards": [[1, 2]],
+                "run_state": "incomplete",
+            }
+            target = SWEEP.Target("fixture", Path("source.hwp"), Path("reference.pdf"))
+
+            summary = SWEEP.write_target_status(
+                base,
+                base.parent,
+                base,
+                target,
+                run_manifest,
+                [base / artifacts["svg"]],
+                [base / artifacts["render_tree"]],
+                [base / artifacts["pdf_png"]],
+                [],
+                [],
+                32,
+            )
+
+            self.assertEqual(summary["run_state"], "incomplete")
+            self.assertEqual(summary["completed_pages"], [1])
+            self.assertEqual(summary["missing_pages"], [2])
+            self.assertEqual(summary["compare_pages"], 1)
 
 
 class LegacyGlyphVisualCandidateTests(unittest.TestCase):
@@ -105,6 +231,37 @@ class LegacyGlyphVisualCandidateTests(unittest.TestCase):
         )
 
         self.assertEqual(candidates, [])
+
+    def test_display_projection_suppresses_resolved_legacy_glyph_candidate(self) -> None:
+        tree = {
+            "type": "Page",
+            "bbox": {"x": 0, "y": 0, "w": 100, "h": 100},
+            "children": [
+                {
+                    "type": "TextRun",
+                    "bbox": {"x": 10, "y": 10, "w": 20, "h": 10},
+                    "text": "ᄒᆞᆫ글",
+                    "displayText": "한글",
+                    "pi": 135,
+                }
+            ],
+        }
+        rhwp = Image.new("RGB", (100, 100), "white")
+        ImageDraw.Draw(rhwp).rectangle((10, 10, 29, 19), fill="black")
+        pdf = Image.new("RGB", (100, 100), "white")
+
+        candidates = SWEEP.render_tree_legacy_glyph_visual_candidates(
+            tree,
+            rhwp,
+            pdf,
+            pixel_diff_threshold=32,
+        )
+
+        self.assertEqual(
+            candidates,
+            [],
+            "source text의 옛자모가 displayText로 이미 해결됐으면 legacy glyph 후보가 아니어야 한다",
+        )
 
     def test_private_use_run_with_local_mismatch_is_a_candidate(self) -> None:
         tree = {
