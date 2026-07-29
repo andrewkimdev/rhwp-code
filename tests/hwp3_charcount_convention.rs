@@ -90,10 +90,7 @@ fn cc_pairs(diff_text: &str) -> Vec<(i64, i64)> {
         .lines()
         .filter_map(|l| {
             let l = l.trim();
-            let rest = l.strip_prefix("[차이] cc: A=").or_else(|| {
-                // summary 모드가 아닌 --json 은 별도 처리(호출 측에서 raw stdout 전달)
-                None
-            })?;
+            let rest = l.strip_prefix("[차이] cc: A=")?;
             let (a, rest) = rest.split_once(" vs B=")?;
             Some((a.trim().parse().ok()?, rest.trim().parse().ok()?))
         })
