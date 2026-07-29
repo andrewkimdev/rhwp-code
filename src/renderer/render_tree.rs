@@ -1438,9 +1438,15 @@ impl PageRenderTree {
         fn visit(node: &mut RenderNode) {
             if let RenderNodeType::TextRun(run) = &mut node.node_type {
                 if run.char_overlap.is_none() {
-                    let source = run.display_or_text();
-                    if let Some(display) = legacy_hancom_product_display_text(source) {
-                        run.display_text = Some(display);
+                    // PUA `U+F53A`처럼 실제 옛한글을 display_text에서 `ᄒᆞᆫ`으로
+                    // 확장한 경우는 product convention이 아니다. raw model text에
+                    // 닫힌 제품명이 있을 때만 기존 화면 문자열(있다면 PUA 확장본)을
+                    // 다시 투영한다.
+                    if legacy_hancom_product_display_text(&run.text).is_some() {
+                        let source = run.display_or_text();
+                        if let Some(display) = legacy_hancom_product_display_text(source) {
+                            run.display_text = Some(display);
+                        }
                     }
                 }
             }
@@ -1670,6 +1676,43 @@ mod tests {
             panic!("expected general old-Hangul text run");
         };
         assert_eq!(general_old_hangul.display_text, None);
+    }
+
+    #[test]
+    fn legacy_hancom_product_projection_does_not_rewrite_pua_old_hangul() {
+        let mut tree = PageRenderTree::new(0, 100.0, 100.0);
+        let id = tree.next_id();
+        tree.root.children.push(RenderNode::new(
+            id,
+            RenderNodeType::TextRun(TextRunNode {
+                text: "\u{f53a}글".to_owned(),
+                style: TextStyle::default(),
+                char_shape_id: None,
+                para_shape_id: None,
+                section_index: None,
+                para_index: None,
+                char_start: None,
+                cell_context: None,
+                is_para_end: false,
+                is_line_break_end: false,
+                rotation: 0.0,
+                is_vertical: false,
+                char_overlap: None,
+                border_fill_id: 0,
+                baseline: 0.0,
+                field_marker: FieldMarkerType::None,
+                display_text: Some("ᄒᆞᆫ글".to_owned()),
+            }),
+            BoundingBox::new(0.0, 0.0, 1.0, 1.0),
+        ));
+
+        tree.apply_legacy_hancom_product_display_projection();
+
+        let RenderNodeType::TextRun(pua_old_hangul) = &tree.root.children[0].node_type else {
+            panic!("expected PUA old-Hangul text run");
+        };
+        assert_eq!(pua_old_hangul.text, "\u{f53a}글");
+        assert_eq!(pua_old_hangul.display_text.as_deref(), Some("ᄒᆞᆫ글"));
     }
 
     #[test]
