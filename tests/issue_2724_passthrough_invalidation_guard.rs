@@ -298,6 +298,14 @@ const EXEMPT: &[(&str, &str, Exempt, &str)] = &[
         "얇은 래퍼 — 실제 삽입·무효화는 `_impl` 이 수행.",
     ),
     (
+        "commands/page_extract.rs",
+        "extract_page_range",
+        Exempt::DelegatesTo("delete_paragraph_native"),
+        "[#3565] 지우는 일은 전부 문단 삭제 뮤테이터에 위임하고, 그쪽이 손댄 구역의 \
+         `raw_stream` 을 무효화한다. 한 문단도 지우지 않은 구역은 원본이 그대로 \
+         유효하므로 통과를 남기는 것이 맞다.",
+    ),
+    (
         "commands/text_editing.rs",
         "insert_text_in_cell_native_deferred_pagination",
         Exempt::DelegatesTo("replace_text_in_cell_native_impl"),
