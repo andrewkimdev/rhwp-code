@@ -478,7 +478,7 @@ fn show_mcp_tools() -> i32 {
             }),
             "edit",
             serde_json::json!(["edit", "set-cell", "{path}", "--table", "{table}", "--row", "{row}", "--col", "{col}", "--text", "{text}", "--json"]),
-            &["schemaVersion", "source", "table", "row", "col", "oldText", "newText", "dryRun", "output", "outputFormat"],
+            &["schemaVersion", "source", "table", "row", "col", "oldText", "newText", "dryRun", "overflow", "output", "outputFormat"],
         ),
     ];
 
