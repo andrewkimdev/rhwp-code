@@ -336,13 +336,13 @@ pub fn compose_paragraph(para: &Paragraph) -> ComposedParagraph {
     // PUA 테두리 숫자(사각형/원형 안의 숫자) → CharOverlap 런으로 변환
     convert_pua_enclosed_numbers(&mut composed);
 
-    // Hanyang-PUA 옛한글 / 한컴 PUA 표시 문자열 변환 (렌더링·측정용)
+    // Hanyang-PUA 옛한글 / 한컴 PUA와 legacy 제품명 표시 문자열 변환 (렌더링·측정용)
     convert_pua_display_text(&mut composed);
 
     composed
 }
 
-/// Hanyang-PUA 옛한글 코드포인트와 한컴 PUA 표시 문자열을 렌더링용 텍스트로 변환한다.
+/// Hanyang-PUA 옛한글 코드포인트·한컴 PUA와 legacy 제품명을 렌더링용 텍스트로 변환한다.
 ///
 /// 한컴 자체 폰트 (함초롬바탕 LVT 등) 는 PUA 영역에 옛한글 글리프를 직접
 /// 보유하나, OFL 폰트 (Noto Serif KR / Source Han Serif K 등) 는 KS X 1026-1
@@ -354,31 +354,105 @@ pub fn compose_paragraph(para: &Paragraph) -> ComposedParagraph {
 /// `line.char_start`, `line_chars` 등 인덱싱 불변성을 유지하기 위함이다
 /// (PUA 1 char = display N chars).
 ///
+/// 1990년대 한컴 제품 설명서는 `ᄒᆞᆫ글`·`ᄒᆞᆫ메일`처럼 제품명을 옛한글 자모로
+/// 저장했지만, 한컴 PDF는 이를 각각 `한글`·`한메일`로 인쇄한다. 이것은 일반
+/// 옛한글 정규화가 아니다. 아래의 닫힌 제품명 어휘만 display projection으로
+/// 바꾸며, 원문 IR·검색·캐럿 offset은 그대로 보존한다.
+///
 /// 매핑 표: KTUG HanyangPuaTableProject (Public Domain).
 fn convert_pua_display_text(composed: &mut ComposedParagraph) {
     use super::pua_oldhangul::map_pua_old_hangul;
+
+    let product_prefix_starts = legacy_hancom_product_prefix_starts(composed);
+    let mut run_char_start = 0usize;
     for line in composed.lines.iter_mut() {
         for run in line.runs.iter_mut() {
-            if !run
-                .text
-                .chars()
-                .any(|ch| pua_plain_text_display(ch).is_some() || map_pua_old_hangul(ch).is_some())
-            {
+            let chars: Vec<char> = run.text.chars().collect();
+            let run_char_end = run_char_start + chars.len();
+            let has_product_projection = product_prefix_starts
+                .iter()
+                .any(|start| *start < run_char_end && start.saturating_add(3) > run_char_start);
+            let has_pua_display = chars.iter().any(|ch| {
+                pua_plain_text_display(*ch).is_some() || map_pua_old_hangul(*ch).is_some()
+            });
+            if !has_product_projection && !has_pua_display {
+                run_char_start = run_char_end;
                 continue;
             }
             let mut display = String::with_capacity(run.text.len() * 3);
-            for ch in run.text.chars() {
-                if let Some(replacement) = pua_plain_text_display(ch) {
+            let mut changed = false;
+            for (index, ch) in chars.iter().copied().enumerate() {
+                let char_position = run_char_start + index;
+                if product_prefix_starts.contains(&char_position) {
+                    display.push('한');
+                    changed = true;
+                } else if product_prefix_starts
+                    .iter()
+                    .any(|start| (start + 1..start + 3).contains(&char_position))
+                {
+                    // `ᄒᆞᆫ` 세 자모가 style/line 경계를 넘더라도 첫 위치에만
+                    // `한`을 투영한다. 뒤 두 model char는 offset 공간에만 남긴다.
+                    changed = true;
+                } else if let Some(replacement) = pua_plain_text_display(ch) {
                     display.push_str(replacement);
+                    changed = true;
                 } else if let Some(jamos) = map_pua_old_hangul(ch) {
                     display.extend(jamos.iter().copied());
+                    changed = true;
                 } else {
                     display.push(ch);
                 }
             }
-            run.display_text = Some(display);
+            run_char_start = run_char_end;
+            if changed {
+                run.display_text = Some(display);
+            }
         }
     }
+}
+
+const LEGACY_HANCOM_PRODUCT_WORDS: [(&str, &str); 4] = [
+    ("ᄒᆞᆫ글", "한글"),
+    ("ᄒᆞᆫ메일", "한메일"),
+    ("ᄒᆞᆫ팩스", "한팩스"),
+    ("ᄒᆞᆫ소프트", "한소프트"),
+];
+
+/// 한컴 PDF가 현대 글리프로 인쇄하는 레거시 제품명만 화면 문자열로 투영한다.
+///
+/// 이 함수는 모델 문자열을 정규화하지 않는다. 표 셀처럼 composer를 우회해
+/// `TextRunNode`를 직접 만드는 레이아웃 경로에도 같은 제한된 표시 계약을
+/// 적용하기 위해 render-tree 최종화 단계에서 재사용한다.
+pub(crate) fn legacy_hancom_product_display_text(text: &str) -> Option<String> {
+    let mut display = text.to_owned();
+    for (legacy, modern) in LEGACY_HANCOM_PRODUCT_WORDS {
+        display = display.replace(legacy, modern);
+    }
+    (display != text).then_some(display)
+}
+
+/// `ᄒᆞᆫ`이 legacy 한컴 제품명으로 쓰인 model-character 시작 위치를 찾는다.
+///
+/// `ComposedParagraph`의 run은 줄·글자모양 경계에서 나뉠 수 있으므로, 먼저 모든
+/// run을 이어 검사한 뒤 model char 좌표를 돌려준다. 그 뒤 display projection은
+/// run별로 적용해도 줄 경계를 넘어선 제품명을 놓치지 않는다.
+fn legacy_hancom_product_prefix_starts(composed: &ComposedParagraph) -> Vec<usize> {
+    let logical_text: String = composed
+        .lines
+        .iter()
+        .flat_map(|line| line.runs.iter())
+        .map(|run| run.text.as_str())
+        .collect();
+    let mut starts = Vec::new();
+    for (char_index, (byte_index, _)) in logical_text.char_indices().enumerate() {
+        if LEGACY_HANCOM_PRODUCT_WORDS
+            .iter()
+            .any(|(legacy, _)| logical_text[byte_index..].starts_with(legacy))
+        {
+            starts.push(char_index);
+        }
+    }
+    starts
 }
 
 /// 각주 마커를 해당 텍스트 위치의 런에 인라인 삽입
