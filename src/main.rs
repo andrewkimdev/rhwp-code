@@ -4,6 +4,7 @@ use std::path::Path;
 use std::process;
 
 mod atomic_file;
+mod mcp_serve;
 
 /// [#2707] CLI 종료 코드 계약 — 성공.
 const EXIT_OK: i32 = 0;
@@ -172,6 +173,7 @@ fn main() {
         Some("export-hml") => export_hml(&args[2..]),
         Some("export-doclang") => exit_with(export_doclang(&args[2..])),
         Some("capabilities") => exit_with(show_capabilities(&args[2..])),
+        Some("mcp-serve") => exit_with(mcp_serve::run()),
         Some("batch") => exit_with(run_batch(&args[2..])),
         Some("info") => exit_with(show_info(&args[2..])),
         Some("dump") => exit_with(dump_controls(&args[2..])),
@@ -238,6 +240,31 @@ fn main() {
 /// 손으로 옮겨 적지 않게 한다. `--json` 계약을 가진 명령이 늘면
 /// `capabilities_mcp_covers_every_json_command` 가 누락을 잡는다.
 fn show_mcp_tools() -> i32 {
+    let tools = mcp_tool_definitions();
+
+    let manifest = serde_json::json!({
+        "schemaVersion": "1.0",
+        "protocol": "mcp",
+        "server": {
+            "suggestedName": "rhwp",
+            "version": rhwp::version(),
+            "description": "HWP/HWPX 한국어 문서를 읽고 편집하는 도구 모음",
+        },
+        "invocation": {
+            "transport": "cli",
+            "note": "각 도구의 cli.args 에서 {name} 자리표시자를 inputSchema 의 같은 이름 값으로 치환해 실행한다. stdout 은 순수 JSON, 진단은 stderr, 종료 코드는 0/1/2(+ir-diff 차이 3). 자리표시자 치환 없이 바로 쓰려면 `rhwp mcp-serve`(stdio JSON-RPC 서버, #3140)를 실행한다.",
+            "stdinTools": ["hwp_batch", "hwp_batch_search"],
+            "server": "mcp-serve",
+        },
+        "tools": tools,
+    });
+    println!("{manifest}");
+    EXIT_OK
+}
+
+/// [#3263→#3140] MCP 도구 정의의 단일 출처 — `capabilities --mcp`(선언 출력)와
+/// `mcp-serve`(실행 서버)가 같은 목록을 쓴다. 여기에만 추가하면 양쪽이 함께 갱신된다.
+fn mcp_tool_definitions() -> Vec<serde_json::Value> {
     /// 문서 경로 하나를 받는 도구의 표준 입력 스키마.
     fn path_schema(extra: serde_json::Value) -> serde_json::Value {
         let mut props = serde_json::json!({
@@ -272,7 +299,7 @@ fn show_mcp_tools() -> i32 {
         })
     }
 
-    let tools = vec![
+    vec![
         tool(
             "hwp_info",
             "HWP/HWPX/HML 문서의 메타데이터(포맷·구역/페이지/문단 수·폰트)를 조회한다. 문서를 열기 전에 규모와 형식을 파악할 때 쓴다.",
@@ -480,25 +507,7 @@ fn show_mcp_tools() -> i32 {
             serde_json::json!(["edit", "set-cell", "{path}", "--table", "{table}", "--row", "{row}", "--col", "{col}", "--text", "{text}", "--json"]),
             &["schemaVersion", "source", "table", "row", "col", "oldText", "newText", "dryRun", "overflow", "output", "outputFormat"],
         ),
-    ];
-
-    let manifest = serde_json::json!({
-        "schemaVersion": "1.0",
-        "protocol": "mcp",
-        "server": {
-            "suggestedName": "rhwp",
-            "version": rhwp::version(),
-            "description": "HWP/HWPX 한국어 문서를 읽는 도구 모음 (읽기 전용)",
-        },
-        "invocation": {
-            "transport": "cli",
-            "note": "각 도구의 cli.args 에서 {name} 자리표시자를 inputSchema 의 같은 이름 값으로 치환해 실행한다. stdout 은 순수 JSON, 진단은 stderr, 종료 코드는 0/1/2(+ir-diff 차이 3).",
-            "stdinTools": ["hwp_batch", "hwp_batch_search"],
-        },
-        "tools": tools,
-    });
-    println!("{manifest}");
-    EXIT_OK
+    ]
 }
 
 /// [#3263] 도구 자기서술 — 에이전트가 첫 호출 1회로 명령·계약·스키마를 파악하는 입구.
@@ -606,6 +615,11 @@ fn show_capabilities(args: &[String]) -> i32 {
                 "commands",
                 "batch",
             ],
+        ),
+        cmd(
+            "mcp-serve",
+            "serve",
+            "MCP 서버 (stdio JSON-RPC) — capabilities --mcp 도구 전부 + 세션 도구 실행 (#3140)",
         ),
         // ── 내보내기/변환 ──
         cmd_json(
@@ -993,6 +1007,10 @@ fn print_help() {
     println!("      도구 자기서술 JSON 출력 (명령·플래그·JSON 계약·종료 코드) — 에이전트용");
     println!();
     println!("      --mcp                   MCP 도구 정의(name/description/inputSchema) 출력");
+    println!();
+    println!("  mcp-serve");
+    println!("      MCP 서버 실행 (stdio JSON-RPC) — AI 에이전트 호스트가 도구로 연결 (#3140)");
+    println!("      capabilities --mcp 의 도구 전부 + 세션(hwp_open/hwp_doc_text/hwp_close)");
     println!();
     println!("  dump <파일.hwp|파일.hwpx|파일.hml> [--section <번호>] [--para <번호>]");
     println!("      문서 조판부호 구조 덤프 (디버깅용)");
