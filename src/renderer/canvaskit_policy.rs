@@ -661,9 +661,10 @@ fn paint_op_work_units(op: &PaintOp) -> usize {
         PaintOp::TextRun { run, .. } => run.display_or_text().chars().count(),
         PaintOp::CharOverlap { run, .. } => run.text.chars().count(),
         PaintOp::TextControlMark { run, .. } => bounded_text_char_count(&run.text),
-        PaintOp::TabLeader { run, .. } => bounded_text_char_count(run.display_or_text())
-            .saturating_add(run.style.tab_leaders.len()),
-        PaintOp::TextDecoration { run, .. } => text_decoration_position_count(run),
+        PaintOp::TabLeader { run, .. } => {
+            display_visual_position_count(run).saturating_add(run.style.tab_leaders.len())
+        }
+        PaintOp::TextDecoration { run, .. } => display_visual_position_count(run),
         _ => 0,
     };
     let payload_bytes = match op {
@@ -759,19 +760,24 @@ fn bounded_text_char_count(text: &str) -> usize {
         .count()
 }
 
-fn text_decoration_position_count(run: &TextRunNode) -> usize {
-    let source: String = run
-        .display_or_text()
-        .chars()
-        .take(crate::paint::MAX_POSITIONED_CONTROL_MARKS_PER_RUN + 1)
-        .collect();
-    if source.chars().count() > crate::paint::MAX_POSITIONED_CONTROL_MARKS_PER_RUN {
-        return crate::paint::MAX_POSITIONED_CONTROL_MARKS_PER_RUN + 1;
+fn bounded_display_text_for_visual(run: &TextRunNode) -> (String, bool) {
+    let limit = crate::paint::MAX_POSITIONED_CONTROL_MARKS_PER_RUN;
+    let mut source_chars = run.display_or_text().chars();
+    let source: String = source_chars.by_ref().take(limit).collect();
+    let source_complete = source_chars.next().is_none();
+    let expanded = expand_pua_display_text(&source);
+    let mut display_chars = expanded.chars();
+    let display: String = display_chars.by_ref().take(limit).collect();
+    (display, source_complete && display_chars.next().is_none())
+}
+
+fn display_visual_position_count(run: &TextRunNode) -> usize {
+    let (display, complete) = bounded_display_text_for_visual(run);
+    if complete {
+        display.chars().count()
+    } else {
+        crate::paint::MAX_POSITIONED_CONTROL_MARKS_PER_RUN + 1
     }
-    expand_pua_display_text(&source)
-        .chars()
-        .take(crate::paint::MAX_POSITIONED_CONTROL_MARKS_PER_RUN + 1)
-        .count()
 }
 
 fn text_visual_geometry_is_valid(
@@ -1511,13 +1517,13 @@ impl CanvasKitReplayPlanBuilder {
                 }
             }
             PaintOp::TabLeader { bbox, run } => {
-                let detail = if bounded_text_char_count(run.display_or_text())
-                    > crate::paint::MAX_POSITIONED_CONTROL_MARKS_PER_RUN
+                let (display_text, display_complete) = bounded_display_text_for_visual(run);
+                let detail = if !display_complete
                     || run.style.tab_leaders.len()
                         > crate::paint::MAX_POSITIONED_CONTROL_MARKS_PER_RUN
                 {
                     Some("visualItemLimitExceeded")
-                } else if !text_visual_geometry_is_valid(bbox, run, run.display_or_text()) {
+                } else if !text_visual_geometry_is_valid(bbox, run, &display_text) {
                     Some("invalidGeometry")
                 } else if run.is_vertical {
                     Some("verticalText")
@@ -1546,11 +1552,10 @@ impl CanvasKitReplayPlanBuilder {
                 }
             }
             PaintOp::TextDecoration { bbox, run, kind } => {
-                let too_many_items = text_decoration_position_count(run)
-                    > crate::paint::MAX_POSITIONED_CONTROL_MARKS_PER_RUN;
-                let detail = if too_many_items {
+                let (display_text, display_complete) = bounded_display_text_for_visual(run);
+                let detail = if !display_complete {
                     Some("visualItemLimitExceeded")
-                } else if !text_visual_geometry_is_valid(bbox, run, run.display_or_text()) {
+                } else if !text_visual_geometry_is_valid(bbox, run, &display_text) {
                     Some("invalidGeometry")
                 } else if run.is_vertical {
                     Some("verticalText")
@@ -2953,6 +2958,36 @@ mod tests {
         );
         assert_eq!(
             count_layer_tree_work_units(&decoration_tree, 100),
+            CanvasKitBoundedWorkCount::Exceeded
+        );
+
+        let pua_source =
+            "\u{F012B}".repeat(crate::paint::MAX_POSITIONED_CONTROL_MARKS_PER_RUN / 3 + 1);
+        assert!(pua_source.chars().count() <= crate::paint::MAX_POSITIONED_CONTROL_MARKS_PER_RUN);
+        assert!(
+            expand_pua_display_text(&pua_source).chars().count()
+                > crate::paint::MAX_POSITIONED_CONTROL_MARKS_PER_RUN
+        );
+        let mut leader = text_run(&pua_source);
+        leader
+            .style
+            .tab_leaders
+            .push(crate::renderer::TabLeaderInfo {
+                start_x: 1.0,
+                end_x: 8.0,
+                fill_type: 1,
+            });
+        let leader_tree = tree_with_ops(vec![PaintOp::tab_leader(bbox(), leader)]);
+        let leader_plan = analyze_canvaskit_replay_plan(&leader_tree, CanvasKitReplayMode::Default);
+        assert_eq!(
+            leader_plan.items[0].detail.as_deref(),
+            Some("visualItemLimitExceeded")
+        );
+        assert_eq!(
+            count_layer_tree_work_units(
+                &leader_tree,
+                crate::paint::MAX_POSITIONED_CONTROL_MARKS_PER_RUN as u32
+            ),
             CanvasKitBoundedWorkCount::Exceeded
         );
 
