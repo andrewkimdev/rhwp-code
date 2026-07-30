@@ -1,6 +1,6 @@
 ---
 kind: pr_review_plan
-status: active
+status: complete
 canonical: mydocs/manual/pr_review_workflow.md
 last_verified: 2026-07-31
 ---
@@ -36,3 +36,12 @@ last_verified: 2026-07-31
 - LFS 대상, object 또는 lock이 발견되면 skip-push 경로를 쓰지 않고 LFS 상태를 확인한다.
 - broad sweep의 text/equation hard gate 16건은 P40 image acceptance로 숨기지 않는다. P40 image-crop 결과나
   current Canvas visual diff가 실패하면 merge를 중단하고 별도 renderer 수정으로 처리한다.
+
+## 완료 기록
+
+- current code head의 full CI와 review-only tail fast-pass를 모두 확인한 뒤 #3536은
+  [`b432958`](https://github.com/edwardkim/rhwp/commit/b432958cc2028b1f063e36dd34036a801ea967b8)로 merge됐다.
+- `devel` 동기화, #536 추적 comment, contributor approval/comment를 완료했다. contributor fork
+  `seo-rii/rhwp:render-p40`은 외부 fork branch이므로 삭제 대상이 아니다.
+- 최초 review-only tail에 빠졌던 대표 visual asset은 post-merge 기록 fast-pass로 보완한다. 이 보완은 source·test·CI를
+  바꾸지 않으며 original code merge의 CI 근거를 바꾸지 않는다.

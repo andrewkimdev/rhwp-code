@@ -45,9 +45,20 @@ source branch의 contributor code commit 10개(`e5412d1`, `6a9c051`, `59bc906`, 
 ### 시각 검증 기록
 
 로컬 headless CanvasKit sweep은 23개 sample, `canvas2d`·`canvaskit-compat`·`canvaskit-default`,
-`screen`·`fast-preview` 조합으로 캡처했다. P40의 직접 대상인 `image-crop`은 CanvasKit 4개 조합 모두
-2% tolerant diff budget 안에서 통과했다(최대 selected diff ratio `1.4700637%`, image replay failure `0`).
-원본 report는 로컬 검토 출력 `output/renderer-baseline/studio-headless/browser-baseline-report.json`에 남겼다.
+`screen`·`fast-preview` 조합으로 캡처했다. P40의 직접 대상은
+`samples/pic-crop-01.hwp` p0(`sha256:3b5afbe4cdb18faa49452a9cbed770d5caa27aed2f83b708e9ab8516c65ebf4c`)다.
+`image-crop`은 CanvasKit 4개 조합 모두 2% tolerant diff budget 안에서 통과했다(최대 selected diff ratio
+`1.4700637%`, image replay failure `0`). 원본 report는 로컬 검토 출력
+`output/renderer-baseline/studio-headless/browser-baseline-report.json`에 남겼다.
+
+대표 panel은 `mydocs/pr/assets/pr3536_canvaskit_image_crop_backend_parity_review_p0_3way.png`
+(`sha256:c229ad55374a77e69a3f799bcd2063bd7072d3579df49dadfcb1cf23b77f2165`)에 보존했다. 왼쪽은 Canvas2D,
+가운데는 CanvasKit default, 오른쪽은 R=Canvas2D·G/B=CanvasKit의 channel overlay다.
+
+![PR #3536 image-crop backend parity p0](../assets/pr3536_canvaskit_image_crop_backend_parity_review_p0_3way.png)
+
+이 panel의 Canvas2D는 browser backend 비교 기준이지 한컴 HWP/PDF 정답지가 아니다. 따라서 이 asset은
+P40 image replay의 backend-parity 증적이며 외부 문서 충실도의 독립 최종 판정으로 확대하지 않는다.
 
 같은 broad corpus에는 이번 이미지 재생 변경의 성공 증거로 사용하지 않은 기존 진단도 있다. report의 hard gate
 16건은 `image-start`·`header-image`·`legacy-doc-2010`의 `textRun:glyphMapping` 및 `exam-math`의
@@ -57,8 +68,8 @@ parity는 88 comparison 중 48 pass / 40 fail / 4 capture error이므로 broad s
 
 ## 권고와 merge 전 조건
 
-**권고: 수용.** 현재 code head `b14d245a2023eeee225e9cb3c1f69f4c012e1efd`에서 full CI와 CodeQL,
-Canvas visual diff, `Build & Test`가 모두 success이고 GitHub 상태는 `MERGEABLE`·`CLEAN`이다. 이 archive
-review·실행계획·오늘할일만 추가한 최신 head가 review-only fast-pass의 preflight와 최종 `Build & Test`
-aggregate를 통과하고 mergeability를 유지하는지 재확인한 뒤 merge한다. merge 뒤에는 #536을 추적 상태로 유지한
-사실, contributor 결과 comment, `devel` sync 및 이 검토의 branch·전용 Cargo target 정리를 확인한다.
+**결론: 수용·merge 완료.** 현재 code head `b14d245a2023eeee225e9cb3c1f69f4c012e1efd`의 full CI와
+CodeQL, Canvas visual diff, `Build & Test` 및 review-only tail의 fast-pass preflight·최종 aggregate를
+확인한 뒤 PR은 [`b432958`](https://github.com/edwardkim/rhwp/commit/b432958cc2028b1f063e36dd34036a801ea967b8)로
+merge됐다. #536은 추적 상태로 유지했고 contributor 결과 comment와 `devel` sync를 완료했다. 이 대표 asset은
+merge 뒤 증적 보완 fast-pass PR로 archive에 추가한다.
