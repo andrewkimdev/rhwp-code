@@ -658,7 +658,9 @@ fn additional_payload_work_units(bytes: usize) -> usize {
 
 fn paint_op_work_units(op: &PaintOp) -> usize {
     let repeated_visual_units = match op {
-        PaintOp::TextRun { run, .. } => run.display_or_text().chars().count(),
+        PaintOp::TextRun { run, .. } => expand_pua_display_text(run.display_or_text())
+            .chars()
+            .count(),
         PaintOp::CharOverlap { run, .. } => run.text.chars().count(),
         PaintOp::TextControlMark { run, .. } => bounded_text_char_count(&run.text),
         PaintOp::TabLeader { run, .. } => {
@@ -3004,6 +3006,25 @@ mod tests {
         let text_tree = tree_with_ops(vec![PaintOp::text_run(bbox(), text_run(&"A".repeat(101)))]);
         assert_eq!(
             count_layer_tree_work_units(&text_tree, 100),
+            CanvasKitBoundedWorkCount::Exceeded
+        );
+
+        let projected_text =
+            "\u{F012B}".repeat(CANVASKIT_DOCUMENT_PREFLIGHT_MAX_WORK_UNITS as usize / 3 + 1);
+        assert!(
+            projected_text.chars().count() < CANVASKIT_DOCUMENT_PREFLIGHT_MAX_WORK_UNITS as usize
+        );
+        assert!(
+            expand_pua_display_text(&projected_text).chars().count()
+                > CANVASKIT_DOCUMENT_PREFLIGHT_MAX_WORK_UNITS as usize
+        );
+        let projected_tree =
+            tree_with_ops(vec![PaintOp::text_run(bbox(), text_run(&projected_text))]);
+        assert_eq!(
+            count_layer_tree_work_units(
+                &projected_tree,
+                CANVASKIT_DOCUMENT_PREFLIGHT_MAX_WORK_UNITS
+            ),
             CanvasKitBoundedWorkCount::Exceeded
         );
     }
