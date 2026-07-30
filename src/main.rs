@@ -181,6 +181,7 @@ fn main() {
         Some("diag") => exit_with(diag_document(&args[2..])),
         Some("search") => exit_with(search_document(&args[2..])),
         Some("convert") => exit_with(convert_hwp(&args[2..])),
+        Some("extract-pages") => exit_with(extract_pages(&args[2..])),
         Some("build-from-ingest") => exit_with(build_from_ingest(&args[2..])),
         Some("hwp5-inventory") => rhwp::diagnostics::hwp5_inventory::run(&args[2..]),
         Some("hwp5-inventory-diff") => rhwp::diagnostics::hwp5_inventory_diff::run(&args[2..]),
@@ -6152,6 +6153,134 @@ fn verify_reparse_failed_exit_code(options: ConversionVerifyOptions) -> i32 {
     } else {
         4
     }
+}
+
+/// [#3565] `extract-pages` — 쪽 범위만 남겨 저장한다.
+///
+/// 대형 문서의 결함을 이분법으로 좁히기 위한 도구다. 384쪽 문서가 저장 후 한컴에서
+/// 열리지 않을 때, 절반씩 잘라 재현 여부를 보면 방아쇠를 특정할 수 있다.
+///
+/// 쪽 단위로 자르되 **문단 단위로** 지운다 — 여러 쪽에 걸친 문단은 한 쪽이라도 범위 안이면
+/// 남긴다. 결과 쪽수가 요청 범위와 정확히 같지 않을 수 있다(레이아웃이 다시 흐른다).
+fn extract_pages(args: &[String]) -> i32 {
+    let mut input: Option<&str> = None;
+    let mut output: Option<&str> = None;
+    let mut from: Option<u32> = None;
+    let mut to: Option<u32> = None;
+    let mut json_mode = false;
+
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--from" | "--to" => {
+                // 옵션 이름을 리터럴로 고정하고 인자 값은 에코하지 않는다.
+                // 같은 `args` 에 `--password` 가 실릴 수 있어, 인자에서 온 문자열을
+                // 그대로 찍으면 비밀번호가 로그에 남는다 (CodeQL: cleartext logging).
+                let opt: &'static str = if args[i] == "--from" {
+                    "--from"
+                } else {
+                    "--to"
+                };
+                i += 1;
+                let Some(v) = args.get(i) else {
+                    eprintln!("오류: {opt} 뒤에 쪽 번호가 필요합니다.");
+                    return EXIT_USAGE;
+                };
+                let Ok(n) = v.parse::<u32>() else {
+                    eprintln!("오류: {opt} 값이 숫자가 아닙니다.");
+                    return EXIT_USAGE;
+                };
+                if opt == "--from" {
+                    from = Some(n)
+                } else {
+                    to = Some(n)
+                }
+            }
+            "-o" | "--output" => {
+                i += 1;
+                output = args.get(i).map(|s| s.as_str());
+            }
+            "--json" => json_mode = true,
+            v if v.starts_with('-') => {
+                eprintln!("알 수 없는 옵션: {v}");
+                return EXIT_USAGE;
+            }
+            v => {
+                if input.is_none() {
+                    input = Some(v)
+                } else if output.is_none() {
+                    output = Some(v)
+                }
+            }
+        }
+        i += 1;
+    }
+
+    let (Some(input), Some(output)) = (input, output) else {
+        eprintln!("사용법: rhwp extract-pages <입력> <출력.hwp> --from N --to M [--json]");
+        return EXIT_USAGE;
+    };
+    let from = from.unwrap_or(1);
+    let Some(to) = to else {
+        eprintln!("오류: --to 가 필요합니다.");
+        return EXIT_USAGE;
+    };
+
+    let data = match fs::read(input) {
+        Ok(d) => d,
+        Err(e) => {
+            eprintln!("오류: 파일을 읽을 수 없습니다 - {input}: {e}");
+            return EXIT_RUNTIME;
+        }
+    };
+    let mut doc = match rhwp::wasm_api::HwpDocument::from_bytes(&data) {
+        Ok(d) => d,
+        Err(e) => {
+            eprintln!("오류: 문서 파싱 실패 - {e}");
+            return EXIT_RUNTIME;
+        }
+    };
+    let report = match doc.extract_page_range(from, to) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("오류: 쪽 추출 실패 - {e}");
+            return EXIT_RUNTIME;
+        }
+    };
+    let bytes = match doc.export_hwp_with_adapter() {
+        Ok(b) => b,
+        Err(e) => {
+            eprintln!("오류: HWP 직렬화 실패 - {e}");
+            return EXIT_RUNTIME;
+        }
+    };
+    if let Err(e) = fs::write(output, &bytes) {
+        eprintln!("오류: 출력 쓰기 실패 - {output}: {e}");
+        return EXIT_RUNTIME;
+    }
+
+    if json_mode {
+        println!(
+            "{}",
+            serde_json::json!({
+                "schemaVersion": "1.0",
+                "source": input,
+                "output": output,
+                "from": from,
+                "to": to,
+                "pagesBefore": report.pages_before,
+                "pagesAfter": report.pages_after,
+                "paragraphsKept": report.kept,
+                "paragraphsRemoved": report.removed,
+            })
+        );
+    } else {
+        println!(
+            "추출 완료: {output} ({}~{}쪽) — {}쪽 → {}쪽, 문단 {}개 남기고 {}개 제거",
+            from, to, report.pages_before, report.pages_after, report.kept, report.removed
+        );
+    }
+    EXIT_OK
 }
 
 fn convert_hwp(args: &[String]) -> i32 {

@@ -481,6 +481,16 @@ rhwp export-tables 작성본.hwpx --json | jq '.tables[0].cells[] | select(.row=
 - `--verify-pages` — 저장 전 문서 페이지 수와 저장 후 재로딩 페이지 수를 비교한다.
   불일치하면 산출물은 남기고 종료 코드 4로 실패한다.
 
+### `extract-pages <입력> <출력.hwp> --from N --to M [--json]` (#3565)
+지정한 쪽 범위만 남겨 저장한다. **대형 문서의 결함을 이분법으로 좁히기 위한 진단 도구**다
+(387쪽 문서가 저장 후 한컴에서 열리지 않을 때 절반씩 잘라 재현 여부를 본다).
+- 쪽 단위로 자르되 **문단 단위로** 지운다. 여러 쪽에 걸친 문단은 한 쪽이라도 범위 안이면 남긴다.
+- 결과 쪽수가 요청 범위와 정확히 같지 않을 수 있다(잘라 낸 뒤 레이아웃이 다시 흐른다).
+  목적은 **재현 최소화**이지 정밀한 페이지 오려내기가 아니다.
+- 구역·DocInfo·BinData 는 그대로 남는다. 그 축들을 떼어 내려면
+  [`tools/hwp_open_bisect/`](../../tools/hwp_open_bisect/README.md) 를 쓴다.
+- `--json` — 결과 요약(원본/추출 후 쪽수, 남긴·지운 문단 수)을 JSON 한 줄로 출력한다.
+
 ### `export-hwpx <입력.hwp|.hwpx> [출력.hwpx] [--verify] [--verify-pages]` (#1868, #1638)
 HWP 문서를 HWPX(ZIP+XML)로 변환 저장. `convert`(배포용 해제)와 별개의 포맷 변환 명령.
 - 입력 포맷 자동 감지(HWP5/HWP3/HWPX — HWPX 입력은 재직렬화).
