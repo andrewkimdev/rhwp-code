@@ -320,6 +320,29 @@ MCP 서버(및 함수 호출 클라이언트)가 **그대로 등록할 수 있�
 rhwp capabilities --mcp | jq '.tools[] | {name, description}'
 ```
 
+### `mcp-serve` — MCP 서버 (#3140)
+rhwp 를 **실제 MCP 서버**로 실행한다. 전송은 MCP 표준 stdio(줄 단위 JSON-RPC 2.0)이며,
+`initialize` → `tools/list` → `tools/call` 을 직접 받는다. Claude Code 등 MCP 호스트에는
+명령 한 줄로 등록한다:
+
+```jsonc
+// MCP 호스트 설정 예 (예: .mcp.json)
+{ "mcpServers": { "rhwp": { "command": "rhwp", "args": ["mcp-serve"] } } }
+```
+
+- **도구 목록은 `capabilities --mcp` 와 단일 출처**(`mcp_tool_definitions`)다 — 선언과 서버가
+  어긋날 수 없고, 드리프트 가드(`tools_list_matches_capabilities_manifest`)가 이를 고정한다.
+- 무상태 도구 13종(`hwp_info`·`hwp_search`·`hwp_fill_fields` 등)은 선언의 `cli.args` 배선을
+  그대로 해석해 자기 자신을 서브프로세스로 실행한다 — #2707 종료 코드·stdout 순수성 등
+  검증된 CLI 계약을 문자 그대로 재사용한다. stdout 이 JSON 이면 `structuredContent` 로도 준다.
+- **세션 도구 3종**(서버 전용): `hwp_open`(파싱 1회 → `docId` 핸들) → `hwp_doc_text`(재파싱
+  없이 페이지 텍스트 반복 조회) → `hwp_close`(해제). #3140 이 짚은 "상태 유지 세션" 공백을
+  채운다 — 대형 문서를 여러 번 조회할 때 프로세스별 재파싱 비용이 사라진다.
+- 도구 실행 실패(없는 파일 등)는 MCP 규약대로 프로토콜 오류가 아니라 `isError:true` 도구
+  결과로 돌아온다. 알 수 없는 메서드는 JSON-RPC `-32601`.
+- 의존성 추가 없음 — 프로토콜 표면이 좁아 serde_json 만으로 구현했고, WASM 대상에는
+  포함되지 않는다.
+
 ### `info <파일> [--json]`
 HWP 파일 정보 표시(버전/구역 수/암호화 등).
 - `--json` (#3237): stdout 에 순수 JSON 하나 —
