@@ -53,13 +53,18 @@ import {
   type CanvasKitSurfaceRequest,
 } from './render-backend';
 import {
+  boundedCanvasKitSourceImageKey,
   canvasKitImageCacheKey,
   canvasKitImageFillModeTiles,
   canvasKitImageFillModeStretches,
   canvasKitImagePlacement,
   canvasKitImageSourceRect,
 } from './canvaskit/image-replay';
-import { encodedImageDimensions } from './canvaskit/image-header';
+import {
+  CANVASKIT_MAX_ENCODED_IMAGE_BASE64_LENGTH,
+  decodedImageMatchesEncodedHeader,
+  replayableEncodedImageHeader,
+} from './canvaskit/image-header';
 import { canvaskitClipRightPad } from './canvaskit/policy';
 import {
   selectLayerTextVariantsForLeaf,
@@ -150,6 +155,8 @@ export interface CanvasKitRenderDiagnostics {
   imageCacheHits: number;
   imageCacheMisses: number;
   imageCacheEvictions: number;
+  imageFailureCacheHits: number;
+  imageFailures: CanvasKitImageFailureDiagnostic[];
   localTypefaceCount: number;
   localTypefaceLoadFailureCount: number;
   localTypefacePendingCount: number;
@@ -157,10 +164,26 @@ export interface CanvasKitRenderDiagnostics {
   bundledTypefaceLoadFailureCount: number;
 }
 
+export type CanvasKitImageFailureReason =
+  | 'dataMissing'
+  | 'cacheKeyMissing'
+  | 'base64DecodeFailed'
+  | 'encodedImageRejected'
+  | 'imageDecodeFailed'
+  | 'decodedDimensionsMismatch';
+
+export interface CanvasKitImageFailureDiagnostic {
+  source: 'sourceKey' | 'resource' | 'inline' | 'missing';
+  sourceImageKey: string | null;
+  imageRef: number | string | null;
+  reason: CanvasKitImageFailureReason;
+}
+
 export type CanvasKitReadinessBlocker =
   | 'renderNotCompleted'
   | 'renderError'
   | 'unexpectedUnsupportedOps'
+  | 'imageReplayFailure'
   | 'localFontsPending';
 
 export class CanvasKitLayerRenderer {
@@ -169,8 +192,6 @@ export class CanvasKitLayerRenderer {
   private static readonly MAX_IMAGE_CACHE_ENTRIES = 128;
   private static readonly MAX_IMAGE_FAILURE_CACHE_ENTRIES = 128;
   private static readonly MAX_SVG_GLYPH_CACHE_ENTRIES = 128;
-  private static readonly MAX_ENCODED_IMAGE_BASE64_LENGTH = 24 * 1024 * 1024;
-  private static readonly MAX_DECODED_IMAGE_PIXELS = 32 * 1024 * 1024;
   private static readonly MAX_IMAGE_CACHE_PIXELS = 64 * 1024 * 1024;
   private static readonly MAX_BITMAP_GLYPH_BASE64_LENGTH = Math.ceil(4 * 1024 * 1024 / 3) * 4;
   private static readonly MAX_STATIC_SVG_GLYPH_BYTES = 1024 * 1024;
@@ -186,7 +207,8 @@ export class CanvasKitLayerRenderer {
   private static readonly MAX_BUNDLED_FONT_BYTES = 32 * 1024 * 1024;
 
   private readonly imageCache = new Map<string, { image: SkImage; pixels: number }>();
-  private readonly imageDecodeFailures = new Set<string>();
+  private readonly imageDecodeFailures = new Map<string, CanvasKitImageFailureReason>();
+  private readonly currentImageFailures = new Map<string, CanvasKitImageFailureDiagnostic>();
   private readonly svgGlyphPathCache = new Map<string, StaticSvgPathLayer[]>();
   private readonly svgGlyphParseFailures = new Set<string>();
   private readonly localTypefaces = new Map<string, CanvasKitLocalTypeface>();
@@ -206,6 +228,7 @@ export class CanvasKitLayerRenderer {
   private imageCacheHits = 0;
   private imageCacheMisses = 0;
   private imageCacheEvictions = 0;
+  private imageFailureCacheHits = 0;
   private imageCachePixels = 0;
   private currentResources: LayerResources | undefined;
   private currentShowParagraphMarks = false;
@@ -473,6 +496,7 @@ export class CanvasKitLayerRenderer {
       throw new Error('CanvasKit renderer가 이미 dispose되었습니다');
     }
     this.unsupportedOps.clear();
+    this.currentImageFailures.clear();
     this.lastRenderError = null;
     this.lastRenderCompleted = false;
     let surface: SkSurface | null = null;
@@ -577,6 +601,8 @@ export class CanvasKitLayerRenderer {
     this.imageCacheHits = 0;
     this.imageCacheMisses = 0;
     this.imageCacheEvictions = 0;
+    this.imageFailureCacheHits = 0;
+    this.currentImageFailures.clear();
     this.renderCount = 0;
     this.lastRenderDurationMs = null;
   }
@@ -599,6 +625,7 @@ export class CanvasKitLayerRenderer {
     if (!this.lastRenderCompleted) readinessBlockers.push('renderNotCompleted');
     if (this.lastRenderError !== null) readinessBlockers.push('renderError');
     if (lastUnexpectedUnsupportedOps.length > 0) readinessBlockers.push('unexpectedUnsupportedOps');
+    if (this.currentImageFailures.size > 0) readinessBlockers.push('imageReplayFailure');
     if (this.localTypefacePending.size > 0) readinessBlockers.push('localFontsPending');
     return {
       mode: this.renderMode,
@@ -622,6 +649,8 @@ export class CanvasKitLayerRenderer {
       imageCacheHits: this.imageCacheHits,
       imageCacheMisses: this.imageCacheMisses,
       imageCacheEvictions: this.imageCacheEvictions,
+      imageFailureCacheHits: this.imageFailureCacheHits,
+      imageFailures: [...this.currentImageFailures.values()].map((failure) => ({ ...failure })),
       localTypefaceCount: this.localTypefaces.size,
       localTypefaceLoadFailureCount: this.localTypefaceLoadFailures.size,
       localTypefacePendingCount: this.localTypefacePending.size,
@@ -633,6 +662,7 @@ export class CanvasKitLayerRenderer {
   recordRenderFailure(error: unknown, resetReplayState = false): void {
     if (resetReplayState) {
       this.unsupportedOps.clear();
+      this.currentImageFailures.clear();
       this.surfaceBackend = null;
       this.surfaceFallbackReason = null;
     }
@@ -1115,9 +1145,14 @@ export class CanvasKitLayerRenderer {
   }
 
   private renderImage(canvas: SkCanvas, op: LayerImageOp): void {
+    if (!op.base64) {
+      this.recordImageFailure(op, 'dataMissing', null);
+      this.unsupportedOps.add('image:dataMissing');
+      return;
+    }
     const image = this.imageForOp(op);
     if (!image) {
-      this.unsupportedOps.add(op.base64 ? 'image:decodeFailed' : 'image:dataMissing');
+      this.unsupportedOps.add('image:decodeFailed');
       return;
     }
     this.recordImageCoverageGaps(op);
@@ -3135,11 +3170,18 @@ export class CanvasKitLayerRenderer {
 
   private imageForOp(op: LayerImageOp): SkImage | null {
     const base64 = op.base64 ?? '';
-    if (!base64 || base64.length > CanvasKitLayerRenderer.MAX_ENCODED_IMAGE_BASE64_LENGTH) {
+    if (!base64) {
       return null;
     }
-    const key = canvasKitImageCacheKey(op);
-    if (!key) return null;
+    if (base64.length > CANVASKIT_MAX_ENCODED_IMAGE_BASE64_LENGTH) {
+      this.recordImageFailure(op, 'encodedImageRejected', null);
+      return null;
+    }
+    const key = canvasKitImageCacheKey(op, this.documentGeneration);
+    if (!key) {
+      this.recordImageFailure(op, 'cacheKeyMissing', null);
+      return null;
+    }
     const cached = this.imageCache.get(key);
     if (cached) {
       this.imageCache.delete(key);
@@ -3147,8 +3189,11 @@ export class CanvasKitLayerRenderer {
       this.imageCacheHits += 1;
       return cached.image;
     }
-    if (this.imageDecodeFailures.has(key)) {
+    const cachedFailure = this.imageDecodeFailures.get(key);
+    if (cachedFailure) {
       this.imageCacheHits += 1;
+      this.imageFailureCacheHits += 1;
+      this.recordImageFailure(op, cachedFailure, key);
       return null;
     }
     this.imageCacheMisses += 1;
@@ -3156,29 +3201,23 @@ export class CanvasKitLayerRenderer {
     try {
       bytes = base64ToBytes(base64);
     } catch {
-      this.rememberImageDecodeFailure(key);
+      this.recordImageFailure(op, 'base64DecodeFailed', key);
       return null;
     }
-    const encodedDimensions = encodedImageDimensions(bytes);
-    if (!encodedDimensions) {
-      this.rememberImageDecodeFailure(key);
-      return null;
-    }
-    const encodedPixels = encodedDimensions.width * encodedDimensions.height;
-    if (!Number.isSafeInteger(encodedPixels)
-      || encodedPixels > CanvasKitLayerRenderer.MAX_DECODED_IMAGE_PIXELS) {
-      this.rememberImageDecodeFailure(key);
+    const encodedHeader = replayableEncodedImageHeader(bytes);
+    if (!encodedHeader) {
+      this.recordImageFailure(op, 'encodedImageRejected', key);
       return null;
     }
     let image: SkImage | null = null;
     try {
       image = this.canvasKit.MakeImageFromEncoded(bytes);
     } catch {
-      this.rememberImageDecodeFailure(key);
+      this.recordImageFailure(op, 'imageDecodeFailed', key);
       return null;
     }
     if (!image) {
-      this.rememberImageDecodeFailure(key);
+      this.recordImageFailure(op, 'imageDecodeFailed', key);
       return null;
     }
     const imageWithDimensions = image as SkImage & { width?: (() => number) | number; height?: (() => number) | number };
@@ -3187,12 +3226,9 @@ export class CanvasKitLayerRenderer {
     const decodedPixels = typeof width === 'number' && typeof height === 'number'
       ? width * height
       : Number.POSITIVE_INFINITY;
-    if (!Number.isSafeInteger(decodedPixels)
-      || width !== encodedDimensions.width
-      || height !== encodedDimensions.height
-      || decodedPixels > CanvasKitLayerRenderer.MAX_DECODED_IMAGE_PIXELS) {
+    if (!decodedImageMatchesEncodedHeader(encodedHeader, width, height)) {
       image.delete?.();
-      this.rememberImageDecodeFailure(key);
+      this.recordImageFailure(op, 'decodedDimensionsMismatch', key);
       return null;
     }
     while (this.imageCache.size >= CanvasKitLayerRenderer.MAX_IMAGE_CACHE_ENTRIES
@@ -3210,12 +3246,49 @@ export class CanvasKitLayerRenderer {
     return image;
   }
 
-  private rememberImageDecodeFailure(key: string): void {
-    if (this.imageDecodeFailures.size >= CanvasKitLayerRenderer.MAX_IMAGE_FAILURE_CACHE_ENTRIES) {
-      const oldestKey = this.imageDecodeFailures.values().next().value as string | undefined;
-      if (oldestKey !== undefined) this.imageDecodeFailures.delete(oldestKey);
+  private recordImageFailure(
+    op: LayerImageOp,
+    reason: CanvasKitImageFailureReason,
+    key: string | null,
+  ): void {
+    if (key) {
+      if (!this.imageDecodeFailures.has(key)
+        && this.imageDecodeFailures.size >= CanvasKitLayerRenderer.MAX_IMAGE_FAILURE_CACHE_ENTRIES) {
+        const oldestKey = this.imageDecodeFailures.keys().next().value as string | undefined;
+        if (oldestKey !== undefined) this.imageDecodeFailures.delete(oldestKey);
+      }
+      this.imageDecodeFailures.set(key, reason);
     }
-    this.imageDecodeFailures.add(key);
+
+    const sourceImageKey = boundedCanvasKitSourceImageKey(op.sourceImageKey);
+    const imageRef = (
+      (typeof op.imageRef === 'number' && Number.isSafeInteger(op.imageRef))
+      || (
+        typeof op.imageRef === 'string'
+        && op.imageRef.length > 0
+        && op.imageRef.length <= 256
+        && !/[\u0000-\u001f\u007f]/.test(op.imageRef)
+      )
+    ) ? op.imageRef : null;
+    const source = sourceImageKey
+      ? 'sourceKey'
+      : imageRef !== null
+        ? 'resource'
+        : op.base64
+          ? 'inline'
+          : 'missing';
+    const diagnosticKey = key
+      ?? `${source}:${sourceImageKey ?? String(imageRef ?? op.base64?.length ?? 0)}:${reason}`;
+    if (this.currentImageFailures.has(diagnosticKey)
+      || this.currentImageFailures.size >= CanvasKitLayerRenderer.MAX_IMAGE_FAILURE_CACHE_ENTRIES) {
+      return;
+    }
+    this.currentImageFailures.set(diagnosticKey, {
+      source,
+      sourceImageKey,
+      imageRef,
+      reason,
+    });
   }
 
   private makeFillPaint(color: string, opacity = 1): SkPaint {

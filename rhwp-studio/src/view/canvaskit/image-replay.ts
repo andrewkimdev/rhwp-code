@@ -1,3 +1,6 @@
+import { blake3 } from '@noble/hashes/blake3.js';
+import { bytesToHex } from '@noble/hashes/utils.js';
+
 export interface CanvasKitImageBounds {
   x: number;
   y: number;
@@ -27,19 +30,54 @@ export const HWPUNIT_PER_PIXEL = 75;
 
 export interface CanvasKitImageCacheKeyInput {
   imageRef?: number | string;
+  sourceImageKey?: string;
   mime?: string;
   base64?: string;
 }
 
-export function canvasKitImageCacheKey(input: CanvasKitImageCacheKeyInput): string | null {
+export function boundedCanvasKitSourceImageKey(value: string | undefined): string | null {
+  return value !== undefined
+    && value.length > 0
+    && value.length <= 256
+    && !/[\u0000-\u001f\u007f]/.test(value)
+    ? value
+    : null;
+}
+
+export function canvasKitImageCacheKey(
+  input: CanvasKitImageCacheKeyInput,
+  documentGeneration?: number,
+): string | null {
   const parts: string[] = [];
-  if (input.imageRef !== undefined) {
-    parts.push(`ref:${String(input.imageRef)}`);
+  const sourceImageKey = boundedCanvasKitSourceImageKey(input.sourceImageKey);
+  if (sourceImageKey !== null) {
+    parts.push(`source:${sourceImageKey}`);
+  } else {
+    if (
+      (typeof input.imageRef === 'number' && Number.isSafeInteger(input.imageRef))
+      || (
+        typeof input.imageRef === 'string'
+        && input.imageRef.length > 0
+        && input.imageRef.length <= 256
+        && !/[\u0000-\u001f\u007f]/.test(input.imageRef)
+      )
+    ) {
+      parts.push(`ref:${String(input.imageRef)}`);
+    }
+    if (input.base64) {
+      const mime = input.mime
+        && input.mime.length <= 128
+        && !/[\u0000-\u001f\u007f]/.test(input.mime)
+        ? input.mime
+        : 'application/octet-stream';
+      const digest = bytesToHex(blake3(new TextEncoder().encode(input.base64)));
+      parts.push(`${mime}:${input.base64.length}:blake3:${digest}`);
+    }
   }
-  if (input.base64) {
-    parts.push(`${input.mime ?? 'application/octet-stream'}:${input.base64.length}:${fnv1a32(input.base64)}`);
-  }
-  return parts.length > 0 ? parts.join('|') : null;
+  if (parts.length === 0) return null;
+  return Number.isSafeInteger(documentGeneration)
+    ? `document:${documentGeneration}|${parts.join('|')}`
+    : parts.join('|');
 }
 
 export function canvasKitImageSourceRect(
@@ -135,15 +173,6 @@ export function canvasKitImageFillModeTiles(fillMode: string | undefined): boole
 
 export function canvasKitImageFillModeStretches(fillMode: string | undefined): boolean {
   return fillMode === undefined || fillMode === 'fitToSize' || fillMode === 'total';
-}
-
-function fnv1a32(value: string): string {
-  let hash = 2166136261;
-  for (let i = 0; i < value.length; i += 1) {
-    hash ^= value.charCodeAt(i);
-    hash = Math.imul(hash, 16777619);
-  }
-  return (hash >>> 0).toString(16);
 }
 
 function clamp(value: number, min: number, max: number): number {

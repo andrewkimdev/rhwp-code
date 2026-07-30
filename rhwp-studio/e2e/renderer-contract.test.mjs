@@ -8,6 +8,7 @@ import { blake3 } from '@noble/hashes/blake3.js';
 import { bytesToHex } from '@noble/hashes/utils.js';
 
 import { comparePngBuffers } from './helpers.mjs';
+import { inspectCanvasKitRuntimeImageFailures } from './renderer-baseline-contract.mjs';
 
 const studioRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const repoRoot = path.resolve(studioRoot, '..');
@@ -326,7 +327,7 @@ assert.doesNotMatch(
 );
 requireSnippet(
   diagnosticsBody,
-  /if \(!this\.lastRenderCompleted\) readinessBlockers\.push\('renderNotCompleted'\);[\s\S]*?if \(this\.lastRenderError !== null\) readinessBlockers\.push\('renderError'\);[\s\S]*?if \(lastUnexpectedUnsupportedOps\.length > 0\) readinessBlockers\.push\('unexpectedUnsupportedOps'\);[\s\S]*?passesRuntimeReadinessGate: readinessBlockers\.length === 0/,
+  /if \(!this\.lastRenderCompleted\) readinessBlockers\.push\('renderNotCompleted'\);[\s\S]*?if \(this\.lastRenderError !== null\) readinessBlockers\.push\('renderError'\);[\s\S]*?if \(lastUnexpectedUnsupportedOps\.length > 0\) readinessBlockers\.push\('unexpectedUnsupportedOps'\);[\s\S]*?if \(this\.currentImageFailures\.size > 0\) readinessBlockers\.push\('imageReplayFailure'\);[\s\S]*?passesRuntimeReadinessGate: readinessBlockers\.length === 0/,
   'CanvasKit diagnostics should expose deterministic runtime readiness blockers',
 );
 requireSnippet(
@@ -1291,6 +1292,11 @@ function runExecutableFontNativeGlyphReplay() {
     height: () => 1,
     delete() { events.push('image.delete'); },
   };
+  const exifOrientedImage = {
+    width: () => 3,
+    height: () => 2,
+    delete() { events.push('image.delete:exif'); },
+  };
   const fakePath = () => ({
     setFillType() {},
     delete() { events.push('path.delete'); },
@@ -1298,7 +1304,7 @@ function runExecutableFontNativeGlyphReplay() {
   const canvasKit = {
     MakeImageFromEncoded(bytes) {
       events.push(`image.decode:${bytes.byteLength}`);
-      return fakeImage;
+      return bytes[0] === 0xff && bytes[1] === 0xd8 ? exifOrientedImage : fakeImage;
     },
     Path: {
       MakeFromSVGString(pathData) {
@@ -1342,8 +1348,15 @@ function runExecutableFontNativeGlyphReplay() {
       isDefaultFallback: true,
     },
   };
-  const bitmapBase64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB';
-  const bitmapBytes = new Uint8Array(Buffer.from(bitmapBase64, 'base64'));
+  const bitmapBytes = new Uint8Array(33);
+  bitmapBytes.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+  const bitmapView = new DataView(bitmapBytes.buffer);
+  bitmapView.setUint32(8, 13);
+  bitmapBytes.set([0x49, 0x48, 0x44, 0x52], 12);
+  bitmapView.setUint32(16, 1);
+  bitmapView.setUint32(20, 1);
+  bitmapBytes.set([8, 6, 0, 0, 0], 24);
+  const bitmapBase64 = Buffer.from(bitmapBytes).toString('base64');
   const bitmapResourceKey = `img:blake3:${bitmapBytes.byteLength}:${bytesToHex(blake3(bitmapBytes))}`;
   const bitmap = {
     type: 'glyphOutline',
@@ -1402,6 +1415,59 @@ function runExecutableFontNativeGlyphReplay() {
 
   const corrupt = { ...bitmap, payloadResourceKey: 'glyphPayload:bitmapGlyph:resource:img:missing' };
   assert.equal(renderer.glyphOutlineVariantReplayable(corrupt), false);
+  const imageDecodeEventsBeforeRejection = events.filter(
+    (event) => event.startsWith('image.decode:'),
+  ).length;
+  const rejectedImage = {
+    type: 'image',
+    bbox: { x: 0, y: 0, width: 16, height: 16 },
+    sourceImageKey: 'bin:1:7:src',
+    imageRef: 7,
+    base64: Buffer.from([1, 2, 3]).toString('base64'),
+  };
+  assert.equal(renderer.imageForOp(rejectedImage), null);
+  assert.equal(renderer.imageForOp(rejectedImage), null);
+  assert.equal(
+    events.filter((event) => event.startsWith('image.decode:')).length,
+    imageDecodeEventsBeforeRejection,
+    'malformed headers must not reach the CanvasKit decoder',
+  );
+  const imageFailureDiagnostics = renderer.diagnostics();
+  assert.equal(imageFailureDiagnostics.imageFailureCacheHits, 1);
+  assert.deepEqual(imageFailureDiagnostics.imageFailures, [{
+    source: 'sourceKey',
+    sourceImageKey: 'bin:1:7:src',
+    imageRef: 7,
+    reason: 'encodedImageRejected',
+  }]);
+  assert.equal(imageFailureDiagnostics.passesRuntimeReadinessGate, false);
+  assert.ok(imageFailureDiagnostics.readinessBlockers.includes('imageReplayFailure'));
+  const orientedJpeg = new Uint8Array([
+    0xff, 0xd8,
+    0xff, 0xe0, 0x00, 0x04, 0x00, 0x00,
+    0xff, 0xc0, 0x00, 0x0b, 0x08,
+    0x00, 0x03,
+    0x00, 0x02,
+    0x01, 0x01, 0x11, 0x00,
+  ]);
+  assert.equal(renderer.imageForOp({
+    type: 'image',
+    bbox: { x: 0, y: 0, width: 3, height: 2 },
+    sourceImageKey: 'bin:1:8:src',
+    imageRef: 8,
+    base64: Buffer.from(orientedJpeg).toString('base64'),
+  }), exifOrientedImage, 'EXIF-oriented JPEG decode may swap bounded source dimensions');
+  renderer.recordRenderFailure(new Error('page preparation failed'), true);
+  const resetFailureDiagnostics = renderer.diagnostics();
+  assert.deepEqual(
+    resetFailureDiagnostics.imageFailures,
+    [],
+    'pre-replay failures must not retain image diagnostics from the previous page',
+  );
+  assert.equal(
+    resetFailureDiagnostics.readinessBlockers.includes('imageReplayFailure'),
+    false,
+  );
   renderer.lastRenderCompleted = true;
   renderer.localTypefacePending.set('pending:test-face', 1);
   assert.ok(renderer.diagnostics().readinessBlockers.includes('localFontsPending'));
@@ -2224,18 +2290,47 @@ assert(
     && rendererBaselineSource.includes("code: 'runtimeRenderIncomplete'")
     && rendererBaselineSource.includes("code: 'runtimeRenderError'")
     && rendererBaselineSource.includes("code: 'runtimeUnexpectedUnsupportedOps'")
+    && rendererBaselineSource.includes("code: 'runtimeImageDiagnosticsUnavailable'")
+    && rendererBaselineSource.includes("code: 'runtimeImageReplayFailure'")
     && rendererBaselineSource.includes("code: 'runtimeBackendMismatch'")
     && rendererBaselineSource.includes("code: 'runtimeProfileMismatch'")
     && rendererBaselineSource.includes('contractGateAndReportInventory')
     && rendererBaselineSource.includes('planReasonCounts')
-    && rendererBaselineSource.includes('planFeatureCounts'),
+    && rendererBaselineSource.includes('planFeatureCounts')
+    && rendererBaselineSource.includes('imageFailureReasonCounts')
+    && rendererBaselineSource.includes('imageFailureSourceCounts'),
   'browser baseline must gate replay-plan/runtime contract failures and inventory known gaps',
 );
+assert.deepEqual(inspectCanvasKitRuntimeImageFailures(null), {
+  available: false,
+  failures: [],
+  hasFailures: false,
+});
+assert.deepEqual(inspectCanvasKitRuntimeImageFailures({ imageFailures: {} }), {
+  available: false,
+  failures: [],
+  hasFailures: false,
+});
+assert.deepEqual(inspectCanvasKitRuntimeImageFailures({ imageFailures: [] }), {
+  available: true,
+  failures: [],
+  hasFailures: false,
+});
+const runtimeImageFailure = { source: 'inline', reason: 'imageDecodeFailed' };
+assert.deepEqual(inspectCanvasKitRuntimeImageFailures({
+  imageFailures: [runtimeImageFailure],
+}), {
+  available: true,
+  failures: [runtimeImageFailure],
+  hasFailures: true,
+});
 assert(
   rendererBaselineDriverSource.includes('CanvasKit Replay Diagnostics')
     && rendererBaselineDriverSource.includes('Replay Diagnostic Inventory')
     && rendererBaselineDriverSource.includes('expectedUnsupportedOpCounts')
-    && rendererBaselineDriverSource.includes('unexpectedUnsupportedOpCounts'),
+    && rendererBaselineDriverSource.includes('unexpectedUnsupportedOpCounts')
+    && rendererBaselineDriverSource.includes('runtimeImageReplayFailures')
+    && rendererBaselineDriverSource.includes('imageFailureReasonCounts'),
   'renderer baseline report must preserve replay-plan and runtime diagnostic inventories',
 );
 assert(

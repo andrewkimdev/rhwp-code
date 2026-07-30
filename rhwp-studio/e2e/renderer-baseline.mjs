@@ -13,6 +13,7 @@ import {
   loadApp,
   loadHwpFile,
 } from './helpers.mjs';
+import { inspectCanvasKitRuntimeImageFailures } from './renderer-baseline-contract.mjs';
 
 const DEFAULT_BROWSER_PARITY_THRESHOLDS = {
   ignoreChannelDelta: 8,
@@ -915,6 +916,24 @@ try {
                 detail: JSON.stringify(runtime.lastUnexpectedUnsupportedOps),
               });
             }
+            const imageFailureState = inspectCanvasKitRuntimeImageFailures(runtime);
+            if (!imageFailureState.available) {
+              hardGateViolations.push({
+                sampleId: sample.id,
+                backend: backend.key,
+                profile,
+                code: 'runtimeImageDiagnosticsUnavailable',
+                detail: null,
+              });
+            } else if (imageFailureState.hasFailures) {
+              hardGateViolations.push({
+                sampleId: sample.id,
+                backend: backend.key,
+                profile,
+                code: 'runtimeImageReplayFailure',
+                detail: JSON.stringify(imageFailureState.failures),
+              });
+            }
           }
         }
         results.push({
@@ -1245,17 +1264,21 @@ for (const result of results) {
       hardGateViolationCount: 0,
       runtimeRenderErrors: 0,
       runtimeUnexpectedUnsupportedOps: 0,
+      runtimeImageReplayFailures: 0,
       planStatusCounts: {},
       planReasonCounts: {},
       planFeatureCounts: {},
       expectedUnsupportedOpCounts: {},
       unexpectedUnsupportedOpCounts: {},
+      imageFailureReasonCounts: {},
+      imageFailureSourceCounts: {},
     });
   }
   const summary = replaySummaryByBackendProfile.get(key);
   const replayPlan = result.diagnostics?.replayPlan ?? {};
   const planSummary = replayPlan.summary ?? {};
   const runtime = result.diagnostics?.canvaskitRender ?? {};
+  const imageFailureState = inspectCanvasKitRuntimeImageFailures(runtime);
   summary.captureCount += 1;
   for (const field of [
     'totalItems',
@@ -1271,6 +1294,7 @@ for (const result of results) {
   }
   if (runtime.lastRenderError) summary.runtimeRenderErrors += 1;
   summary.runtimeUnexpectedUnsupportedOps += runtime.lastUnexpectedUnsupportedOps?.length ?? 0;
+  summary.runtimeImageReplayFailures += imageFailureState.failures.length;
   for (const item of replayPlan.items ?? []) {
     const status = String(item.status ?? 'unknown');
     const reason = String(item.reason ?? 'unknown');
@@ -1284,6 +1308,12 @@ for (const result of results) {
   }
   for (const op of runtime.lastUnexpectedUnsupportedOps ?? []) {
     summary.unexpectedUnsupportedOpCounts[op] = (summary.unexpectedUnsupportedOpCounts[op] ?? 0) + 1;
+  }
+  for (const failure of imageFailureState.failures) {
+    const reason = String(failure.reason ?? 'unknown');
+    const source = String(failure.source ?? 'unknown');
+    summary.imageFailureReasonCounts[reason] = (summary.imageFailureReasonCounts[reason] ?? 0) + 1;
+    summary.imageFailureSourceCounts[source] = (summary.imageFailureSourceCounts[source] ?? 0) + 1;
   }
 }
 for (const violation of hardGateViolations) {
@@ -1301,6 +1331,8 @@ for (const summary of replaySummaryRows) {
     'planFeatureCounts',
     'expectedUnsupportedOpCounts',
     'unexpectedUnsupportedOpCounts',
+    'imageFailureReasonCounts',
+    'imageFailureSourceCounts',
   ]) {
     summary[field] = Object.fromEntries(
       Object.entries(summary[field]).sort(([left], [right]) => left.localeCompare(right)),
@@ -1371,6 +1403,7 @@ for (const result of results.filter((entry) => entry.readinessGateRequired)) {
   if (renderDiagnostics === null) {
     blockers.push('diagnosticsUnavailable');
   } else {
+    const imageFailureState = inspectCanvasKitRuntimeImageFailures(renderDiagnostics);
     if (renderDiagnostics.mode !== 'default') {
       blockers.push('canvaskitModeMismatch');
     }
@@ -1379,6 +1412,12 @@ for (const result of results.filter((entry) => entry.readinessGateRequired)) {
     }
     for (const blocker of renderDiagnostics.readinessBlockers ?? []) {
       blockers.push(`runtime:${blocker}`);
+    }
+    if (!imageFailureState.available) {
+      blockers.push('runtime:imageDiagnosticsUnavailable');
+    } else if (imageFailureState.hasFailures
+      && !blockers.includes('runtime:imageReplayFailure')) {
+      blockers.push('runtime:imageReplayFailure');
     }
     if (renderDiagnostics.passesRuntimeReadinessGate !== true) {
       blockers.push('runtime:readinessGateFailed');
@@ -1452,6 +1491,7 @@ for (const result of results.filter((entry) => entry.readinessGateRequired)) {
     backendFallbackReason: runtime.backendFallbackReason ?? null,
     expectedUnsupportedOps: renderDiagnostics?.lastExpectedUnsupportedOps ?? [],
     unexpectedUnsupportedOps: renderDiagnostics?.lastUnexpectedUnsupportedOps ?? [],
+    imageFailures: inspectCanvasKitRuntimeImageFailures(renderDiagnostics).failures,
     renderError: renderDiagnostics?.lastRenderError ?? null,
     surfaceBackend: renderDiagnostics?.surfaceBackend ?? null,
     surfaceFallbackReason: renderDiagnostics?.surfaceFallbackReason ?? null,
@@ -1483,6 +1523,7 @@ const canvaskitReadinessGate = {
     canvaskitSurface: 'auto',
     requireActiveBackend: true,
     requireRuntimeReadiness: true,
+    requireNoImageReplayFailures: true,
     requireVisualParity: true,
     requireColdAndWarmPerformanceBudget: true,
   },

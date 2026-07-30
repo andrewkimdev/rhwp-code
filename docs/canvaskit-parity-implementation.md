@@ -166,6 +166,18 @@ Canvas2D, CanvasKit, and native Skia; OLE placeholders keep the existing static
 replay. The `export-png` CLI defaults to the `high-quality` profile; callers
 must request `--profile screen` explicitly to include editor-only visuals.
 
+P40 makes that image boundary fail closed before CanvasKit's decoder is called.
+PNG, JPEG, GIF, WebP, and BMP payloads must have a structurally valid header
+whose encoded size, dimensions, and pixel count are within the browser limits.
+Layer schema `1.20` supplies an opaque, document-local `sourceImageKey`; the
+runtime preserves that identity byte-for-byte, scopes both positive and
+negative cache entries to the document generation, and falls back to a bounded
+payload fingerprint when no valid source key exists. Missing bytes, invalid
+base64, header rejection, decoder failure, and decoded-dimension mismatch are
+reported as separate bounded diagnostics. Baseline artifacts inventory those
+reasons and fail their replay contract when any image failure reaches a
+captured CanvasKit page.
+
 Equation ops now carry their bounded semantic `layoutBox` in the layer JSON.
 CanvasKit replays that tree directly, so a missing or malformed equation SVG
 does not require a DOM/SVG overlay and cannot abort the page. Non-finite,
@@ -219,6 +231,14 @@ work budget; oversized or invalid browser image payloads are not reported as
 direct replay candidates. The reported page cost is the larger of the
 pre-lowering estimate and the lowered-tree cost.
 
+Text preflight uses `displayText` for the text that will actually be painted,
+including required-font and shaping decisions. The bounded lowering estimate
+still counts both the model-space source string and its optional display
+projection because both remain present in the transition payload. Special
+visual operations follow their serialized authority: character overlap and
+control marks use source text, while tab leaders and decorations use display
+text.
+
 The same report carries a bounded, sorted `requiredFontFamilies` list for text
 fallbacks that the selected replay plan will actually paint. A strict glyph
 outline variant does not require its source family. Each browser surface maps
@@ -265,8 +285,9 @@ they never make a document eligible for CanvasKit selection in the VS Code
 webview.
 
 `CanvasKitRenderDiagnostics.passesRuntimeReadinessGate` means only that the
-selected page completed a CanvasKit surface flush without a render error or
-unexpected unsupported operation. Surface fallback remains explicit
+selected page completed a CanvasKit surface flush without a render error,
+unexpected unsupported operation, pending local font, or image replay failure.
+Surface fallback remains explicit
 telemetry because headless and constrained devices may legitimately use the
 software surface. `surfaceBackend` records whether the default or software
 factory actually succeeded. If CanvasKit replaces the DOM canvas during its

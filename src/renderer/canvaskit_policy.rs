@@ -501,8 +501,7 @@ fn render_node_prelower_work_units(node_type: &RenderNodeType) -> Option<usize> 
         // text sidecars, so reserve the largest currently supported expansion.
         RenderNodeType::TextRun(run) => (
             10usize,
-            run.text
-                .len()
+            text_run_payload_bytes(run)?
                 .checked_add(run.style.font_family.len())?
                 .checked_add(
                     run.style
@@ -558,6 +557,12 @@ fn render_node_prelower_work_units(node_type: &RenderNodeType) -> Option<usize> 
         return None;
     }
     base_units.checked_add(payload_bytes.div_ceil(CANVASKIT_DOCUMENT_PREFLIGHT_PRELOWER_UNIT_BYTES))
+}
+
+fn text_run_payload_bytes(run: &TextRunNode) -> Option<usize> {
+    run.text
+        .len()
+        .checked_add(run.display_text.as_ref().map_or(0, String::len))
 }
 
 fn count_layer_tree_work_units(
@@ -653,13 +658,15 @@ fn additional_payload_work_units(bytes: usize) -> usize {
 
 fn paint_op_work_units(op: &PaintOp) -> usize {
     let repeated_visual_units = match op {
-        PaintOp::TextRun { run, .. } => run.text.chars().count(),
+        PaintOp::TextRun { run, .. } => expand_pua_display_text(run.display_or_text())
+            .chars()
+            .count(),
         PaintOp::CharOverlap { run, .. } => run.text.chars().count(),
         PaintOp::TextControlMark { run, .. } => bounded_text_char_count(&run.text),
         PaintOp::TabLeader { run, .. } => {
-            bounded_text_char_count(&run.text).saturating_add(run.style.tab_leaders.len())
+            display_visual_position_count(run).saturating_add(run.style.tab_leaders.len())
         }
-        PaintOp::TextDecoration { run, .. } => text_decoration_position_count(run),
+        PaintOp::TextDecoration { run, .. } => display_visual_position_count(run),
         _ => 0,
     };
     let payload_bytes = match op {
@@ -671,9 +678,8 @@ fn paint_op_work_units(op: &PaintOp) -> usize {
         | PaintOp::CharOverlap { run, .. }
         | PaintOp::TextControlMark { run, .. }
         | PaintOp::TabLeader { run, .. }
-        | PaintOp::TextDecoration { run, .. } => run
-            .text
-            .len()
+        | PaintOp::TextDecoration { run, .. } => text_run_payload_bytes(run)
+            .unwrap_or(usize::MAX)
             .saturating_add(run.style.font_family.len())
             .saturating_add(
                 run.style
@@ -756,24 +762,30 @@ fn bounded_text_char_count(text: &str) -> usize {
         .count()
 }
 
-fn text_decoration_position_count(run: &TextRunNode) -> usize {
-    let source: String = run
-        .text
-        .chars()
-        .take(crate::paint::MAX_POSITIONED_CONTROL_MARKS_PER_RUN + 1)
-        .collect();
-    if source.chars().count() > crate::paint::MAX_POSITIONED_CONTROL_MARKS_PER_RUN {
-        return crate::paint::MAX_POSITIONED_CONTROL_MARKS_PER_RUN + 1;
+fn bounded_display_text_for_visual(run: &TextRunNode) -> (String, bool) {
+    let limit = crate::paint::MAX_POSITIONED_CONTROL_MARKS_PER_RUN;
+    let mut source_chars = run.display_or_text().chars();
+    let source: String = source_chars.by_ref().take(limit).collect();
+    let source_complete = source_chars.next().is_none();
+    let expanded = expand_pua_display_text(&source);
+    let mut display_chars = expanded.chars();
+    let display: String = display_chars.by_ref().take(limit).collect();
+    (display, source_complete && display_chars.next().is_none())
+}
+
+fn display_visual_position_count(run: &TextRunNode) -> usize {
+    let (display, complete) = bounded_display_text_for_visual(run);
+    if complete {
+        display.chars().count()
+    } else {
+        crate::paint::MAX_POSITIONED_CONTROL_MARKS_PER_RUN + 1
     }
-    expand_pua_display_text(&source)
-        .chars()
-        .take(crate::paint::MAX_POSITIONED_CONTROL_MARKS_PER_RUN + 1)
-        .count()
 }
 
 fn text_visual_geometry_is_valid(
     bbox: &crate::renderer::render_tree::BoundingBox,
     run: &TextRunNode,
+    replay_text: &str,
 ) -> bool {
     [
         bbox.x,
@@ -792,7 +804,7 @@ fn text_visual_geometry_is_valid(
         && run.style.font_size > 0.0
         && run.style.ratio > 0.0
         && compute_char_positions(
-            &run.text
+            &replay_text
                 .chars()
                 .take(crate::paint::MAX_POSITIONED_CONTROL_MARKS_PER_RUN)
                 .collect::<String>(),
@@ -1311,7 +1323,7 @@ impl CanvasKitReplayPlanBuilder {
             match op {
                 PaintOp::TextRun { run, .. } if text_run_selected => {
                     self.record_required_font_family(&run.style.font_family);
-                    let display_text = expand_pua_display_text(&run.text);
+                    let display_text = expand_pua_display_text(run.display_or_text());
                     if crate::renderer::contains_old_hangul_jamo(&display_text) {
                         self.record_required_font_family(OLD_HANGUL_FONT_FAMILY);
                     }
@@ -1443,7 +1455,7 @@ impl CanvasKitReplayPlanBuilder {
                     > crate::paint::MAX_POSITIONED_CONTROL_MARKS_PER_RUN
                 {
                     Some("visualItemLimitExceeded")
-                } else if !text_visual_geometry_is_valid(bbox, run) {
+                } else if !text_visual_geometry_is_valid(bbox, run, &run.text) {
                     Some("invalidGeometry")
                 } else if run.is_vertical {
                     Some("verticalText")
@@ -1481,7 +1493,7 @@ impl CanvasKitReplayPlanBuilder {
                         > crate::paint::MAX_POSITIONED_CONTROL_MARKS_PER_RUN
                 {
                     Some("visualItemLimitExceeded")
-                } else if !text_visual_geometry_is_valid(bbox, run) {
+                } else if !text_visual_geometry_is_valid(bbox, run, &run.text) {
                     Some("invalidGeometry")
                 } else if run.is_vertical {
                     Some("verticalText")
@@ -1507,13 +1519,13 @@ impl CanvasKitReplayPlanBuilder {
                 }
             }
             PaintOp::TabLeader { bbox, run } => {
-                let detail = if bounded_text_char_count(&run.text)
-                    > crate::paint::MAX_POSITIONED_CONTROL_MARKS_PER_RUN
+                let (display_text, display_complete) = bounded_display_text_for_visual(run);
+                let detail = if !display_complete
                     || run.style.tab_leaders.len()
                         > crate::paint::MAX_POSITIONED_CONTROL_MARKS_PER_RUN
                 {
                     Some("visualItemLimitExceeded")
-                } else if !text_visual_geometry_is_valid(bbox, run) {
+                } else if !text_visual_geometry_is_valid(bbox, run, &display_text) {
                     Some("invalidGeometry")
                 } else if run.is_vertical {
                     Some("verticalText")
@@ -1542,11 +1554,10 @@ impl CanvasKitReplayPlanBuilder {
                 }
             }
             PaintOp::TextDecoration { bbox, run, kind } => {
-                let too_many_items = text_decoration_position_count(run)
-                    > crate::paint::MAX_POSITIONED_CONTROL_MARKS_PER_RUN;
-                let detail = if too_many_items {
+                let (display_text, display_complete) = bounded_display_text_for_visual(run);
+                let detail = if !display_complete {
                     Some("visualItemLimitExceeded")
-                } else if !text_visual_geometry_is_valid(bbox, run) {
+                } else if !text_visual_geometry_is_valid(bbox, run, &display_text) {
                     Some("invalidGeometry")
                 } else if run.is_vertical {
                     Some("verticalText")
@@ -2055,7 +2066,7 @@ fn text_run_transition_detail(run: &TextRunNode) -> Option<&'static str> {
         return Some("ratioTextEffect");
     }
     if run.style.superscript || run.style.subscript {
-        let display_text = expand_pua_display_text(&run.text);
+        let display_text = expand_pua_display_text(run.display_or_text());
         if !display_text
             .bytes()
             .all(|byte| (0x20..=0x7e).contains(&byte))
@@ -2615,6 +2626,32 @@ mod tests {
                 plan.items[0].detail.as_deref(),
                 Some("unsupportedEncodedImage")
             );
+
+            let preflight = analyze_canvaskit_document_preflight_with_limits(
+                1,
+                CanvasKitReplayMode::Default,
+                RenderProfile::Screen,
+                CanvasKitDocumentPreflightLimits {
+                    max_pages: 1,
+                    max_work_units: 16,
+                    max_blockers: 4,
+                    max_required_font_families: 1,
+                },
+                move |_, _| Ok::<_, &'static str>(preflight_page(tree.clone())),
+            );
+
+            assert_eq!(
+                preflight.status,
+                CanvasKitDocumentPreflightStatus::Ineligible
+            );
+            assert!(!preflight.eligible);
+            assert!(preflight.complete);
+            assert_eq!(preflight.summary.direct_required_items, 1);
+            assert_eq!(
+                preflight.blockers[0].code,
+                CanvasKitDocumentPreflightBlockerCode::HiddenCanvas2dOverlayRequired
+            );
+            assert_eq!(preflight.blockers[0].op_type, Some("image"));
         }
     }
 
@@ -2890,7 +2927,9 @@ mod tests {
 
     #[test]
     fn text_special_visual_work_and_item_counts_are_bounded() {
-        let marks = text_run(&" ".repeat(crate::paint::MAX_POSITIONED_CONTROL_MARKS_PER_RUN + 1));
+        let mut marks =
+            text_run(&" ".repeat(crate::paint::MAX_POSITIONED_CONTROL_MARKS_PER_RUN + 1));
+        marks.display_text = Some("A".to_string());
         let tree = tree_with_ops(vec![PaintOp::text_control_mark(bbox(), marks)]);
 
         let plan = analyze_canvaskit_replay_plan(&tree, CanvasKitReplayMode::Default);
@@ -2904,8 +2943,9 @@ mod tests {
             CanvasKitBoundedWorkCount::Exceeded
         );
 
-        let decoration =
-            text_run(&"A".repeat(crate::paint::MAX_POSITIONED_CONTROL_MARKS_PER_RUN + 1));
+        let mut decoration = text_run("\u{0017}");
+        decoration.display_text =
+            Some("A".repeat(crate::paint::MAX_POSITIONED_CONTROL_MARKS_PER_RUN + 1));
         let decoration_tree = tree_with_ops(vec![PaintOp::text_decoration(
             bbox(),
             decoration,
@@ -2923,6 +2963,36 @@ mod tests {
             CanvasKitBoundedWorkCount::Exceeded
         );
 
+        let pua_source =
+            "\u{F012B}".repeat(crate::paint::MAX_POSITIONED_CONTROL_MARKS_PER_RUN / 3 + 1);
+        assert!(pua_source.chars().count() <= crate::paint::MAX_POSITIONED_CONTROL_MARKS_PER_RUN);
+        assert!(
+            expand_pua_display_text(&pua_source).chars().count()
+                > crate::paint::MAX_POSITIONED_CONTROL_MARKS_PER_RUN
+        );
+        let mut leader = text_run(&pua_source);
+        leader
+            .style
+            .tab_leaders
+            .push(crate::renderer::TabLeaderInfo {
+                start_x: 1.0,
+                end_x: 8.0,
+                fill_type: 1,
+            });
+        let leader_tree = tree_with_ops(vec![PaintOp::tab_leader(bbox(), leader)]);
+        let leader_plan = analyze_canvaskit_replay_plan(&leader_tree, CanvasKitReplayMode::Default);
+        assert_eq!(
+            leader_plan.items[0].detail.as_deref(),
+            Some("visualItemLimitExceeded")
+        );
+        assert_eq!(
+            count_layer_tree_work_units(
+                &leader_tree,
+                crate::paint::MAX_POSITIONED_CONTROL_MARKS_PER_RUN as u32
+            ),
+            CanvasKitBoundedWorkCount::Exceeded
+        );
+
         let mut malformed = text_run("A");
         malformed.baseline = f64::NAN;
         let malformed_tree = tree_with_ops(vec![PaintOp::text_control_mark(bbox(), malformed)]);
@@ -2936,6 +3006,25 @@ mod tests {
         let text_tree = tree_with_ops(vec![PaintOp::text_run(bbox(), text_run(&"A".repeat(101)))]);
         assert_eq!(
             count_layer_tree_work_units(&text_tree, 100),
+            CanvasKitBoundedWorkCount::Exceeded
+        );
+
+        let projected_text =
+            "\u{F012B}".repeat(CANVASKIT_DOCUMENT_PREFLIGHT_MAX_WORK_UNITS as usize / 3 + 1);
+        assert!(
+            projected_text.chars().count() < CANVASKIT_DOCUMENT_PREFLIGHT_MAX_WORK_UNITS as usize
+        );
+        assert!(
+            expand_pua_display_text(&projected_text).chars().count()
+                > CANVASKIT_DOCUMENT_PREFLIGHT_MAX_WORK_UNITS as usize
+        );
+        let projected_tree =
+            tree_with_ops(vec![PaintOp::text_run(bbox(), text_run(&projected_text))]);
+        assert_eq!(
+            count_layer_tree_work_units(
+                &projected_tree,
+                CANVASKIT_DOCUMENT_PREFLIGHT_MAX_WORK_UNITS
+            ),
             CanvasKitBoundedWorkCount::Exceeded
         );
     }
@@ -2962,6 +3051,16 @@ mod tests {
                 );
             }
         }
+
+        let mut substituted = text_run("\u{0017}");
+        substituted.display_text = Some("가".to_string());
+        substituted.style.superscript = true;
+        let tree = tree_with_ops(vec![PaintOp::text_run(bbox(), substituted)]);
+        let plan = analyze_canvaskit_replay_plan(&tree, CanvasKitReplayMode::Default);
+        assert_eq!(
+            plan.items[0].detail.as_deref(),
+            Some("scriptTextRequiresShaping")
+        );
     }
 
     #[test]
@@ -3101,7 +3200,9 @@ mod tests {
 
     #[test]
     fn document_preflight_requires_old_hangul_shaping_font_for_pua_projection() {
-        let tree = tree_with_ops(vec![PaintOp::text_run(bbox(), text_run("\u{F53A}"))]);
+        let mut run = text_run("\u{0017}");
+        run.display_text = Some("\u{F53A}".to_string());
+        let tree = tree_with_ops(vec![PaintOp::text_run(bbox(), run)]);
         let preflight = analyze_canvaskit_document_preflight_with_limits(
             1,
             CanvasKitReplayMode::Default,
@@ -3139,6 +3240,26 @@ mod tests {
         );
         assert_eq!(
             estimate_canvaskit_page_lowering_work(&tree, 11),
+            CanvasKitBoundedWorkCount::Exceeded
+        );
+    }
+
+    #[test]
+    fn prelower_estimate_counts_display_text_alongside_the_source_marker() {
+        let mut run = text_run("\u{0017}");
+        run.display_text =
+            Some("A".repeat(CANVASKIT_DOCUMENT_PREFLIGHT_WORK_UNIT_BYTES.saturating_add(1)));
+        let mut tree = PageRenderTree::new(0, 100.0, 100.0);
+        tree.root
+            .children
+            .push(crate::renderer::render_tree::RenderNode::new(
+                1,
+                RenderNodeType::TextRun(run),
+                bbox(),
+            ));
+
+        assert_eq!(
+            estimate_canvaskit_page_lowering_work(&tree, 12),
             CanvasKitBoundedWorkCount::Exceeded
         );
     }
