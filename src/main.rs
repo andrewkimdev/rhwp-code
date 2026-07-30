@@ -6173,17 +6173,24 @@ fn extract_pages(args: &[String]) -> i32 {
     while i < args.len() {
         match args[i].as_str() {
             "--from" | "--to" => {
-                let name = args[i].clone();
+                // 옵션 이름을 리터럴로 고정하고 인자 값은 에코하지 않는다.
+                // 같은 `args` 에 `--password` 가 실릴 수 있어, 인자에서 온 문자열을
+                // 그대로 찍으면 비밀번호가 로그에 남는다 (CodeQL: cleartext logging).
+                let opt: &'static str = if args[i] == "--from" {
+                    "--from"
+                } else {
+                    "--to"
+                };
                 i += 1;
                 let Some(v) = args.get(i) else {
-                    eprintln!("오류: {name} 뒤에 쪽 번호가 필요합니다.");
+                    eprintln!("오류: {opt} 뒤에 쪽 번호가 필요합니다.");
                     return EXIT_USAGE;
                 };
                 let Ok(n) = v.parse::<u32>() else {
-                    eprintln!("오류: {name} 값이 숫자가 아닙니다: {v}");
+                    eprintln!("오류: {opt} 값이 숫자가 아닙니다.");
                     return EXIT_USAGE;
                 };
-                if name == "--from" {
+                if opt == "--from" {
                     from = Some(n)
                 } else {
                     to = Some(n)
