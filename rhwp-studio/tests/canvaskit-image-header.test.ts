@@ -42,24 +42,31 @@ function gif(width: number, height: number): Uint8Array {
 }
 
 function webp(width: number, height: number): Uint8Array {
-  const bytes = new Uint8Array(30);
-  bytes.set([0x52, 0x49, 0x46, 0x46]);
-  const view = new DataView(bytes.buffer);
-  view.setUint32(4, 22, true);
-  bytes.set([0x57, 0x45, 0x42, 0x50, 0x56, 0x50, 0x38, 0x58], 8);
-  view.setUint32(16, 10, true);
+  const payload = new Uint8Array(10);
   const encodedWidth = width - 1;
   const encodedHeight = height - 1;
-  bytes.set([
+  payload.set([
+    0, 0, 0, 0,
     encodedWidth & 0xff,
     (encodedWidth >> 8) & 0xff,
     (encodedWidth >> 16) & 0xff,
-  ], 24);
-  bytes.set([
     encodedHeight & 0xff,
     (encodedHeight >> 8) & 0xff,
     (encodedHeight >> 16) & 0xff,
-  ], 27);
+  ]);
+  return webpChunk('VP8X', payload);
+}
+
+function webpChunk(chunk: string, payload: Uint8Array): Uint8Array {
+  const paddedLength = payload.byteLength + (payload.byteLength & 1);
+  const bytes = new Uint8Array(20 + paddedLength);
+  bytes.set([0x52, 0x49, 0x46, 0x46]);
+  const view = new DataView(bytes.buffer);
+  view.setUint32(4, 12 + paddedLength, true);
+  bytes.set([0x57, 0x45, 0x42, 0x50], 8);
+  bytes.set(new TextEncoder().encode(chunk), 12);
+  view.setUint32(16, payload.byteLength, true);
+  bytes.set(payload, 20);
   return bytes;
 }
 
@@ -125,6 +132,30 @@ test('encoded image admission rejects malformed and truncated structures', () =>
   const malformedJpeg = jpeg(1, 1);
   malformedJpeg[17] = 2;
   assert.equal(encodedImageHeader(malformedJpeg), null);
+});
+
+test('encoded image admission parses lossy and lossless WebP dimensions', () => {
+  const vp8 = new Uint8Array(10);
+  vp8.set([0x9d, 0x01, 0x2a], 3);
+  const vp8View = new DataView(vp8.buffer);
+  vp8View.setUint16(6, 320, true);
+  vp8View.setUint16(8, 240, true);
+  assert.deepEqual(encodedImageHeader(webpChunk('VP8 ', vp8)), {
+    format: 'webp',
+    width: 320,
+    height: 240,
+  });
+
+  const width = 320;
+  const height = 240;
+  const vp8l = new Uint8Array(5);
+  vp8l[0] = 0x2f;
+  new DataView(vp8l.buffer).setUint32(1, (width - 1) | ((height - 1) << 14), true);
+  assert.deepEqual(encodedImageHeader(webpChunk('VP8L', vp8l)), {
+    format: 'webp',
+    width,
+    height,
+  });
 });
 
 test('encoded image admission rejects oversized payloads before decode', () => {
