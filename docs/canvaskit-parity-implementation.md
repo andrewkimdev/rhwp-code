@@ -285,8 +285,9 @@ they never make a document eligible for CanvasKit selection in the VS Code
 webview.
 
 `CanvasKitRenderDiagnostics.passesRuntimeReadinessGate` means only that the
-selected page completed a CanvasKit surface flush without a render error or
-unexpected unsupported operation. Surface fallback remains explicit
+selected page completed a CanvasKit surface flush without a render error,
+unexpected unsupported operation, pending local font, or image replay failure.
+Surface fallback remains explicit
 telemetry because headless and constrained devices may legitimately use the
 software surface. `surfaceBackend` records whether the default or software
 factory actually succeeded. If CanvasKit replaces the DOM canvas during its

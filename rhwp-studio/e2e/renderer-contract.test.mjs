@@ -8,6 +8,7 @@ import { blake3 } from '@noble/hashes/blake3.js';
 import { bytesToHex } from '@noble/hashes/utils.js';
 
 import { comparePngBuffers } from './helpers.mjs';
+import { inspectCanvasKitRuntimeImageFailures } from './renderer-baseline-contract.mjs';
 
 const studioRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const repoRoot = path.resolve(studioRoot, '..');
@@ -326,7 +327,7 @@ assert.doesNotMatch(
 );
 requireSnippet(
   diagnosticsBody,
-  /if \(!this\.lastRenderCompleted\) readinessBlockers\.push\('renderNotCompleted'\);[\s\S]*?if \(this\.lastRenderError !== null\) readinessBlockers\.push\('renderError'\);[\s\S]*?if \(lastUnexpectedUnsupportedOps\.length > 0\) readinessBlockers\.push\('unexpectedUnsupportedOps'\);[\s\S]*?passesRuntimeReadinessGate: readinessBlockers\.length === 0/,
+  /if \(!this\.lastRenderCompleted\) readinessBlockers\.push\('renderNotCompleted'\);[\s\S]*?if \(this\.lastRenderError !== null\) readinessBlockers\.push\('renderError'\);[\s\S]*?if \(lastUnexpectedUnsupportedOps\.length > 0\) readinessBlockers\.push\('unexpectedUnsupportedOps'\);[\s\S]*?if \(this\.currentImageFailures\.size > 0\) readinessBlockers\.push\('imageReplayFailure'\);[\s\S]*?passesRuntimeReadinessGate: readinessBlockers\.length === 0/,
   'CanvasKit diagnostics should expose deterministic runtime readiness blockers',
 );
 requireSnippet(
@@ -1439,6 +1440,8 @@ function runExecutableFontNativeGlyphReplay() {
     imageRef: 7,
     reason: 'encodedImageRejected',
   }]);
+  assert.equal(imageFailureDiagnostics.passesRuntimeReadinessGate, false);
+  assert.ok(imageFailureDiagnostics.readinessBlockers.includes('imageReplayFailure'));
   const orientedJpeg = new Uint8Array([
     0xff, 0xd8,
     0xff, 0xe0, 0x00, 0x04, 0x00, 0x00,
@@ -2276,6 +2279,7 @@ assert(
     && rendererBaselineSource.includes("code: 'runtimeRenderIncomplete'")
     && rendererBaselineSource.includes("code: 'runtimeRenderError'")
     && rendererBaselineSource.includes("code: 'runtimeUnexpectedUnsupportedOps'")
+    && rendererBaselineSource.includes("code: 'runtimeImageDiagnosticsUnavailable'")
     && rendererBaselineSource.includes("code: 'runtimeImageReplayFailure'")
     && rendererBaselineSource.includes("code: 'runtimeBackendMismatch'")
     && rendererBaselineSource.includes("code: 'runtimeProfileMismatch'")
@@ -2286,6 +2290,29 @@ assert(
     && rendererBaselineSource.includes('imageFailureSourceCounts'),
   'browser baseline must gate replay-plan/runtime contract failures and inventory known gaps',
 );
+assert.deepEqual(inspectCanvasKitRuntimeImageFailures(null), {
+  available: false,
+  failures: [],
+  hasFailures: false,
+});
+assert.deepEqual(inspectCanvasKitRuntimeImageFailures({ imageFailures: {} }), {
+  available: false,
+  failures: [],
+  hasFailures: false,
+});
+assert.deepEqual(inspectCanvasKitRuntimeImageFailures({ imageFailures: [] }), {
+  available: true,
+  failures: [],
+  hasFailures: false,
+});
+const runtimeImageFailure = { source: 'inline', reason: 'imageDecodeFailed' };
+assert.deepEqual(inspectCanvasKitRuntimeImageFailures({
+  imageFailures: [runtimeImageFailure],
+}), {
+  available: true,
+  failures: [runtimeImageFailure],
+  hasFailures: true,
+});
 assert(
   rendererBaselineDriverSource.includes('CanvasKit Replay Diagnostics')
     && rendererBaselineDriverSource.includes('Replay Diagnostic Inventory')

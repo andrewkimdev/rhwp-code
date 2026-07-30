@@ -183,6 +183,7 @@ export type CanvasKitReadinessBlocker =
   | 'renderNotCompleted'
   | 'renderError'
   | 'unexpectedUnsupportedOps'
+  | 'imageReplayFailure'
   | 'localFontsPending';
 
 export class CanvasKitLayerRenderer {
@@ -624,6 +625,7 @@ export class CanvasKitLayerRenderer {
     if (!this.lastRenderCompleted) readinessBlockers.push('renderNotCompleted');
     if (this.lastRenderError !== null) readinessBlockers.push('renderError');
     if (lastUnexpectedUnsupportedOps.length > 0) readinessBlockers.push('unexpectedUnsupportedOps');
+    if (this.currentImageFailures.size > 0) readinessBlockers.push('imageReplayFailure');
     if (this.localTypefacePending.size > 0) readinessBlockers.push('localFontsPending');
     return {
       mode: this.renderMode,
