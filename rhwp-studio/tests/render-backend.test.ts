@@ -554,14 +554,19 @@ test('CanvasKit image replay cache key includes payload fingerprint with repeate
   assert.ok((first ?? '').startsWith('ref:7|image/png:4:'));
   assert.match(first ?? '', /:blake3:[0-9a-f]{64}$/);
 
+  const fnvCollisionPngA =
+    'iVBORw0KGgoAAAANSUhEUgAAAAIAAAABCAYAAAD0In+KAAAAFElEQVR4AQEJAPb/ALjHZwCHKJKlEgEDzUwrqc8AAAAASUVORK5CYII=';
+  const fnvCollisionPngB =
+    'iVBORw0KGgoAAAANSUhEUgAAAAIAAAABCAYAAAD0In+KAAAAFElEQVR4AQEJAPb/AB3Rhl4tN/FbDzgDg0NfIYUAAAAASUVORK5CYII=';
+  assert.equal(fnvCollisionPngA.length, fnvCollisionPngB.length);
   const fnvCollisionA = canvasKitImageCacheKey({
     mime: 'image/png',
-    base64: 'S3cCAAAA',
-  });
+    base64: fnvCollisionPngA,
+  }, 1);
   const fnvCollisionB = canvasKitImageCacheKey({
     mime: 'image/png',
-    base64: 'wBADAAAA',
-  });
+    base64: fnvCollisionPngB,
+  }, 1);
   assert.notEqual(
     fnvCollisionA,
     fnvCollisionB,
