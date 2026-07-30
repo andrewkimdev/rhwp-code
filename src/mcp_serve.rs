@@ -9,6 +9,9 @@
 //!   그대로 재사용하므로 서버와 CLI 가 어긋날 수 없다.
 //! - 세션 도구(`hwp_open`/`hwp_doc_text`/`hwp_close`): #3140 이 짚은 "상태 유지" 공백.
 //!   문서를 한 번 파싱해 핸들로 잡아두고, 재파싱 없이 반복 조회한다.
+//! - 세션 편집(`hwp_doc_fill_fields`/`hwp_doc_save`, #3598): 열린 핸들의 IR 에 편집을
+//!   **누적**하고 save 에서 한 번만 기록한다 — 판정 어휘(filledCount/notFound/ambiguous)와
+//!   형식 보존(#3383)은 무상태 `edit` 경로와 같은 코어 함수를 재사용해 동형을 보장한다.
 //!
 //! 의존성은 추가하지 않는다 — 프로토콜 표면(initialize/ping/tools/list/tools/call)이
 //! 좁아 serde_json 만으로 충분하고, WASM 대상에는 아예 포함되지 않는다.
@@ -24,9 +27,16 @@ const PARSE_ERROR: i64 = -32700;
 const METHOD_NOT_FOUND: i64 = -32601;
 const INVALID_PARAMS: i64 = -32602;
 
+/// 열린 문서 핸들 하나 — 편집·저장의 형식 보존(#3383)을 위해 원본 형식을 기억한다.
+struct SessionDoc {
+    doc: HwpDocument,
+    /// 원본이 HWPX 였는가. save 는 이 값으로 산출 형식을 정한다(HWPX→HWPX, 그 외→HWP5).
+    source_is_hwpx: bool,
+}
+
 /// 열린 문서 핸들 테이블. 서버 프로세스가 사는 동안 유지된다.
 struct Sessions {
-    docs: HashMap<String, HwpDocument>,
+    docs: HashMap<String, SessionDoc>,
     next_id: u64,
 }
 
@@ -164,6 +174,57 @@ fn served_tools(tool_defs: &[serde_json::Value]) -> Vec<serde_json::Value> {
         }
     }));
     tools.push(serde_json::json!({
+        "name": "hwp_doc_search",
+        "description": "[#3601] hwp_open 으로 연 핸들에서 재파싱 없이 검색한다. 주소 어휘(matches[].section/paragraph/page/context)는 hwp_search 와 동형 — 대형 문서에서 '어디를 고칠까'를 반복 탐색할 때 쓴다.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "docId": { "type": "string", "description": "hwp_open 이 돌려준 핸들" },
+                "query": { "type": "string", "minLength": 1, "description": "검색어" },
+                "caseSensitive": { "type": "boolean", "description": "대소문자 구분. 기본 true" }
+            },
+            "required": ["docId", "query"]
+        }
+    }));
+    tools.push(serde_json::json!({
+        "name": "hwp_doc_replace_text",
+        "description": "[#3601] 핸들의 IR 에 문자열 일괄 치환을 누적한다(디스크 미기록 — hwp_doc_save 가 기록 지점). replacedCount 0 은 오류가 아니라 계수 보고다. hwp_doc_fill_fields 와 조합해 '채우고 다듬고 한 번에 저장'하는 흐름을 만든다.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "docId": { "type": "string", "description": "hwp_open 이 돌려준 핸들" },
+                "find": { "type": "string", "minLength": 1, "description": "찾을 문자열" },
+                "replace": { "type": "string", "description": "바꿀 문자열 (빈 문자열이면 삭제)" },
+                "caseSensitive": { "type": "boolean", "description": "대소문자 구분. 기본 true" }
+            },
+            "required": ["docId", "find", "replace"]
+        }
+    }));
+    tools.push(serde_json::json!({
+        "name": "hwp_doc_fill_fields",
+        "description": "[#3598] hwp_open 으로 연 핸들의 IR 에 누름틀 값을 직접 채운다(디스크 미기록 — hwp_doc_save 가 유일한 기록 지점). 여러 번 호출하면 누적된다. 판정 필드(filledCount/notFound/ambiguous)는 hwp_fill_fields 와 동형이고, 반복 필드는 '이름[N]' 으로 지목한다.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "docId": { "type": "string", "description": "hwp_open 이 돌려준 핸들" },
+                "data": { "type": "object", "description": "{\"필드이름\":\"값\"} 객체. 반복 필드는 \"이름[N]\"(0 기준)" }
+            },
+            "required": ["docId", "data"]
+        }
+    }));
+    tools.push(serde_json::json!({
+        "name": "hwp_doc_save",
+        "description": "[#3598] 핸들에 누적된 편집을 형식 보존(HWPX→HWPX, 그 외→HWP5, #3383 규약)으로 저장한다. 핸들은 저장 후에도 열려 있다 — 이어서 편집·재저장할 수 있다.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "docId": { "type": "string", "description": "hwp_open 이 돌려준 핸들" },
+                "output": { "type": "string", "description": "출력 파일 경로" }
+            },
+            "required": ["docId", "output"]
+        }
+    }));
+    tools.push(serde_json::json!({
         "name": "hwp_close",
         "description": "hwp_open 으로 연 핸들을 닫아 메모리를 해제한다.",
         "inputSchema": {
@@ -196,6 +257,10 @@ fn handle_tool_call(
     match name {
         "hwp_open" => Ok(session_open(&args, sessions)),
         "hwp_doc_text" => Ok(session_doc_text(&args, sessions)),
+        "hwp_doc_search" => Ok(session_search(&args, sessions)),
+        "hwp_doc_replace_text" => Ok(session_replace_text(&args, sessions)),
+        "hwp_doc_fill_fields" => Ok(session_fill_fields(&args, sessions)),
+        "hwp_doc_save" => Ok(session_save(&args, sessions)),
         "hwp_close" => Ok(session_close(&args, sessions)),
         _ => {
             let Some(def) = tool_defs.iter().find(|t| t["name"] == name) else {
@@ -242,10 +307,21 @@ fn session_open(args: &serde_json::Value, sessions: &mut Sessions) -> serde_json
         Ok(d) => d,
         Err(e) => return tool_error(format!("{path} 파싱 실패: {e:?}")),
     };
+    // [#3598] save 의 형식 보존을 위해 원본 형식을 핸들에 함께 기억한다.
+    let source_is_hwpx = matches!(
+        rhwp::parser::detect_format(&data),
+        rhwp::parser::FileFormat::Hwpx
+    );
     let page_count = doc.page_count();
     let doc_id = format!("doc-{}", sessions.next_id);
     sessions.next_id += 1;
-    sessions.docs.insert(doc_id.clone(), doc);
+    sessions.docs.insert(
+        doc_id.clone(),
+        SessionDoc {
+            doc,
+            source_is_hwpx,
+        },
+    );
     tool_ok_text(
         serde_json::json!({
             "schemaVersion": "1.0",
@@ -261,9 +337,10 @@ fn session_doc_text(args: &serde_json::Value, sessions: &mut Sessions) -> serde_
     let Some(doc_id) = args.get("docId").and_then(|d| d.as_str()) else {
         return tool_error("docId 가 필요합니다".into());
     };
-    let Some(doc) = sessions.docs.get_mut(doc_id) else {
+    let Some(sd) = sessions.docs.get_mut(doc_id) else {
         return tool_error(format!("열려 있지 않은 핸들: {doc_id} (hwp_open 먼저)"));
     };
+    let doc = &mut sd.doc;
     let page_count = doc.page_count();
     let pages: Vec<u32> = match args.get("page").and_then(|p| p.as_u64()) {
         Some(p) => {
@@ -288,6 +365,192 @@ fn session_doc_text(args: &serde_json::Value, sessions: &mut Sessions) -> serde_
             "docId": doc_id,
             "pageCount": page_objs.len(),
             "pages": page_objs,
+        })
+        .to_string(),
+    )
+}
+
+/// [#3601] 열린 핸들에서 재파싱 없이 검색한다. 봉투는 무상태 `search --json` 과
+/// 같은 helper(`crate::search_json_value`)를 재사용해 주소 어휘 동형을 보장한다
+/// (`source` 자리에는 경로 대신 핸들 docId 가 들어간다).
+fn session_search(args: &serde_json::Value, sessions: &mut Sessions) -> serde_json::Value {
+    let Some(doc_id) = args.get("docId").and_then(|d| d.as_str()) else {
+        return tool_error("docId 가 필요합니다".into());
+    };
+    let Some(query) = args.get("query").and_then(|q| q.as_str()) else {
+        return tool_error("query 가 필요합니다".into());
+    };
+    if query.is_empty() {
+        return tool_error("query 는 빈 문자열일 수 없습니다".into());
+    }
+    let case_sensitive = args
+        .get("caseSensitive")
+        .and_then(|c| c.as_bool())
+        .unwrap_or(true);
+    let Some(sd) = sessions.docs.get_mut(doc_id) else {
+        return tool_error(format!("열려 있지 않은 핸들: {doc_id} (hwp_open 먼저)"));
+    };
+    let matches = sd.doc.grep(query, case_sensitive, None);
+    let total = matches.len();
+    tool_ok_text(
+        crate::search_json_value(doc_id, query, case_sensitive, &matches, total).to_string(),
+    )
+}
+
+/// [#3601] 핸들의 IR 에 문자열 일괄 치환을 누적한다 — 디스크 미기록, save 가 기록 지점.
+/// 무상태 `edit replace-text` 와 같은 코어 경로(`replace_all_native`)를 재사용한다.
+fn session_replace_text(args: &serde_json::Value, sessions: &mut Sessions) -> serde_json::Value {
+    let Some(doc_id) = args.get("docId").and_then(|d| d.as_str()) else {
+        return tool_error("docId 가 필요합니다".into());
+    };
+    let Some(find) = args.get("find").and_then(|f| f.as_str()) else {
+        return tool_error("find 가 필요합니다".into());
+    };
+    if find.is_empty() {
+        return tool_error("find 는 빈 문자열일 수 없습니다".into());
+    }
+    let Some(replace) = args.get("replace").and_then(|r| r.as_str()) else {
+        return tool_error("replace 가 필요합니다".into());
+    };
+    let case_sensitive = args
+        .get("caseSensitive")
+        .and_then(|c| c.as_bool())
+        .unwrap_or(true);
+    let Some(sd) = sessions.docs.get_mut(doc_id) else {
+        return tool_error(format!("열려 있지 않은 핸들: {doc_id} (hwp_open 먼저)"));
+    };
+    let result = match sd.doc.replace_all_native(find, replace, case_sensitive) {
+        Ok(r) => r,
+        Err(e) => return tool_error(format!("치환 실패: {e}")),
+    };
+    // replace_all_native 는 {"ok":true,"count":N} 문자열을 낸다 — 계수만 뽑아
+    // 세션 봉투 어휘(replacedCount)로 정규화한다.
+    let count = serde_json::from_str::<serde_json::Value>(&result)
+        .ok()
+        .and_then(|v| v["count"].as_u64())
+        .unwrap_or(0);
+    tool_ok_text(
+        serde_json::json!({
+            "schemaVersion": "1.0",
+            "docId": doc_id,
+            "find": find,
+            "replace": replace,
+            "caseSensitive": case_sensitive,
+            "replacedCount": count,
+        })
+        .to_string(),
+    )
+}
+
+/// [#3598] 열린 핸들의 IR 에 누름틀 값을 채운다 — 디스크 미기록, save 까지 누적.
+///
+/// 판정 로직(이름 개수 → notFound/ambiguous → `set_field_value_by_name_at`)은 무상태
+/// `edit fill-fields`(#3329/#3476)와 같은 코어 경로를 재사용한다 — 두 경로의 판정
+/// 어휘가 어긋나면 소비자가 같은 코드로 못 읽는다.
+fn session_fill_fields(args: &serde_json::Value, sessions: &mut Sessions) -> serde_json::Value {
+    let Some(doc_id) = args.get("docId").and_then(|d| d.as_str()) else {
+        return tool_error("docId 가 필요합니다".into());
+    };
+    let Some(data) = args.get("data").and_then(|d| d.as_object()) else {
+        return tool_error("data 는 {\"필드이름\":\"값\"} 객체여야 합니다".into());
+    };
+    let Some(sd) = sessions.docs.get_mut(doc_id) else {
+        return tool_error(format!("열려 있지 않은 핸들: {doc_id} (hwp_open 먼저)"));
+    };
+    let doc = &mut sd.doc;
+
+    let mut name_counts: HashMap<String, usize> = HashMap::new();
+    for fi in doc.collect_all_fields().iter() {
+        if let Some(n) = fi.field.field_name() {
+            *name_counts.entry(n.to_string()).or_insert(0) += 1;
+        }
+    }
+
+    let mut filled: Vec<serde_json::Value> = Vec::new();
+    let mut not_found: Vec<String> = Vec::new();
+    let mut ambiguous: Vec<serde_json::Value> = Vec::new();
+
+    // 1차: 판정만 먼저 — 핸들은 살아 있는 상태라, 중간 실패로 절반만 채워진 IR 을
+    // 남기지 않도록 적용 전에 전 키를 검증한다.
+    let mut apply: Vec<(String, usize, String)> = Vec::new();
+    for (key, value) in data {
+        let value_str = match value {
+            serde_json::Value::String(s) => s.clone(),
+            other => other.to_string(),
+        };
+        let (name, occurrence) = crate::parse_field_key(key);
+        let total = name_counts.get(name).copied().unwrap_or(0);
+        if total == 0 || occurrence >= total {
+            not_found.push(key.clone());
+            continue;
+        }
+        if occurrence == 0 && total > 1 && !key.contains('[') {
+            ambiguous.push(serde_json::json!({
+                "name": name,
+                "matched": 1,
+                "total": total,
+            }));
+        }
+        apply.push((name.to_string(), occurrence, value_str));
+    }
+
+    // 2차: 적용. 검증을 통과한 키만 남았으므로 실패는 코어 결함 신호다.
+    for (name, occurrence, value_str) in &apply {
+        if let Err(e) = doc.set_field_value_by_name_at(name, *occurrence, value_str) {
+            return tool_error(format!(
+                "필드 '{name}' 설정 실패: {e} — 핸들이 부분 편집 상태일 수 있으니 \
+                 hwp_close 후 다시 여는 것을 권장합니다"
+            ));
+        }
+        filled.push(serde_json::json!({
+            "name": name, "occurrence": occurrence, "value": value_str,
+        }));
+    }
+
+    tool_ok_text(
+        serde_json::json!({
+            "schemaVersion": "1.0",
+            "docId": doc_id,
+            "filledCount": filled.len(),
+            "filled": filled,
+            "notFound": not_found,
+            "ambiguous": ambiguous,
+        })
+        .to_string(),
+    )
+}
+
+/// [#3598] 핸들에 누적된 편집을 형식 보존(#3383)으로 저장한다. 핸들은 계속 열려 있다.
+fn session_save(args: &serde_json::Value, sessions: &mut Sessions) -> serde_json::Value {
+    let Some(doc_id) = args.get("docId").and_then(|d| d.as_str()) else {
+        return tool_error("docId 가 필요합니다".into());
+    };
+    let Some(output) = args.get("output").and_then(|o| o.as_str()) else {
+        return tool_error("output 이 필요합니다".into());
+    };
+    let Some(sd) = sessions.docs.get_mut(doc_id) else {
+        return tool_error(format!("열려 있지 않은 핸들: {doc_id} (hwp_open 먼저)"));
+    };
+
+    let format = if sd.source_is_hwpx {
+        crate::EditOutputFormat::Hwpx
+    } else {
+        crate::EditOutputFormat::Hwp
+    };
+    let bytes = match crate::edit_serialize(&mut sd.doc, format) {
+        Ok(b) => b,
+        Err(e) => return tool_error(format!("직렬화 실패: {e}")),
+    };
+    if let Err(e) = std::fs::write(output, &bytes) {
+        return tool_error(format!("{output} 쓰기 실패: {e}"));
+    }
+    tool_ok_text(
+        serde_json::json!({
+            "schemaVersion": "1.0",
+            "docId": doc_id,
+            "output": output,
+            "outputFormat": format.label(),
+            "bytes": bytes.len(),
         })
         .to_string(),
     )
