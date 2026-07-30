@@ -662,6 +662,7 @@ export class CanvasKitLayerRenderer {
   recordRenderFailure(error: unknown, resetReplayState = false): void {
     if (resetReplayState) {
       this.unsupportedOps.clear();
+      this.currentImageFailures.clear();
       this.surfaceBackend = null;
       this.surfaceFallbackReason = null;
     }

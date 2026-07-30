@@ -1457,6 +1457,17 @@ function runExecutableFontNativeGlyphReplay() {
     imageRef: 8,
     base64: Buffer.from(orientedJpeg).toString('base64'),
   }), exifOrientedImage, 'EXIF-oriented JPEG decode may swap bounded source dimensions');
+  renderer.recordRenderFailure(new Error('page preparation failed'), true);
+  const resetFailureDiagnostics = renderer.diagnostics();
+  assert.deepEqual(
+    resetFailureDiagnostics.imageFailures,
+    [],
+    'pre-replay failures must not retain image diagnostics from the previous page',
+  );
+  assert.equal(
+    resetFailureDiagnostics.readinessBlockers.includes('imageReplayFailure'),
+    false,
+  );
   renderer.lastRenderCompleted = true;
   renderer.localTypefacePending.set('pending:test-face', 1);
   assert.ok(renderer.diagnostics().readinessBlockers.includes('localFontsPending'));
