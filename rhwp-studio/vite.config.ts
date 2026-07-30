@@ -15,6 +15,11 @@ const useSubsecondWasm = process.env.RHWP_SUBSECOND === '1';
 export default defineConfig({
   define: {
     __APP_VERSION__: JSON.stringify(pkg.version),
+    // 셀프 호스팅 빌드에서 외부(CDN) 웹폰트 로드를 빌드 시점에 끈다.
+    // 확장 storage 설정(disableExternalWebFonts)이 있으면 그 값이 우선한다.
+    __RHWP_DISABLE_EXTERNAL_WEBFONTS__: JSON.stringify(
+      process.env.RHWP_DISABLE_EXTERNAL_WEBFONTS === '1',
+    ),
   },
   resolve: {
     alias: {
