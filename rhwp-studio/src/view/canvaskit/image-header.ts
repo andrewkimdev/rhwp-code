@@ -45,6 +45,35 @@ export function encodedImageIsReplayable(bytes: Uint8Array): boolean {
   return replayableEncodedImageHeader(bytes) !== null;
 }
 
+export function decodedImageMatchesEncodedHeader(
+  header: EncodedImageHeader,
+  width: unknown,
+  height: unknown,
+): boolean {
+  if (
+    !Number.isSafeInteger(width)
+    || !Number.isSafeInteger(height)
+    || (width as number) <= 0
+    || (height as number) <= 0
+    || (width as number) > CANVASKIT_MAX_IMAGE_DIMENSION
+    || (height as number) > CANVASKIT_MAX_IMAGE_DIMENSION
+  ) {
+    return false;
+  }
+  const pixels = (width as number) * (height as number);
+  if (!Number.isSafeInteger(pixels) || pixels > CANVASKIT_MAX_DECODED_IMAGE_PIXELS) {
+    return false;
+  }
+  return (
+    width === header.width
+    && height === header.height
+  ) || (
+    header.format === 'jpeg'
+    && width === header.height
+    && height === header.width
+  );
+}
+
 export function encodedImageDimensions(bytes: Uint8Array): EncodedImageDimensions | null {
   const header = encodedImageHeader(bytes);
   return header ? { width: header.width, height: header.height } : null;

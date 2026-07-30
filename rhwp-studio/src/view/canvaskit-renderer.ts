@@ -61,8 +61,8 @@ import {
   canvasKitImageSourceRect,
 } from './canvaskit/image-replay';
 import {
-  CANVASKIT_MAX_DECODED_IMAGE_PIXELS,
   CANVASKIT_MAX_ENCODED_IMAGE_BASE64_LENGTH,
+  decodedImageMatchesEncodedHeader,
   replayableEncodedImageHeader,
 } from './canvaskit/image-header';
 import { canvaskitClipRightPad } from './canvaskit/policy';
@@ -3223,10 +3223,7 @@ export class CanvasKitLayerRenderer {
     const decodedPixels = typeof width === 'number' && typeof height === 'number'
       ? width * height
       : Number.POSITIVE_INFINITY;
-    if (!Number.isSafeInteger(decodedPixels)
-      || width !== encodedHeader.width
-      || height !== encodedHeader.height
-      || decodedPixels > CANVASKIT_MAX_DECODED_IMAGE_PIXELS) {
+    if (!decodedImageMatchesEncodedHeader(encodedHeader, width, height)) {
       image.delete?.();
       this.recordImageFailure(op, 'decodedDimensionsMismatch', key);
       return null;

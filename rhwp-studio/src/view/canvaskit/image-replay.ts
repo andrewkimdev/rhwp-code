@@ -1,3 +1,6 @@
+import { blake3 } from '@noble/hashes/blake3.js';
+import { bytesToHex } from '@noble/hashes/utils.js';
+
 export interface CanvasKitImageBounds {
   x: number;
   y: number;
@@ -67,7 +70,8 @@ export function canvasKitImageCacheKey(
         && !/[\u0000-\u001f\u007f]/.test(input.mime)
         ? input.mime
         : 'application/octet-stream';
-      parts.push(`${mime}:${input.base64.length}:${fnv1a32(input.base64)}`);
+      const digest = bytesToHex(blake3(new TextEncoder().encode(input.base64)));
+      parts.push(`${mime}:${input.base64.length}:blake3:${digest}`);
     }
   }
   if (parts.length === 0) return null;
@@ -169,15 +173,6 @@ export function canvasKitImageFillModeTiles(fillMode: string | undefined): boole
 
 export function canvasKitImageFillModeStretches(fillMode: string | undefined): boolean {
   return fillMode === undefined || fillMode === 'fitToSize' || fillMode === 'total';
-}
-
-function fnv1a32(value: string): string {
-  let hash = 2166136261;
-  for (let i = 0; i < value.length; i += 1) {
-    hash ^= value.charCodeAt(i);
-    hash = Math.imul(hash, 16777619);
-  }
-  return (hash >>> 0).toString(16);
 }
 
 function clamp(value: number, min: number, max: number): number {

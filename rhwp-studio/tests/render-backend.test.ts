@@ -552,6 +552,21 @@ test('CanvasKit image replay cache key includes payload fingerprint with repeate
   const second = canvasKitImageCacheKey({ imageRef: 7, mime: 'image/png', base64: 'BBBB' });
   assert.notEqual(first, second);
   assert.ok((first ?? '').startsWith('ref:7|image/png:4:'));
+  assert.match(first ?? '', /:blake3:[0-9a-f]{64}$/);
+
+  const fnvCollisionA = canvasKitImageCacheKey({
+    mime: 'image/png',
+    base64: 'S3cCAAAA',
+  });
+  const fnvCollisionB = canvasKitImageCacheKey({
+    mime: 'image/png',
+    base64: 'wBADAAAA',
+  });
+  assert.notEqual(
+    fnvCollisionA,
+    fnvCollisionB,
+    'equal-length payloads that collide under FNV-1a must not share a cache identity',
+  );
 
   const stable = canvasKitImageCacheKey(
     { imageRef: 7, sourceImageKey: 'bin:3:7:src', mime: 'image/png', base64: 'AAAA' },

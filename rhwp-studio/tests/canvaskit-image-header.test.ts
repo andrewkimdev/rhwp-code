@@ -3,6 +3,7 @@ import test from 'node:test';
 
 import {
   CANVASKIT_MAX_ENCODED_IMAGE_BASE64_LENGTH,
+  decodedImageMatchesEncodedHeader,
   encodedImageDimensions,
   encodedImageHeader,
   encodedImageIsReplayable,
@@ -135,4 +136,18 @@ test('encoded image admission rejects oversized payloads before decode', () => {
   const overEncodedLimit = new Uint8Array(maxRawBytes + 1);
   overEncodedLimit.set(png(1, 1));
   assert.equal(encodedImageIsReplayable(overEncodedLimit), false);
+});
+
+test('decoded image dimensions allow bounded JPEG EXIF orientation swaps only', () => {
+  const jpegHeader = encodedImageHeader(jpeg(2, 3));
+  const pngHeader = encodedImageHeader(png(2, 3));
+  assert.ok(jpegHeader);
+  assert.ok(pngHeader);
+
+  assert.equal(decodedImageMatchesEncodedHeader(jpegHeader, 2, 3), true);
+  assert.equal(decodedImageMatchesEncodedHeader(jpegHeader, 3, 2), true);
+  assert.equal(decodedImageMatchesEncodedHeader(pngHeader, 3, 2), false);
+  assert.equal(decodedImageMatchesEncodedHeader(jpegHeader, 4, 2), false);
+  assert.equal(decodedImageMatchesEncodedHeader(jpegHeader, 0, 3), false);
+  assert.equal(decodedImageMatchesEncodedHeader(jpegHeader, 8193, 1), false);
 });

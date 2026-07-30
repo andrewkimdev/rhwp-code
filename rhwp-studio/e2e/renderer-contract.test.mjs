@@ -1291,6 +1291,11 @@ function runExecutableFontNativeGlyphReplay() {
     height: () => 1,
     delete() { events.push('image.delete'); },
   };
+  const exifOrientedImage = {
+    width: () => 3,
+    height: () => 2,
+    delete() { events.push('image.delete:exif'); },
+  };
   const fakePath = () => ({
     setFillType() {},
     delete() { events.push('path.delete'); },
@@ -1298,7 +1303,7 @@ function runExecutableFontNativeGlyphReplay() {
   const canvasKit = {
     MakeImageFromEncoded(bytes) {
       events.push(`image.decode:${bytes.byteLength}`);
-      return fakeImage;
+      return bytes[0] === 0xff && bytes[1] === 0xd8 ? exifOrientedImage : fakeImage;
     },
     Path: {
       MakeFromSVGString(pathData) {
@@ -1434,6 +1439,21 @@ function runExecutableFontNativeGlyphReplay() {
     imageRef: 7,
     reason: 'encodedImageRejected',
   }]);
+  const orientedJpeg = new Uint8Array([
+    0xff, 0xd8,
+    0xff, 0xe0, 0x00, 0x04, 0x00, 0x00,
+    0xff, 0xc0, 0x00, 0x0b, 0x08,
+    0x00, 0x03,
+    0x00, 0x02,
+    0x01, 0x01, 0x11, 0x00,
+  ]);
+  assert.equal(renderer.imageForOp({
+    type: 'image',
+    bbox: { x: 0, y: 0, width: 3, height: 2 },
+    sourceImageKey: 'bin:1:8:src',
+    imageRef: 8,
+    base64: Buffer.from(orientedJpeg).toString('base64'),
+  }), exifOrientedImage, 'EXIF-oriented JPEG decode may swap bounded source dimensions');
   renderer.lastRenderCompleted = true;
   renderer.localTypefacePending.set('pending:test-face', 1);
   assert.ok(renderer.diagnostics().readinessBlockers.includes('localFontsPending'));
