@@ -473,6 +473,18 @@ npx vite build --base=/your-path/
 # 빌드 결과물(dist/)을 서버에 배포
 ```
 
+외부(CDN) 웹폰트를 사용할 수 없는 환경 — 함초롬체 CDN은 비상업적 사용
+조건이므로 상업 환경, 또는 오프라인/폐쇄망 — 에서는 빌드 시점 스위치로
+CDN 로드를 끕니다. 조판(줄바꿈·페이지 분할)은 내장 폰트 메트릭 기준이라
+변하지 않고, 화면 표시만 번들/시스템 글꼴로 대체됩니다:
+
+```bash
+RHWP_DISABLE_EXTERNAL_WEBFONTS=1 npx vite build --base=/your-path/
+```
+
+브라우저 확장 storage에 저장된 `disableExternalWebFonts` 설정이 있으면
+그 값이 빌드 스위치보다 우선합니다.
+
 ```javascript
 const editor = await createEditor('#editor', {
   studioUrl: 'https://your-domain.com/your-path/'
