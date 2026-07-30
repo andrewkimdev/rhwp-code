@@ -291,6 +291,43 @@ export class CanvasView {
 
     // 그리드 모드 CSS 클래스 토글
     this.scrollContent.classList.toggle('grid-mode', this.virtualScroll.isGridMode());
+
+    // [#3377] 좌표계가 바뀌어도 기렌더 캔버스·오버레이는 renderCanvas 밖에서 재배치되지
+    // 않아, 첫 로딩 중 스크롤바 등장(clientWidth −15px) 같은 재계산 뒤에 신·구 좌표계가
+    // 공존했다. 활성 페이지 전체에 현재 좌표를 재적용한다. 줌 애니메이션 중에는 preview
+    // 변환(scale 동반)이 위치를 관리하므로 그 경로를 재사용한다.
+    if (this.viewportManager.isZoomAnimating()) {
+      this.updateRenderedPageZoomPreview();
+    } else {
+      this.repositionActivePages();
+    }
+  }
+
+  /** 페이지 요소(캔버스·오버레이)에 현재 레이아웃 좌표를 적용하는 단일 관문. */
+  private positionPageElement(element: HTMLElement, pageIdx: number): void {
+    element.style.top = `${this.virtualScroll.getPageOffset(pageIdx)}px`;
+
+    // 그리드/광폭 팬: 고정 left 좌표, 단일 열: CSS 중앙 정렬
+    const pageLeft = this.virtualScroll.getPageLeft(pageIdx);
+    if (pageLeft >= 0) {
+      element.style.left = `${pageLeft}px`;
+      element.style.transform = 'none';
+    } else {
+      element.style.left = '50%';
+      element.style.transform = 'translateX(-50%)';
+    }
+    element.style.transformOrigin = '';
+  }
+
+  /** [#3377] 이미 렌더된 페이지의 캔버스와 오버레이를 현재 레이아웃 좌표로 재배치한다. */
+  private repositionActivePages(): void {
+    for (const pageIdx of this.canvasPool.activePages) {
+      const canvas = this.canvasPool.getCanvas(pageIdx);
+      if (canvas) this.positionPageElement(canvas, pageIdx);
+      this.scrollContent.querySelectorAll<HTMLElement>(
+        `[data-rhwp-overlay-page="${pageIdx}"], [data-rhwp-grid-page="${pageIdx}"]`,
+      ).forEach((element) => this.positionPageElement(element, pageIdx));
+    }
   }
 
   /** 스크롤/리사이즈 시 보이는 페이지를 갱신한다 */
@@ -417,18 +454,7 @@ export class CanvasView {
     const dpr = renderScale / (zoom > 0 ? zoom : 1);
 
     // Canvas를 DOM에 추가하고 위치를 설정한다
-    canvas.style.top = `${this.virtualScroll.getPageOffset(pageIdx)}px`;
-
-    // 그리드 모드: 고정 left 좌표, 단일 열: CSS 중앙 정렬
-    const pageLeft = this.virtualScroll.getPageLeft(pageIdx);
-    if (pageLeft >= 0) {
-      canvas.style.left = `${pageLeft}px`;
-      canvas.style.transform = 'none';
-    } else {
-      canvas.style.left = '50%';
-      canvas.style.transform = 'translateX(-50%)';
-    }
-    canvas.style.transformOrigin = '';
+    this.positionPageElement(canvas, pageIdx);
 
     // WASM이 Canvas 크기를 자동 설정한다 (물리 픽셀 = 페이지크기 × zoom × DPR)
     let renderResult: PageRenderResult = { needsTextEditStaticLayerVerification: false };
