@@ -1591,13 +1591,25 @@ fn group_container_component_data(
     w.write_u16(group.children.len() as u16).unwrap();
     for child in &group.children {
         let child_ctrl_id = match child {
-            ShapeObject::Line(_) => tags::SHAPE_LINE_ID,
+            // [#3565] 연결선 자식은 실제 레코드가 '$col' 로 나간다
+            // (serialize_group_child 의 connector 분기). 목록도 같은 판정을
+            // 써야 부모 선언과 자식 실체가 어긋나지 않는다.
+            ShapeObject::Line(line) => {
+                if line.connector.is_some() {
+                    tags::SHAPE_CONNECTOR_ID
+                } else {
+                    tags::SHAPE_LINE_ID
+                }
+            }
             ShapeObject::Rectangle(_) => tags::SHAPE_RECT_ID,
             ShapeObject::Ellipse(_) => tags::SHAPE_ELLIPSE_ID,
             ShapeObject::Arc(_) => tags::SHAPE_ARC_ID,
             ShapeObject::Polygon(_) => tags::SHAPE_POLYGON_ID,
             ShapeObject::Curve(_) => tags::SHAPE_CURVE_ID,
-            ShapeObject::Group(_) => tags::CTRL_GEN_SHAPE,
+            // [#3565] 중첩 그룹 자식의 실제 레코드는 '$con' 이다
+            // (serialize_group_child 의 Group arm). 'gso ' 로 선언하면
+            // 한컴이 자식 트리를 세우지 못해 문서를 열지 못한다.
+            ShapeObject::Group(_) => tags::SHAPE_CONTAINER_ID,
             ShapeObject::Picture(_) => tags::SHAPE_PICTURE_ID,
             ShapeObject::Chart(c) => c.drawing.shape_attr.ctrl_id,
             ShapeObject::Ole(o) => {
