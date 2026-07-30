@@ -139,6 +139,23 @@ CLOSED여도 같은 merge commit·같은 검증 증적의 maintainer comment가 
 GitHub bot auto-close comment만으로 후속 기록이 완료된 것은 아니다. 같은 commit·같은 증적의 maintainer
 comment가 있으면 중복 게시하지 않고 permalink를 상태 보고에 남긴다.
 
+### 7.3.1 sub-issue 연동 부모 issue의 close
+
+추적 성격의 부모 issue(discussion 발견 여러 건을 부모로 묶고 실작업을 sub-issue로 분리한 경우 등)는
+마지막 sub-issue close 시점에 함께 close하는 것을 기본으로 한다. 단 다음을 모두 지킨다.
+
+- 부모 귀속 산출물(가드 테스트 PR 등)이 모두 merge된 뒤에만 close한다. sub-issue close를 단일
+  트리거로 삼지 않는다.
+- sub-issue 연동은 close 시점 규칙일 뿐 절차 단축이 아니다. devel 반영 검증(`git branch --contains`)과
+  작업지시자 승인 게이트는 동일하게 거친다. GitHub는 sub-issue 완료 시 부모를 자동 close하지 않으므로
+  항상 수동 close다.
+- close comment에 판정 경위를 명시한다. "버그 수정으로 닫힘"이 아닌 경우(오등록 판정, 이미 닫힌 축
+  귀속, 가드 보강)는 그 성격과 귀속 커밋을 남겨 사후 검색이 성격을 오독하지 않게 한다.
+
+첫 적용 사례: #3552(부모 — 재현 불가 판정, 가드 테스트 PR 귀속) / #3576(sub-issue — 실작업).
+close 체크리스트: ① sub-issue close ② 가드 테스트 PR merge ③ 판정 경위 close comment
+④ 작업지시자 승인.
+
 ## 7.4 contributor PR comment
 
 원 PR에는 감사, merge 사실, 실제 검증 결과, 필요하면 후속 issue를 남긴다. issue·PR·comment는 평문 번호

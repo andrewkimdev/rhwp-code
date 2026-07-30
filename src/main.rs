@@ -4,6 +4,7 @@ use std::path::Path;
 use std::process;
 
 mod atomic_file;
+mod mcp_serve;
 
 /// [#2707] CLI 종료 코드 계약 — 성공.
 const EXIT_OK: i32 = 0;
@@ -172,6 +173,7 @@ fn main() {
         Some("export-hml") => export_hml(&args[2..]),
         Some("export-doclang") => exit_with(export_doclang(&args[2..])),
         Some("capabilities") => exit_with(show_capabilities(&args[2..])),
+        Some("mcp-serve") => exit_with(mcp_serve::run()),
         Some("batch") => exit_with(run_batch(&args[2..])),
         Some("info") => exit_with(show_info(&args[2..])),
         Some("dump") => exit_with(dump_controls(&args[2..])),
@@ -181,6 +183,7 @@ fn main() {
         Some("diag") => exit_with(diag_document(&args[2..])),
         Some("search") => exit_with(search_document(&args[2..])),
         Some("convert") => exit_with(convert_hwp(&args[2..])),
+        Some("extract-pages") => exit_with(extract_pages(&args[2..])),
         Some("build-from-ingest") => exit_with(build_from_ingest(&args[2..])),
         Some("hwp5-inventory") => rhwp::diagnostics::hwp5_inventory::run(&args[2..]),
         Some("hwp5-inventory-diff") => rhwp::diagnostics::hwp5_inventory_diff::run(&args[2..]),
@@ -238,6 +241,31 @@ fn main() {
 /// 손으로 옮겨 적지 않게 한다. `--json` 계약을 가진 명령이 늘면
 /// `capabilities_mcp_covers_every_json_command` 가 누락을 잡는다.
 fn show_mcp_tools() -> i32 {
+    let tools = mcp_tool_definitions();
+
+    let manifest = serde_json::json!({
+        "schemaVersion": "1.0",
+        "protocol": "mcp",
+        "server": {
+            "suggestedName": "rhwp",
+            "version": rhwp::version(),
+            "description": "HWP/HWPX 한국어 문서를 읽고 편집하는 도구 모음",
+        },
+        "invocation": {
+            "transport": "cli",
+            "note": "각 도구의 cli.args 에서 {name} 자리표시자를 inputSchema 의 같은 이름 값으로 치환해 실행한다. stdout 은 순수 JSON, 진단은 stderr, 종료 코드는 0/1/2(+ir-diff 차이 3). 자리표시자 치환 없이 바로 쓰려면 `rhwp mcp-serve`(stdio JSON-RPC 서버, #3140)를 실행한다.",
+            "stdinTools": ["hwp_batch", "hwp_batch_search"],
+            "server": "mcp-serve",
+        },
+        "tools": tools,
+    });
+    println!("{manifest}");
+    EXIT_OK
+}
+
+/// [#3263→#3140] MCP 도구 정의의 단일 출처 — `capabilities --mcp`(선언 출력)와
+/// `mcp-serve`(실행 서버)가 같은 목록을 쓴다. 여기에만 추가하면 양쪽이 함께 갱신된다.
+fn mcp_tool_definitions() -> Vec<serde_json::Value> {
     /// 문서 경로 하나를 받는 도구의 표준 입력 스키마.
     fn path_schema(extra: serde_json::Value) -> serde_json::Value {
         let mut props = serde_json::json!({
@@ -272,7 +300,7 @@ fn show_mcp_tools() -> i32 {
         })
     }
 
-    let tools = vec![
+    vec![
         tool(
             "hwp_info",
             "HWP/HWPX/HML 문서의 메타데이터(포맷·구역/페이지/문단 수·폰트)를 조회한다. 문서를 열기 전에 규모와 형식을 파악할 때 쓴다.",
@@ -480,25 +508,7 @@ fn show_mcp_tools() -> i32 {
             serde_json::json!(["edit", "set-cell", "{path}", "--table", "{table}", "--row", "{row}", "--col", "{col}", "--text", "{text}", "--json"]),
             &["schemaVersion", "source", "table", "row", "col", "oldText", "newText", "dryRun", "overflow", "output", "outputFormat"],
         ),
-    ];
-
-    let manifest = serde_json::json!({
-        "schemaVersion": "1.0",
-        "protocol": "mcp",
-        "server": {
-            "suggestedName": "rhwp",
-            "version": rhwp::version(),
-            "description": "HWP/HWPX 한국어 문서를 읽는 도구 모음 (읽기 전용)",
-        },
-        "invocation": {
-            "transport": "cli",
-            "note": "각 도구의 cli.args 에서 {name} 자리표시자를 inputSchema 의 같은 이름 값으로 치환해 실행한다. stdout 은 순수 JSON, 진단은 stderr, 종료 코드는 0/1/2(+ir-diff 차이 3).",
-            "stdinTools": ["hwp_batch", "hwp_batch_search"],
-        },
-        "tools": tools,
-    });
-    println!("{manifest}");
-    EXIT_OK
+    ]
 }
 
 /// [#3263] 도구 자기서술 — 에이전트가 첫 호출 1회로 명령·계약·스키마를 파악하는 입구.
@@ -606,6 +616,11 @@ fn show_capabilities(args: &[String]) -> i32 {
                 "commands",
                 "batch",
             ],
+        ),
+        cmd(
+            "mcp-serve",
+            "serve",
+            "MCP 서버 (stdio JSON-RPC) — capabilities --mcp 도구 전부 + 세션 도구 실행 (#3140)",
         ),
         // ── 내보내기/변환 ──
         cmd_json(
@@ -993,6 +1008,10 @@ fn print_help() {
     println!("      도구 자기서술 JSON 출력 (명령·플래그·JSON 계약·종료 코드) — 에이전트용");
     println!();
     println!("      --mcp                   MCP 도구 정의(name/description/inputSchema) 출력");
+    println!();
+    println!("  mcp-serve");
+    println!("      MCP 서버 실행 (stdio JSON-RPC) — AI 에이전트 호스트가 도구로 연결 (#3140)");
+    println!("      capabilities --mcp 의 도구 전부 + 세션(hwp_open/hwp_doc_text/hwp_close)");
     println!();
     println!("  dump <파일.hwp|파일.hwpx|파일.hml> [--section <번호>] [--para <번호>]");
     println!("      문서 조판부호 구조 덤프 (디버깅용)");
@@ -6152,6 +6171,134 @@ fn verify_reparse_failed_exit_code(options: ConversionVerifyOptions) -> i32 {
     } else {
         4
     }
+}
+
+/// [#3565] `extract-pages` — 쪽 범위만 남겨 저장한다.
+///
+/// 대형 문서의 결함을 이분법으로 좁히기 위한 도구다. 384쪽 문서가 저장 후 한컴에서
+/// 열리지 않을 때, 절반씩 잘라 재현 여부를 보면 방아쇠를 특정할 수 있다.
+///
+/// 쪽 단위로 자르되 **문단 단위로** 지운다 — 여러 쪽에 걸친 문단은 한 쪽이라도 범위 안이면
+/// 남긴다. 결과 쪽수가 요청 범위와 정확히 같지 않을 수 있다(레이아웃이 다시 흐른다).
+fn extract_pages(args: &[String]) -> i32 {
+    let mut input: Option<&str> = None;
+    let mut output: Option<&str> = None;
+    let mut from: Option<u32> = None;
+    let mut to: Option<u32> = None;
+    let mut json_mode = false;
+
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--from" | "--to" => {
+                // 옵션 이름을 리터럴로 고정하고 인자 값은 에코하지 않는다.
+                // 같은 `args` 에 `--password` 가 실릴 수 있어, 인자에서 온 문자열을
+                // 그대로 찍으면 비밀번호가 로그에 남는다 (CodeQL: cleartext logging).
+                let opt: &'static str = if args[i] == "--from" {
+                    "--from"
+                } else {
+                    "--to"
+                };
+                i += 1;
+                let Some(v) = args.get(i) else {
+                    eprintln!("오류: {opt} 뒤에 쪽 번호가 필요합니다.");
+                    return EXIT_USAGE;
+                };
+                let Ok(n) = v.parse::<u32>() else {
+                    eprintln!("오류: {opt} 값이 숫자가 아닙니다.");
+                    return EXIT_USAGE;
+                };
+                if opt == "--from" {
+                    from = Some(n)
+                } else {
+                    to = Some(n)
+                }
+            }
+            "-o" | "--output" => {
+                i += 1;
+                output = args.get(i).map(|s| s.as_str());
+            }
+            "--json" => json_mode = true,
+            v if v.starts_with('-') => {
+                eprintln!("알 수 없는 옵션: {v}");
+                return EXIT_USAGE;
+            }
+            v => {
+                if input.is_none() {
+                    input = Some(v)
+                } else if output.is_none() {
+                    output = Some(v)
+                }
+            }
+        }
+        i += 1;
+    }
+
+    let (Some(input), Some(output)) = (input, output) else {
+        eprintln!("사용법: rhwp extract-pages <입력> <출력.hwp> --from N --to M [--json]");
+        return EXIT_USAGE;
+    };
+    let from = from.unwrap_or(1);
+    let Some(to) = to else {
+        eprintln!("오류: --to 가 필요합니다.");
+        return EXIT_USAGE;
+    };
+
+    let data = match fs::read(input) {
+        Ok(d) => d,
+        Err(e) => {
+            eprintln!("오류: 파일을 읽을 수 없습니다 - {input}: {e}");
+            return EXIT_RUNTIME;
+        }
+    };
+    let mut doc = match rhwp::wasm_api::HwpDocument::from_bytes(&data) {
+        Ok(d) => d,
+        Err(e) => {
+            eprintln!("오류: 문서 파싱 실패 - {e}");
+            return EXIT_RUNTIME;
+        }
+    };
+    let report = match doc.extract_page_range(from, to) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("오류: 쪽 추출 실패 - {e}");
+            return EXIT_RUNTIME;
+        }
+    };
+    let bytes = match doc.export_hwp_with_adapter() {
+        Ok(b) => b,
+        Err(e) => {
+            eprintln!("오류: HWP 직렬화 실패 - {e}");
+            return EXIT_RUNTIME;
+        }
+    };
+    if let Err(e) = fs::write(output, &bytes) {
+        eprintln!("오류: 출력 쓰기 실패 - {output}: {e}");
+        return EXIT_RUNTIME;
+    }
+
+    if json_mode {
+        println!(
+            "{}",
+            serde_json::json!({
+                "schemaVersion": "1.0",
+                "source": input,
+                "output": output,
+                "from": from,
+                "to": to,
+                "pagesBefore": report.pages_before,
+                "pagesAfter": report.pages_after,
+                "paragraphsKept": report.kept,
+                "paragraphsRemoved": report.removed,
+            })
+        );
+    } else {
+        println!(
+            "추출 완료: {output} ({}~{}쪽) — {}쪽 → {}쪽, 문단 {}개 남기고 {}개 제거",
+            from, to, report.pages_before, report.pages_after, report.kept, report.removed
+        );
+    }
+    EXIT_OK
 }
 
 fn convert_hwp(args: &[String]) -> i32 {

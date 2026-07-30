@@ -2,21 +2,34 @@
  * 확장 페이지에서 공유하는 viewer 설정을 읽는다.
  *
  * 일반 web/PWA 환경에서는 확장 storage API가 없으므로 기본값을 반환한다.
+ * 기본값에는 셀프 호스팅용 빌드 스위치(`RHWP_DISABLE_EXTERNAL_WEBFONTS=1`,
+ * vite.config.ts define)가 반영되며, storage에 저장된 값이 있으면 그 값이
+ * 우선한다.
  */
 
 export interface ExtensionViewerSettings {
   disableExternalWebFonts: boolean;
 }
 
-const DEFAULT_SETTINGS: ExtensionViewerSettings = {
-  disableExternalWebFonts: false,
-};
+function buildTimeDisableExternalWebFonts(): boolean {
+  // Vite define 상수 — node:test 등 번들 밖 실행에서는 미정의이므로 typeof 가드.
+  return typeof __RHWP_DISABLE_EXTERNAL_WEBFONTS__ !== 'undefined'
+    && __RHWP_DISABLE_EXTERNAL_WEBFONTS__ === true;
+}
+
+function defaultSettings(): ExtensionViewerSettings {
+  return {
+    disableExternalWebFonts: buildTimeDisableExternalWebFonts(),
+  };
+}
 
 type StorageItems = Record<string, unknown>;
 
-const DEFAULT_STORAGE_ITEMS: StorageItems = {
-  disableExternalWebFonts: DEFAULT_SETTINGS.disableExternalWebFonts,
-};
+function defaultStorageItems(): StorageItems {
+  return {
+    disableExternalWebFonts: defaultSettings().disableExternalWebFonts,
+  };
+}
 
 interface StorageAreaLike {
   get(
@@ -103,8 +116,8 @@ async function readStorage(
   if (!storage) return null;
   try {
     const items = mode === 'chrome-callback'
-      ? await chromeStorageGet(storage, DEFAULT_STORAGE_ITEMS)
-      : await promiseStorageGet(storage, DEFAULT_STORAGE_ITEMS);
+      ? await chromeStorageGet(storage, defaultStorageItems())
+      : await promiseStorageGet(storage, defaultStorageItems());
     return normalizeSettings(items);
   } catch (error) {
     console.warn('[extension-settings] 확장 설정 로드 실패:', error);
@@ -127,6 +140,6 @@ export async function loadExtensionViewerSettings(): Promise<ExtensionViewerSett
     await readStorage(browserStorage?.sync, 'promise') ??
     await readStorage(browserStorage?.local, 'promise') ??
     await readStorage(chromeStorage?.local, 'chrome-callback') ??
-    DEFAULT_SETTINGS
+    defaultSettings()
   );
 }

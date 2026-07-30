@@ -3669,7 +3669,18 @@ impl LayoutEngine {
             // px 필드에 들어가 96dpi 에서 7.5pt 로 렌더되던 단위 혼동이었다.
             const PAGE_NUMBER_PT: f64 = 10.0;
             let font_size = PAGE_NUMBER_PT * self.dpi / 72.0;
-            let text_width = page_num_text.chars().count() as f64 * font_size * 0.6;
+
+            // [#3048] 폭은 실제 폰트 메트릭으로 잰다. 종전 `문자수 × 크기 × 0.6` 은
+            // 장식 공백이 든 `- 1 -`(5자)을 30pt 로 과대평가해(실측 24.8pt) 가운데·
+            // 오른쪽 정렬 위치를 약 2pt 왼쪽으로 밀었다. 아래 TextRunNode 가 쓰는
+            // 스타일과 **같은 값**으로 재야 측정과 렌더가 어긋나지 않는다.
+            let page_num_style = TextStyle {
+                font_family: "바탕".to_string(),
+                font_size,
+                color: 0x000000,
+                ..Default::default()
+            };
+            let text_width = estimate_text_width(&page_num_text, &page_num_style);
 
             let is_odd_page = page_content.page_number % 2 == 1;
             let x = match pnp.position {
@@ -3735,12 +3746,7 @@ impl LayoutEngine {
                 run_id,
                 RenderNodeType::TextRun(TextRunNode {
                     text: page_num_text,
-                    style: TextStyle {
-                        font_family: "바탕".to_string(),
-                        font_size,
-                        color: 0x000000,
-                        ..Default::default()
-                    },
+                    style: page_num_style,
                     char_shape_id: None,
                     para_shape_id: None,
                     section_index: None,

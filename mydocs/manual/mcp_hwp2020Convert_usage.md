@@ -275,4 +275,9 @@ shasum -a 256 /Users/me/rhwp/pdf/example-a3-2020.pdf
   `HWP2020_MCP_SERVER_URL`을 추가하거나 `--server-url`을 직접 지정한다.
 - `--input`은 client 로컬 파일이어야 하고, `--output-dir` 상위 경로에는 쓰기 권한이 있어야 한다.
 - 큰 문서는 `--timeout-seconds`를 900~1800초로 늘린다.
+- 복잡한 문서(그림 대량·중첩 표)의 PDF 변환은 `--timeout-seconds` 지정과 무관하게 약 13~15분에서
+  MCP `-32001`(Request timed out)이 날 수 있다. 2026-07-30 실측: 384쪽·9MB 편람은 1500초 지정에도
+  실패, 27쪽 KTX.hwp는 7.6초 성공 — 병목은 쪽수가 아니라 콘텐츠 복잡도다. **개방 여부 판정만
+  필요하면 `--target hwp`**(전량 인쇄 생략, 384쪽도 수 분 내)를 쓰고, PDF 정답지가 필요한 복잡
+  문서는 `extract-pages`로 조각낸 뒤 변환한다.
 - VS Code의 `MCP: Reset Cached Tools` 명령이 없으면 `Developer: Reload Window` 또는 재시작을 사용한다.
