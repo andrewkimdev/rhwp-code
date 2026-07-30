@@ -116,3 +116,21 @@ test('pointer anchor remains representable across the viewport-width boundary', 
   );
   assert.ok(Math.abs(reverse.scrollLeft - viewport.scrollLeft) < 1e-9);
 });
+
+// [#3591] 그리드는 layoutGrid 가 중앙을 잡으므로 팬을 주지 않는다.
+// 그리드 첫 진입(zoom 0.5)에서만 팬이 붙어 스크롤 여지가 생기고 문서가 밀리던 회귀 가드.
+test('grid mode never receives pan space at any zoom', () => {
+  const scroll = new VirtualScroll();
+  const gridPages = Array.from({ length: 5 }, () => ({ width: 794, height: 1123 })) as never;
+  const viewportWidth = 1229;
+
+  for (const zoom of [0.5, 0.45, 0.35, 0.3, 0.25]) {
+    scroll.setPageDimensions(gridPages, zoom, viewportWidth);
+    assert.ok(scroll.isGridMode(), `zoom ${zoom} 은 그리드 모드여야 한다`);
+    const overflow = scroll.getTotalWidth() - viewportWidth;
+    assert.ok(
+      overflow <= 10,
+      `zoom ${zoom}: 그리드에 팬이 붙어 가로 스크롤 여지가 생겼다 (초과 ${overflow}px)`,
+    );
+  }
+});

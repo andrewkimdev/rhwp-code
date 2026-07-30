@@ -109,6 +109,11 @@ export class VirtualScroll {
    * 증가를 끊는다.
    */
   private horizontalPanSpace(viewportWidth: number, contentWidth: number): number {
+    // 그리드는 layoutGrid 의 marginLeft 가 이미 중앙을 잡고, base 가 항상 창 폭 이상
+    // (`max(gridWidth + marginLeft*2, viewportWidth)`)이라 팬 조건이 경계에서 참이 될 수
+    // 있다. 그리드 첫 진입(zoom 0.5)에서만 팬이 붙어 스크롤 여지가 생기고 문서가 중앙에서
+    // 밀리는 현상이 그것이다. 그리드에는 팬을 주지 않는다.
+    if (this.gridMode) return 0;
     if (contentWidth <= viewportWidth) return 0;
     const ratio = viewportWidth * PAN_SPACE_RATIO;
     return Math.min(Math.max(ratio, MIN_PAN_SPACE), MAX_PAN_SPACE);
