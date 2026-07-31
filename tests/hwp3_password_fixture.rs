@@ -275,6 +275,37 @@ fn actual_hwp3_password_fixture_preserves_table_triangle_bullets() {
 }
 
 #[test]
+fn actual_hwp3_password_fixture_preserves_p3_inline_object_vertical_contract() {
+    let document = parse_document_with_password(&fixture_bytes(), FIXTURE_PASSWORD)
+        .expect("실제 HWP3 fixture를 열어야 함");
+    let paragraphs = &document.sections[0].paragraphs;
+
+    // HWP5 변환본과 한컴 PDF의 3쪽 저장 흐름 계약. 제목 양옆의 작은 사각형은
+    // 일반 제목 텍스트와 한 줄을 공유하므로 160% 줄간격을 유지하고, inline 표는
+    // 표 자체 높이 + 2mm 고정 후행간격만 차지한다. 첫 표의 spacing_before=568 HU는
+    // 선행 제목의 spacing_after로 이미 반영되어 이중 적용하면 안 된다.
+    let expected = [
+        (23, 0, 1_600, 960),
+        (25, 5_152, 12_920, 600),
+        (27, 21_972, 1_600, 960),
+        (30, 29_292, 17_188, 600),
+        (31, 47_648, 1_000, 600),
+    ];
+
+    for (paragraph_index, vertical_pos, line_height, line_spacing) in expected {
+        let line = paragraphs[paragraph_index]
+            .line_segs
+            .first()
+            .unwrap_or_else(|| panic!("문단 {paragraph_index}에 저장 줄이 있어야 함"));
+        assert_eq!(
+            (line.vertical_pos, line.line_height, line.line_spacing),
+            (vertical_pos, line_height, line_spacing),
+            "p3 문단 {paragraph_index}의 HWP3→HWP5 세로 흐름 계약"
+        );
+    }
+}
+
+#[test]
 fn actual_hwp3_password_fixture_anchors_inline_folder_table_to_paragraph() {
     let document = parse_document_with_password(&fixture_bytes(), FIXTURE_PASSWORD)
         .expect("실제 HWP3 fixture를 열어야 함");

@@ -458,6 +458,31 @@ fn hwp3_is_treat_as_char_visual_control(ctrl: &crate::model::control::Control) -
     }
 }
 
+/// HWP3의 개체 호스트 문단이 공백과 inline-object marker만으로 이뤄졌는지 판정한다.
+///
+/// 대형 TAC 도형의 저장 줄은 도형 높이를 `text_height`로 쓰지만, HWP5 변환본은
+/// 줄간격을 2mm(600 HU) 고정값으로 유지한다. 반대로 제목 텍스트와 작은 장식
+/// 사각형을 함께 둔 문단은 보통 텍스트 줄간격을 유지해야 한다. 이 둘을 개체의
+/// 절대 높이가 아닌 HWP3 원문 구조로 구분한다.
+fn hwp3_text_is_inline_object_marker_only(text: &str) -> bool {
+    !text.is_empty()
+        && text
+            .chars()
+            .all(|ch| ch.is_whitespace() || ch == '\u{FFFC}')
+}
+
+fn hwp3_paragraph_has_treat_as_char_table(para: &crate::model::paragraph::Paragraph) -> bool {
+    para.controls.iter().any(|ctrl| {
+        matches!(
+            ctrl,
+            crate::model::control::Control::Table(table) if table.common.treat_as_char
+        )
+    })
+}
+
+/// HWP5 변환본이 HWP3 inline 개체 호스트에 보존하는 고정 후행 줄간격(2mm).
+const HWP3_TAC_OBJECT_LINE_SPACING_HU: i32 = 600;
+
 fn strip_hwp3_single_tac_visual_marker(para: &mut crate::model::paragraph::Paragraph) {
     if para.text == "\u{FFFC}"
         && para.controls.len() == 1
@@ -2911,29 +2936,32 @@ pub(crate) fn parse_paragraph_list(
                         // 기반 계산 → ls=th×0.6 큰 값 → paragraph height 비정상 → 페이지 분할
                         // 위반. TAC 그림 paragraph 시 ls=600 (작은 고정값) 으로 강제.
                         // [Task #877 Stage 3 v2] sample16 표지 RFP 박스 (Rectangle drawing object,
-                        // treat_as_char=true) 도 TAC 영역에 포함. Picture 이외 ShapeObject
-                        // (Rectangle/Ellipse/Polygon/Line/Arc/Curve/Group) 의 treat_as_char
-                        // 검사 누락으로 ls=th*60% 거대값 → vpos 누적 → 빈 페이지 2 발생.
+                        // treat_as_char=true) 도 TAC 영역에 포함한다. 단, 작은 장식 사각형과
+                        // 제목 텍스트가 같은 줄에 있을 때까지 고정 600 HU를 적용하면 본문의
+                        // 정상 줄간격(예: 160% × 1600 HU = 960 HU)이 축소된다. Shape 계열은
+                        // 공백/개체 marker만 있는 호스트 문단일 때만 고정값을 사용한다.
                         let has_tac_picture = para.controls.iter().any(|c| match c {
                             crate::model::control::Control::Picture(p) => p.common.treat_as_char,
                             crate::model::control::Control::Shape(s) => {
                                 use crate::model::shape::ShapeObject;
                                 match s.as_ref() {
                                     ShapeObject::Picture(p) => p.common.treat_as_char,
-                                    ShapeObject::Rectangle(r) => r.common.treat_as_char,
-                                    ShapeObject::Ellipse(e) => e.common.treat_as_char,
-                                    ShapeObject::Polygon(p) => p.common.treat_as_char,
-                                    ShapeObject::Line(l) => l.common.treat_as_char,
-                                    ShapeObject::Arc(a) => a.common.treat_as_char,
-                                    ShapeObject::Curve(c) => c.common.treat_as_char,
-                                    ShapeObject::Group(g) => g.common.treat_as_char,
                                     _ => false,
                                 }
                             }
                             _ => false,
                         });
-                        ls = if has_tac_picture {
-                            600
+                        let has_marker_only_tac_shape =
+                            hwp3_text_is_inline_object_marker_only(&para.text)
+                                && para.controls.iter().any(|ctrl| {
+                                    matches!(
+                                        ctrl,
+                                        crate::model::control::Control::Shape(shape)
+                                            if shape.common().treat_as_char
+                                    )
+                                });
+                        ls = if has_tac_picture || has_marker_only_tac_shape {
+                            HWP3_TAC_OBJECT_LINE_SPACING_HU
                         } else {
                             th * (line_spacing_ratio - 100) / 100
                         };
@@ -3043,20 +3071,14 @@ pub(crate) fn parse_paragraph_list(
             para.line_segs = line_segs;
         }
 
-        // TAC 표 문단: 줄간격 배율 미적용 — lh=th (표 높이 그대로, line spacing은 내용 텍스트에만 적용)
-        {
-            let has_tac_table = para.controls.iter().any(|c| {
-                if let crate::model::control::Control::Table(t) = c {
-                    t.common.treat_as_char
-                } else {
-                    false
-                }
-            });
-            if has_tac_table {
-                for seg in para.line_segs.iter_mut() {
-                    seg.line_height = seg.text_height;
-                    seg.line_spacing = 0;
-                }
+        // TAC 표 문단: 줄간격 배율 미적용 — lh=th (표 높이 그대로).
+        // 한컴 HWP5 변환본은 표 높이에 160% 배율을 곱하지 않되, 표 호스트 뒤에는
+        // 2mm(600 HU)의 고정 줄간격을 보존한다. 0으로 만들면 다음 문단이 표에
+        // 달라붙어 HWP3 원본만 세로 흐름이 위로 누적된다.
+        if hwp3_paragraph_has_treat_as_char_table(&para) {
+            for seg in para.line_segs.iter_mut() {
+                seg.line_height = seg.text_height;
+                seg.line_spacing = HWP3_TAC_OBJECT_LINE_SPACING_HU;
             }
         }
 
@@ -3260,7 +3282,13 @@ pub(crate) fn parse_paragraph_list(
             // 가 한글97 layout 시점에 본 line 부터 새 페이지 인식). HWP5 v2024 변환본의
             // paragraph 내 ls[i].vpos=0 영역 정합 (typeset Task #321 vpos-reset guard
             // 영역 trigger 정합).
-            if !starts_new_page && !para.line_segs.is_empty() {
+            // HWP3 inline 표의 `spacing_before`는 표 호스트가 아닌 선행 문단의
+            // `spacing_after`로 이미 반영된다. 둘을 누적하면 HWP5 변환본·한컴 PDF보다
+            // 표가 아래로 한 번 더 밀린다. 일반 문단의 before/after 계약은 유지한다.
+            if !starts_new_page
+                && !para.line_segs.is_empty()
+                && !hwp3_paragraph_has_treat_as_char_table(&para)
+            {
                 acc_section_vpos = acc_section_vpos.saturating_add(para_flow_spacing.0);
             }
             for (i, seg) in para.line_segs.iter_mut().enumerate() {
