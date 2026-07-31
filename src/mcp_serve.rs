@@ -556,6 +556,9 @@ fn session_render_page(args: &serde_json::Value, sessions: &mut Sessions) -> ser
         Err(e) => return e,
     };
     let page_count = sd.doc.page_count();
+    if page_count == 0 {
+        return tool_error("렌더 가능한 페이지가 없습니다".into());
+    }
     if page >= page_count {
         return tool_error(format!("페이지 범위 초과: {page} (0~{})", page_count - 1));
     }
