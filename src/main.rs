@@ -428,7 +428,14 @@ fn mcp_tool_definitions() -> Vec<serde_json::Value> {
             path_schema(serde_json::json!({})),
             "export-svg",
             serde_json::json!(["export-svg", "{path}", "--json"]),
-            &["format", "outputDir", "pageCount", "renderedCount", "pages"],
+            &[
+                "format",
+                "outputDir",
+                "pageCount",
+                "renderedCount",
+                "overflowCellLines",
+                "pages",
+            ],
         ),
         tool(
             "hwp_export_pdf",
@@ -1801,6 +1808,8 @@ fn export_svg(args: &[String]) -> i32 {
     // [#2707] 요청한 페이지 수가 아니라 실제로 저장에 성공한 페이지 수를 센다.
     let mut manifest: Vec<serde_json::Value> = Vec::new();
     let mut written = 0usize;
+    // [#3668] LAYOUT_OVERFLOW_CELL 집계 — 페이지 렌더 직후 take 로 페이지 귀속.
+    let mut overflow_cell_total: u64 = 0;
 
     for page_num in &pages {
         let svg_result = if let Some(profile) = render_profile {
@@ -1810,6 +1819,8 @@ fn export_svg(args: &[String]) -> i32 {
         } else {
             doc.render_page_svg_native(*page_num)
         };
+        let page_overflow_cell_lines = doc.take_overflow_cell_lines();
+        overflow_cell_total += u64::from(page_overflow_cell_lines);
         match svg_result {
             Ok(mut svg) => {
                 // 격자 오버레이 삽입
@@ -1845,6 +1856,7 @@ fn export_svg(args: &[String]) -> i32 {
                                 "page": page_num,
                                 "path": svg_path.display().to_string(),
                                 "bytes": svg.len(),
+                                "overflowCellLines": page_overflow_cell_lines,
                             }));
                         } else {
                             println!("  → {}", svg_path.display());
@@ -1877,6 +1889,7 @@ fn export_svg(args: &[String]) -> i32 {
             "outputDir": output_dir,
             "pageCount": page_count,
             "renderedCount": written,
+            "overflowCellLines": overflow_cell_total,
             "pages": manifest,
         });
         println!("{envelope}");

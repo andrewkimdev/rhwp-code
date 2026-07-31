@@ -724,6 +724,12 @@ impl DocumentCore {
             .map(|b| b.data.load())
     }
 
+    /// [#3668] 직전 렌더에서 발생한 `LAYOUT_OVERFLOW_CELL` 줄 수를 읽고 리셋한다.
+    /// 페이지 렌더 직후 호출하면 그 페이지 귀속 카운트가 된다.
+    pub fn take_overflow_cell_lines(&self) -> u32 {
+        self.layout_engine.take_overflow_cell_lines()
+    }
+
     pub fn render_page_svg_native(&self, page_num: u32) -> Result<String, HwpError> {
         if matches!(
             std::env::var("RHWP_RENDER_PATH").ok().as_deref(),

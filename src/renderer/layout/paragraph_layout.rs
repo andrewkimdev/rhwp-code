@@ -3275,6 +3275,9 @@ impl LayoutEngine {
             if cell_ctx.is_some() && !blank_spacer_line {
                 let page_h = self.current_page_height.get();
                 if page_h > 0.0 && text_y > page_h + 0.5 {
+                    // [#3668] stderr 진단과 같은 조건에서 집계 카운터도 올린다.
+                    self.overflow_cell_lines
+                        .set(self.overflow_cell_lines.get() + 1);
                     eprintln!(
                         "LAYOUT_OVERFLOW_CELL: section={} pi={} line={} y={:.1} \
                          page_bottom={:.1} overflow={:.1}px",
