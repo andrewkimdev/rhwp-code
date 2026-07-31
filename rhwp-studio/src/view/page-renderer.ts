@@ -83,8 +83,8 @@ export class PageRenderer {
   /**
    * DOM flow 그림의 신원 키별 object URL (Task #3315).
    *
-   * 키가 내용에서 유도되므로 스스로 무효화된다 — 편집 때 비우지 않는다. 문서를 갈아끼울 때만
-   * 회수한다(`invalidateDocumentRevision`·`dispose`).
+   * 키가 내용에서 유도되므로 스스로 무효화된다 — 편집 때 비우지 않는다. 문서 경계는
+   * `beginDocument` 가 가른다.
    */
   private flowImageUrls = new FlowImageUrlCache();
   private prefetchRequestTokens = new Map<number, number>();
@@ -119,12 +119,29 @@ export class PageRenderer {
     return true;
   }
 
+  /**
+   * 문서 (재)로드 경계 — `CanvasView.prepareDocumentLoad` 가 부른다 (Task #3315).
+   *
+   * 문서 범위 자원 가운데 브라우저가 명시적 회수까지 붙들고 있는 것(flow 그림 object URL)을
+   * 여기서 넘긴다. 조회 시점으로 미루면 새 문서가 flow 그림을 한 장도 조회하지 않을 때
+   * (그림 없는 문서·CanvasKit 경로) 옛 문서의 URL 이 그대로 남는다.
+   *
+   * 같은 문서를 다시 로드한 경우에는 캐시가 신원을 보고 그대로 둔다.
+   */
+  beginDocument(): void {
+    this.flowImageUrls.beginDocument({
+      digest: this.wasm.documentDigest,
+      generation: this.wasm.documentGeneration,
+    });
+  }
+
   invalidateDocumentRevision(): void {
     this.cancelAll();
     this.releaseAllPageDiagnostics();
     this.layerSummaryCache.clear();
-    // 문서가 갈리면 옛 신원 키는 다시 조회되지 않는다 — object URL 을 여기서 거둔다(#3315).
-    this.flowImageUrls.releaseAll();
+    // [#3315] object URL 캐시는 여기서 비우지 않는다. 이 메서드는 renderer decision key 에
+    // 묶여 있어 같은 문서를 편집할 때마다 불리므로, 여기서 비우면 캐시가 매 키 입력에 수 MB 를
+    // 다시 읽는다 — 캐시가 없는 것과 같아진다. 문서 경계는 `beginDocument` 가 가른다.
   }
 
   /** 페이지를 Canvas에 렌더링한다 (renderScale = zoom × DPR) */

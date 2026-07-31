@@ -113,23 +113,35 @@ test('빈 목록은 유효한 결과다 — 그림 없는 쪽에서 전체 트�
 
 // ── object URL 캐시 ──
 
-test('object URL 캐시는 키당 한 번만 바이트를 받는다', () => {
-  const revoked: string[] = [];
-  const created: string[] = [];
+const DOC_A = { digest: 'digest-a', generation: 1 };
+const DOC_B = { digest: 'digest-b', generation: 1 };
+
+/** `URL.createObjectURL`/`revokeObjectURL` 을 세어 보는 스텁. */
+function withUrlStub<T>(body: (state: { created: string[]; revoked: string[] }) => T): T {
+  const state = { created: [] as string[], revoked: [] as string[] };
   const originalCreate = globalThis.URL.createObjectURL;
   const originalRevoke = globalThis.URL.revokeObjectURL;
   let counter = 0;
   globalThis.URL.createObjectURL = () => {
     const url = `blob:stub/${++counter}`;
-    created.push(url);
+    state.created.push(url);
     return url;
   };
   globalThis.URL.revokeObjectURL = (url: string) => {
-    revoked.push(url);
+    state.revoked.push(url);
   };
-
   try {
+    return body(state);
+  } finally {
+    globalThis.URL.createObjectURL = originalCreate;
+    globalThis.URL.revokeObjectURL = originalRevoke;
+  }
+}
+
+test('object URL 캐시는 같은 문서 안에서 키당 한 번만 바이트를 받는다', () => {
+  withUrlStub((state) => {
     const cache = new FlowImageUrlCache();
+    cache.beginDocument(DOC_A);
     let loads = 0;
     const loadBytes = () => {
       loads += 1;
@@ -148,15 +160,127 @@ test('object URL 캐시는 키당 한 번만 바이트를 받는다', () => {
 
     cache.releaseAll();
     assert.equal(cache.size, 0);
-    assert.deepEqual(revoked, created, '회수하지 않으면 문서를 갈아끼울 때마다 URL 이 쌓인다');
-  } finally {
-    globalThis.URL.createObjectURL = originalCreate;
-    globalThis.URL.revokeObjectURL = originalRevoke;
-  }
+    assert.deepEqual(
+      state.revoked,
+      state.created,
+      '회수하지 않으면 renderer 수명 동안 URL 이 쌓인다',
+    );
+  });
+});
+
+// [#3315 P1] 그림 키는 문서 안에서만 신원이다 — `bin_data_epoch` 가 문서마다 0 에서 시작하므로
+// 두 문서의 첫 그림이 똑같이 `bin:0:1:src` 다. 문서 경계에서 비우지 않으면 새 문서가 옛 문서의
+// 그림을 받는다.
+test('같은 키라도 문서가 다르면 새 바이트를 읽는다', () => {
+  withUrlStub(() => {
+    const cache = new FlowImageUrlCache();
+    const loaded: string[] = [];
+    const bytesFor = (tag: string) => (key: string) => {
+      loaded.push(`${tag}:${key}`);
+      return new Uint8Array([tag.charCodeAt(0)]);
+    };
+
+    cache.beginDocument(DOC_A);
+    const a = cache.urlFor('bin:0:1:src', 'image/png', bytesFor('A'));
+    cache.beginDocument(DOC_B);
+    const b = cache.urlFor('bin:0:1:src', 'image/png', bytesFor('B'));
+
+    assert.notEqual(a, b, '문서가 바뀌었는데 옛 문서의 URL 을 재사용했다');
+    assert.deepEqual(loaded, ['A:bin:0:1:src', 'B:bin:0:1:src']);
+    assert.equal(cache.size, 1, '옛 문서 항목은 남지 않는다');
+  });
+});
+
+test('같은 파일을 다시 열면(generation 증가) 캐시를 재사용하지 않는다', () => {
+  withUrlStub(() => {
+    const cache = new FlowImageUrlCache();
+    let loads = 0;
+    const loadBytes = () => {
+      loads += 1;
+      return new Uint8Array([7]);
+    };
+
+    cache.beginDocument({ digest: 'same', generation: 1 });
+    cache.urlFor('bin:0:1:src', 'image/png', loadBytes);
+    cache.beginDocument({ digest: 'same', generation: 2 });
+    cache.urlFor('bin:0:1:src', 'image/png', loadBytes);
+    assert.equal(loads, 2, 'digest 가 같아도 문서 인스턴스가 다르면 다시 읽어야 한다');
+  });
+});
+
+// [#3315] 회수 시점을 조회 시점에 두면 새 문서가 flow 그림을 한 장도 조회하지 않을 때
+// (그림 없는 문서·CanvasKit 경로) 옛 문서의 수 MB 가 renderer 수명 내내 남는다. 문서 경계가
+// 회수를 결정해야 하고, 그 경계는 새 문서의 조회 여부와 무관해야 한다.
+test('새 문서가 한 장도 조회하지 않아도 옛 문서 URL 을 회수한다', () => {
+  withUrlStub((state) => {
+    const cache = new FlowImageUrlCache();
+    cache.beginDocument(DOC_A);
+    cache.urlFor('bin:0:1:src', 'image/png', () => new Uint8Array([1]));
+    cache.urlFor('bin:0:2:src', 'image/png', () => new Uint8Array([2]));
+    assert.equal(state.created.length, 2);
+    assert.deepEqual(state.revoked, []);
+
+    // 새 문서로 갈아끼우기만 한다 — `urlFor` 는 부르지 않는다.
+    cache.beginDocument(DOC_B);
+
+    assert.deepEqual(state.revoked, state.created, '옛 문서 URL 이 남아 있다');
+    assert.equal(cache.size, 0);
+  });
+});
+
+// [#3315] 이 경계는 같은 문서를 다시 로드할 때도 불린다(외부 그림 주입 후 뷰 갱신). 그때 비우면
+// 방금 만든 URL 을 버리고 수 MB 를 다시 읽는다.
+test('같은 문서를 다시 로드하면 캐시를 지킨다', () => {
+  withUrlStub((state) => {
+    const cache = new FlowImageUrlCache();
+    let loads = 0;
+    const loadBytes = () => {
+      loads += 1;
+      return new Uint8Array([1]);
+    };
+
+    cache.beginDocument(DOC_A);
+    const first = cache.urlFor('bin:0:1:src', 'image/png', loadBytes);
+    cache.beginDocument(DOC_A);
+    const second = cache.urlFor('bin:0:1:src', 'image/png', loadBytes);
+
+    assert.equal(first, second);
+    assert.equal(loads, 1, '같은 문서인데 캐시를 버렸다');
+    assert.deepEqual(state.revoked, []);
+  });
+});
+
+test('문서 신원을 모르면 캐시하지 않고 되돌린다', () => {
+  withUrlStub((state) => {
+    const cache = new FlowImageUrlCache();
+    // digest 가 null 이면 항목을 어느 문서 것이라고 표시할 수 없다.
+    cache.beginDocument({ digest: null, generation: 0 });
+    assert.equal(
+      cache.urlFor('bin:0:1:src', 'image/png', () => new Uint8Array([1])),
+      null,
+    );
+    assert.equal(cache.size, 0);
+
+    // 신원을 모르는 문서로 갈아끼우는 경우에도 옛 문서 URL 은 거둬야 한다.
+    cache.beginDocument(DOC_A);
+    cache.urlFor('bin:0:1:src', 'image/png', () => new Uint8Array([1]));
+    assert.equal(state.created.length, 1);
+    cache.beginDocument({ digest: null, generation: 0 });
+    assert.deepEqual(state.revoked, state.created);
+    assert.equal(cache.size, 0);
+  });
+});
+
+test('경계를 지나지 않았으면 캐시하지 않고 되돌린다', () => {
+  const cache = new FlowImageUrlCache();
+  // `beginDocument` 전에는 어느 문서의 것인지 말할 수 없다 — 종전 base64 경로로 되돌아간다.
+  assert.equal(cache.urlFor('bin:0:1:src', 'image/png', () => new Uint8Array([1])), null);
+  assert.equal(cache.size, 0);
 });
 
 test('바이트를 받을 수 없으면 URL 을 만들지 않는다', () => {
   const cache = new FlowImageUrlCache();
+  cache.beginDocument(DOC_A);
   assert.equal(cache.urlFor('bin:9:1:src', 'image/png', () => null), null);
   // 빈 바이트도 그림이 될 수 없다 — 캐시에 남겨 두면 다음 조회가 빈 URL 을 재사용한다.
   assert.equal(cache.urlFor('bin:9:2:src', 'image/png', () => new Uint8Array()), null);

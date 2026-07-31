@@ -21,6 +21,43 @@ use crate::model::paragraph::Paragraph;
 use crate::model::shape::CaptionDirection;
 use crate::model::style::{Alignment, BorderLine};
 
+/// 분할 셀 조각에서 실제로 보이는 첫 줄의 저장 vpos를 찾는다.
+///
+/// `cell_line_ranges_from_cut`은 문단 중간 줄에서 시작할 수 있다. 문단 첫 줄을
+/// 쓰면 이미 앞 조각에서 소비한 줄 높이를 다시 더해 다음 문단 스냅이 밀린다.
+fn fragment_vpos_origin(
+    cell: &crate::model::table::Cell,
+    line_ranges: Option<&[(usize, usize)]>,
+) -> i32 {
+    line_ranges
+        .and_then(|ranges| {
+            ranges
+                .iter()
+                .position(|&(start, end)| start < end)
+                .and_then(|para_idx| {
+                    let (start_line, _) = ranges[para_idx];
+                    cell.paragraphs.get(para_idx).and_then(|para| {
+                        para.line_segs
+                            .get(start_line)
+                            // recompose된 문단처럼 저장 LINE_SEG가 줄 수보다 적으면
+                            // 기존의 보수적 첫 세그먼트 폴백을 유지한다.
+                            .or_else(|| para.line_segs.first())
+                            .map(|seg| seg.vertical_pos)
+                    })
+                })
+        })
+        .unwrap_or(0)
+        .max(0)
+}
+
+/// 셀의 실제 텍스트 하단 경계.
+///
+/// `text_y_start`에는 세로 정렬 offset이 포함되므로 여기에 전체 `cell_h`를 더하면
+/// Center/Bottom 셀에서 물리 셀 하단을 넘는다.
+fn cell_content_bottom(cell_y: f64, cell_h: f64, pad_bottom: f64) -> f64 {
+    cell_y + cell_h - pad_bottom
+}
+
 // 표 수평 정렬 보조 타입은 table_layout.rs에 통합됨
 
 /// [Task #1025] `row` 를 포함하는 rowspan 블록 범위 `[b_start, b_end)`.
@@ -582,6 +619,10 @@ impl LayoutEngine {
 
             let mut para_y = text_y_start;
             let mut has_preceding_text = false;
+            // [#3637] 이 조각에서 **실제로 그려지는 첫 문단**의 vpos. 아래 중첩 표
+            // 문단 스냅이 쓰는 조각 원점이다. `line_segs.first()` 를 그대로 쓰면 셀
+            // 전체 좌표라 연속 조각에서 원점만큼 통째로 밀린다.
+            let frag_vpos_origin = fragment_vpos_origin(cell, line_ranges.as_deref());
             let preserve_linear_single_cell_vpos = cut_units.is_some_and(|(su, _)| su == 0)
                 && matches!(
                     table.page_break,
@@ -662,6 +703,25 @@ impl LayoutEngine {
                     }
                 }
 
+                // [#3637 진단] 조각 셀에서 실제로 배치되는 문단과 그 y. 컷 범위 밖
+                // 문단이 예외 경로(중첩 표 보유 등)로 새는지 직접 본다. 동작 불변.
+                if std::env::var("RHWP_DIAG_CELLPARA").is_ok() {
+                    eprintln!(
+                        "DIAG_CELLPARA pi={} cell=({},{}) cp={} lines={}..{} cut={:?} nested={:?} mixed={} nonline={} para_y={:.1} cell_bot={:.1}",
+                        para_index,
+                        cell.row,
+                        cell.col,
+                        cp_idx,
+                        start_line,
+                        end_line,
+                        cut_units,
+                        nested_cut_rows,
+                        mixed_nested_split.is_some(),
+                        visible_non_inline_controls,
+                        para_y,
+                        cell_content_bottom(cell_y, cell_h, pad_bottom),
+                    );
+                }
                 let cell_context = CellContext {
                     parent_para_index: para_index,
                     path: vec![CellPathEntry {
@@ -1371,9 +1431,33 @@ impl LayoutEngine {
                     if !is_last_para {
                         if let Some(next_para) = cell.paragraphs.get(cp_idx + 1) {
                             if let Some(next_seg) = next_para.line_segs.first() {
-                                let next_vpos_y =
-                                    text_y_start + hwpunit_to_px(next_seg.vertical_pos, self.dpi);
-                                para_y = para_y.max(next_vpos_y);
+                                // [#3637] `vertical_pos` 는 **셀 전체** 좌표라 조각 시작
+                                // 유닛만큼의 원점이 빠져 있지 않다. 조각 후반부(start_cut 이
+                                // 큰 연속 조각)에서 이 스냅은 문단을 셀 상자 밖으로 밀어내고,
+                                // 그 글자는 어느 렌더 경로에도 보이지 않는다 — 텍스트 추출에만
+                                // 남는다(156083443 보도자료 10쪽: cp=164 다음이 vpos=72846
+                                // → y=1018.5, 셀 바닥 1005.1).
+                                //
+                                // 원점을 빼는 교정은 #3654 에서 실패했다. para_y 를 낮추면 그
+                                // 값이 다시 컷 판정으로 되먹임되어 다른 문서에 새 넘침을
+                                // 만든다. 이 스냅은 **밀어내기 전용**(`max`)이므로 셀 바닥으로
+                                // 상한만 두면 밀림을 막으면서 기존 위치는 보존한다 — 스냅이
+                                // 필요했던 쪽 안 문단은 상자 안이라 상한에 걸리지 않는다.
+                                //
+                                // 그래서 두 가지를 함께 건다.
+                                //   ① 조각 원점(frag_vpos_origin)을 빼 조각-상대 좌표로
+                                //   ② 그래도 남는 셀 내부 도약(#3654 가 걸린 자리, 소방방재
+                                //      45,290 HU)에 대비해 셀 바닥으로 상한
+                                // ①만으로는 #3654 처럼 도약 문서에서 여전히 밀려나고,
+                                // ②만으로는 상한에서 멈춘 뒤 뒤 문단이 그 아래로 쌓인다.
+                                let next_vpos_y = text_y_start
+                                    + hwpunit_to_px(
+                                        (next_seg.vertical_pos - frag_vpos_origin).max(0),
+                                        self.dpi,
+                                    );
+                                let cell_content_bottom =
+                                    cell_content_bottom(cell_y, cell_h, pad_bottom);
+                                para_y = para_y.max(next_vpos_y.min(cell_content_bottom));
                             }
                         }
                     }
@@ -2131,6 +2215,65 @@ impl LayoutEngine {
             // Left/Right 캡션은 표 높이에 영향 없음
             0.0
         };
+        // [#3637 진단] 조각 렌더 높이 vs 페이지네이터 컷 예산. 동작 불변.
+        // TABLE_SPLIT_RESULT 의 consumed 와 짝지어 보면 두 공간의 발산이 보인다.
+        if std::env::var("RHWP_DIAG_FRAG").is_ok() {
+            eprintln!(
+                "DIAG_FRAG pi={} ci={} rows={}..{} cont={} blk={} start_cut={:?} end_cut={:?} y_start={:.1} tbl_h={:.1} cap={:.1}",
+                para_index,
+                control_index,
+                start_row,
+                end_row,
+                is_continuation,
+                is_block_split,
+                start_cut,
+                end_cut,
+                y_start,
+                partial_table_height,
+                caption_total,
+            );
+        }
         y_start + partial_table_height + caption_total
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{cell_content_bottom, fragment_vpos_origin};
+    use crate::model::paragraph::{LineSeg, Paragraph};
+    use crate::model::table::Cell;
+
+    fn paragraph_with_vpos(vposes: &[i32]) -> Paragraph {
+        Paragraph {
+            line_segs: vposes
+                .iter()
+                .map(|&vertical_pos| LineSeg {
+                    vertical_pos,
+                    ..Default::default()
+                })
+                .collect(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn split_cell_fragment_origin_uses_first_visible_line_not_paragraph_start() {
+        let cell = Cell {
+            paragraphs: vec![paragraph_with_vpos(&[4_000, 5_000, 6_000])],
+            ..Default::default()
+        };
+
+        assert_eq!(
+            fragment_vpos_origin(&cell, Some(&[(1, 3)])),
+            5_000,
+            "문단 중간에서 시작한 조각은 첫 줄 vpos를 다시 쓰면 안 된다"
+        );
+    }
+
+    #[test]
+    fn split_cell_snap_cap_uses_physical_content_bottom_not_valign_start() {
+        // Center/Bottom valign의 text_y_start에는 이미 offset이 들어 있다. 물리 셀
+        // 하단은 어떤 valign이든 cell_y + cell_h - pad_bottom으로 고정된다.
+        assert_eq!(cell_content_bottom(100.0, 80.0, 7.0), 173.0);
     }
 }
