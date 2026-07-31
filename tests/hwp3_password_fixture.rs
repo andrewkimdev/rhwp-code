@@ -239,6 +239,42 @@ fn actual_hwp3_password_fixture_keeps_white_shaded_table_cells_white() {
 }
 
 #[test]
+fn actual_hwp3_password_fixture_preserves_table_triangle_bullets() {
+    let document = parse_document_with_password(&fixture_bytes(), FIXTURE_PASSWORD)
+        .expect("실제 HWP3 fixture를 열어야 함");
+    let table = document.sections[0]
+        .paragraphs
+        .iter()
+        .flat_map(|paragraph| paragraph.controls.iter())
+        .find_map(|control| match control {
+            Control::Table(table) if table.row_count == 4 && table.col_count == 2 => {
+                Some(table.as_ref())
+            }
+            _ => None,
+        })
+        .expect("운영 체제/권장 사양 4×2 표를 찾아야 함");
+
+    let right_cell_texts: Vec<String> = table
+        .cells
+        .iter()
+        .filter(|cell| cell.col == 1)
+        .map(|cell| {
+            cell.paragraphs
+                .iter()
+                .map(|paragraph| paragraph.text.as_str())
+                .collect()
+        })
+        .collect();
+    assert_eq!(right_cell_texts.len(), 4, "우측 셀은 네 개여야 함");
+    for text in right_cell_texts {
+        assert!(
+            text.starts_with("▸ "),
+            "HWP3 사적 글머리표 0x2F67은 ▸로 보존해야 함: {text:?}"
+        );
+    }
+}
+
+#[test]
 fn actual_hwp3_password_fixture_anchors_inline_folder_table_to_paragraph() {
     let document = parse_document_with_password(&fixture_bytes(), FIXTURE_PASSWORD)
         .expect("실제 HWP3 fixture를 열어야 함");
