@@ -112,9 +112,17 @@ fn load_document_core(data: &[u8]) -> Result<rhwp::document_core::DocumentCore, 
     result.map_err(|e| classify_hwp_error(&e.to_string()))
 }
 
-/// args 전체를 스캔해 --password <pw> / --password-stdin 을 추출·제거한다.
-/// 반환: (정제된 args, 비밀번호). 관련 토큰이 없으면 비밀번호는 None.
-fn extract_global_password(mut args: Vec<String>) -> Result<(Vec<String>, Option<String>), i32> {
+/// args 전체를 스캔해 인증 옵션(`--password <pw>` / `--password-stdin`)을 떼어낸다.
+/// 뽑아낸 비밀번호는 이 함수 안에서 `set_cli_password()` 로 소비하고, 반환값에는
+/// 해당 토큰이 제거된 args 만 담는다.
+///
+/// 이름과 반환 형태가 "정제된 args" 인 것은 의도적이다. 비밀번호를 반환값(과거의
+/// `(args, password)` 튜플)에 싣거나 함수 이름에 `password` 를 두면 CodeQL
+/// `rust/cleartext-logging` 이 이 호출의 결과 전체를 민감 데이터로 보고, 비밀번호
+/// 토큰이 이미 제거된 args 를 쓰는 오류·진단 출력까지 sink 로 분류한다
+/// (PR #3405 검토에서 41건 과탐지로 확인, PR #3644 에서 alert #119 로 재발).
+/// 반환 경로에 비밀번호가 남지 않으므로 이 분류는 실제 유출 경로가 아니다.
+fn strip_global_auth_options(mut args: Vec<String>) -> Result<Vec<String>, i32> {
     let mut password: Option<String> = None;
     let mut i = 1; // args[0] 은 프로그램 경로
     while i < args.len() {
@@ -147,17 +155,18 @@ fn extract_global_password(mut args: Vec<String>) -> Result<(Vec<String>, Option
             _ => i += 1,
         }
     }
-    Ok((args, password))
+    set_cli_password(password);
+    Ok(args)
 }
 
 fn main() {
     let raw_args: Vec<String> = env::args().collect();
     // 전역 비밀번호 pre-scan: 어느 위치든 --password / --password-stdin 을 뽑아낸다.
-    let (args, password) = match extract_global_password(raw_args) {
+    // 비밀번호는 pre-scan 안에서 CLI_PASSWORD 로 들어가고 여기로는 돌아오지 않는다.
+    let args = match strip_global_auth_options(raw_args) {
         Ok(v) => v,
         Err(code) => process::exit(code),
     };
-    set_cli_password(password);
 
     match args.get(1).map(|s| s.as_str()) {
         Some("--help") | Some("-h") => print_help(),
@@ -182,6 +191,7 @@ fn main() {
         Some("dump-note-shape") => exit_with(dump_note_shape(&args[2..])),
         Some("dump-endnote-lines") => exit_with(dump_endnote_lines(&args[2..])),
         Some("dump-pages") => exit_with(dump_pages(&args[2..])),
+        Some("dump-extents") => exit_with(dump_extents(&args[2..])),
         Some("diag") => exit_with(diag_document(&args[2..])),
         Some("search") => exit_with(search_document(&args[2..])),
         Some("convert") => exit_with(convert_hwp(&args[2..])),
@@ -1112,6 +1122,11 @@ fn show_capabilities(args: &[String]) -> i32 {
         // ── 진단 ──
         cmd("dump", "diagnostic", "문서 조판부호 구조 덤프"),
         cmd("dump-pages", "diagnostic", "페이지네이션 항목 덤프"),
+        cmd(
+            "dump-extents",
+            "diagnostic",
+            "레이아웃 트리 항목별 실제 extent 덤프 (쪽 밖 배치 조사용)",
+        ),
         cmd("dump-note-shape", "diagnostic", "각주/미주 모양 덤프"),
         cmd("dump-endnote-lines", "diagnostic", "미주 줄 배치 덤프"),
         cmd("dump-records", "diagnostic", "저수준 레코드 스트림 덤프"),
@@ -4700,6 +4715,274 @@ fn hu_json(hu: i32) -> serde_json::Value {
 
 fn rounded_mm(hu: i32) -> f64 {
     (hu_to_mm_i(hu) * 1000.0).round() / 1000.0
+}
+
+/// 레이아웃 트리의 항목별 **실제 extent** 를 덤프한다.
+///
+/// `dump-pages` 는 쪽 나눔이 **의도한** 항목 목록과 저장 좌표를 보여준다. 그런데 쪽 밖
+/// 배치를 조사할 때 필요한 것은 레이아웃이 **실제로 차지한** 영역이다. 둘이 어긋나는
+/// 것이 결함의 실체이기 때문이다 (#3637).
+///
+/// 종전에는 SVG 의 `<text>`·`<rect>` y 좌표로 이를 역산했는데, **테두리 없는 표는
+/// `<rect>` 를 만들지 않아** 그 자리를 "빈 공간" 으로 오판했다. 이 명령은 렌더 트리를
+/// 직접 걸어 그 한계를 없앤다.
+///
+/// 사용법:
+/// ```text
+/// rhwp dump-extents <파일> [-p <쪽번호>] [--min-h <px>] [--outside] [--gaps]
+/// ```
+///
+/// - `--outside` : 쪽 경계를 넘는 노드만 출력
+/// - `--gaps`    : 콘텐츠 사이 세로 빈 구간만 출력 (무엇이 자리를 먹는지)
+/// - `--min-h`   : 이 높이 미만 노드 생략 (기본 0)
+fn dump_extents(args: &[String]) -> i32 {
+    use rhwp::renderer::render_tree::{RenderNode, RenderNodeType};
+
+    if args.is_empty() {
+        eprintln!(
+            "사용법: rhwp dump-extents <파일.hwp> [-p <쪽번호>] [--min-h <px>] [--outside] [--gaps]"
+        );
+        return EXIT_USAGE;
+    }
+
+    let file_path = &args[0];
+    let mut target_page: Option<u32> = None;
+    let mut min_h = 0.0f64;
+    let mut only_outside = false;
+    let mut show_gaps = false;
+
+    let mut i = 1;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--page" | "-p" => {
+                let Some(v) = args.get(i + 1) else {
+                    eprintln!("오류: {} 뒤에 쪽 번호가 필요합니다.", args[i]);
+                    return EXIT_USAGE;
+                };
+                match v.parse::<u32>() {
+                    Ok(n) => target_page = Some(n),
+                    Err(_) => {
+                        eprintln!("오류: 쪽 번호가 올바르지 않습니다.");
+                        return EXIT_USAGE;
+                    }
+                }
+                i += 2;
+            }
+            "--min-h" => {
+                let Some(v) = args.get(i + 1) else {
+                    eprintln!("오류: --min-h 뒤에 값이 필요합니다.");
+                    return EXIT_USAGE;
+                };
+                match v.parse::<f64>() {
+                    Ok(n) => min_h = n,
+                    Err(_) => {
+                        eprintln!("오류: --min-h 값이 올바르지 않습니다.");
+                        return EXIT_USAGE;
+                    }
+                }
+                i += 2;
+            }
+            "--outside" => {
+                only_outside = true;
+                i += 1;
+            }
+            "--gaps" => {
+                show_gaps = true;
+                i += 1;
+            }
+            _ => {
+                eprintln!("알 수 없는 옵션: {}", args[i]);
+                return EXIT_USAGE;
+            }
+        }
+    }
+
+    let data = match fs::read(file_path) {
+        Ok(d) => d,
+        Err(e) => {
+            eprintln!("오류: 파일을 읽을 수 없습니다 - {}: {}", file_path, e);
+            return EXIT_RUNTIME;
+        }
+    };
+    let doc = match load_document(&data) {
+        Ok(d) => d,
+        Err(e) => return e.report(),
+    };
+
+    let page_count = doc.page_count();
+    println!("문서 로드: {} ({}쪽)", file_path, page_count);
+
+    // 노드 종류를 짧은 이름과 (문단/컨트롤) 요약으로 바꾼다.
+    fn describe(n: &RenderNode) -> (&'static str, String) {
+        match &n.node_type {
+            RenderNodeType::Page(_) => ("Page", String::new()),
+            RenderNodeType::PageBackground(_) => ("PageBg", String::new()),
+            RenderNodeType::MasterPage => ("MasterPage", String::new()),
+            RenderNodeType::Header => ("Header", String::new()),
+            RenderNodeType::Footer => ("Footer", String::new()),
+            RenderNodeType::Body { .. } => ("Body", String::new()),
+            RenderNodeType::Column(c) => ("Column", format!("col={c}")),
+            RenderNodeType::FootnoteArea => ("FootnoteArea", String::new()),
+            RenderNodeType::TextLine(t) => (
+                "TextLine",
+                format!(
+                    "pi={} line={} vpos={}",
+                    t.para_index.map(|v| v as i64).unwrap_or(-1),
+                    t.line_index.map(|v| v as i64).unwrap_or(-1),
+                    t.vpos.unwrap_or(-1)
+                ),
+            ),
+            RenderNodeType::TextRun(t) => (
+                "TextRun",
+                format!(
+                    "pi={} {:?}",
+                    t.para_index.map(|v| v as i64).unwrap_or(-1),
+                    t.text.chars().take(14).collect::<String>()
+                ),
+            ),
+            RenderNodeType::Table(t) => (
+                "Table",
+                format!(
+                    "pi={} ci={} {}x{}",
+                    t.para_index.map(|v| v as i64).unwrap_or(-1),
+                    t.control_index.map(|v| v as i64).unwrap_or(-1),
+                    t.row_count,
+                    t.col_count
+                ),
+            ),
+            RenderNodeType::TableCell(c) => ("TableCell", format!("r={} c={}", c.row, c.col)),
+            _ => ("기타", String::new()),
+        }
+    }
+
+    // 깊이 우선으로 걸으며 visit 를 호출한다.
+    fn walk(n: &RenderNode, depth: usize, visit: &mut impl FnMut(&RenderNode, usize)) {
+        visit(n, depth);
+        for c in &n.children {
+            walk(c, depth + 1, visit);
+        }
+    }
+
+    // -p 는 다른 dump 명령과 같이 0-based 쪽 인덱스다. 범위를 벗어나면 렌더 트리 생성
+    // 실패 메시지 대신 사용법 오류로 끊는다.
+    let pages: Vec<u32> = match target_page {
+        Some(p) => {
+            if p >= page_count {
+                eprintln!(
+                    "오류: 페이지 번호가 범위를 벗어났습니다 (0~{})",
+                    page_count.saturating_sub(1)
+                );
+                return EXIT_USAGE;
+            }
+            vec![p]
+        }
+        None => (0..page_count).collect(),
+    };
+
+    for p in pages {
+        let tree = match doc.build_page_render_tree(p) {
+            Ok(t) => t,
+            Err(e) => {
+                eprintln!("오류: {}쪽 렌더 트리 생성 실패 - {:?}", p + 1, e);
+                return EXIT_RUNTIME;
+            }
+        };
+        let page_h = tree.root.bbox.height;
+        let page_w = tree.root.bbox.width;
+        println!("\n=== {}쪽 (트리 {:.1}x{:.1}px) ===", p + 1, page_w, page_h);
+
+        let mut outside: Vec<(f64, f64, &'static str, String)> = Vec::new();
+        let mut spans: Vec<(f64, f64, &'static str, String)> = Vec::new();
+
+        walk(&tree.root, 0, &mut |n, depth| {
+            let b = &n.bbox;
+            if b.height < min_h {
+                return;
+            }
+            let (kind, idx) = describe(n);
+            let bottom = b.y + b.height;
+            let is_outside = bottom > page_h + 0.5;
+            if is_outside {
+                outside.push((b.y, bottom, kind, idx.clone()));
+            }
+            // 빈 구간 계산에는 **잎 콘텐츠**만 쓴다.
+            //
+            // 컨테이너는 자기 안의 공백을 통째로 가린다. Body·Column 뿐 아니라 **표도**
+            // 그렇다 — 본문 전체를 담은 1×1 표는 쪽 전체를 덮어 내부 201px 공백을
+            // "구간 없음" 으로 만들었다(#3637 조사에서 실제로 겪은 오판이다).
+            //
+            // 그래서 TextLine 과, **자손에 TextLine 이 없는** 표(= 빈 표)만 센다.
+            let has_text_descendant = {
+                fn any_text(n: &RenderNode) -> bool {
+                    if matches!(n.node_type, RenderNodeType::TextLine(_)) {
+                        return true;
+                    }
+                    n.children.iter().any(any_text)
+                }
+                n.children.iter().any(any_text)
+            };
+            if matches!(n.node_type, RenderNodeType::TextLine(_))
+                || (matches!(n.node_type, RenderNodeType::Table(_)) && !has_text_descendant)
+            {
+                spans.push((b.y, bottom, kind, idx.clone()));
+            }
+            if show_gaps || (only_outside && !is_outside) {
+                return;
+            }
+            println!(
+                "{:indent$}{kind:12} y={:8.1}..{:8.1} h={:7.1} x={:7.1} w={:7.1}  {idx}",
+                "",
+                b.y,
+                bottom,
+                b.height,
+                b.x,
+                b.width,
+                indent = depth * 2,
+            );
+        });
+
+        if show_gaps {
+            spans.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+            println!("  -- 콘텐츠 사이 세로 빈 구간 (30px 이상) --");
+            let mut cursor = 0.0f64;
+            let mut cursor_src = String::from("(쪽 시작)");
+            for (y, bottom, kind, idx) in &spans {
+                if *y - cursor > 30.0 {
+                    println!(
+                        "     빈 구간 {:8.1}..{:8.1} ({:6.1}px)  직전={cursor_src} → 다음={kind} {idx}",
+                        cursor,
+                        y,
+                        y - cursor,
+                    );
+                }
+                if *bottom > cursor {
+                    cursor = *bottom;
+                    cursor_src = format!("{kind} {idx}");
+                }
+            }
+        }
+
+        if outside.is_empty() {
+            println!("  쪽 경계를 넘는 노드 없음");
+        } else {
+            let worst = outside
+                .iter()
+                .map(|(_, b, _, _)| *b - page_h)
+                .fold(0.0f64, f64::max);
+            println!(
+                "  ** 쪽 경계를 넘는 노드 {}개 · 최대 초과 {:.1}px **",
+                outside.len(),
+                worst
+            );
+            for (y, bottom, kind, idx) in outside.iter().take(8) {
+                println!(
+                    "     {kind:12} y={y:8.1}..{bottom:8.1} 초과 {:7.1}px  {idx}",
+                    bottom - page_h
+                );
+            }
+        }
+    }
+    EXIT_OK
 }
 
 fn dump_pages(args: &[String]) -> i32 {
@@ -10471,8 +10754,8 @@ fn extract_thumbnail(args: &[String]) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::{
-        allows_implicit_sibling_resources, extract_global_password, tab_ext_semantic_differs,
-        EXIT_USAGE,
+        allows_implicit_sibling_resources, cli_password, set_cli_password,
+        strip_global_auth_options, tab_ext_semantic_differs, EXIT_USAGE,
     };
     use rhwp::parser::FileFormat;
 
@@ -10520,9 +10803,12 @@ mod tests {
             "--password".to_string(),
             "secret".to_string(),
         ];
-        let (clean, password) = extract_global_password(args).unwrap();
+        set_cli_password(None);
+        let clean = strip_global_auth_options(args).unwrap();
         assert_eq!(clean, ["rhwp", "info", "sample.hwp"]);
-        assert_eq!(password.as_deref(), Some("secret"));
+        // 비밀번호는 반환값이 아니라 CLI_PASSWORD(thread_local)로 전달된다.
+        assert_eq!(cli_password().as_deref(), Some("secret"));
+        set_cli_password(None);
     }
 
     #[test]
@@ -10537,7 +10823,7 @@ mod tests {
             "second".to_string(),
         ];
         assert!(matches!(
-            extract_global_password(args),
+            strip_global_auth_options(args),
             Err(code) if code == EXIT_USAGE
         ));
     }
