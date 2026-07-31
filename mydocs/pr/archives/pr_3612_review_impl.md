@@ -79,3 +79,6 @@ render/HML/split/checkbox 경로의 계약은 release-test에 포함된 Rust con
 Lint, Native Skia, default-feature 8개 shard, Build & Test, CodeQL, Canvas visual diff가 모두
 success였다(WASM·frontend는 변경 범위상 skipped). 이 review-only 기록 PR merge 뒤 관련 issue의 완료
 여부와 원 PR supersede close를 실제 상태로 처리한다.
+
+원 PR #3620의 `hwp_set_checkbox`는 문자 `□`(U+25A1) occurrence 경로만 완료한다. #3395가 추적하는
+문단 글머리표 `☐`(U+2610) 의미론은 구현되지 않았으므로 해당 issue는 open으로 유지한다.
