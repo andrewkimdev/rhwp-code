@@ -514,7 +514,23 @@ test('PageRenderer deferred image rerender preserves static layer reuse policy',
   assert.match(source, /retrySignature: overlays\.signature/);
   assert.match(source, /reuseStaticFlow/);
   assert.match(source, /reuseStaticOverlay/);
-  assert.match(source, /const retryKey = `\$\{imageCount\}:\$\{rawSvgCount\}:\$\{policy\.retrySignature\}`/);
+  // [#3315] 재시도 키는 개수·overlay 서명만으로는 그림 **내용** 변화를 못 본다. 문서 신원과
+  // 그림 신원 키를 함께 들어야 blanket 리셋 없이 재사용 판정이 성립한다.
+  assert.match(source, /const retryKey = this\.buildImageRetryKey\(/);
+  const keyBuilder = source.slice(source.indexOf('private buildImageRetryKey('));
+  const keyBody = keyBuilder.slice(0, keyBuilder.indexOf('\n  }'));
+  assert.match(keyBody, /getPageSourceImageKeys\(pageIdx\)/, '그림 신원 키를 재료로 쓴다');
+  assert.match(keyBody, /documentDigest/, '문서 digest 를 재료로 쓴다');
+  assert.match(keyBody, /documentGeneration/, '문서 generation 을 재료로 쓴다');
+  assert.match(keyBody, /policy\.retrySignature/, 'overlay 서명도 유지한다');
+  // 판정 재료가 없으면 재사용하지 않는다 — 안전망을 없애는 쪽으로 작동해서는 안 된다.
+  assert.match(
+    keyBody,
+    /if \(imageKeys === null \|\| documentDigest === null\) return null;/,
+    '판정 재료가 없으면 null 로 재사용을 포기해야 한다',
+  );
+  assert.match(source, /retryKey !== null && this\.imageRetryCounts\.get\(pageIdx\) === retryKey/,
+    'null 키로는 재사용 조기 반환이 일어나면 안 된다');
   assert.match(source, /IMAGE_RE_RENDER_FALLBACK_DELAY_MS = 1500/);
   assert.match(source, /RAW_SVG_EARLY_RE_RENDER_DELAYS_MS = \[0, 32, 96, 240\]/);
   assert.match(source, /const job: ReRenderJob/);
