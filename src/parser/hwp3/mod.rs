@@ -3072,13 +3072,17 @@ pub(crate) fn parse_paragraph_list(
         }
 
         // TAC 표 문단: 줄간격 배율 미적용 — lh=th (표 높이 그대로).
-        // 한컴 HWP5 변환본은 표 높이에 160% 배율을 곱하지 않되, 표 호스트 뒤에는
-        // 2mm(600 HU)의 고정 줄간격을 보존한다. 0으로 만들면 다음 문단이 표에
-        // 달라붙어 HWP3 원본만 세로 흐름이 위로 누적된다.
+        // 암호 HWP3의 한컴 변환본은 표 높이에 160% 배율을 곱하지 않되, 표 호스트 뒤에
+        // 2mm(600 HU)의 고정 줄간격을 보존한다. 일반 HWP3은 #460의 0 HU 계약을
+        // 유지한다. 이를 전역으로 바꾸면 일반 HWP3→HWPX 변환의 페이지 수가 바뀐다.
         if hwp3_paragraph_has_treat_as_char_table(&para) {
             for seg in para.line_segs.iter_mut() {
                 seg.line_height = seg.text_height;
-                seg.line_spacing = HWP3_TAC_OBJECT_LINE_SPACING_HU;
+                seg.line_spacing = if use_password_layout_contract {
+                    HWP3_TAC_OBJECT_LINE_SPACING_HU
+                } else {
+                    0
+                };
             }
         }
 
@@ -3282,12 +3286,13 @@ pub(crate) fn parse_paragraph_list(
             // 가 한글97 layout 시점에 본 line 부터 새 페이지 인식). HWP5 v2024 변환본의
             // paragraph 내 ls[i].vpos=0 영역 정합 (typeset Task #321 vpos-reset guard
             // 영역 trigger 정합).
-            // HWP3 inline 표의 `spacing_before`는 표 호스트가 아닌 선행 문단의
-            // `spacing_after`로 이미 반영된다. 둘을 누적하면 HWP5 변환본·한컴 PDF보다
-            // 표가 아래로 한 번 더 밀린다. 일반 문단의 before/after 계약은 유지한다.
+            // 암호 HWP3 inline 표의 `spacing_before`는 표 호스트가 아닌 선행 문단의
+            // `spacing_after`로 이미 반영된다. 둘을 누적하면 같은 문서의 HWP5 변환본과
+            // 한컴 PDF보다 표가 아래로 한 번 더 밀린다. 일반 HWP3의 before/after
+            // 계약은 유지한다.
             if !starts_new_page
                 && !para.line_segs.is_empty()
-                && !hwp3_paragraph_has_treat_as_char_table(&para)
+                && !(use_password_layout_contract && hwp3_paragraph_has_treat_as_char_table(&para))
             {
                 acc_section_vpos = acc_section_vpos.saturating_add(para_flow_spacing.0);
             }
