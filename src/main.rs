@@ -3,6 +3,7 @@ use std::fs;
 use std::path::Path;
 use std::process;
 
+mod agent_profiles;
 mod atomic_file;
 mod mcp_serve;
 
@@ -173,9 +174,10 @@ fn main() {
         Some("export-hml") => export_hml(&args[2..]),
         Some("export-doclang") => exit_with(export_doclang(&args[2..])),
         Some("capabilities") => exit_with(show_capabilities(&args[2..])),
-        Some("mcp-serve") => exit_with(mcp_serve::run()),
+        Some("mcp-serve") => exit_with(mcp_serve::run(&args[2..])),
         Some("batch") => exit_with(run_batch(&args[2..])),
         Some("info") => exit_with(show_info(&args[2..])),
+        Some("digest") => exit_with(digest_document(&args[2..])),
         Some("dump") => exit_with(dump_controls(&args[2..])),
         Some("dump-note-shape") => exit_with(dump_note_shape(&args[2..])),
         Some("dump-endnote-lines") => exit_with(dump_endnote_lines(&args[2..])),
@@ -240,8 +242,16 @@ fn main() {
 /// MCP 서버 저자(및 함수 호출 클라이언트)가 도구 이름·설명·입력 JSON Schema·실행 배선을
 /// 손으로 옮겨 적지 않게 한다. `--json` 계약을 가진 명령이 늘면
 /// `capabilities_mcp_covers_every_json_command` 가 누락을 잡는다.
-fn show_mcp_tools() -> i32 {
-    let tools = mcp_tool_definitions();
+fn show_mcp_tools(profile: Option<&'static agent_profiles::AgentProfile>) -> i32 {
+    let mut tools = mcp_tool_definitions();
+    if let Some(p) = profile {
+        tools.retain(|t| {
+            t["name"]
+                .as_str()
+                .map(|n| agent_profiles::allows_tool(p, n))
+                .unwrap_or(false)
+        });
+    }
 
     let manifest = serde_json::json!({
         "schemaVersion": "1.0",
@@ -258,6 +268,13 @@ fn show_mcp_tools() -> i32 {
             "server": "mcp-serve",
         },
         "tools": tools,
+        "profile": profile.map(|p| serde_json::json!({
+            "name": p.name,
+            "summary": p.summary,
+            "session": p.session,
+            "recipe": p.recipe,
+        })),
+        "profiles": agent_profiles::names(),
     });
     println!("{manifest}");
     EXIT_OK
@@ -300,6 +317,29 @@ fn mcp_tool_definitions() -> Vec<serde_json::Value> {
         })
     }
 
+    /// 선택 인자는 기본 `cli.args` 뒤에만 덧붙인다. MCP 서버는 이 메타데이터를
+    /// 해석해 실제 CLI flag를 전달하고, capability 소비자는 생략 가능 여부를 안다.
+    fn tool_with_optional_args(
+        name: &str,
+        description: &str,
+        input_schema: serde_json::Value,
+        command: &str,
+        args_template: serde_json::Value,
+        optional_args: serde_json::Value,
+        output_fields: &[&str],
+    ) -> serde_json::Value {
+        let mut definition = tool(
+            name,
+            description,
+            input_schema,
+            command,
+            args_template,
+            output_fields,
+        );
+        definition["cli"]["optionalArgs"] = optional_args;
+        definition
+    }
+
     vec![
         tool(
             "hwp_info",
@@ -308,6 +348,30 @@ fn mcp_tool_definitions() -> Vec<serde_json::Value> {
             "info",
             serde_json::json!(["info", "--json", "{path}"]),
             &["format", "sizeBytes", "sections", "pageCount", "paraCount", "fonts"],
+        ),
+        // [#3633] 초소형 모델용 매크로 1호. 설명은 40자 이내로 극단 압축한다 —
+        // 도구 목록 자체가 컨텍스트 예산을 잠식하는 4B급 모델이 1차 소비자이기
+        // 때문이다(계약 테스트 digest_macro_contract 가 길이를 감시한다).
+        tool_with_optional_args(
+            "hwp_digest",
+            "문서 요약 한 번에: 메타·개요·발췌·다음 행동",
+            path_schema(serde_json::json!({
+                "maxChars": { "type": "integer", "minimum": 1, "description": "발췌 최대 문자 수. 기본 2000" }
+            })),
+            "digest",
+            serde_json::json!(["digest", "--json", "{path}"]),
+            serde_json::json!([
+                { "when": "maxChars", "args": ["--max-chars", "{maxChars}"] }
+            ]),
+            &[
+                "format",
+                "pageCount",
+                "paraCount",
+                "outline",
+                "excerpt",
+                "truncated",
+                "nextStep",
+            ],
         ),
         tool(
             "hwp_export_text",
@@ -402,6 +466,36 @@ fn mcp_tool_definitions() -> Vec<serde_json::Value> {
             &["schemaVersion", "source", "output", "format", "bytes", "verify", "verifyPages"],
         ),
         tool(
+            "hwp_convert_hwp5",
+            "HWPX(또는 배포용 HWP)를 편집 가능 HWP5 로 변환 저장하고 IR 왕복 검증(--verify)까지 한 번에 수행한다. verify.identical=false(CLI exit 3)는 변환은 저장됐지만 IR 차이가 있다는 판정이다.",
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "입력 HWPX/HWP 문서 경로" },
+                    "output": { "type": "string", "description": "출력 HWP 파일 경로" }
+                },
+                "required": ["path", "output"],
+            }),
+            "convert",
+            serde_json::json!(["convert", "{path}", "{output}", "--verify", "--json"]),
+            &["schemaVersion", "source", "output", "format", "bytes", "wasDistribution", "verify", "verifyPages"],
+        ),
+        tool(
+            "hwp_export_hml",
+            "HML 원본을 HWPML 2.91 XML 로 재직렬화해 저장하고 봉투를 돌려준다.",
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "입력 HML 경로" },
+                    "output": { "type": "string", "description": "출력 HML 경로" }
+                },
+                "required": ["path", "output"],
+            }),
+            "export-hml",
+            serde_json::json!(["export-hml", "{path}", "-o", "{output}", "--json"]),
+            &["schemaVersion", "source", "output", "format", "bytes"],
+        ),
+        tool(
             "hwp_build_from_ingest",
             "ingest JSON 명세로 새 HWPX 문서를 생성한다 — 기존 문서 편집이 아니라 무(無)에서 만드는 유일한 생성 경로. 스키마는 tools/rhwp-ingest/schema/ 참조.",
             serde_json::json!({
@@ -423,6 +517,23 @@ fn mcp_tool_definitions() -> Vec<serde_json::Value> {
             "thumbnail",
             serde_json::json!(["thumbnail", "{path}", "--data-uri", "--json"]),
             &["schemaVersion", "source", "format", "mime", "width", "height", "bytes", "dataUri"],
+        ),
+        tool(
+            "hwp_split_document",
+            "문서에서 지정한 쪽 범위만 남겨 새 파일로 저장한다 — 대형 문서의 발췌·부분 제출·결함 이분법용. 쪽 단위로 자르되 문단 단위로 지우므로 결과 쪽수는 재조판으로 달라질 수 있다(pagesAfter 로 실측 보고).",
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "입력 HWP/HWPX 문서 경로" },
+                    "from": { "type": "integer", "minimum": 0, "description": "시작 쪽 (0 기준, 포함)" },
+                    "to": { "type": "integer", "minimum": 0, "description": "끝 쪽 (0 기준, 포함)" },
+                    "output": { "type": "string", "description": "출력 파일 경로" }
+                },
+                "required": ["path", "from", "to", "output"],
+            }),
+            "extract-pages",
+            serde_json::json!(["extract-pages", "{path}", "{output}", "--from", "{from}", "--to", "{to}", "--json"]),
+            &["schemaVersion", "source", "output", "from", "to", "pagesBefore", "pagesAfter", "paragraphsKept", "paragraphsRemoved"],
         ),
         tool(
             "hwp_export_tables",
@@ -557,6 +668,22 @@ fn mcp_tool_definitions() -> Vec<serde_json::Value> {
             &["schemaVersion", "source", "find", "replace", "caseSensitive", "dryRun", "replacedCount", "output", "outputFormat"],
         ),
         tool(
+            "hwp_set_checkbox",
+            "실물 양식의 k번째(0 기준, hwp_search 문서 순서) 체크박스 문자를 체크한다(기본 □→☑). 전량 치환이 아니라 지정한 하나만 바꾼다 — 정부 서식의 해당 항목 체크용. 산출물은 입력 형식을 따른다.",
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "입력 HWP/HWPX 문서 경로" },
+                    "occurrence": { "type": "integer", "minimum": 0, "description": "몇 번째 □ 인가 (0 기준, hwp_search 로 확인)" },
+                    "output": { "type": "string", "description": "출력 경로" }
+                },
+                "required": ["path", "occurrence", "output"],
+            }),
+            "edit",
+            serde_json::json!(["edit", "replace-text", "{path}", "--find", "□", "--replace", "☑", "--occurrence", "{occurrence}", "-o", "{output}", "--json"]),
+            &["schemaVersion", "source", "find", "replace", "occurrence", "dryRun", "replacedCount", "output", "outputFormat"],
+        ),
+        tool(
             "hwp_set_cell",
             "HWP 표의 격자 좌표(hwp_export_tables 와 동일)로 셀 값을 바꿔 새 문서를 만든다 — 누름틀 없는 실물 표 양식 채우기. 먼저 hwp_export_tables 로 좌표를 확인한 뒤 사용한다. 병합으로 덮인 칸은 앵커 좌표를 안내하며 실패한다. 산출물은 입력 형식을 따른다(HWPX 입력 → HWPX 산출).",
             serde_json::json!({
@@ -588,17 +715,49 @@ fn show_capabilities(args: &[String]) -> i32 {
     // 로드맵상 MCP 서버 자체는 별도 저장소(#227)지만, 그 서버가 도구 목록·입력 스키마를
     // 손으로 베껴 쓰면 rhwp 가 바뀔 때마다 조용히 낡는다. 원천을 여기서 낸다.
     let mut mcp_mode = false;
-    for a in args {
-        match a.as_str() {
+    // [#3629] 직무 프로필 필터 — 단일 출처는 agent_profiles::PROFILES.
+    let mut profile: Option<String> = None;
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
             "--mcp" => mcp_mode = true,
+            "--profile" => {
+                i += 1;
+                match args.get(i) {
+                    Some(p) => profile = Some(p.clone()),
+                    None => {
+                        eprintln!("오류: --profile 뒤에 역할 이름이 필요합니다.");
+                        eprintln!("사용 가능: {}", agent_profiles::names().join(", "));
+                        return EXIT_USAGE;
+                    }
+                }
+            }
             other => {
                 eprintln!("알 수 없는 옵션: {other}");
                 return EXIT_USAGE;
             }
         }
+        i += 1;
     }
+    let profile = match profile {
+        Some(name) => match agent_profiles::find(&name) {
+            Some(p) => Some(p),
+            None => {
+                eprintln!("오류: 알 수 없는 프로필 '{name}'");
+                eprintln!("사용 가능: {}", agent_profiles::names().join(", "));
+                return EXIT_USAGE;
+            }
+        },
+        None => None,
+    };
     if mcp_mode {
-        return show_mcp_tools();
+        return show_mcp_tools(profile);
+    }
+    if profile.is_some() {
+        eprintln!(
+            "오류: --profile 은 --mcp 와 함께 사용합니다 (capabilities --mcp --profile <역할>)."
+        );
+        return EXIT_USAGE;
     }
 
     fn cmd(name: &str, category: &str, summary: &str) -> serde_json::Value {
@@ -669,6 +828,25 @@ fn show_capabilities(args: &[String]) -> i32 {
             true,
             &["--mode", "-o", "--json"],
             &["schemaVersion", "source", "mode", "nodeCount", "structure"],
+        ),
+        // [#3633] 초소형 모델용 매크로 1호 — info+structure+발췌를 원콜로 묶는다.
+        cmd_json(
+            "digest",
+            "query",
+            "문서 요약 봉투(메타·개요·발췌·nextStep)를 한 번 호출로 출력",
+            false,
+            &["--max-chars", "--json"],
+            &[
+                "schemaVersion",
+                "source",
+                "format",
+                "pageCount",
+                "paraCount",
+                "outline",
+                "excerpt",
+                "truncated",
+                "nextStep",
+            ],
         ),
         cmd_json(
             "capabilities",
@@ -764,7 +942,14 @@ fn show_capabilities(args: &[String]) -> i32 {
                 "verifyPages",
             ],
         ),
-        cmd("export-hml", "export", "HML 원본을 HWPML 2.91 XML로 저장"),
+        cmd_json(
+            "export-hml",
+            "export",
+            "HML 원본을 HWPML 2.91 XML로 저장 (--json 봉투)",
+            false,
+            &["-o", "--json"],
+            &["schemaVersion", "source", "output", "format", "bytes"],
+        ),
         cmd(
             "export-doclang",
             "export",
@@ -777,6 +962,24 @@ fn show_capabilities(args: &[String]) -> i32 {
             false,
             &["-o", "--json"],
             &["schemaVersion", "source", "tableCount", "tables"],
+        ),
+        cmd_json(
+            "extract-pages",
+            "export",
+            "쪽 범위만 남겨 저장 (--json 봉투; 발췌·부분 제출·결함 이분법)",
+            false,
+            &["--from", "--to", "--json"],
+            &[
+                "schemaVersion",
+                "source",
+                "output",
+                "from",
+                "to",
+                "pagesBefore",
+                "pagesAfter",
+                "paragraphsKept",
+                "paragraphsRemoved",
+            ],
         ),
         cmd_json(
             "search",
@@ -808,10 +1011,22 @@ fn show_capabilities(args: &[String]) -> i32 {
             "export",
             "페이지별 render tree bbox JSON 덤프",
         ),
-        cmd(
+        cmd_json(
             "convert",
             "export",
-            "HWP↔HWPX 변환 (--verify/--verify-pages 게이트)",
+            "HWPX/배포용→편집 가능 HWP5 변환 (--verify 게이트 exit 3/4, --json 봉투)",
+            false,
+            &["--verify", "--verify-pages", "--json"],
+            &[
+                "schemaVersion",
+                "source",
+                "output",
+                "format",
+                "bytes",
+                "wasDistribution",
+                "verify",
+                "verifyPages",
+            ],
         ),
         cmd_json(
             "build-from-ingest",
@@ -850,7 +1065,7 @@ fn show_capabilities(args: &[String]) -> i32 {
         cmd_json(
             "edit",
             "edit",
-            "문서 편집 — fill-fields: 누름틀 채우기 / replace-text: 일괄 치환 / set-cell: 표 셀 기록",
+            "문서 편집 — fill-fields: 누름틀 채우기 / replace-text: 일괄 치환(--occurrence k번째만) / set-cell: 표 셀 기록",
             false,
             &[
                 "--data",
@@ -1137,6 +1352,12 @@ fn print_help() {
     println!("      HWP/HWPX/HML 문서 정보 표시");
     println!();
     println!("      --json                  문서 정보를 JSON으로 stdout에 출력");
+    println!();
+    println!("  digest <파일> [--max-chars N] [--json]");
+    println!("      문서 요약 봉투 한 줄 출력 — 메타(info)·개요 상위 노드·첫 페이지 발췌·");
+    println!("      nextStep 유도문을 한 번 호출로 묶은 매크로 (초소형 모델용, #3633)");
+    println!();
+    println!("      --max-chars <N>         발췌 최대 문자 수 (기본: 2000)");
     println!();
     println!("  capabilities [--mcp]");
     println!("      도구 자기서술 JSON 출력 (명령·플래그·JSON 계약·종료 코드) — 에이전트용");
@@ -3917,6 +4138,129 @@ fn info_json_value(
     })
 }
 
+/// [#3633] `nextStep` 고정 문자열 계약 — 봉투를 받은 초소형 모델이 다음 행동을
+/// 지어내지 않고 받아 적게 하는 유도문. 문구 변경은 계약 테스트
+/// (`tests/digest_macro_contract.rs`)가 잡는 의도적 결정이어야 한다.
+const DIGEST_NEXT_STEP: &str = "더 읽으려면 export-text --json -p <쪽>, 찾으려면 search --json";
+/// [#3633] excerpt 기본 절단 길이(문자 수) — 4B급 모델의 컨텍스트 예산에 맞춘 보수값.
+const DIGEST_DEFAULT_MAX_CHARS: usize = 2000;
+/// [#3633] outline 에 싣는 최상위 노드 제목 최대 개수 — 트리 전체를 싣지 않는다.
+const DIGEST_OUTLINE_LIMIT: usize = 20;
+/// [#3633] excerpt 원천 페이지 수 — 앞쪽 페이지 0~2 만 발췌한다.
+const DIGEST_EXCERPT_PAGES: u32 = 3;
+
+/// [#3633] `digest` — 초소형 모델용 매크로 도구 축 1호.
+///
+/// 도구 체이닝을 못 하는 모델(4B급)을 위해 "info 로 훑고 → export-structure 로
+/// 개요를 얻고 → export-text 로 첫 장을 읽는" 3단 파이프라인을 한 번 호출로
+/// 결정론적으로 수행한다. 새 로직 없이 기존 원천만 재사용한다:
+/// `load_document` → `info_json_value` 의 필드 + `build_structure` 상위 노드 제목 +
+/// `extract_page_text_native` 발췌(`--max-chars` 문자 절단).
+///
+/// 출력은 항상 봉투 한 줄 JSON 이다(기계 전용 명령 — 표면 규약 통일을 위해
+/// `--json` 플래그는 받아만 둔다). 실패 시 stdout 은 0바이트.
+fn digest_document(args: &[String]) -> i32 {
+    use rhwp::document_core::queries::structure::{build_structure, StructureMode};
+
+    let mut file_path: Option<&str> = None;
+    let mut max_chars = DIGEST_DEFAULT_MAX_CHARS;
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--json" => {}
+            "--max-chars" => {
+                i += 1;
+                match args.get(i).and_then(|v| v.parse::<usize>().ok()) {
+                    Some(n) if n > 0 => max_chars = n,
+                    _ => {
+                        eprintln!("오류: --max-chars 뒤에 1 이상의 숫자가 필요합니다.");
+                        return EXIT_USAGE;
+                    }
+                }
+            }
+            other if other.starts_with('-') => {
+                eprintln!("알 수 없는 옵션: {other}");
+                return EXIT_USAGE;
+            }
+            other => {
+                if file_path.replace(other).is_some() {
+                    eprintln!("오류: 입력 파일은 하나만 지정할 수 있습니다: {other}");
+                    return EXIT_USAGE;
+                }
+            }
+        }
+        i += 1;
+    }
+    let Some(file_path) = file_path else {
+        eprintln!("사용법: rhwp digest <파일> [--max-chars N] [--json]");
+        return EXIT_USAGE;
+    };
+
+    let data = match fs::read(file_path) {
+        Ok(d) => d,
+        Err(e) => {
+            eprintln!("오류: 파일을 읽을 수 없습니다 - {}: {}", file_path, e);
+            return EXIT_RUNTIME;
+        }
+    };
+    let file_size = data.len();
+    let detected_format = rhwp::parser::detect_format(&data);
+    let doc = match load_document(&data) {
+        Ok(d) => d,
+        Err(e) => return e.report(),
+    };
+
+    // 메타는 info --json 과 같은 원천(info_json_value)에서 뽑는다 — 어휘 동형 보장.
+    let info = info_json_value(file_path, file_size, detected_format, &doc);
+
+    // 구조 최상위 노드 제목만 싣는다 — 트리 전체는 export-structure 의 몫이다.
+    let st = build_structure(doc.document(), StructureMode::Auto);
+    let outline: Vec<&str> = st
+        .roots
+        .iter()
+        .take(DIGEST_OUTLINE_LIMIT)
+        .map(|n| n.heading.as_str())
+        .collect();
+
+    // 앞쪽 페이지 텍스트 발췌 → max_chars 문자에서 절단 (char 경계 안전).
+    let page_count = doc.page_count();
+    let mut excerpt_src = String::new();
+    for p in 0..page_count.min(DIGEST_EXCERPT_PAGES) {
+        match doc.extract_page_text_native(p) {
+            Ok(text) => {
+                if !excerpt_src.is_empty() {
+                    excerpt_src.push('\n');
+                }
+                excerpt_src.push_str(&text);
+            }
+            Err(e) => {
+                eprintln!("오류: 페이지 {} 텍스트 추출 실패 - {:?}", p, e);
+                return EXIT_RUNTIME;
+            }
+        }
+    }
+    let truncated = excerpt_src.chars().count() > max_chars;
+    let excerpt: String = if truncated {
+        excerpt_src.chars().take(max_chars).collect()
+    } else {
+        excerpt_src
+    };
+
+    let envelope = serde_json::json!({
+        "schemaVersion": "1.0",
+        "source": file_path,
+        "format": info["format"],
+        "pageCount": info["pageCount"],
+        "paraCount": info["paraCount"],
+        "outline": outline,
+        "excerpt": excerpt,
+        "truncated": truncated,
+        "nextStep": DIGEST_NEXT_STEP,
+    });
+    println!("{envelope}");
+    EXIT_OK
+}
+
 fn show_info(args: &[String]) -> i32 {
     // [#3237] --json은 위치와 무관하다. 단일 입력 명령이므로 추가 경로를 무시하지 않는다.
     let mut json_mode = false;
@@ -6512,10 +6856,10 @@ fn extract_pages(args: &[String]) -> i32 {
 fn convert_hwp(args: &[String]) -> i32 {
     let (positionals, verify_options) = match parse_conversion_verify_args(
         args,
-        "rhwp convert <입력.hwp|입력.hwpx> <출력.hwp> [--verify] [--verify-pages]",
+        "rhwp convert <입력.hwp|입력.hwpx> <출력.hwp> [--verify] [--verify-pages] [--json]",
         2,
         2,
-        false,
+        true,
     ) {
         Ok(parsed) => parsed,
         Err(message) => {
@@ -6549,15 +6893,16 @@ fn convert_hwp(args: &[String]) -> i32 {
     } else {
         None
     };
+    let json_mode = verify_options.json;
     let was_distribution = doc.document().header.distribution;
-    if !was_distribution {
+    if !was_distribution && !json_mode {
         println!("{}: 이미 편집 가능한 문서입니다.", input_path);
     }
 
     // 변환
     match doc.convert_to_editable_native() {
         Ok(_) => {
-            if was_distribution {
+            if was_distribution && !json_mode {
                 println!("배포용 → 편집 가능 변환 완료");
             }
         }
@@ -6568,10 +6913,32 @@ fn convert_hwp(args: &[String]) -> i32 {
     }
 
     // 직렬화
+    // [#3605] JSON 봉투 — export-hwpx(#3596)와 같은 "판정은 데이터" 규약.
+    let emit_envelope =
+        |bytes_len: usize, verify: serde_json::Value, verify_pages: serde_json::Value| {
+            println!(
+                "{}",
+                serde_json::json!({
+                    "schemaVersion": "1.0",
+                    "source": input_path,
+                    "output": output_path,
+                    "format": "hwp5",
+                    "bytes": bytes_len,
+                    "wasDistribution": was_distribution,
+                    "verify": verify,
+                    "verifyPages": verify_pages,
+                })
+            );
+        };
     match doc.export_hwp_with_adapter() {
         Ok(bytes) => match fs::write(output_path, &bytes) {
             Ok(_) => {
-                println!("저장 완료: {} ({}KB)", output_path, bytes.len() / 1024);
+                if !json_mode {
+                    println!("저장 완료: {} ({}KB)", output_path, bytes.len() / 1024);
+                }
+                let mut verify_report = serde_json::Value::Null;
+                let mut verify_pages_report = serde_json::Value::Null;
+                let mut exit_code = EXIT_OK;
                 if verify_options.enabled() {
                     let reloaded = match rhwp::wasm_api::HwpDocument::from_bytes(&bytes) {
                         Ok(d) => d,
@@ -6588,9 +6955,20 @@ fn convert_hwp(args: &[String]) -> i32 {
                                 "검증 실패(--verify-pages): 변환 전 {}쪽, 재파싱 후 {}쪽",
                                 before, after
                             );
+                            verify_pages_report = serde_json::json!({
+                                "before": before, "after": after, "identical": false,
+                            });
+                            if json_mode {
+                                emit_envelope(bytes.len(), verify_report, verify_pages_report);
+                            }
                             process::exit(4);
                         }
-                        println!("검증 통과(--verify-pages): {}쪽", before);
+                        if !json_mode {
+                            println!("검증 통과(--verify-pages): {}쪽", before);
+                        }
+                        verify_pages_report = serde_json::json!({
+                            "before": before, "after": after, "identical": true,
+                        });
                     }
 
                     if verify_options.verify {
@@ -6607,10 +6985,25 @@ fn convert_hwp(args: &[String]) -> i32 {
                         };
                         if !diff.is_empty() {
                             print_ir_verify_failure(&diff, output_path);
-                            process::exit(3);
+                            verify_report = serde_json::json!({
+                                "identical": false, "diffCount": diff.differences.len(),
+                            });
+                            exit_code = 3;
+                        } else {
+                            if !json_mode {
+                                println!("검증 통과(--verify): IR 차이 없음");
+                            }
+                            verify_report = serde_json::json!({
+                                "identical": true, "diffCount": 0,
+                            });
                         }
-                        println!("검증 통과(--verify): IR 차이 없음");
                     }
+                }
+                if json_mode {
+                    emit_envelope(bytes.len(), verify_report, verify_pages_report);
+                }
+                if exit_code != EXIT_OK {
+                    process::exit(exit_code);
                 }
                 EXIT_OK
             }
@@ -6934,15 +7327,22 @@ fn export_hwpx(args: &[String]) -> i32 {
 struct HmlExportArgs {
     input: std::path::PathBuf,
     output: std::path::PathBuf,
+    /// [#3616] 봉투를 stdout 순수 JSON 으로.
+    json: bool,
 }
 
 fn parse_hml_export_args(args: &[String]) -> Result<HmlExportArgs, String> {
-    let usage = "rhwp export-hml <입력.hml> -o <출력.hml>";
+    let usage = "rhwp export-hml <입력.hml> -o <출력.hml> [--json]";
     let mut input = None;
     let mut output = None;
+    let mut json = false;
     let mut index = 0;
     while index < args.len() {
         match args[index].as_str() {
+            "--json" => {
+                json = true;
+                index += 1;
+            }
             "-o" | "--output" => {
                 let value = args
                     .get(index + 1)
@@ -6967,6 +7367,7 @@ fn parse_hml_export_args(args: &[String]) -> Result<HmlExportArgs, String> {
         }
     }
     Ok(HmlExportArgs {
+        json,
         input: input.ok_or_else(|| format!("입력 파일이 필요합니다\n사용법: {usage}"))?,
         output: output.ok_or_else(|| format!("출력 경로가 필요합니다\n사용법: {usage}"))?,
     })
@@ -7034,11 +7435,24 @@ fn export_hml(args: &[String]) {
         eprintln!("오류: 파일 저장 실패 - {}: {error}", paths.output.display());
         process::exit(1);
     });
-    println!(
-        "저장 완료: {} ({}KB)",
-        paths.output.display(),
-        bytes.len() / 1024
-    );
+    if paths.json {
+        println!(
+            "{}",
+            serde_json::json!({
+                "schemaVersion": "1.0",
+                "source": paths.input.display().to_string(),
+                "output": paths.output.display().to_string(),
+                "format": "hml",
+                "bytes": bytes.len(),
+            })
+        );
+    } else {
+        println!(
+            "저장 완료: {} ({}KB)",
+            paths.output.display(),
+            bytes.len() / 1024
+        );
+    }
 }
 
 /// `rhwp build-from-ingest <ingest.json> [--media-dir <dir>] -o <out.hwpx>`
@@ -9122,6 +9536,8 @@ fn edit_replace_text(args: &[String]) -> i32 {
     let mut ignore_case = false;
     let mut dry_run = false;
     let mut json_mode = false;
+    // [#3395] 문서 순서 k번째(0 기준) 매치만 치환 — 체크박스류 반복 문자 지목.
+    let mut occurrence: Option<usize> = None;
 
     let mut i = 0;
     while i < args.len() {
@@ -9157,6 +9573,16 @@ fn edit_replace_text(args: &[String]) -> i32 {
                 }
             }
             "--ignore-case" => ignore_case = true,
+            "--occurrence" => {
+                i += 1;
+                match args.get(i).and_then(|v| v.parse::<usize>().ok()) {
+                    Some(n) => occurrence = Some(n),
+                    None => {
+                        eprintln!("오류: --occurrence 뒤에 0 이상의 정수가 필요합니다.");
+                        return EXIT_USAGE;
+                    }
+                }
+            }
             "--dry-run" => dry_run = true,
             "--json" => json_mode = true,
             other if other.starts_with('-') => {
@@ -9201,9 +9627,16 @@ fn edit_replace_text(args: &[String]) -> i32 {
 
     let replaced_count = if dry_run {
         // 파일을 건드리지 않는다 — 읽기 전용 검색으로 치환 예정 건수만 센다.
-        doc.grep(find, !ignore_case, None).len()
+        match occurrence {
+            // dry-run + occurrence: 그 순번이 존재하면 1, 아니면 0.
+            Some(n) => usize::from(doc.grep(find, !ignore_case, None).len() > n),
+            None => doc.grep(find, !ignore_case, None).len(),
+        }
     } else {
-        let result = match doc.replace_all(find, replace, !ignore_case) {
+        let result = match match occurrence {
+            Some(n) => doc.replace_nth_native(find, replace, !ignore_case, n),
+            None => doc.replace_all_native(find, replace, !ignore_case),
+        } {
             Ok(r) => r,
             Err(e) => {
                 eprintln!("오류: 치환 실패 - {:?}", e);
@@ -9253,6 +9686,7 @@ fn edit_replace_text(args: &[String]) -> i32 {
             "source": file_path,
             "find": find,
             "replace": replace,
+            "occurrence": occurrence,
             "caseSensitive": !ignore_case,
             "dryRun": dry_run,
             "replacedCount": replaced_count,
@@ -9470,6 +9904,96 @@ fn estimate_text_width_px(
         .sum()
 }
 
+/// [#3603] 격자 주소(export-tables 좌표) → 모델 좌표 해석.
+/// CLI(edit set-cell)와 세션 도구(hwp_doc_set_cell)가 공유한다 — 병합으로 덮인 칸은
+/// 앵커 좌표를 안내하며 실패한다(보호 동작). 반환: (sec, para, ctrl, cell_idx,
+/// 문단별 글자 수, 기존 텍스트).
+enum CellResolveError {
+    Usage(String),
+    Runtime(String),
+}
+
+#[allow(clippy::type_complexity)]
+fn resolve_table_cell(
+    document: &rhwp::model::document::Document,
+    table_no: usize,
+    row: u16,
+    col: u16,
+) -> Result<(usize, usize, usize, usize, Vec<usize>, String), CellResolveError> {
+    use rhwp::document_core::queries::table_extract::extract_tables;
+    use rhwp::model::control::Control;
+    let grids = extract_tables(document);
+    let Some(grid) = grids
+        .iter()
+        .find(|g| g.index == table_no && g.container_path.is_empty())
+    else {
+        let top_level = grids.iter().filter(|g| g.container_path.is_empty()).count();
+        return Err(CellResolveError::Runtime(format!(
+            "오류: 본문 최상위 표 {} 번이 없습니다 (최상위 표 {}개; 중첩 표는 v1 범위 밖).",
+            table_no, top_level
+        )));
+    };
+    let Some(Control::Table(table)) = document.sections[grid.section].paragraphs[grid.paragraph]
+        .controls
+        .get(grid.control)
+    else {
+        return Err(CellResolveError::Runtime(
+            "오류: 표 컨트롤 좌표 해석 실패 (내부 불일치).".into(),
+        ));
+    };
+    if row >= table.row_count || col >= table.col_count {
+        return Err(CellResolveError::Usage(format!(
+            "오류: 좌표가 격자를 벗어났습니다 — 표 {} 는 {}x{} 입니다.",
+            table_no, table.row_count, table.col_count
+        )));
+    }
+    match table
+        .cells
+        .iter()
+        .enumerate()
+        .find(|(_, c)| c.row == row && c.col == col)
+    {
+        Some((cell_idx, c)) => {
+            let para_lens: Vec<usize> = c
+                .paragraphs
+                .iter()
+                .map(|p| p.text.chars().count())
+                .collect();
+            let old_text = c
+                .paragraphs
+                .iter()
+                .map(|p| p.text.as_str())
+                .collect::<Vec<_>>()
+                .join(
+                    "
+",
+                )
+                .trim()
+                .to_string();
+            Ok((
+                grid.section,
+                grid.paragraph,
+                grid.control,
+                cell_idx,
+                para_lens,
+                old_text,
+            ))
+        }
+        None => {
+            let anchor = table.cells.iter().find(|c| {
+                c.row <= row && row < c.row + c.row_span && c.col <= col && col < c.col + c.col_span
+            });
+            Err(CellResolveError::Usage(match anchor {
+                Some(a) => format!(
+                    "오류: ({},{}) 는 병합으로 덮인 칸입니다 — 앵커 ({},{}) 를 지정하세요.",
+                    row, col, a.row, a.col
+                ),
+                None => format!("오류: ({},{}) 위치에 셀이 없습니다.", row, col),
+            }))
+        }
+    }
+}
+
 fn edit_set_cell(args: &[String]) -> i32 {
     let mut file_path: Option<&str> = None;
     let mut table_arg: Option<usize> = None;
@@ -9588,100 +10112,18 @@ fn edit_set_cell(args: &[String]) -> i32 {
     // 격자 주소(export-tables 좌표) → 모델 좌표. 병합으로 덮인 칸은 앵커가 아니므로
     // 모델 셀 순회로 (row,col) 앵커를 직접 찾는다 (격자 배열 위치는 손상 방어 필터
     // 때문에 모델 인덱스와 어긋날 수 있어 쓰지 않는다).
-    enum Located {
-        Ok(usize, usize, usize, usize, Vec<usize>, String),
-        Fail(i32),
-    }
-    let located = {
-        use rhwp::document_core::queries::table_extract::extract_tables;
-        use rhwp::model::control::Control;
-        let document = doc.document();
-        let grids = extract_tables(document);
-        match grids
-            .iter()
-            .find(|g| g.index == table_no && g.container_path.is_empty())
-        {
-            None => {
-                let top_level = grids.iter().filter(|g| g.container_path.is_empty()).count();
-                eprintln!(
-                    "오류: 본문 최상위 표 {} 번이 없습니다 (최상위 표 {}개; 중첩 표는 v1 범위 밖).",
-                    table_no, top_level
-                );
-                Located::Fail(EXIT_RUNTIME)
+    let (sec, para, ctrl, cell_idx, para_lens, old_text) =
+        match resolve_table_cell(doc.document(), table_no, row, col) {
+            Ok(v) => v,
+            Err(CellResolveError::Usage(msg)) => {
+                eprintln!("{msg}");
+                return EXIT_USAGE;
             }
-            Some(grid) => match document.sections[grid.section].paragraphs[grid.paragraph]
-                .controls
-                .get(grid.control)
-            {
-                Some(Control::Table(table)) => {
-                    if row >= table.row_count || col >= table.col_count {
-                        eprintln!(
-                            "오류: 좌표가 격자를 벗어났습니다 — 표 {} 는 {}x{} 입니다.",
-                            table_no, table.row_count, table.col_count
-                        );
-                        Located::Fail(EXIT_USAGE)
-                    } else {
-                        match table
-                            .cells
-                            .iter()
-                            .enumerate()
-                            .find(|(_, c)| c.row == row && c.col == col)
-                        {
-                            Some((cell_idx, c)) => {
-                                // 셀의 문단별 글자 수(전체 비우기용)와, export-tables 격자와
-                                // 같은 방식(줄바꿈 결합 + 트림)의 기존 텍스트를 모은다.
-                                let para_lens: Vec<usize> = c
-                                    .paragraphs
-                                    .iter()
-                                    .map(|p| p.text.chars().count())
-                                    .collect();
-                                let old_text = c
-                                    .paragraphs
-                                    .iter()
-                                    .map(|p| p.text.as_str())
-                                    .collect::<Vec<_>>()
-                                    .join("\n")
-                                    .trim()
-                                    .to_string();
-                                Located::Ok(
-                                    grid.section,
-                                    grid.paragraph,
-                                    grid.control,
-                                    cell_idx,
-                                    para_lens,
-                                    old_text,
-                                )
-                            }
-                            None => {
-                                let anchor = table.cells.iter().find(|c| {
-                                    c.row <= row
-                                        && row < c.row + c.row_span
-                                        && c.col <= col
-                                        && col < c.col + c.col_span
-                                });
-                                match anchor {
-                                    Some(a) => eprintln!(
-                                        "오류: ({},{}) 는 병합으로 덮인 칸입니다 — 앵커 ({},{}) 를 지정하세요.",
-                                        row, col, a.row, a.col
-                                    ),
-                                    None => eprintln!("오류: ({},{}) 위치에 셀이 없습니다.", row, col),
-                                }
-                                Located::Fail(EXIT_USAGE)
-                            }
-                        }
-                    }
-                }
-                _ => {
-                    eprintln!("오류: 표 컨트롤 좌표 해석 실패 (내부 불일치).");
-                    Located::Fail(EXIT_RUNTIME)
-                }
-            },
-        }
-    };
-    let (sec, para, ctrl, cell_idx, para_lens, old_text) = match located {
-        Located::Ok(a, b, c, d, e, f) => (a, b, c, d, e, f),
-        Located::Fail(code) => return code,
-    };
+            Err(CellResolveError::Runtime(msg)) => {
+                eprintln!("{msg}");
+                return EXIT_RUNTIME;
+            }
+        };
 
     // [#3480] 값이 그 칸에 들어가는지 재고 넘치면 알린다.
     // 에이전트는 렌더 결과를 보지 않으므로, 신호가 없으면 표 경계를 벗어난 문서를
