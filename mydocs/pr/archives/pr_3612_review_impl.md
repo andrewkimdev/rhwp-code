@@ -70,3 +70,12 @@ render/HML/split/checkbox 경로의 계약은 release-test에 포함된 Rust con
 4. 원 PR에는 실제 LF로 된 통합 결과·감사 comment를 남긴 뒤 supersede close한다. contributor fork
    branch는 삭제하지 않는다. 마지막에 `devel` sync, 통합 remote/local branch와 정확한 review target만
    정리한다.
+
+## 완료
+
+통합 PR [#3647](https://github.com/edwardkim/rhwp/pull/3647)은
+[`a54ff52aa8bb2ede5dfe06bb493090d74f9065ab`](https://github.com/edwardkim/rhwp/commit/a54ff52aa8bb2ede5dfe06bb493090d74f9065ab)로
+2026-07-31에 merge됐다. current head `c9790a52b`와 remote head가 일치한 상태에서 CI preflight,
+Lint, Native Skia, default-feature 8개 shard, Build & Test, CodeQL, Canvas visual diff가 모두
+success였다(WASM·frontend는 변경 범위상 skipped). 이 review-only 기록 PR merge 뒤 관련 issue의 완료
+여부와 원 PR supersede close를 실제 상태로 처리한다.
