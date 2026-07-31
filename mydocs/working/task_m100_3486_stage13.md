@@ -5,7 +5,7 @@ canonical: mydocs/manual/codex/docs_and_git_workflow.md
 last_verified: 2026-07-31
 ---
 
-# Task #3486 Stage 13 — HWP3 p3 표 글머리표·세로 흐름 원인 분리
+# Task #3486 Stage 13 — HWP3 inline 도형·차례 세로 흐름 정합
 
 - 이슈: [#3486](https://github.com/edwardkim/rhwp/issues/3486)
 - 기준 `devel`: `665982920b5d4739a58485060043a2a25b09c5e7`
@@ -14,59 +14,91 @@ last_verified: 2026-07-31
 - 기준 오라클: `pdf/HWP3-password-123456.pdf` (24쪽)
 - 선행 결론: [Stage 12](task_m100_3486_stage12.md)의 제품명 display projection은 유지한다.
 
-## 재현
+## 범위와 재현
 
-현재 `devel` source를 `CARGO_TARGET_DIR=target/issue-3486-p3-20260731`,
+현재 작업 브랜치 source를 `CARGO_TARGET_DIR=target/issue-3486-p3-20260731`,
 `CARGO_INCREMENTAL=0`으로 `release-test` profile에 빌드했다. 비밀번호 값은 프로세스 인자,
 출력, 이 문서에 기록하지 않고 local stdin launcher로만 HWP3에 공급했다.
 
 ```bash
 python3 scripts/task1274_visual_sweep.py \
-  --key hwp3-password-p3-current-devel \
+  --key hwp3-stage13-post-toc-p01-06 \
   --hwp samples/HWP3-password-123456.hwp \
   --pdf pdf/HWP3-password-123456.pdf \
-  --pages 3 --dpi 144 \
+  --pages 1-6 --dpi 144 \
   --rhwp-bin <local-password-stdin-launcher> \
-  --out /private/tmp/rhwp-issue-3486-p3-20260731/sweep
+  --out /private/tmp/rhwp-issue-3486-p3-20260731/sweep-full-post-toc-p01-06
 ```
 
-| 입력 | 요청/완료 | pixel match | ink proxy | 구조 후보 |
-| --- | --- | ---: | ---: | --- |
-| HWP3 원본 p3 | `[3]` / `[3]` | 93.48494% | 6.92495% | `content_bottom_drift` |
-| HWP5 변환본 p3 | `[3]` / `[3]` | 93.35590% | 6.49419% | 없음 |
+동일 명령을 `--pages 7-12`, `13-18`, `19-24`로 나누어 실행했다. 환경의 단일 실행
+상한을 넘기지 않으면서도 각 실행에서 SVG/render tree 24쪽 전체와 지정 raster/overlay/review
+6쪽을 모두 산출한다.
 
-두 실행 모두 SVG와 render tree는 24쪽을 export했지만 raster/overlay/review는 p3만
-완료했다. 따라서 전수 raster sweep 또는 전체 fidelity 합격을 주장하지 않는다. pixel/ink 값은
-글꼴 raster 차이를 포함한 후보 지표이며, HWP5의 더 낮은 ink 값은 구조 fidelity의 우열을 뜻하지
-않는다.
+`pdftotext -bbox-layout`은 기준 PDF에서 exit 6으로 실패했다. 따라서 PDF 질문 marker
+추출 단계는 생략됐으며, 이 결과를 marker 검증 성공으로 해석하지 않는다. PNG overlay와
+render-tree 구조 분석은 정상 완료했다.
 
-## 확인된 차이
+## HWP5·PDF 대조로 확정한 원인
 
-한컴 PDF와 HWP5 변환본 p3의 4×2 표 우측 셀에는 `▸` 글머리표가 있다. HWP3 원본의 같은
-셀은 원문 IR에서 그 marker가 없고 선행 공백만 남는다. HWP3 render tree도 marker를 paint하지
-않는다. 이는 font raster 차이가 아니라 HWP3 source → IR 단계의 사용자 가시 소실이다.
+HWP3 p3에는 두 독립 결함이 있었다. 4×2 표 우측 셀의 private 글머리표는 `▸`로 복원했고,
+제목·inline 표 호스트의 줄간격은 HWP5 변환본의 저장 흐름에 맞췄다. p3의
+`content_bottom_drift`는 이 두 보정 뒤 사라졌다.
 
-| 대상 | HWP3 원본 | HWP5 변환본 |
+| 대상 | 보정 전 HWP3 | HWP5/PDF 기준 |
 | --- | --- | --- |
-| p3 첫 제목 `LINE_SEG` 간격 | `ls=600` | `ls=960` |
-| p3 본문 pi=24 첫 `vpos` | `2624` | `2984` |
-| p3 폴더 표 pi=30 첫 `vpos` | `28540` | `29292` |
-| p3 표 뒤 본문 pi=32 첫 `vpos` | `48464` | `49816` |
-| 4×2 표 우측 셀 내용 | 글머리표 없음 | `▸` 글머리표 보존 |
+| p3 제목 inline 사각형 `LINE_SEG` | `ls=600` | `ls=960` |
+| p3 폴더 표 `vpos` | `28540` | `29292` |
+| 4×2 표 우측 셀 | 글머리표 누락 | `▸` 보존 |
+| p1–p2 차례 항목 pitch | `line_height + 1629/1682 HU` | `line_height + 840 HU` |
 
-HWP3 p3 render tree에서 첫 표는 `y=203.7px`, 폴더 표는 `y=514.7px`, 표 뒤 본문의
-첫 기준선은 `y=778.5px`이다. PDF raster와 대조하면 첫 표부터 누적된 간격 차이가 표 뒤
-본문에서 약 17px의 상향 배치로 보이며, 이는 visual sweep의 `content_bottom_drift`와 일치한다.
+전수 sweep에서 p1–p2가 추가 후보로 나타났다. 차례의 각 행은 `treat_as_char` 도형 하나와
+marker·공백·쪽 번호만 가진다. 일반 160% 줄간격이 적용되어 행마다 `789 HU`씩 아래로
+누적된 것이 원인이었다. HWP5 변환본의 같은 행은 후행 `840 HU`를 사용한다.
 
-## 현재 판단과 다음 조사
+## 최소 수정과 회귀 계약
 
-`src/parser/hwp3/paragraph.rs`는 `special_char_flags`를 읽지만, 현재 parser에서 이 값이
-HWP3 표 셀 글머리표를 복원하는 데 쓰이는지는 확인되지 않았다. 즉 이 필드는 **조사 후보**일 뿐
-원인으로 확정하지 않는다.
+- `src/parser/hwp3/mod.rs`는 암호 HWP3 layout contract가 켜진 경우에만, marker·공백·쪽 번호와
+  `treat_as_char` 도형 하나로 이루어진 차례 호스트를 판정한다.
+- 이 구조에만 HWP5/PDF와 같은 `840 HU` 후행 간격을 적용한다. 일반 HWP3, 제목 텍스트가
+  함께 있는 도형, marker-only 도형(`600 HU`), inline 표 계약은 바꾸지 않는다.
+- `tests/hwp3_password_fixture.rs`는 p1–p2 11개 차례 행의 `vpos`·`line_height`·`line_spacing`과
+  도형 구조를 고정한다.
 
-다음 단계는 HWP3 table-box 내부 문단의 raw 문자/제어 데이터, `special_char_flags`, HWP5의
-동일 셀 IR을 문단 단위로 대조해 `▸`의 원천을 확정하는 것이다. 원천이 확정되기 전에는 전역
-문자 치환, renderer 전용 보정, HWP3 외 문서에 영향을 주는 line-spacing 변경을 하지 않는다.
+## 전체 시각 스윕 결과
 
-확정 시에는 HWP3 parser에서만 최소 보정하고, 실제 HWP3 p3 PDF review와 원문 IR 보존/음성
-회귀를 함께 추가한다.
+| 페이지 | 요청/완료 | 구조 후보 | 평균 pixel match | 평균 ink proxy |
+| --- | --- | --- | ---: | ---: |
+| 1–6 | 6/6 | 없음 | 93.12691% | 23.11761% |
+| 7–12 | 6/6 | 없음 | 93.12251% | 9.92014% |
+| 13–18 | 6/6 | 없음 | 92.95761% | 11.34811% |
+| 19–24 | 6/6 | 없음 | 93.70045% | 10.52678% |
+
+24/24 review PNG와 네 개의 contact sheet를 확인했다. p1–p2는 수정 뒤 차례 제목, 각 행,
+leader, 쪽 번호의 세로 기준선이 PDF와 맞고, p3의 글머리표·표·본문 흐름도 유지된다. 나머지
+쪽에서는 페이지 이탈, 표/텍스트 겹침, 문단 흐름 붕괴를 발견하지 못했다.
+
+pixel/ink proxy는 글꼴 raster 차이를 포함하므로 단독 합격 기준이 아니다. 가장 낮은 ink proxy는
+p7의 8.19555%이나 review PNG의 줄 흐름은 PDF와 일치하며 구조 후보도 없다. p1/p2의 proxy는
+수정 전보다 각각 30.13753%→38.80579%, 28.99589%→61.94906%로 개선됐다. 이 수치는
+목차 간격 보정의 보조 증거이며, 최종 판정은 overlay·구조 분석·사람 검토를 함께 따른다.
+
+### 산출물
+
+- [p1–6 review contact sheet](/private/tmp/rhwp-issue-3486-p3-20260731/sweep-full-post-toc-p01-06/hwp3-stage13-post-toc-p01-06/review_contact_sheet.png)
+- [p7–12 review contact sheet](/private/tmp/rhwp-issue-3486-p3-20260731/sweep-full-post-toc-p07-12/hwp3-stage13-post-toc-p07-12/review_contact_sheet.png)
+- [p13–18 review contact sheet](/private/tmp/rhwp-issue-3486-p3-20260731/sweep-full-post-toc-p13-18/hwp3-stage13-post-toc-p13-18/review_contact_sheet.png)
+- [p19–24 review contact sheet](/private/tmp/rhwp-issue-3486-p3-20260731/sweep-full-post-toc-p19-24/hwp3-stage13-post-toc-p19-24/review_contact_sheet.png)
+
+## 회귀 검증
+
+- `cargo fmt --check`
+- `cargo test --profile release-test --test hwp3_password_fixture` — 11 passed
+- `cargo test --profile release-test --test issue_2151_hwp3_ghost_page` — 2 passed
+  (`hwp3-sample11` 151쪽, `hwp3-sample14` 11쪽)
+- `cargo test --profile release-test --tests` — 최종 exit code 0
+- `cargo clippy --profile release-test --all-targets -- -D warnings`
+
+초기 전체 integration은 일반 HWP3에서도 Shape TAC를 marker-only로 좁힌 탓에
+`hwp3-sample11`이 152쪽으로 변하는 회귀를 발견했다. 일반 HWP3의 기존 600 HU 계약을
+복원하고 암호 HWP3 layout contract에만 p3/차례의 구조별 분기를 남긴 뒤 위 검증을 모두
+재실행했다.

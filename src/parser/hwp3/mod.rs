@@ -465,10 +465,29 @@ fn hwp3_is_treat_as_char_visual_control(ctrl: &crate::model::control::Control) -
 /// 사각형을 함께 둔 문단은 보통 텍스트 줄간격을 유지해야 한다. 이 둘을 개체의
 /// 절대 높이가 아닌 HWP3 원문 구조로 구분한다.
 fn hwp3_text_is_inline_object_marker_only(text: &str) -> bool {
-    !text.is_empty()
-        && text
+    // `strip_hwp3_single_tac_visual_marker`가 제어문자 하나짜리 호스트를 빈 문자열로
+    // 정규화한 뒤 이 판정이 실행된다. 빈 경우를 제외하면 기존의 shape TAC 600 HU
+    // 계약을 잃어 다른 HWP3 문서의 페이지 흐름이 변한다.
+    text.chars()
+        .all(|ch| ch.is_whitespace() || ch == '\u{FFFC}')
+}
+
+/// 암호 HWP3 fixture의 차례 항목은 inline 도형 하나와 쪽 번호 숫자만을 본문에
+/// 둔다. 원본 저장 줄 간격은 160% 문단 비율이 아니라 HWP5 변환본의 840 HU
+/// 고정값이다. 일반 제목 문단도 inline 도형을 가질 수 있으므로, 숫자-only 본문과
+/// 도형 하나라는 원문 구조까지 함께 확인해 이 목차 계약만 분리한다.
+fn hwp3_is_password_toc_page_number_host(para: &crate::model::paragraph::Paragraph) -> bool {
+    let has_page_number = para.text.chars().any(|ch| ch.is_ascii_digit());
+    has_page_number
+        && para
+            .text
             .chars()
-            .all(|ch| ch.is_whitespace() || ch == '\u{FFFC}')
+            .all(|ch| ch.is_ascii_digit() || ch.is_whitespace() || ch == '\u{FFFC}')
+        && para.controls.len() == 1
+        && matches!(
+            para.controls.first(),
+            Some(crate::model::control::Control::Shape(shape)) if shape.common().treat_as_char
+        )
 }
 
 fn hwp3_paragraph_has_treat_as_char_table(para: &crate::model::paragraph::Paragraph) -> bool {
@@ -482,6 +501,10 @@ fn hwp3_paragraph_has_treat_as_char_table(para: &crate::model::paragraph::Paragr
 
 /// HWP5 변환본이 HWP3 inline 개체 호스트에 보존하는 고정 후행 줄간격(2mm).
 const HWP3_TAC_OBJECT_LINE_SPACING_HU: i32 = 600;
+
+/// 암호 HWP3 차례의 텍스트 포함 inline 도형 호스트 후행 줄간격. 같은 문서의
+/// HWP5 변환본과 한컴 PDF에서 840 HU임을 확인했다.
+const HWP3_PASSWORD_TOC_LINE_SPACING_HU: i32 = 840;
 
 fn strip_hwp3_single_tac_visual_marker(para: &mut crate::model::paragraph::Paragraph) {
     if para.text == "\u{FFFC}"
@@ -2938,8 +2961,9 @@ pub(crate) fn parse_paragraph_list(
                         // [Task #877 Stage 3 v2] sample16 표지 RFP 박스 (Rectangle drawing object,
                         // treat_as_char=true) 도 TAC 영역에 포함한다. 단, 작은 장식 사각형과
                         // 제목 텍스트가 같은 줄에 있을 때까지 고정 600 HU를 적용하면 본문의
-                        // 정상 줄간격(예: 160% × 1600 HU = 960 HU)이 축소된다. Shape 계열은
-                        // 공백/개체 marker만 있는 호스트 문단일 때만 고정값을 사용한다.
+                        // 정상 줄간격(예: 160% × 1600 HU = 960 HU)이 축소된다. 이 차이는
+                        // 암호 HWP3 layout contract에서만 확인됐으므로, 일반 HWP3의 기존
+                        // Shape TAC 600 HU 계약은 보존하고 암호 경로만 marker-only로 좁힌다.
                         let has_tac_picture = para.controls.iter().any(|c| match c {
                             crate::model::control::Control::Picture(p) => p.common.treat_as_char,
                             crate::model::control::Control::Shape(s) => {
@@ -2951,16 +2975,23 @@ pub(crate) fn parse_paragraph_list(
                             }
                             _ => false,
                         });
+                        let has_tac_shape = para.controls.iter().any(|ctrl| {
+                            matches!(
+                                ctrl,
+                                crate::model::control::Control::Shape(shape)
+                                    if shape.common().treat_as_char
+                            )
+                        });
                         let has_marker_only_tac_shape =
-                            hwp3_text_is_inline_object_marker_only(&para.text)
-                                && para.controls.iter().any(|ctrl| {
-                                    matches!(
-                                        ctrl,
-                                        crate::model::control::Control::Shape(shape)
-                                            if shape.common().treat_as_char
-                                    )
-                                });
-                        ls = if has_tac_picture || has_marker_only_tac_shape {
+                            hwp3_text_is_inline_object_marker_only(&para.text) && has_tac_shape;
+                        let has_password_toc_page_number = use_password_layout_contract
+                            && hwp3_is_password_toc_page_number_host(&para);
+                        ls = if has_password_toc_page_number {
+                            HWP3_PASSWORD_TOC_LINE_SPACING_HU
+                        } else if has_tac_picture
+                            || (!use_password_layout_contract && has_tac_shape)
+                            || has_marker_only_tac_shape
+                        {
                             HWP3_TAC_OBJECT_LINE_SPACING_HU
                         } else {
                             th * (line_spacing_ratio - 100) / 100

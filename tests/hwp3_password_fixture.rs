@@ -306,6 +306,56 @@ fn actual_hwp3_password_fixture_preserves_p3_inline_object_vertical_contract() {
 }
 
 #[test]
+fn actual_hwp3_password_fixture_preserves_toc_inline_shape_vertical_contract() {
+    let document = parse_document_with_password(&fixture_bytes(), FIXTURE_PASSWORD)
+        .expect("실제 HWP3 fixture를 열어야 함");
+    let paragraphs = &document.sections[0].paragraphs;
+
+    // HWP3 차례 항목은 inline 도형에 제목을 두고 본문에는 쪽 번호만 둔다.
+    // HWP5 변환본과 한컴 PDF의 항목 간 피치는 text_height + 840 HU다. 종전에는
+    // 일반 160% 문단 간격(1629/1682 HU)을 쌓아 1–2쪽 목차가 행마다 더 아래로 밀렸다.
+    let expected = [
+        (12, 51_564, 2_328, 840),
+        (13, 55_300, 2_328, 840),
+        (14, 59_036, 2_404, 840),
+        (15, 62_848, 2_328, 840),
+        (16, 0, 2_328, 840),
+        (17, 3_736, 2_328, 840),
+        (18, 7_472, 2_328, 840),
+        (19, 11_208, 2_328, 840),
+        (20, 14_944, 2_328, 840),
+        (21, 18_680, 2_328, 840),
+        (22, 22_416, 2_328, 840),
+    ];
+
+    for (paragraph_index, vertical_pos, line_height, line_spacing) in expected {
+        let paragraph = &paragraphs[paragraph_index];
+        assert!(
+            paragraph.text.chars().any(|ch| ch.is_ascii_digit())
+                && paragraph
+                    .text
+                    .chars()
+                    .all(|ch| ch.is_ascii_digit() || ch.is_whitespace() || ch == '\u{FFFC}'),
+            "차례 항목 {paragraph_index}의 본문은 marker·공백·쪽 번호여야 함: {:?}",
+            paragraph.text
+        );
+        assert!(matches!(
+            paragraph.controls.as_slice(),
+            [Control::Shape(shape)] if shape.common().treat_as_char
+        ));
+        let line = paragraph
+            .line_segs
+            .first()
+            .unwrap_or_else(|| panic!("문단 {paragraph_index}에 저장 줄이 있어야 함"));
+        assert_eq!(
+            (line.vertical_pos, line.line_height, line.line_spacing),
+            (vertical_pos, line_height, line_spacing),
+            "차례 문단 {paragraph_index}의 HWP3→HWP5 세로 흐름 계약"
+        );
+    }
+}
+
+#[test]
 fn actual_hwp3_password_fixture_anchors_inline_folder_table_to_paragraph() {
     let document = parse_document_with_password(&fixture_bytes(), FIXTURE_PASSWORD)
         .expect("실제 HWP3 fixture를 열어야 함");
