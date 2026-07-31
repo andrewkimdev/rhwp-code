@@ -317,6 +317,29 @@ fn mcp_tool_definitions() -> Vec<serde_json::Value> {
         })
     }
 
+    /// 선택 인자는 기본 `cli.args` 뒤에만 덧붙인다. MCP 서버는 이 메타데이터를
+    /// 해석해 실제 CLI flag를 전달하고, capability 소비자는 생략 가능 여부를 안다.
+    fn tool_with_optional_args(
+        name: &str,
+        description: &str,
+        input_schema: serde_json::Value,
+        command: &str,
+        args_template: serde_json::Value,
+        optional_args: serde_json::Value,
+        output_fields: &[&str],
+    ) -> serde_json::Value {
+        let mut definition = tool(
+            name,
+            description,
+            input_schema,
+            command,
+            args_template,
+            output_fields,
+        );
+        definition["cli"]["optionalArgs"] = optional_args;
+        definition
+    }
+
     vec![
         tool(
             "hwp_info",
@@ -329,7 +352,7 @@ fn mcp_tool_definitions() -> Vec<serde_json::Value> {
         // [#3633] 초소형 모델용 매크로 1호. 설명은 40자 이내로 극단 압축한다 —
         // 도구 목록 자체가 컨텍스트 예산을 잠식하는 4B급 모델이 1차 소비자이기
         // 때문이다(계약 테스트 digest_macro_contract 가 길이를 감시한다).
-        tool(
+        tool_with_optional_args(
             "hwp_digest",
             "문서 요약 한 번에: 메타·개요·발췌·다음 행동",
             path_schema(serde_json::json!({
@@ -337,6 +360,9 @@ fn mcp_tool_definitions() -> Vec<serde_json::Value> {
             })),
             "digest",
             serde_json::json!(["digest", "--json", "{path}"]),
+            serde_json::json!([
+                { "when": "maxChars", "args": ["--max-chars", "{maxChars}"] }
+            ]),
             &[
                 "format",
                 "pageCount",

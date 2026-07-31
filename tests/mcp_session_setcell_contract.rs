@@ -208,3 +208,25 @@ fn set_cell_rejects_closed_handle_and_is_listed() {
         .collect();
     assert!(names.contains(&"hwp_doc_set_cell".to_string()), "{names:?}");
 }
+
+#[test]
+fn set_cell_rejects_numeric_indices_before_narrowing() {
+    let src = sample();
+    if !src.exists() {
+        eprintln!("샘플 없음 — 건너뜀");
+        return;
+    }
+    let mut s = Server::started();
+    let d = s.open(&src);
+    let (err, value) = s.call(
+        "hwp_doc_set_cell",
+        serde_json::json!({
+            "docId": d, "table": 0, "row": 65_536u64, "col": 0, "text": "wrap 금지"
+        }),
+    );
+    assert!(err, "u16 초과 row는 isError 여야 합니다: {value}");
+    assert!(
+        value.as_str().unwrap_or_default().contains("65535"),
+        "범위 안내가 있어야 합니다: {value}"
+    );
+}

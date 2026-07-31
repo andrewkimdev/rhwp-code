@@ -220,6 +220,13 @@ fn doc_render_page_writes_svg_manifest() {
     );
     assert!(err, "범위 초과는 isError: {e}");
 
+    // JSON u64가 u32으로 wrap되어 0쪽을 렌더하면 안 된다.
+    let (err, e) = s.call(
+        "hwp_doc_render_page",
+        serde_json::json!({"docId": doc_id, "page": 4_294_967_296u64, "output": out.to_str().unwrap()}),
+    );
+    assert!(err, "u32 초과 page는 isError 여야 합니다: {e}");
+
     let _ = std::fs::remove_file(&out);
 }
 
