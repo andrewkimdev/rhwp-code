@@ -70,12 +70,10 @@ hwp5rb	HWP5-nopassword-123456.hwp	sections[].paragraphs[].char_count	14
 hwp5rb	HWP5-nopassword-123456.hwp	sections[].paragraphs[].char_offsets[]	80
 hwp5rb	HWP5-nopassword-123456.hwp	sections[].paragraphs[].control_mask	18
 hwp5rb	HWP5-nopassword-123456.hwp	sections[].paragraphs[].controls[].cells[].list_header_width_ref	12
-hwp5rb	HWP5-nopassword-123456.hwp	sections[].paragraphs[].controls[].section_def.extra_child_records.len	1
 hwp5rb	HWP5-nopassword-123456.hwp	sections[].paragraphs[].controls[].text_box.paragraphs[].char_count	5
 hwp5rb	HWP5-nopassword-123456.hwp	sections[].paragraphs[].controls[].text_box.paragraphs[].char_offsets[]	18
 hwp5rb	HWP5-nopassword-123456.hwp	sections[].paragraphs[].controls[].text_box.paragraphs[].control_mask	5
 hwp5rb	HWP5-nopassword-123456.hwp	sections[].paragraphs[].line_segs[].vertical_pos	295
-hwp5rb	HWP5-nopassword-123456.hwp	sections[].section_def.extra_child_records.len	1
 hwp5rb	KTX.hwp	sections[].paragraphs[].controls[].cells[].list_header_width_ref	280
 hwp5rb	KTX.hwp	sections[].paragraphs[].controls[].cells[].paragraphs[].controls[].cells[].list_header_width_ref	3
 hwp5rb	[2027] 온새미로 1 본교재.hwp	sections[].paragraphs[].controls[].cells[].list_header_width_ref	115
