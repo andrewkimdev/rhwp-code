@@ -350,7 +350,50 @@ fn mcp_tool_definitions() -> Vec<serde_json::Value> {
         definition
     }
 
-    vec![
+    fn supports_password_stdin(name: &str) -> bool {
+        matches!(
+            name,
+            "hwp_info"
+                | "hwp_digest"
+                | "hwp_export_text"
+                | "hwp_export_structure"
+                | "hwp_ir_diff"
+                | "hwp_export_svg"
+                | "hwp_export_pdf"
+                | "hwp_export_markdown"
+                | "hwp_convert_hwpx"
+                | "hwp_convert_hwp5"
+                | "hwp_split_document"
+                | "hwp_export_tables"
+                | "hwp_search"
+                | "hwp_fields"
+                | "hwp_fill_fields"
+                | "hwp_replace_text"
+                | "hwp_set_checkbox"
+                | "hwp_set_cell"
+        )
+    }
+
+    fn add_password_stdin_contract(definition: &mut serde_json::Value) {
+        let Some(properties) = definition["inputSchema"]["properties"].as_object_mut() else {
+            return;
+        };
+        properties.insert(
+            "password".to_string(),
+            serde_json::json!({
+                "type": "string",
+                "writeOnly": true,
+                "description": "암호 문서 비밀번호. MCP 서버는 응답·세션에 저장하지 않고, 무상태 도구에서는 자식 CLI stdin으로만 전달한다."
+            }),
+        );
+        definition["cli"]["passwordStdin"] = serde_json::json!({
+            "argument": "password",
+            "flag": "--password-stdin",
+            "format": "utf8-first-line"
+        });
+    }
+
+    let mut tools = vec![
         tool(
             "hwp_info",
             "HWP/HWPX/HML 문서의 메타데이터(포맷·구역/페이지/문단 수·폰트)를 조회한다. 문서를 열기 전에 규모와 형식을 파악할 때 쓴다.",
@@ -720,7 +763,16 @@ fn mcp_tool_definitions() -> Vec<serde_json::Value> {
             serde_json::json!(["edit", "set-cell", "{path}", "--table", "{table}", "--row", "{row}", "--col", "{col}", "--text", "{text}", "--json"]),
             &["schemaVersion", "source", "table", "row", "col", "oldText", "newText", "dryRun", "overflow", "output", "outputFormat"],
         ),
-    ]
+    ];
+    for definition in &mut tools {
+        if definition["name"]
+            .as_str()
+            .is_some_and(supports_password_stdin)
+        {
+            add_password_stdin_contract(definition);
+        }
+    }
+    tools
 }
 
 /// [#3263] 도구 자기서술 — 에이전트가 첫 호출 1회로 명령·계약·스키마를 파악하는 입구.
