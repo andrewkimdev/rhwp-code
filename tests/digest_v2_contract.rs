@@ -14,8 +14,11 @@
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
-/// 구조(조문 패턴 15개 노드)와 여러 쪽(16쪽)을 모두 가진 실제 샘플 — v1 테스트와 동일 원천.
+/// 여러 쪽(16쪽)인 실제 HWP3 샘플 — pages 범위·v1 기본 봉투 검증 원천.
 const SAMPLE: &str = "samples/hwp3-sample.hwp";
+/// 실제 조문 구조를 가진 HWP3 샘플. 일반 문서의 독립 번호를 조문으로 과검출하지 않도록
+/// #3715가 강화됐으므로, 구조 경로는 실제 `제N조` 표지가 있는 이 fixture로 검증한다.
+const STRUCTURED_SAMPLE: &str = "samples/hwp3-sample16.hwp";
 /// 구조 노드가 하나도 없는 실제 샘플(6쪽) — 쪽 단위 폴백 검증용.
 const NO_STRUCTURE_SAMPLE: &str = "samples/2026_oss_rst.hwp";
 
@@ -59,7 +62,7 @@ fn parse_stdout_json(args: &[&str], output: &Output) -> serde_json::Value {
 
 #[test]
 fn digest_sections_envelope_and_addresses() {
-    let sample = sample_path(SAMPLE);
+    let sample = sample_path(STRUCTURED_SAMPLE);
     let args = ["digest", "--sections", "--json", sample.to_str().unwrap()];
     let output = run(&args);
     assert_eq!(
@@ -129,7 +132,7 @@ fn digest_sections_envelope_and_addresses() {
 
 #[test]
 fn digest_sections_max_chars_caps_each_excerpt() {
-    let sample = sample_path(SAMPLE);
+    let sample = sample_path(STRUCTURED_SAMPLE);
     let args = [
         "digest",
         "--sections",
