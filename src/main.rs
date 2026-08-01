@@ -776,6 +776,7 @@ fn mcp_tool_definitions() -> Vec<serde_json::Value> {
                 "ambiguous",
                 "output",
                 "outputFormat",
+                "changedPages",
             ],
         ),
         tool(
@@ -822,7 +823,7 @@ fn mcp_tool_definitions() -> Vec<serde_json::Value> {
             }),
             "edit",
             serde_json::json!(["edit", "replace-text", "{path}", "--find", "{find}", "--replace", "{replace}", "--json"]),
-            &["schemaVersion", "source", "find", "replace", "caseSensitive", "dryRun", "replacedCount", "output", "outputFormat"],
+            &["schemaVersion", "source", "find", "replace", "caseSensitive", "dryRun", "replacedCount", "output", "outputFormat", "changedPages"],
         ),
         tool(
             "hwp_set_checkbox",
@@ -838,7 +839,7 @@ fn mcp_tool_definitions() -> Vec<serde_json::Value> {
             }),
             "edit",
             serde_json::json!(["edit", "replace-text", "{path}", "--find", "□", "--replace", "☑", "--occurrence", "{occurrence}", "-o", "{output}", "--json"]),
-            &["schemaVersion", "source", "find", "replace", "occurrence", "dryRun", "replacedCount", "output", "outputFormat"],
+            &["schemaVersion", "source", "find", "replace", "occurrence", "dryRun", "replacedCount", "output", "outputFormat", "changedPages"],
         ),
         tool(
             "hwp_set_cell",
@@ -858,7 +859,7 @@ fn mcp_tool_definitions() -> Vec<serde_json::Value> {
             }),
             "edit",
             serde_json::json!(["edit", "set-cell", "{path}", "--table", "{table}", "--row", "{row}", "--col", "{col}", "--text", "{text}", "--json"]),
-            &["schemaVersion", "source", "table", "row", "col", "oldText", "newText", "dryRun", "overflow", "output", "outputFormat"],
+            &["schemaVersion", "source", "table", "row", "col", "oldText", "newText", "dryRun", "overflow", "output", "outputFormat", "changedPages"],
         ),
         tool(
             "hwp_run_plan",
@@ -875,7 +876,7 @@ fn mcp_tool_definitions() -> Vec<serde_json::Value> {
             }),
             "run",
             serde_json::json!(["run", "--plan-json", "{plan}", "--json"]),
-            &["schemaVersion", "planVersion", "input", "output", "outputFormat", "steps", "verify", "invalid"],
+            &["schemaVersion", "planVersion", "input", "output", "outputFormat", "steps", "verify", "invalid", "changedPages"],
         ),
     ];
     for definition in &mut tools {
@@ -10361,9 +10362,16 @@ fn run_plan_engine(plan: &serde_json::Value) -> (serde_json::Value, i32) {
     //    위반이 나오는 두더지잡기 방지). 판정자는 실행이 쓰는 바로 그 함수들이다.
     let mut name_counts: std::collections::HashMap<String, usize> =
         std::collections::HashMap::new();
+    // [#3712] 같은 순회에서 문단 주소도 담는다 — 저널 changedPages 산출 근거.
+    let mut name_locs: std::collections::HashMap<String, Vec<(usize, usize)>> =
+        std::collections::HashMap::new();
     for fi in doc.collect_all_fields().iter() {
         if let Some(n) = fi.field.field_name() {
             *name_counts.entry(n.to_string()).or_insert(0) += 1;
+            name_locs
+                .entry(n.to_string())
+                .or_default()
+                .push((fi.location.section_index, fi.location.para_index));
         }
     }
     let mut invalid: Vec<serde_json::Value> = Vec::new();
@@ -10465,6 +10473,7 @@ fn run_plan_engine(plan: &serde_json::Value) -> (serde_json::Value, i32) {
     // 2) 원자 실행 — 전 step 을 인메모리 IR 에만 적용한다. 디스크는 아직 무변경이라
     //    어느 step 이 실패해도 반편집 문서가 남지 않는다.
     let mut journal_steps: Vec<serde_json::Value> = Vec::new();
+    let mut changed_paras: Vec<(usize, usize)> = Vec::new();
     for (idx, step) in steps.iter().enumerate() {
         let action = step["action"].as_str().unwrap_or("");
         match action {
@@ -10487,6 +10496,9 @@ fn run_plan_engine(plan: &serde_json::Value) -> (serde_json::Value, i32) {
                     if let Err(e) = doc.set_field_value_by_name_at(name, occurrence, &value_str) {
                         return fail(format!("step {}: 필드 '{}' 설정 실패 - {}", idx, key, e));
                     }
+                    if let Some(loc) = name_locs.get(name).and_then(|l| l.get(occurrence)) {
+                        changed_paras.push(*loc);
+                    }
                     filled.push(serde_json::json!({
                         "name": name, "occurrence": occurrence, "value": value_str,
                     }));
@@ -10501,6 +10513,18 @@ fn run_plan_engine(plan: &serde_json::Value) -> (serde_json::Value, i32) {
                 let find = step["find"].as_str().expect("선검증 통과");
                 let replace = step["replace"].as_str().expect("선검증 통과");
                 let case_sensitive = step["caseSensitive"].as_bool().unwrap_or(true);
+                {
+                    // [#3712] 치환 전 매치 주소 — 문자열 치환은 문단 인덱스를 밀지 않는다.
+                    let all = doc.grep(find, case_sensitive, None);
+                    match step["occurrence"].as_u64() {
+                        Some(n) => {
+                            if let Some(m) = all.get(n as usize) {
+                                changed_paras.push((m.section, m.paragraph));
+                            }
+                        }
+                        None => changed_paras.extend(all.iter().map(|m| (m.section, m.paragraph))),
+                    }
+                }
                 let result = match step["occurrence"].as_u64() {
                     Some(n) => doc.replace_nth_native(find, replace, case_sensitive, n as usize),
                     None => doc.replace_all_native(find, replace, case_sensitive),
@@ -10519,6 +10543,9 @@ fn run_plan_engine(plan: &serde_json::Value) -> (serde_json::Value, i32) {
             }
             "set_checkbox" => {
                 let n = step["occurrence"].as_u64().expect("선검증 통과") as usize;
+                if let Some(m) = doc.grep("□", true, None).get(n) {
+                    changed_paras.push((m.section, m.paragraph));
+                }
                 let count = match doc.replace_nth_native("□", "☑", true, n) {
                     Ok(r) => serde_json::from_str::<serde_json::Value>(&r)
                         .ok()
@@ -10582,6 +10609,7 @@ fn run_plan_engine(plan: &serde_json::Value) -> (serde_json::Value, i32) {
                         eprintln!("경고: step {} 셀 글자색을 검정으로 바꾸지 못했습니다.", idx);
                     }
                 }
+                changed_paras.push((sec, para));
                 journal_steps.push(serde_json::json!({
                     "step": idx, "action": "set_cell",
                     "table": t, "row": r, "col": c, "oldText": old_text,
@@ -10592,6 +10620,11 @@ fn run_plan_engine(plan: &serde_json::Value) -> (serde_json::Value, i32) {
     }
 
     // 3) 사후 단언 → 단 한 번 저장. 단언 실패 시 디스크 무변경 — 자연 트랜잭션.
+    // [#3712] 눈검증 대상 페이지 — 편집 반영 후 조판 기준. 확정 불가면 null.
+    let changed_pages = match doc.pages_covering_paragraphs(&changed_paras) {
+        Some(pages) => serde_json::json!(pages),
+        None => serde_json::Value::Null,
+    };
     let out_format = edit_output_format(&bytes, Some(output));
     let out_bytes = match edit_serialize(&mut doc, out_format) {
         Ok(b) => b,
@@ -10623,6 +10656,7 @@ fn run_plan_engine(plan: &serde_json::Value) -> (serde_json::Value, i32) {
             "schemaVersion": "1.0", "planVersion": "1.0",
             "input": input, "output": output, "outputFormat": out_format.label(),
             "steps": journal_steps, "verify": verify_report,
+            "changedPages": changed_pages,
             "assertions": { "notFoundEmpty": assert_not_found_empty, "verify": assert_verify },
         }),
         EXIT_OK,
@@ -10727,11 +10761,19 @@ fn edit_fill_fields(args: &[String]) -> i32 {
     // (규제영향분석서의 `피규제집단명` ×14 등) 이름만으로는 하나만 지목된다.
     let mut name_counts: std::collections::HashMap<String, usize> =
         std::collections::HashMap::new();
+    // [#3712] 같은 순회에서 문단 주소도 담는다 — changedPages 산출 근거.
+    let mut name_locs: std::collections::HashMap<String, Vec<(usize, usize)>> =
+        std::collections::HashMap::new();
     for fi in doc.collect_all_fields().iter() {
         if let Some(n) = fi.field.field_name() {
             *name_counts.entry(n.to_string()).or_insert(0) += 1;
+            name_locs
+                .entry(n.to_string())
+                .or_default()
+                .push((fi.location.section_index, fi.location.para_index));
         }
     }
+    let mut changed_paras: Vec<(usize, usize)> = Vec::new();
 
     let mut filled: Vec<serde_json::Value> = Vec::new();
     let mut not_found: Vec<String> = Vec::new();
@@ -10789,6 +10831,9 @@ fn edit_fill_fields(args: &[String]) -> i32 {
             // 실패 시 원본 불변 — 출력 파일을 쓰지 않고 즉시 끝낸다.
             return EXIT_RUNTIME;
         }
+        if let Some(loc) = name_locs.get(name).and_then(|l| l.get(occurrence)) {
+            changed_paras.push(*loc);
+        }
         filled.push(
             serde_json::json!({ "name": name, "occurrence": occurrence, "value": value_str }),
         );
@@ -10842,11 +10887,22 @@ fn edit_fill_fields(args: &[String]) -> i32 {
         }
     }
 
+    // [#3712] 눈검증 대상 페이지 — 편집 반영 후 조판 기준. 확정 불가면 null(부분 목록 금지).
+    let changed_pages = if dry_run {
+        serde_json::Value::Null
+    } else {
+        match doc.pages_covering_paragraphs(&changed_paras) {
+            Some(pages) => serde_json::json!(pages),
+            None => serde_json::Value::Null,
+        }
+    };
+
     if json_mode {
         let mut envelope = serde_json::json!({
             "schemaVersion": "1.0",
             "source": file_path,
             "dryRun": dry_run,
+            "changedPages": changed_pages,
             "filledCount": filled.len(),
             "filled": filled,
             "notFound": not_found,
@@ -11006,6 +11062,20 @@ fn edit_replace_text(args: &[String]) -> i32 {
         }
     };
 
+    // [#3712] 치환 전 매치 주소를 붙잡는다 — 문자열 치환은 문단 인덱스를 밀지 않는다.
+    let changed_paras: Vec<(usize, usize)> = if dry_run {
+        Vec::new()
+    } else {
+        let all = doc.grep(find, !ignore_case, None);
+        match occurrence {
+            Some(n) => all
+                .get(n)
+                .map(|m| vec![(m.section, m.paragraph)])
+                .unwrap_or_default(),
+            None => all.iter().map(|m| (m.section, m.paragraph)).collect(),
+        }
+    };
+
     let replaced_count = if dry_run {
         // 파일을 건드리지 않는다 — 읽기 전용 검색으로 치환 예정 건수만 센다.
         match occurrence {
@@ -11071,6 +11141,16 @@ fn edit_replace_text(args: &[String]) -> i32 {
         }
     }
 
+    // [#3712] 눈검증 대상 페이지 — 산출물이 있을 때만 의미가 있다(무산출은 null).
+    let changed_pages = if wrote_output {
+        match doc.pages_covering_paragraphs(&changed_paras) {
+            Some(pages) => serde_json::json!(pages),
+            None => serde_json::Value::Null,
+        }
+    } else {
+        serde_json::Value::Null
+    };
+
     if json_mode {
         let mut envelope = serde_json::json!({
             "schemaVersion": "1.0",
@@ -11080,6 +11160,7 @@ fn edit_replace_text(args: &[String]) -> i32 {
             "occurrence": occurrence,
             "caseSensitive": !ignore_case,
             "dryRun": dry_run,
+            "changedPages": changed_pages,
             "replacedCount": replaced_count,
         });
         if wrote_output {
@@ -11623,6 +11704,16 @@ fn edit_set_cell(args: &[String]) -> i32 {
         }
     }
 
+    // [#3712] 눈검증 대상 페이지 — 표 호스트 문단이 걸친 쪽 전부(분할 표 포함).
+    let changed_pages = if dry_run {
+        serde_json::Value::Null
+    } else {
+        match doc.pages_covering_paragraphs(&[(sec, para)]) {
+            Some(pages) => serde_json::json!(pages),
+            None => serde_json::Value::Null,
+        }
+    };
+
     if json_mode {
         let mut envelope = serde_json::json!({
             "schemaVersion": "1.0",
@@ -11633,6 +11724,7 @@ fn edit_set_cell(args: &[String]) -> i32 {
             "oldText": old_text,
             "newText": new_text,
             "dryRun": dry_run,
+            "changedPages": changed_pages,
             "keepStyle": keep_style,
             "overflow": overflow.clone().map(|o| vec![o]).unwrap_or_default(),
         });
