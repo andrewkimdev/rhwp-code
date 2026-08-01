@@ -932,8 +932,8 @@ mod emitted_bytes_key_agreement_tests {
     //! - 키 조회 경로: `parse_source_image_key(key)` 로 되읽은 variant
     //!
     //! 그 둘이 어긋나면 워터마크 그림에 원본 JPEG 을 돌려주고도 성공한 것처럼 보인다. 여기서
-    //! 고정하는 것은 "키만으로 같은 바이트를 재현할 수 있다"는 계약이고, 변환 분기(BMP·PCX·
-    //! TIFF·회색 JPEG·워터마크 JPEG·변환 실패 되돌림)마다 확인한다.
+    //! 고정하는 것은 "키만으로 같은 바이트를 재현할 수 있다"는 계약이고, 이 테스트가 만드는
+    //! 변환 분기(BMP·TIFF·회색 JPEG·워터마크 JPEG·변환 실패 되돌림)마다 확인한다.
 
     use super::{emitted_image_bytes, is_watermark_image};
     use crate::model::image::ImageEffect;
@@ -1034,7 +1034,7 @@ mod emitted_bytes_key_agreement_tests {
     }
 
     #[test]
-    fn issue_3315_key_variant_reproduces_json_bytes_for_every_conversion_branch() {
+    fn issue_3315_key_variant_reproduces_json_bytes_for_covered_conversion_branches() {
         let png = encoded(4, 4, ImageFormat::Png, |_, _| [10, 20, 30]);
         let bmp = encoded(16, 16, ImageFormat::Bmp, |x, _| [x as u8 * 4, 90, 200]);
         let tiff = encoded(4, 4, ImageFormat::Tiff, |x, y| {

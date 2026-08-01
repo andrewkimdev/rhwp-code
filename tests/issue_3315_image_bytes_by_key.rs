@@ -4,7 +4,7 @@
 //! 바이트가 한 바이트라도 다르면 소비자는 같은 그림을 다르게 그린다. 그래서 여기서 고정하는
 //! 것은 크기 이득이 아니라 등가성이다 — 크기는 그 등가성이 성립한 뒤의 부산물이다.
 //!
-//! 변환 사슬(BMP/PCX/TIFF/회색 JPEG → PNG, JPEG 워터마크 bake)이 JSON 경로와 키 조회 경로에
+//! 변환 사슬(BMP/TIFF/회색 JPEG → PNG, JPEG 워터마크 bake)이 JSON 경로와 키 조회 경로에
 //! 각각 사본으로 존재하면 이 등가성이 조용히 깨진다. 두 경로가 같은 함수를 쓰는지 확인하는
 //! 자리도 이 테스트다.
 
@@ -139,10 +139,10 @@ fn issue_3315_omitted_ops_keep_mime_and_declare_omission() {
 /// 호출의 JSON 은 종전과 바이트 단위로 같지 않다. 이름만 보고 "schema 가 안 바뀌었다"고
 /// 판단하면 소비자 호환 결정을 잘못 내린다.
 ///
-/// 실제로 지켜야 하는 것은 둘이다 — ①그림 op 의 payload(`mime`·`base64`)가 종전과 같다
-/// ②추가된 것은 문서화된 두 필드뿐이고 생략 표식은 나타나지 않는다.
+/// 실제로 지켜야 하는 것은 둘이다 — ①기본 inline 경로의 그림 op payload(`mime`·`base64`)가
+/// 유지된다 ②schema minor 21과 `imageBytes:"inline"` 메타데이터가 선언되고 생략 표식은 없다.
 #[test]
-fn issue_3315_default_serialization_keeps_payloads_and_only_adds_documented_fields() {
+fn issue_3315_default_serialization_keeps_image_payloads_and_declares_schema_v21() {
     let doc = open_sample();
     let inline = inline_json(&doc);
     let value: Value = serde_json::from_str(&inline).expect("레이어 JSON 이 유효해야 한다");

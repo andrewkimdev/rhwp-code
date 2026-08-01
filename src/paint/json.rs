@@ -83,8 +83,8 @@ pub struct LayerJsonOptions {
     ///
     /// 기본값은 `false` 이고, 그때 그림 op 의 payload(`mime`·`base64`)는 종전과 같다. 다만
     /// **JSON 전체가 종전과 같지는 않다** — 이 기능이 최상위 `imageBytes` 를 더하고 schema
-    /// minor 를 21 로 올렸다. 계약은 "기존 필드 불변 + 추가만"(additive)이지 바이트 동일이
-    /// 아니다.
+    /// minor 를 21 로 올렸다. 계약은 "기존 그림 payload 유지 + schema minor 상승과 새 메타데이터"
+    /// 이지 바이트 동일이나 모든 기존 필드 불변이 아니다.
     pub omit_image_bytes: bool,
 }
 
