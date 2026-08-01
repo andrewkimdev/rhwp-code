@@ -29,6 +29,9 @@ use std::io::Read;
 /// HWP3 표본. 그림 5개(본문·표 셀·묶음 개체에 분산)와 도형을 함께 가진다 —
 /// 세 계약을 한 문서로 덮는다.
 const SAMPLE: &str = "samples/hwp3-sample.hwp";
+/// 실제 HWPX는 pageBorderFill BOTH 하나만 가진다. HWP 저장 어댑터가 이 IR을
+/// 변형하면 이어지는 HWPX 저장에서 원래 없던 EVEN/ODD가 생긴다.
+const SINGLE_BOTH_HWPX: &str = "samples/task2093/saved_single_line_spacing_after.hwpx";
 
 const HWPTAG_BEGIN: u16 = 0x10;
 const HWPTAG_PAGE_BORDER_FILL: u16 = HWPTAG_BEGIN + 59;
@@ -99,6 +102,16 @@ fn section_streams(bytes: &[u8]) -> Vec<Vec<u8>> {
     out
 }
 
+fn section0_xml(bytes: &[u8]) -> String {
+    let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes)).expect("HWPX ZIP 열기");
+    let mut section = archive
+        .by_name("Contents/section0.xml")
+        .expect("section0.xml 찾기");
+    let mut xml = String::new();
+    section.read_to_string(&mut xml).expect("section0.xml 읽기");
+    xml
+}
+
 /// ① 구역마다 쪽 테두리/배경 레코드가 3개다.
 #[test]
 fn each_section_has_three_page_border_fills() {
@@ -115,6 +128,43 @@ fn each_section_has_three_page_border_fills() {
              3개를 요구하며, 하나라도 모자라면 문서 전체를 거부한다."
         );
     }
+}
+
+/// HWP3에만 필요한 세 pageBorderFill 레코드를 HWPX에도 채우면, HWP를 한 번
+/// 내보낸 뒤 다시 HWPX로 저장하는 사용 흐름에서 원래 단일 BOTH 문서에 EVEN/ODD가
+/// 생긴다. HWPX 출처 IR은 저장 어댑터를 거쳐도 그 구조를 유지해야 한다.
+#[test]
+fn hwpx_single_both_stays_single_after_hwp_then_hwpx_export() {
+    let input =
+        std::fs::read(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(SINGLE_BOTH_HWPX))
+            .expect("HWPX 표본 읽기");
+    let mut core = rhwp::document_core::DocumentCore::from_bytes(&input).expect("HWPX 파싱");
+
+    assert!(
+        core.document().sections[0]
+            .section_def
+            .extra_page_border_fills
+            .is_empty(),
+        "표본은 BOTH 하나만 가져야 한다"
+    );
+
+    core.export_hwp_with_adapter().expect("HWP 저장");
+    assert!(
+        core.document().sections[0]
+            .section_def
+            .extra_page_border_fills
+            .is_empty(),
+        "HWPX 출처 IR에 HWP3 전용 EVEN/ODD를 주입하면 안 된다"
+    );
+
+    let hwpx = core.export_hwpx_native().expect("HWPX 재저장");
+    let xml = section0_xml(&hwpx);
+    assert!(xml.contains(r#"<hp:pageBorderFill type="BOTH""#));
+    assert!(
+        !xml.contains(r#"<hp:pageBorderFill type="EVEN""#)
+            && !xml.contains(r#"<hp:pageBorderFill type="ODD""#),
+        "HWPX 재저장본에 원래 없던 EVEN/ODD pageBorderFill이 생기면 안 된다: {xml}"
+    );
 }
 
 /// ② 그림 개체의 사각형 4점이 채워져 있다.
