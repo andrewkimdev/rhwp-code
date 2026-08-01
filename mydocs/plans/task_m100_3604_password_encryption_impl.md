@@ -52,11 +52,26 @@ parser와 serializer는 파일 형식의 레이아웃, CFB/ZIP 읽기·쓰기를
 5. HWP3 실제 password fixture 재암호화/재열기, HWPX 실제 평문 fixture 암호화,
    manifest/Stored 검사, 올바른·오류 비밀번호 재열기를 테스트로 고정했다.
 
-## Stage 6 예정
+## Stage 6 결과
 
-- Hancom Office 2020의 직접 열기·저장 경로로 새 HWPX/HWP5 보호 산출물의
-  외부 호환성을 교차 검증한다.
-- 그 결과가 고정된 뒤에만 CLI와 MCP의 암호 저장 입력을 노출한다.
+1. `rhwp convert`와 `rhwp export-hwpx`에 전역 `--output-password`와
+   `--output-password-stdin`을 추가했다. 출력 암호는 input `--password`와 분리된다.
+2. 두 stdin option이 함께 있으면 input 암호를 첫 줄, output 암호를 둘째 줄로 읽는다.
+3. HWP5 output은 HWPX-to-HWP adapter 적용 뒤 EncryptVersion 4로, HWPX output은
+   ODF AES-256-CBC/PBKDF2로 저장한다.
+4. `--verify`와 `--verify-pages`의 output reload는 output 암호를 사용한다.
+5. 실제 HWP5/HWPX fixture에서 평문 거부, 정답 재열기, 암호 HWPX re-key를 확인했다.
+6. WASM facade와 Studio `암호 설정하여 저장...` 메뉴를 추가했다. Studio는 새 암호·확인을
+   받고 HWP5/HWPX만 보호 저장하며 HML은 거부한다.
+7. Studio는 암호 값 대신 보호 저장 여부 boolean만 메모리에 보관하고, 이후 Ctrl+S에서
+   재입력받는다. public WASM JS/type declaration도 새 binding을 제공한다.
+
+## 다음 단계
+
+- hwp-convert MCP가 input `password`와 output `output_password`를 분리해 받고,
+  Hancom 변환 결과를 CLI stdin 경로로 password-protect한다.
+- Hancom Office 2020 직접 열기 교차 검증은 MCP server가 새 rhwp binary를 포함한 배포본으로
+  갱신된 뒤 운영 환경에서 별도 evidence로 고정한다.
 
 ## 보안 규칙
 
