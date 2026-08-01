@@ -31,7 +31,7 @@ Windows 한글 열기 검사 도구를 검토한 결과다. 작성자 `@planet68
 | PR / 작성자 | [#3685](https://github.com/edwardkim/rhwp/pull/3685) / `@planet6897` |
 | base / head | `devel` `f80b910aabeda5939972752719b0916129eb3a53` / `fix/3676-hwp3-convert-hancom-openable` `2f81e673308b5f253528541c3963e452e1cf2e41` |
 | 원 PR 변경 규모 | 3 files, +475 / -0 |
-| 메인터너 code tail | `fcf101e68` (Windows 격리), `af00f9245` (HWP3 PBF 범위), `4c7082710`·`b23de3a5` (중첩 개체·Chart/OLE caption walker), `ccae1d016` (Python 안전 회귀 CI gate) |
+| 메인터너 code tail | `fcf101e68` (Windows 격리), `af00f9245` (HWP3 PBF 범위), `4c7082710`·`b23de3a5` (중첩 개체·Chart/OLE caption walker) |
 | 변경 파일 | 원 PR 3개와 `scripts/tests/test_hwp3_convert_openable.py`, review·오늘할일 |
 | reviewer | `@edwardkim` 요청 완료 |
 | merge 상태 | `CLEAN` (작성 시점 참고) |
@@ -42,7 +42,7 @@ Windows 한글 열기 검사 도구를 검토한 결과다. 작성자 `@planet68
 | --- | --- |
 | 원 source head CI | `2f81e673`의 CI preflight, lint, test archive, Native Skia, default-feature 8 shards, `Build & Test`, CodeQL 모두 success; WASM·frontend gate의 skipped는 preflight 판정에 따른 정상 생략 |
 | Windows 기능 오라클 | 작업지시자가 `win10-ted`에서 한글 실물 열기 검증 완료를 확인. 이 검토에서는 중복 실행하지 않음 |
-| Windows tool regression | `python3 -m py_compile`, `python3 -m unittest scripts/tests/test_hwp3_convert_openable.py` 2 passed, `--help`, `git diff --check` 성공. CI lint job에도 같은 Python test를 추가했고 Rust release-test는 실행하지 않음 |
+| Windows tool regression | `python3 -m py_compile`, `python3 -m unittest scripts/tests/test_hwp3_convert_openable.py` 2 passed, `--help`, `git diff --check` 성공. Windows 전용 보조 도구이므로 Linux CI gate는 추가하지 않았고 Rust release-test도 실행하지 않음 |
 | HWP3 PBF regression | `cargo test --profile release-test --test issue_3676_hwp3_convert_hancom_openable -- --nocapture` 4 passed, 0 failed. 단일 BOTH HWPX의 HWP→HWPX 보존과 기존 HWP3 3-record 계약을 함께 확인 |
 | 중첩 walker regression | `cargo test --profile release-test --lib document_core::converters::hwpx_to_hwp::tests::hwp3_nested_caption_hidden_comment_and_master_page_pictures_are_normalized -- --exact --nocapture` 1 passed, 0 failed |
 | 추가 전체 Cargo | 최신 CI와 중복되며 실행하지 않음. 검토 초기에 시작된 중복 전체 suite는 완료 결과로 사용하지 않고 범위 변경 직후 종료 |
