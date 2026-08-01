@@ -23,10 +23,6 @@
  *   npm run e2e:issue-3137-perf -- \
  *     --formats=hwp --kinds=english --cadences=0 --iterations=3 --warmups=1
  *
- * Rust 내부 구간 계측(Stage 2):
- *
- *   npm run e2e:issue-3137-perf -- --cursor-breakdown
- *
  * focused geometry 최적화 게이트(Stage 3):
  *
  *   npm run e2e:issue-3137-perf -- --require-focused-geometry
@@ -209,7 +205,6 @@ function parseConfig() {
     browserMode: cliValue('mode', 'host'),
     allowSyncFlush: hasFlag('allow-sync-flush'),
     enforceFrameBudget: hasFlag('enforce-frame-budget'),
-    cursorBreakdown: hasFlag('cursor-breakdown'),
     requireFocusedGeometry: hasFlag('require-focused-geometry'),
     requireFocusedRepaint: hasFlag('require-focused-repaint'),
   };
@@ -419,9 +414,9 @@ async function restoreTrace(page) {
   });
 }
 
-async function installTrace(page, { cursorBreakdown = false } = {}) {
+async function installTrace(page) {
   await restoreTrace(page);
-  await page.evaluate((options) => {
+  await page.evaluate(() => {
     const trace = {
       startedAt: performance.now(),
       sequence: 0,
@@ -585,50 +580,12 @@ async function installTrace(page, { cursorBreakdown = false } = {}) {
       charOffset: args[3],
       hintPage: args[4],
     });
-    if (options.cursorBreakdown) {
-      const original = wasm?.getCursorRectByPathNear;
-      const diagnostic = wasm?.getCursorRectByPathNearDiagnostic;
-      if (typeof original !== 'function' || typeof diagnostic !== 'function') {
-        throw new Error(
-          '#3137 --cursor-breakdown requires getCursorRectByPathNearDiagnostic',
-        );
-      }
-      wasm.getCursorRectByPathNear = function issue3137DiagnosticCursorNear(...args) {
-        const sampleId = trace.currentSampleId;
-        const startedAt = performance.now();
-        let payload;
-        let result;
-        try {
-          payload = diagnostic.apply(this, args);
-          result = payload?.rect;
-          return result;
-        } finally {
-          const finishedAt = performance.now();
-          trace.events.push({
-            sequence: ++trace.sequence,
-            type: 'wasm.getCursorRectByPathNear',
-            sampleId,
-            startTime: startedAt,
-            atMs: startedAt - trace.startedAt,
-            endTime: finishedAt,
-            durationMs: finishedAt - startedAt,
-            ...describeCursorNearArgs(args),
-            diagnosticSchemaVersion: payload?.schemaVersion ?? null,
-            cursorDiagnostic: payload?.profile ?? null,
-          });
-        }
-      };
-      trace.restores.push(() => {
-        wasm.getCursorRectByPathNear = original;
-      });
-    } else {
-      wrap(
-        wasm,
-        'getCursorRectByPathNear',
-        'wasm.getCursorRectByPathNear',
-        describeCursorNearArgs,
-      );
-    }
+    wrap(
+      wasm,
+      'getCursorRectByPathNear',
+      'wasm.getCursorRectByPathNear',
+      describeCursorNearArgs,
+    );
     wrap(
       wasm,
       'getCursorRectByPath',
@@ -753,7 +710,7 @@ async function installTrace(page, { cursorBreakdown = false } = {}) {
     }
 
     window.__issue3137Trace = trace;
-  }, { cursorBreakdown });
+  });
 }
 
 async function resetTrace(page) {
@@ -984,15 +941,6 @@ function buildSampleMetrics(trace) {
       1,
       `${sample.sampleId}: expected exactly one cursor update`,
     );
-    const cursorDiagnostic = cursorNearEvents[0]?.cursorDiagnostic ?? null;
-    if (cursorDiagnostic) {
-      assert.equal(
-        cursorDiagnostic.pageTreeCalls,
-        cursorDiagnostic.pageTreeCacheHits + cursorDiagnostic.pageTreeCacheMisses,
-        `${sample.sampleId}: cursor diagnostic cache accounting`,
-      );
-    }
-
     return {
       ...sample,
       stable: mutationEvents.every((event) => event.cellFlowChanged === false),
@@ -1018,7 +966,6 @@ function buildSampleMetrics(trace) {
       cursorPrepareMs: sumDurations(cursorPrepareEvents),
       cursorUpdateMs: sumDurations(cursorUpdateEvents),
       cursorUpdateCount: cursorUpdateEvents.length,
-      cursorDiagnostic,
       longTaskCount: longTasks.length,
       longTaskTotalMs: sumDurations(longTasks),
       longTaskMaxMs: longTasks.length
@@ -1030,46 +977,6 @@ function buildSampleMetrics(trace) {
       })),
     };
   });
-}
-
-function summarizeCursorDiagnostics(values) {
-  const profiles = values
-    .map((value) => value.cursorDiagnostic)
-    .filter(Boolean);
-  const metric = (name) => summarize(profiles.map((profile) => profile[name]));
-  return {
-    sampleCount: profiles.length,
-    total: metric('totalMs'),
-    parsePath: metric('parsePathMs'),
-    resolveParagraph: metric('resolveParagraphMs'),
-    findPages: metric('findPagesMs'),
-    orderPages: metric('orderPagesMs'),
-    pageTreeCached: metric('pageTreeCachedMs'),
-    pageTreeCacheLookup: metric('pageTreeCacheLookupMs'),
-    pageTreeBuild: metric('pageTreeBuildMs'),
-    pageTreeClone: metric('pageTreeCloneMs'),
-    pageTreeStore: metric('pageTreeStoreMs'),
-    treeTraversalInclusive: metric('treeTraversalInclusiveMs'),
-    treeTraversalExclusive: metric('treeTraversalExclusiveMs'),
-    computeCharPositions: metric('computeCharPositionsMs'),
-    formatRect: metric('formatRectMs'),
-    other: metric('otherMs'),
-    counts: {
-      pageTreeCalls: profiles.reduce((sum, profile) => sum + profile.pageTreeCalls, 0),
-      cacheHits: profiles.reduce((sum, profile) => sum + profile.pageTreeCacheHits, 0),
-      cacheMisses: profiles.reduce((sum, profile) => sum + profile.pageTreeCacheMisses, 0),
-      computeCharPositionsCalls: profiles.reduce(
-        (sum, profile) => sum + profile.computeCharPositionsCalls,
-        0,
-      ),
-      fallbackQueries: profiles.filter((profile) => profile.fallbackUsed).length,
-    },
-    matchedPages: [...new Set(
-      profiles
-        .map((profile) => profile.matchedPage)
-        .filter((page) => Number.isInteger(page)),
-    )].sort((a, b) => a - b),
-  };
 }
 
 function summarizeSampleMetrics(sampleMetrics) {
@@ -1088,7 +995,6 @@ function summarizeSampleMetrics(sampleMetrics) {
       cursorAll: summarize(values.map((value) => value.cursorAllMs)),
       cursorPrepare: summarize(values.map((value) => value.cursorPrepareMs)),
       cursorUpdate: summarize(values.map((value) => value.cursorUpdateMs)),
-      cursorDiagnostic: summarizeCursorDiagnostics(values),
       syncDispatch: summarize(values.map((value) => value.syncDispatchMs)),
       inputToFirstRaf: summarize(values.map((value) => value.inputToFirstRafMs)),
       inputToSecondRaf: summarize(values.map((value) => value.inputToSecondRafMs)),
@@ -1163,7 +1069,7 @@ async function runScenario(page, fixture, config, scenario, pageErrors) {
   const initial = await readFocusedModel(page);
   assert.equal(initial.length, TARGET.charOffset, `${scenario.format}: initial text length`);
 
-  await installTrace(page, { cursorBreakdown: config.cursorBreakdown });
+  await installTrace(page);
   if (config.warmups > 0) {
     const warmupSamples = await runInputSequence(page, {
       kind: scenario.kind,
@@ -1209,13 +1115,6 @@ async function runScenario(page, fixture, config, scenario, pageErrors) {
   assert.equal(samples.length, expectedSampleCount, `${scenarioSlug(scenario)}: browser sample count`);
   assert.equal(trace.samples.length, expectedSampleCount, `${scenarioSlug(scenario)}: trace sample count`);
   assert.equal(sampleMetrics.length, expectedSampleCount, `${scenarioSlug(scenario)}: metric sample count`);
-  if (config.cursorBreakdown) {
-    assert.equal(
-      sampleMetrics.filter((value) => value.cursorDiagnostic !== null).length,
-      sampleMetrics.reduce((sum, value) => sum + value.cursorQueryCount, 0),
-      `${scenarioSlug(scenario)}: Rust cursor diagnostic sample count`,
-    );
-  }
   assert.equal(
     sampleMetrics.filter((value) => value.stable).length,
     expectedSampleCount,
@@ -1331,7 +1230,6 @@ async function runScenario(page, fixture, config, scenario, pageErrors) {
       ).length,
       focusedPagePatchRendered: metrics.repaint.focusedPatchCount,
       fullPageRendered: metrics.repaint.fullPageCount,
-      cursorDiagnostic: sampleMetrics.filter((value) => value.cursorDiagnostic !== null).length,
       wasmFlush: flushCount,
       inputFlush: inputFlushCount,
       wasmBegin: traceCount(trace, EVENT_TYPES.begin),
@@ -1358,12 +1256,6 @@ async function runScenario(page, fixture, config, scenario, pageErrors) {
       + `exact=${traceCount(trace, EVENT_TYPES.cursorNear)}, `
       + `render p95=${formatMs(metrics.repaint.renderPage.p95Ms)}ms `
       + `(patch=${metrics.repaint.focusedPatchCount}, full=${metrics.repaint.fullPageCount}), `
-      + (config.cursorBreakdown
-        ? `build p95=${formatMs(metrics.stable.cursorDiagnostic.pageTreeBuild.p95Ms)}ms, `
-          + `traverse p95=${formatMs(
-            metrics.stable.cursorDiagnostic.treeTraversalExclusive.p95Ms,
-          )}ms, `
-        : '')
       + `2rAF p95=${formatMs(metrics.stable.inputToSecondRaf.p95Ms)}ms, `
       + `long=${metrics.stable.longTasks.count}, flush=${flushCount}`,
   );
@@ -1399,15 +1291,6 @@ function summaryTsv(summary) {
     'full_page_render_p95_ms',
     'page_refresh_p95_ms',
     'page_render_p95_ms',
-    'cursor_rust_total_p95_ms',
-    'find_pages_p95_ms',
-    'page_tree_cached_p95_ms',
-    'page_tree_build_p95_ms',
-    'page_tree_clone_p95_ms',
-    'traversal_exclusive_p95_ms',
-    'compute_char_positions_p95_ms',
-    'page_tree_cache_hits',
-    'page_tree_cache_misses',
     'input_to_2raf_p50_ms',
     'input_to_2raf_p95_ms',
     'actual_interval_p50_ms',
@@ -1449,15 +1332,6 @@ function summaryTsv(summary) {
       scenario.metrics.repaint.fullPage.p95Ms,
       scenario.metrics.repaint.refresh.p95Ms,
       scenario.metrics.repaint.renderPage.p95Ms,
-      stable.cursorDiagnostic.total.p95Ms,
-      stable.cursorDiagnostic.findPages.p95Ms,
-      stable.cursorDiagnostic.pageTreeCached.p95Ms,
-      stable.cursorDiagnostic.pageTreeBuild.p95Ms,
-      stable.cursorDiagnostic.pageTreeClone.p95Ms,
-      stable.cursorDiagnostic.treeTraversalExclusive.p95Ms,
-      stable.cursorDiagnostic.computeCharPositions.p95Ms,
-      stable.cursorDiagnostic.counts.cacheHits,
-      stable.cursorDiagnostic.counts.cacheMisses,
       stable.inputToSecondRaf.p50Ms,
       stable.inputToSecondRaf.p95Ms,
       stable.actualStartInterval.p50Ms,
@@ -1527,7 +1401,6 @@ async function main() {
       warmups: config.warmups,
       allowSyncFlush: config.allowSyncFlush,
       enforceFrameBudget: config.enforceFrameBudget,
-      cursorBreakdown: config.cursorBreakdown,
       requireFocusedGeometry: config.requireFocusedGeometry,
       requireFocusedRepaint: config.requireFocusedRepaint,
     },

@@ -26040,6 +26040,21 @@ fn issue3137_focused_cell_geometry_matches_exact_rect() {
                 .expect("second stable insert"),
         )
         .expect("second insert json");
+        let focused_alignment = doc
+            .core
+            .get_cell_paragraph_ref(0, 0, 2, 2, 5)
+            .and_then(|paragraph| {
+                doc.core
+                    .styles
+                    .para_styles
+                    .get(paragraph.para_shape_id as usize)
+            })
+            .map(|style| style.alignment);
+        assert_eq!(
+            insert_2["focusedPageTreePatched"].as_bool(),
+            Some(true),
+            "{label} insert-a must stay on the focused stable-alignment fast path: alignment={focused_alignment:?}, mutation={insert_2}"
+        );
         assert_cached_line_matches_fresh(&doc, label, "insert-a");
         let rect_132: Value = serde_json::from_str(
             &doc.get_cursor_rect_in_cell_native(0, 0, 2, 2, 5, 132)

@@ -10,96 +10,7 @@ use crate::model::control::Control;
 use crate::model::paragraph::Paragraph;
 use crate::model::path::PathSegment;
 use crate::renderer::layout::{CellContext, CellPathEntry};
-use crate::renderer::render_tree::{PageRenderTree, TextRunNode};
-#[cfg(not(target_arch = "wasm32"))]
-use std::time::Instant;
-#[cfg(target_arch = "wasm32")]
-use web_time::Instant;
-
-#[derive(Debug, Default, serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-struct CursorPageTreeCallDiagnostic {
-    page_num: u32,
-    cache_hit: bool,
-    total_ms: f64,
-    cache_lookup_ms: f64,
-    build_page_tree_ms: f64,
-    cache_hit_clone_ms: f64,
-    cache_store_clone_ms: f64,
-    cache_store_ms: f64,
-}
-
-/// [#3137] 경로 기반 exact cursor query의 읽기 전용 성능 진단값.
-///
-/// normal API는 이 구조체를 만들지 않는다. diagnostic API가 같은 query를 한 번만
-/// 실행하면서 page lookup/cache/build/traversal/text 측정 비용을 분리할 때만 사용한다.
-#[derive(Debug, Default, serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-struct CursorRectPathDiagnostic {
-    total_ms: f64,
-    parse_path_ms: f64,
-    resolve_paragraph_ms: f64,
-    find_pages_ms: f64,
-    order_pages_ms: f64,
-    format_rect_ms: f64,
-    other_ms: f64,
-    hint_page: Option<u32>,
-    page_candidates: usize,
-    matched_page: Option<u32>,
-    result_source: Option<&'static str>,
-    fallback_used: bool,
-    primary_pages_visited: u32,
-    fallback_pages_visited: u32,
-    page_tree_calls: u32,
-    page_tree_cache_hits: u32,
-    page_tree_cache_misses: u32,
-    page_tree_cached_ms: f64,
-    page_tree_cache_lookup_ms: f64,
-    page_tree_build_ms: f64,
-    page_tree_clone_ms: f64,
-    page_tree_store_ms: f64,
-    tree_traversal_inclusive_ms: f64,
-    tree_traversal_exclusive_ms: f64,
-    compute_char_positions_calls: u32,
-    compute_char_positions_chars: usize,
-    compute_char_positions_ms: f64,
-    primary_nodes_visited: u64,
-    primary_text_runs_visited: u64,
-    matching_text_runs: u64,
-    page_tree: Vec<CursorPageTreeCallDiagnostic>,
-}
-
-impl CursorRectPathDiagnostic {
-    fn record_page_tree_call(&mut self, call: CursorPageTreeCallDiagnostic) {
-        self.page_tree_calls += 1;
-        if call.cache_hit {
-            self.page_tree_cache_hits += 1;
-        } else {
-            self.page_tree_cache_misses += 1;
-        }
-        self.page_tree_cached_ms += call.total_ms;
-        self.page_tree_cache_lookup_ms += call.cache_lookup_ms;
-        self.page_tree_build_ms += call.build_page_tree_ms;
-        self.page_tree_clone_ms += call.cache_hit_clone_ms + call.cache_store_clone_ms;
-        self.page_tree_store_ms += call.cache_store_ms;
-        self.page_tree.push(call);
-    }
-
-    fn finish(&mut self, total_ms: f64) {
-        self.total_ms = total_ms;
-        self.tree_traversal_exclusive_ms =
-            (self.tree_traversal_inclusive_ms - self.compute_char_positions_ms).max(0.0);
-        let accounted_ms = self.parse_path_ms
-            + self.resolve_paragraph_ms
-            + self.find_pages_ms
-            + self.order_pages_ms
-            + self.page_tree_cached_ms
-            + self.tree_traversal_exclusive_ms
-            + self.compute_char_positions_ms
-            + self.format_rect_ms;
-        self.other_ms = (total_ms - accounted_ms).max(0.0);
-    }
-}
+use crate::renderer::render_tree::TextRunNode;
 
 /// 글자겹침 TextRun의 논리적 char_count (1) 반환, 아니면 실제 글자 수 반환.
 ///
@@ -3022,70 +2933,6 @@ impl DocumentCore {
         ordered
     }
 
-    fn build_page_tree_cached_for_cursor_diagnostic(
-        &self,
-        page_num: u32,
-        diagnostic: &mut CursorRectPathDiagnostic,
-    ) -> Result<PageRenderTree, HwpError> {
-        let total_started = Instant::now();
-        let idx = page_num as usize;
-
-        let cache_lookup_started = Instant::now();
-        {
-            let mut cache = self.page_tree_cache.borrow_mut();
-            if cache.len() <= idx {
-                cache.resize_with(idx + 1, || None);
-            }
-            let cache_lookup_ms = cache_lookup_started.elapsed().as_secs_f64() * 1000.0;
-            if let Some(ref tree) = cache[idx] {
-                let clone_started = Instant::now();
-                let cloned = tree.clone();
-                let cache_hit_clone_ms = clone_started.elapsed().as_secs_f64() * 1000.0;
-                drop(cache);
-                diagnostic.record_page_tree_call(CursorPageTreeCallDiagnostic {
-                    page_num,
-                    cache_hit: true,
-                    total_ms: total_started.elapsed().as_secs_f64() * 1000.0,
-                    cache_lookup_ms,
-                    cache_hit_clone_ms,
-                    ..CursorPageTreeCallDiagnostic::default()
-                });
-                return Ok(cloned);
-            }
-        }
-        let cache_lookup_ms = cache_lookup_started.elapsed().as_secs_f64() * 1000.0;
-
-        let build_started = Instant::now();
-        let tree = self.build_page_tree(page_num)?;
-        let build_page_tree_ms = build_started.elapsed().as_secs_f64() * 1000.0;
-
-        let clone_started = Instant::now();
-        let cloned = tree.clone();
-        let cache_store_clone_ms = clone_started.elapsed().as_secs_f64() * 1000.0;
-
-        let store_started = Instant::now();
-        {
-            let mut cache = self.page_tree_cache.borrow_mut();
-            if cache.len() <= idx {
-                cache.resize_with(idx + 1, || None);
-            }
-            cache[idx] = Some(cloned);
-        }
-        let cache_store_ms = store_started.elapsed().as_secs_f64() * 1000.0;
-
-        diagnostic.record_page_tree_call(CursorPageTreeCallDiagnostic {
-            page_num,
-            cache_hit: false,
-            total_ms: total_started.elapsed().as_secs_f64() * 1000.0,
-            cache_lookup_ms,
-            build_page_tree_ms,
-            cache_store_clone_ms,
-            cache_store_ms,
-            ..CursorPageTreeCallDiagnostic::default()
-        });
-        Ok(tree)
-    }
-
     pub(crate) fn get_cursor_rect_by_path_with_hint(
         &self,
         section_idx: usize,
@@ -3094,93 +2941,21 @@ impl DocumentCore {
         char_offset: usize,
         hint_page: Option<u32>,
     ) -> Result<String, HwpError> {
-        self.get_cursor_rect_by_path_with_hint_impl(
-            section_idx,
-            parent_para_idx,
-            path_json,
-            char_offset,
-            hint_page,
-            None,
-        )
-    }
-
-    /// [#3137] normal query와 같은 좌표를 한 번만 계산하면서 내부 구간별 시간을 반환한다.
-    pub(crate) fn get_cursor_rect_by_path_with_hint_diagnostic_native(
-        &self,
-        section_idx: usize,
-        parent_para_idx: usize,
-        path_json: &str,
-        char_offset: usize,
-        hint_page: Option<u32>,
-    ) -> Result<String, HwpError> {
-        let total_started = Instant::now();
-        let mut diagnostic = CursorRectPathDiagnostic {
-            hint_page,
-            ..CursorRectPathDiagnostic::default()
-        };
-        let rect = self.get_cursor_rect_by_path_with_hint_impl(
-            section_idx,
-            parent_para_idx,
-            path_json,
-            char_offset,
-            hint_page,
-            Some(&mut diagnostic),
-        )?;
-        diagnostic.finish(total_started.elapsed().as_secs_f64() * 1000.0);
-        let rect_value: serde_json::Value = serde_json::from_str(&rect).map_err(|error| {
-            HwpError::RenderError(format!(
-                "#3137 cursor diagnostic rect JSON 변환 실패: {error}"
-            ))
-        })?;
-        serde_json::to_string(&serde_json::json!({
-            "schemaVersion": 1,
-            "rect": rect_value,
-            "profile": diagnostic,
-        }))
-        .map_err(|error| {
-            HwpError::RenderError(format!("#3137 cursor diagnostic 직렬화 실패: {error}"))
-        })
-    }
-
-    fn get_cursor_rect_by_path_with_hint_impl(
-        &self,
-        section_idx: usize,
-        parent_para_idx: usize,
-        path_json: &str,
-        char_offset: usize,
-        hint_page: Option<u32>,
-        mut diagnostic: Option<&mut CursorRectPathDiagnostic>,
-    ) -> Result<String, HwpError> {
         use crate::renderer::layout::{compute_char_positions, CellContext, CellPathEntry};
         use crate::renderer::render_tree::{RenderNode, RenderNodeType};
 
-        let parse_started = diagnostic.is_some().then(Instant::now);
         let path = Self::parse_cell_path(path_json)?;
-        if let (Some(started), Some(profile)) = (parse_started, diagnostic.as_deref_mut()) {
-            profile.parse_path_ms += started.elapsed().as_secs_f64() * 1000.0;
-        }
         if path.is_empty() {
             return Err(HwpError::RenderError("경로가 비어있습니다".to_string()));
         }
 
-        let resolve_started = diagnostic.is_some().then(Instant::now);
         let _para = self.resolve_paragraph_by_path(section_idx, parent_para_idx, &path)?;
-        if let (Some(started), Some(profile)) = (resolve_started, diagnostic.as_deref_mut()) {
-            profile.resolve_paragraph_ms += started.elapsed().as_secs_f64() * 1000.0;
-        }
 
         // 커서 좌표를 렌더 트리에서 찾기 ([#2021] 힌트 페이지 우선 탐색)
-        let find_pages_started = diagnostic.is_some().then(Instant::now);
-        let pages = self.find_pages_for_paragraph(section_idx, parent_para_idx)?;
-        if let (Some(started), Some(profile)) = (find_pages_started, diagnostic.as_deref_mut()) {
-            profile.find_pages_ms += started.elapsed().as_secs_f64() * 1000.0;
-            profile.page_candidates = pages.len();
-        }
-        let order_pages_started = diagnostic.is_some().then(Instant::now);
-        let pages = Self::order_pages_by_hint(pages, hint_page);
-        if let (Some(started), Some(profile)) = (order_pages_started, diagnostic.as_deref_mut()) {
-            profile.order_pages_ms += started.elapsed().as_secs_f64() * 1000.0;
-        }
+        let pages = Self::order_pages_by_hint(
+            self.find_pages_for_paragraph(section_idx, parent_para_idx)?,
+            hint_page,
+        );
 
         fn table_ctx_from_node(
             node: &RenderNode,
@@ -3356,164 +3131,27 @@ impl DocumentCore {
             None
         }
 
-        // normal hot path의 재귀에는 timing 분기를 넣지 않는다. diagnostic API만 이
-        // 별도 walker를 사용해 traversal과 compute_char_positions를 독립 계측한다.
-        fn find_cursor_by_path_profiled(
-            core: &DocumentCore,
-            node: &RenderNode,
-            section_idx: usize,
-            parent_para: usize,
-            path: &[(usize, usize, usize)],
-            offset: usize,
-            page: u32,
-            current_table_ctx: Option<CellContext>,
-            current_cell_ctx: Option<CellContext>,
-            current_cell_bounds: Option<CellCursorBounds>,
-            diagnostic: &mut CursorRectPathDiagnostic,
-        ) -> Option<(u32, f64, f64, f64, Option<CellCursorBounds>)> {
-            diagnostic.primary_nodes_visited += 1;
-            let table_ctx =
-                table_ctx_from_node(node, current_table_ctx.as_ref(), current_cell_ctx.as_ref());
-            let mut child_cell_ctx = current_cell_ctx.clone();
-            let mut child_cell_bounds = current_cell_bounds;
-            if let RenderNodeType::TableCell(ref tc) = node.node_type {
-                if let Some(cell_idx) = tc.model_cell_index {
-                    child_cell_ctx = cell_ctx_for_table_cell(
-                        table_ctx.as_ref(),
-                        cell_idx as usize,
-                        0,
-                        tc.text_direction,
-                    );
-                    child_cell_bounds = Some(CellCursorBounds {
-                        x: node.bbox.x,
-                        y: node.bbox.y,
-                        w: node.bbox.width,
-                        h: node.bbox.height,
-                    });
-                }
-            }
-            if let RenderNodeType::TextRun(ref tr) = node.node_type {
-                diagnostic.primary_text_runs_visited += 1;
-                let mut cell_context = effective_cell_context(&tr.cell_context, &current_cell_ctx);
-                if let Some(ref mut ctx) = cell_context {
-                    core.repair_unwrapped_wrapper_cell_context(section_idx, ctx);
-                }
-                if cell_context_matches(&cell_context, parent_para, path) {
-                    diagnostic.matching_text_runs += 1;
-                    let cs = tr.char_start.unwrap_or(0);
-                    let cc = effective_char_count(tr);
-                    if offset >= cs && offset <= cs + cc {
-                        let positions = if tr.char_overlap.is_some() && cc == 1 {
-                            vec![0.0, node.bbox.width]
-                        } else {
-                            diagnostic.compute_char_positions_calls += 1;
-                            diagnostic.compute_char_positions_chars += tr.text.chars().count();
-                            let compute_started = Instant::now();
-                            let positions = compute_char_positions(&tr.text, &tr.style);
-                            diagnostic.compute_char_positions_ms +=
-                                compute_started.elapsed().as_secs_f64() * 1000.0;
-                            positions
-                        };
-                        let lo = offset - cs;
-                        let xr = if lo < positions.len() {
-                            positions[lo]
-                        } else if !positions.is_empty() {
-                            *positions.last().unwrap()
-                        } else {
-                            0.0
-                        };
-                        return Some((
-                            page,
-                            node.bbox.x + xr,
-                            node.bbox.y,
-                            node.bbox.height,
-                            child_cell_bounds,
-                        ));
-                    }
-                }
-            }
-            for child in &node.children {
-                if let Some(hit) = find_cursor_by_path_profiled(
-                    core,
-                    child,
-                    section_idx,
-                    parent_para,
-                    path,
-                    offset,
-                    page,
-                    table_ctx.clone(),
-                    child_cell_ctx.clone(),
-                    child_cell_bounds,
-                    diagnostic,
-                ) {
-                    return Some(hit);
-                }
-            }
-            None
-        }
-
         for &page_num in &pages {
-            let tree = if let Some(profile) = diagnostic.as_deref_mut() {
-                self.build_page_tree_cached_for_cursor_diagnostic(page_num, profile)?
-            } else {
-                self.build_page_tree_cached(page_num)?
-            };
-            let hit = if let Some(profile) = diagnostic.as_deref_mut() {
-                profile.primary_pages_visited += 1;
-                let traversal_started = Instant::now();
-                let hit = find_cursor_by_path_profiled(
-                    self,
-                    &tree.root,
-                    section_idx,
-                    parent_para_idx,
-                    &path,
-                    char_offset,
-                    page_num,
-                    None,
-                    None,
-                    None,
-                    profile,
-                );
-                profile.tree_traversal_inclusive_ms +=
-                    traversal_started.elapsed().as_secs_f64() * 1000.0;
-                hit
-            } else {
-                find_cursor_by_path(
-                    self,
-                    &tree.root,
-                    section_idx,
-                    parent_para_idx,
-                    &path,
-                    char_offset,
-                    page_num,
-                    None,
-                    None,
-                    None,
-                )
-            };
-            if let Some((pi, x, y, h, cell_bounds)) = hit {
-                if let Some(profile) = diagnostic.as_deref_mut() {
-                    profile.matched_page = Some(pi);
-                    profile.result_source = Some("primary");
-                    let format_started = Instant::now();
-                    let rect = format_cursor_rect_json(pi, x, y, h, cell_bounds);
-                    profile.format_rect_ms += format_started.elapsed().as_secs_f64() * 1000.0;
-                    return Ok(rect);
-                }
+            let tree = self.build_page_tree_cached(page_num)?;
+            if let Some((pi, x, y, h, cell_bounds)) = find_cursor_by_path(
+                self,
+                &tree.root,
+                section_idx,
+                parent_para_idx,
+                &path,
+                char_offset,
+                page_num,
+                None,
+                None,
+                None,
+            ) {
                 return Ok(format_cursor_rect_json(pi, x, y, h, cell_bounds));
             }
         }
 
         // fallback: 아무 TextRun이라도 찾기
-        if let Some(profile) = diagnostic.as_deref_mut() {
-            profile.fallback_used = true;
-        }
         for &page_num in &pages {
-            let tree = if let Some(profile) = diagnostic.as_deref_mut() {
-                self.build_page_tree_cached_for_cursor_diagnostic(page_num, profile)?
-            } else {
-                self.build_page_tree_cached(page_num)?
-            };
+            let tree = self.build_page_tree_cached(page_num)?;
             fn find_any_run(
                 core: &DocumentCore,
                 node: &RenderNode,
@@ -3581,8 +3219,7 @@ impl DocumentCore {
                 }
                 None
             }
-            let traversal_started = diagnostic.is_some().then(Instant::now);
-            let hit = find_any_run(
+            if let Some((pi, x, y, h, cell_bounds)) = find_any_run(
                 self,
                 &tree.root,
                 section_idx,
@@ -3592,22 +3229,7 @@ impl DocumentCore {
                 None,
                 None,
                 None,
-            );
-            if let Some(profile) = diagnostic.as_deref_mut() {
-                profile.fallback_pages_visited += 1;
-                if let Some(started) = traversal_started {
-                    profile.tree_traversal_inclusive_ms += started.elapsed().as_secs_f64() * 1000.0;
-                }
-            }
-            if let Some((pi, x, y, h, cell_bounds)) = hit {
-                if let Some(profile) = diagnostic.as_deref_mut() {
-                    profile.matched_page = Some(pi);
-                    profile.result_source = Some("fallback");
-                    let format_started = Instant::now();
-                    let rect = format_cursor_rect_json(pi, x, y, h, cell_bounds);
-                    profile.format_rect_ms += format_started.elapsed().as_secs_f64() * 1000.0;
-                    return Ok(rect);
-                }
+            ) {
                 return Ok(format_cursor_rect_json(pi, x, y, h, cell_bounds));
             }
         }
@@ -5945,51 +5567,5 @@ mod tests {
                 );
             }
         }
-    }
-
-    /// [#3137] diagnostic query는 normal query 좌표를 보존하고 cold miss/warm hit를 구분한다.
-    #[test]
-    fn issue_3137_cursor_path_diagnostic_equivalence_and_cache_state() {
-        let p = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("samples/issue1949_giant_cell_nested_tables_perf.hwp");
-        let bytes = std::fs::read(&p).expect("read sample");
-        let core = crate::document_core::DocumentCore::from_bytes(&bytes).expect("parse");
-        let path = r#"[{"controlIndex":2,"cellIndex":2,"cellParaIndex":5}]"#;
-
-        let normal = core
-            .get_cursor_rect_by_path_with_hint(0, 0, path, 130, None)
-            .expect("normal rect");
-        let normal_value: serde_json::Value = serde_json::from_str(&normal).expect("normal JSON");
-        let hint_page = normal_value["pageIndex"].as_u64().expect("pageIndex") as u32;
-
-        core.invalidate_page_tree_cache();
-        let cold = core
-            .get_cursor_rect_by_path_with_hint_diagnostic_native(0, 0, path, 130, Some(hint_page))
-            .expect("cold diagnostic");
-        let cold_value: serde_json::Value = serde_json::from_str(&cold).expect("cold JSON");
-        assert_eq!(cold_value["schemaVersion"], 1);
-        assert_eq!(cold_value["rect"], normal_value);
-        assert_eq!(cold_value["profile"]["matchedPage"], hint_page);
-        assert_eq!(cold_value["profile"]["resultSource"], "primary");
-        let cold_calls = cold_value["profile"]["pageTreeCalls"]
-            .as_u64()
-            .expect("cold calls");
-        let cold_hits = cold_value["profile"]["pageTreeCacheHits"]
-            .as_u64()
-            .expect("cold hits");
-        let cold_misses = cold_value["profile"]["pageTreeCacheMisses"]
-            .as_u64()
-            .expect("cold misses");
-        assert_eq!(cold_calls, cold_hits + cold_misses);
-        assert_eq!(cold_misses, 1, "편집 직후 정힌트 페이지는 cold miss 1회");
-
-        let warm = core
-            .get_cursor_rect_by_path_with_hint_diagnostic_native(0, 0, path, 130, Some(hint_page))
-            .expect("warm diagnostic");
-        let warm_value: serde_json::Value = serde_json::from_str(&warm).expect("warm JSON");
-        assert_eq!(warm_value["rect"], normal_value);
-        assert_eq!(warm_value["profile"]["pageTreeCalls"], 1);
-        assert_eq!(warm_value["profile"]["pageTreeCacheHits"], 1);
-        assert_eq!(warm_value["profile"]["pageTreeCacheMisses"], 0);
     }
 }

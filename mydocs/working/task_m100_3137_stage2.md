@@ -1,5 +1,9 @@
 # Task M100 #3137 Stage 2 완료보고서 — cursor query Rust 내부 구간 계측
 
+> 이 문서는 연구 브랜치에서 수행한 일회성 원인 계측의 기록이다.
+> 측정 결론은 보존하지만 진단 WASM API, `web-time` 직접 의존성,
+> `--cursor-breakdown` 옵션은 정리 PR의 런타임에서 제거한다.
+
 ## 1. 결론
 
 거대 표 셀의 stable 입력 지연은 `find_pages_for_paragraph`, 렌더 트리 순회,

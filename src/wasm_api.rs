@@ -5416,29 +5416,6 @@ impl HwpDocument {
         .map_err(|e| e.into())
     }
 
-    /// [#3137] 경로 기반 cursor query 내부 구간별 진단.
-    ///
-    /// normal `getCursorRectByPathNear`와 동일한 query를 한 번만 실행하고,
-    /// `rect`와 page lookup/cache/build/traversal/text 측정값을 함께 반환한다.
-    #[wasm_bindgen(js_name = getCursorRectByPathNearDiagnostic)]
-    pub fn get_cursor_rect_by_path_near_diagnostic(
-        &self,
-        section_idx: u32,
-        parent_para_idx: u32,
-        path_json: &str,
-        char_offset: u32,
-        hint_page: u32,
-    ) -> Result<String, JsValue> {
-        self.get_cursor_rect_by_path_with_hint_diagnostic_native(
-            section_idx as usize,
-            parent_para_idx as usize,
-            path_json,
-            char_offset as usize,
-            Some(hint_page),
-        )
-        .map_err(|e| e.into())
-    }
-
     /// 경로 기반 셀 정보 조회 (중첩 표용).
     ///
     /// 반환: JSON `{"row":N,"col":N,"rowSpan":N,"colSpan":N}`

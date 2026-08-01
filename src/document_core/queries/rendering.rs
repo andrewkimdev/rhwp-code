@@ -46,6 +46,36 @@ pub(crate) struct FocusedPageTreePatch {
     pub(crate) dirty_rect: BoundingBox,
 }
 
+fn focused_partial_repaint_alignment_is_safe(
+    alignment: Alignment,
+    is_last_line: bool,
+    has_line_break: bool,
+) -> bool {
+    alignment == Alignment::Left
+        || (alignment == Alignment::Justify && is_last_line && !has_line_break)
+}
+
+/// 고정 dirty rect 밖으로 잉크/장식이 나가거나 cached run spacing을 재계산해야 하는
+/// 스타일은 부분 repaint에서 제외한다. 이 경로는 plain horizontal text 전용이다.
+fn focused_partial_repaint_style_is_safe(style: &TextStyle) -> bool {
+    style.right_tab_block_width_override.is_none()
+        && style.tab_leaders.is_empty()
+        && style.inline_tabs.is_empty()
+        && style.extra_word_spacing.abs() <= 0.001
+        && style.extra_char_spacing.abs() <= 0.001
+        && style.extra_dash_advance.abs() <= 0.001
+        && style.letter_spacing >= -0.01
+        && style.outline_type == 0
+        && style.shadow_type == 0
+        && !style.emboss
+        && !style.engrave
+        && !style.superscript
+        && !style.subscript
+        && style.emphasis_dot == 0
+        && matches!(style.underline, crate::model::style::UnderlineType::None)
+        && !style.strikethrough
+}
+
 /// [#3137 Stage 4] stable tail edit가 재사용할 수 있는 캐시된 마지막 TextLine 정보.
 ///
 /// 페이지/셀 원점과 줄 bbox는 Stage 3의 same-line signature가 보존한다. 여기서는
@@ -129,12 +159,7 @@ fn collect_cached_focused_tail_lines(
                     || run.is_line_break_end
                     || run.is_vertical
                     || run.rotation.abs() > 0.001
-                    || run.style.right_tab_block_width_override.is_some()
-                    || !run.style.tab_leaders.is_empty()
-                    || !run.style.inline_tabs.is_empty()
-                    || run.style.extra_word_spacing.abs() > 0.001
-                    || run.style.extra_char_spacing.abs() > 0.001
-                    || run.style.extra_dash_advance.abs() > 0.001
+                    || !focused_partial_repaint_style_is_safe(&run.style)
                     || !child.visible
                     || child.editor_only
                     || child.layer.is_some()
@@ -5450,6 +5475,23 @@ impl DocumentCore {
         if self.show_paragraph_marks || self.show_control_codes || self.debug_overlay {
             return None;
         }
+        let valid_table_cell = self
+            .document
+            .sections
+            .get(section_idx)
+            .and_then(|section| section.paragraphs.get(parent_para_idx))
+            .and_then(|paragraph| paragraph.controls.get(control_idx))
+            .and_then(|control| match control {
+                Control::Table(table) if cell_idx != super::super::TABLE_CAPTION_CELL_SENTINEL => {
+                    table.cells.get(cell_idx)
+                }
+                _ => None,
+            })
+            .and_then(|cell| cell.paragraphs.get(cell_para_idx))
+            .is_some();
+        if !valid_table_cell {
+            return None;
+        }
         let paragraph = self.get_cell_paragraph_ref(
             section_idx,
             parent_para_idx,
@@ -5493,7 +5535,11 @@ impl DocumentCore {
             .get(paragraph.para_shape_id as usize)
             .map(|style| style.alignment)
             .unwrap_or(Alignment::Left);
-        if alignment != Alignment::Left && alignment != Alignment::Justify {
+        if !focused_partial_repaint_alignment_is_safe(
+            alignment,
+            line_index + 1 == composed.lines.len(),
+            line.has_line_break,
+        ) {
             return None;
         }
 
@@ -5555,6 +5601,9 @@ impl DocumentCore {
             }
 
             let mut style = resolved_to_text_style(&self.styles, run.char_style_id, run.lang_index);
+            if !focused_partial_repaint_style_is_safe(&style) {
+                return None;
+            }
             style.default_tab_width = template.layout_style.default_tab_width;
             style.tab_stops = template.layout_style.tab_stops.clone();
             style.auto_tab_right = template.layout_style.auto_tab_right;
@@ -6562,6 +6611,147 @@ mod tests {
     use super::*;
     use crate::model::bin_data::BinDataContent;
     use crate::renderer::render_tree::RenderNodeType;
+
+    #[test]
+    fn issue3137_focused_partial_repaint_rejects_unsafe_justify_and_extra_spacing() {
+        assert!(focused_partial_repaint_alignment_is_safe(
+            Alignment::Left,
+            false,
+            false
+        ));
+        assert!(focused_partial_repaint_alignment_is_safe(
+            Alignment::Justify,
+            true,
+            false
+        ));
+        assert!(!focused_partial_repaint_alignment_is_safe(
+            Alignment::Justify,
+            false,
+            false
+        ));
+        assert!(!focused_partial_repaint_alignment_is_safe(
+            Alignment::Justify,
+            true,
+            true
+        ));
+
+        let plain = TextStyle::default();
+        assert!(focused_partial_repaint_style_is_safe(&plain));
+
+        for (label, style) in [
+            (
+                "word spacing",
+                TextStyle {
+                    extra_word_spacing: 1.0,
+                    ..plain.clone()
+                },
+            ),
+            (
+                "character spacing",
+                TextStyle {
+                    extra_char_spacing: 1.0,
+                    ..plain.clone()
+                },
+            ),
+            (
+                "dash advance",
+                TextStyle {
+                    extra_dash_advance: 1.0,
+                    ..plain.clone()
+                },
+            ),
+            (
+                "negative letter spacing",
+                TextStyle {
+                    letter_spacing: -0.02,
+                    ..plain.clone()
+                },
+            ),
+        ] {
+            assert!(
+                !focused_partial_repaint_style_is_safe(&style),
+                "{label} must use full repaint"
+            );
+        }
+    }
+
+    #[test]
+    fn issue3137_focused_partial_repaint_rejects_extended_ink_styles() {
+        let plain = TextStyle::default();
+        let styled = [
+            (
+                "outline",
+                TextStyle {
+                    outline_type: 1,
+                    ..plain.clone()
+                },
+            ),
+            (
+                "shadow",
+                TextStyle {
+                    shadow_type: 1,
+                    shadow_offset_x: 8.0,
+                    ..plain.clone()
+                },
+            ),
+            (
+                "emboss",
+                TextStyle {
+                    emboss: true,
+                    ..plain.clone()
+                },
+            ),
+            (
+                "engrave",
+                TextStyle {
+                    engrave: true,
+                    ..plain.clone()
+                },
+            ),
+            (
+                "emphasis",
+                TextStyle {
+                    emphasis_dot: 1,
+                    ..plain.clone()
+                },
+            ),
+            (
+                "underline",
+                TextStyle {
+                    underline: crate::model::style::UnderlineType::Bottom,
+                    ..plain.clone()
+                },
+            ),
+            (
+                "strike",
+                TextStyle {
+                    strikethrough: true,
+                    ..plain.clone()
+                },
+            ),
+            (
+                "superscript",
+                TextStyle {
+                    superscript: true,
+                    ..plain.clone()
+                },
+            ),
+            (
+                "subscript",
+                TextStyle {
+                    subscript: true,
+                    ..plain.clone()
+                },
+            ),
+        ];
+
+        for (label, style) in styled {
+            assert!(
+                !focused_partial_repaint_style_is_safe(&style),
+                "{label} must use full repaint"
+            );
+        }
+    }
 
     #[test]
     fn markdown_table_paragraph_preserves_equation_script() {
