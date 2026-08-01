@@ -35,6 +35,9 @@ pub struct HwpExportVerification {
     pub recovered: bool,
 }
 
+type PageBorderFillExtras = Vec<crate::model::page::PageBorderFill>;
+type HwpPageBorderFillOverlay = Vec<(PageBorderFillExtras, Vec<Vec<Option<PageBorderFillExtras>>>)>;
+
 impl DocumentCore {
     /// [Task #741 후속] 외부 file path 그림 영역 의 binary 영역 영역 base_dir 영역 영역 자동 load.
     ///
@@ -1151,72 +1154,73 @@ impl DocumentCore {
             .map_err(|e| HwpError::RenderError(e.to_string()))
     }
 
-    /// HWP 호환 adapter를 적용해 직렬화하되, HWPX 원본의 pageBorderFill XML 구조는
-    /// live IR에 남기지 않는다.
+    /// HWPX 원본의 pageBorderFill XML 구조를 저장 전 보관한다.
     ///
     /// 한컴 HWP5 출력은 구역마다 세 PAGE_BORDER_FILL record가 필요하다. 하지만 HWPX
     /// 원본은 일반적으로 BOTH 하나만 가지므로, adapter가 채운 EVEN/ODD는 저장 직후
     /// `SectionDef`와 serializer가 읽는 `Control::SectionDef`에서 함께 복원한다.
-    /// 다른 adapter materialization은 기존처럼 live IR에 유지한다.
-    fn serialize_hwp_with_adapter<T>(
-        &mut self,
-        serialize: impl FnOnce(&Document) -> Result<T, crate::serializer::SerializeError>,
-    ) -> Result<T, HwpError> {
-        use crate::document_core::converters::hwpx_to_hwp::convert_if_hwpx_source;
+    fn snapshot_hwpx_page_border_fill_overlay(&self) -> Option<HwpPageBorderFillOverlay> {
+        (self.source_format == crate::parser::FileFormat::Hwpx).then(|| {
+            self.document
+                .sections
+                .iter()
+                .map(|section| {
+                    (
+                        section.section_def.extra_page_border_fills.clone(),
+                        section
+                            .paragraphs
+                            .iter()
+                            .map(|paragraph| {
+                                paragraph
+                                    .controls
+                                    .iter()
+                                    .map(|control| match control {
+                                        Control::SectionDef(section_def) => {
+                                            Some(section_def.extra_page_border_fills.clone())
+                                        }
+                                        _ => None,
+                                    })
+                                    .collect::<Vec<_>>()
+                            })
+                            .collect::<Vec<_>>(),
+                    )
+                })
+                .collect::<Vec<_>>()
+        })
+    }
 
-        let saved_hwpx_page_border_fills = (self.source_format == crate::parser::FileFormat::Hwpx)
-            .then(|| {
-                self.document
-                    .sections
-                    .iter()
-                    .map(|section| {
-                        (
-                            section.section_def.extra_page_border_fills.clone(),
-                            section
-                                .paragraphs
-                                .iter()
-                                .map(|paragraph| {
-                                    paragraph
-                                        .controls
-                                        .iter()
-                                        .map(|control| match control {
-                                            Control::SectionDef(section_def) => {
-                                                Some(section_def.extra_page_border_fills.clone())
-                                            }
-                                            _ => None,
-                                        })
-                                        .collect::<Vec<_>>()
-                                })
-                                .collect::<Vec<_>>(),
-                        )
-                    })
-                    .collect::<Vec<_>>()
-            });
-
-        let _report = convert_if_hwpx_source(&mut self.document, self.source_format);
-        let result = serialize(&self.document);
-
-        if let Some(saved_extras) = saved_hwpx_page_border_fills {
-            debug_assert_eq!(saved_extras.len(), self.document.sections.len());
-            for (section, (section_extras, control_extras)) in
-                self.document.sections.iter_mut().zip(saved_extras)
-            {
-                section.section_def.extra_page_border_fills = section_extras.clone();
-                for (paragraph_idx, paragraph) in section.paragraphs.iter_mut().enumerate() {
-                    for (control_idx, control) in paragraph.controls.iter_mut().enumerate() {
-                        if let Control::SectionDef(section_def) = control {
-                            let original_extras = control_extras
-                                .get(paragraph_idx)
-                                .and_then(|paragraph_controls| paragraph_controls.get(control_idx))
-                                .and_then(|extras| extras.as_ref())
-                                .unwrap_or(&section_extras);
-                            section_def.extra_page_border_fills = original_extras.clone();
-                        }
+    fn restore_hwpx_page_border_fill_overlay(&mut self, saved_extras: HwpPageBorderFillOverlay) {
+        debug_assert_eq!(saved_extras.len(), self.document.sections.len());
+        for (section, (section_extras, control_extras)) in
+            self.document.sections.iter_mut().zip(saved_extras)
+        {
+            section.section_def.extra_page_border_fills = section_extras.clone();
+            for (paragraph_idx, paragraph) in section.paragraphs.iter_mut().enumerate() {
+                for (control_idx, control) in paragraph.controls.iter_mut().enumerate() {
+                    if let Control::SectionDef(section_def) = control {
+                        let original_extras = control_extras
+                            .get(paragraph_idx)
+                            .and_then(|paragraph_controls| paragraph_controls.get(control_idx))
+                            .and_then(|extras| extras.as_ref())
+                            .unwrap_or(&section_extras);
+                        section_def.extra_page_border_fills = original_extras.clone();
                     }
                 }
             }
         }
+    }
 
+    /// Adapter 적용 뒤 직렬화하고, HWPX 원본에 한해 pageBorderFill overlay를 되돌린다.
+    /// 다른 adapter materialization은 기존처럼 live IR에 유지한다.
+    fn serialize_hwp_after_adapter<T>(
+        &mut self,
+        saved_hwpx_page_border_fills: Option<HwpPageBorderFillOverlay>,
+        serialize: impl FnOnce(&Document) -> Result<T, crate::serializer::SerializeError>,
+    ) -> Result<T, HwpError> {
+        let result = serialize(&self.document);
+        if let Some(saved_extras) = saved_hwpx_page_border_fills {
+            self.restore_hwpx_page_border_fill_overlay(saved_extras);
+        }
         result.map_err(|error| HwpError::RenderError(error.to_string()))
     }
 
@@ -1228,7 +1232,14 @@ impl DocumentCore {
     /// HWPX 원본의 단일 BOTH pageBorderFill은 HWP 저장에는 세 record로 materialize하고,
     /// 저장 후 live IR에서는 원래 구조로 복원한다.
     pub fn export_hwp_with_adapter(&mut self) -> Result<Vec<u8>, HwpError> {
-        self.serialize_hwp_with_adapter(crate::serializer::serialize_document)
+        use crate::document_core::converters::hwpx_to_hwp::convert_if_hwpx_source;
+
+        let saved_hwpx_page_border_fills = self.snapshot_hwpx_page_border_fill_overlay();
+        let _report = convert_if_hwpx_source(&mut self.document, self.source_format);
+        self.serialize_hwp_after_adapter(
+            saved_hwpx_page_border_fills,
+            crate::serializer::serialize_document,
+        )
     }
 
     /// HWPX 출처 어댑터를 적용한 뒤 HWP5 EncryptVersion 4 비밀번호 문서로 저장한다.
@@ -1239,7 +1250,11 @@ impl DocumentCore {
         &mut self,
         password: &[u8],
     ) -> Result<Vec<u8>, HwpError> {
-        self.serialize_hwp_with_adapter(|document| {
+        use crate::document_core::converters::hwpx_to_hwp::convert_if_hwpx_source;
+
+        let saved_hwpx_page_border_fills = self.snapshot_hwpx_page_border_fill_overlay();
+        let _report = convert_if_hwpx_source(&mut self.document, self.source_format);
+        self.serialize_hwp_after_adapter(saved_hwpx_page_border_fills, |document| {
             crate::serializer::serialize_hwp_with_password(document, password)
         })
     }
