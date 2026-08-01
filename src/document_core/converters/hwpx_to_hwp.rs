@@ -182,6 +182,8 @@ pub fn convert_hwpx_to_hwp_ir(doc: &mut Document) -> AdapterReport {
     let mut report = AdapterReport::new();
 
     normalize_file_header_for_hwp(doc, &mut report);
+    normalize_page_border_fills_for_hwp(doc);
+    normalize_picture_geometry_for_hwp(doc);
     normalize_doc_properties_for_hwp(doc, &mut report);
     materialize_hwp5_bin_data_order(doc, &mut report);
     normalize_bin_data_for_hwp(doc, &mut report);
@@ -572,6 +574,182 @@ fn remap_bin_ref(id: u16, remap: &[u16]) -> u16 {
 /// 임시 헤더를 만든다. 그러나 HWP 저장기는 이 값을 그대로 사용해 DocInfo/BodyText/BinData
 /// 스트림 압축 여부를 결정한다. Stage30 probe의 공통 기준선도 압축 플래그를 켠 상태였으므로,
 /// HWPX -> HWP 저장 adapter는 HWP5 compressed 헤더를 명시적으로 materialize해야 한다.
+/// 개체 요소 속성에 대한 가변 접근 — 도형 종류마다 보관 위치가 달라 한 곳에 모은다.
+fn shape_attr_mut(
+    obj: &mut crate::model::shape::ShapeObject,
+) -> Option<&mut crate::model::shape::ShapeComponentAttr> {
+    use crate::model::shape::ShapeObject as S;
+    Some(match obj {
+        S::Line(s) => &mut s.drawing.shape_attr,
+        S::Rectangle(s) => &mut s.drawing.shape_attr,
+        S::Ellipse(s) => &mut s.drawing.shape_attr,
+        S::Arc(s) => &mut s.drawing.shape_attr,
+        S::Polygon(s) => &mut s.drawing.shape_attr,
+        S::Curve(s) => &mut s.drawing.shape_attr,
+        S::Group(g) => &mut g.shape_attr,
+        S::Picture(p) => &mut p.shape_attr,
+        S::Chart(c) => &mut c.drawing.shape_attr,
+        S::Ole(o) => &mut o.drawing.shape_attr,
+    })
+}
+
+/// [#3676] 그림 개체의 사각형 4점과 자르기 정보가 비어 있으면 크기에서 채운다.
+///
+/// `HWPTAG_SHAPE_COMPONENT_PICTURE` 는 개체의 네 꼭짓점을 (x,y) 쌍 4개로 담는다.
+/// 한컴이 저장한 문서는 `(0,0) (w,0) (w,h) (0,h)` 형태이고 자르기 우/하단에 원본
+/// 크기가 들어간다. HWP3 파서는 이 값들을 채우지 않아 **전부 0** 으로 나갔고,
+/// 크기 0 짜리 그림이 든 문서를 한컴이 거부했다(그림 1개짜리 34KB 문서도 거부 —
+/// 문서 크기가 아니라 그림 유무가 판별자).
+///
+/// 크기는 `SHAPE_COMPONENT` 가 이미 갖고 있다(현재 폭/높이). 그것으로 사각형을
+/// 만들고, 자르기는 원본 크기 기준 전체 영역으로 둔다. 이미 채워진 그림은
+/// 건드리지 않으므로 HWPX·HWP5 경로는 무영향이다.
+fn normalize_picture_geometry_for_hwp(doc: &mut Document) {
+    fn fill(pic: &mut crate::model::image::Picture) {
+        // `SHAPE_COMPONENT` 의 local file version. 한컴 저장본은 1, HWP3 변환본은 0 이다
+        // (같은 그림의 바이트 대조로 확인). 기하와 무관하게 항상 맞춘다.
+        if pic.shape_attr.local_file_version == 0 {
+            pic.shape_attr.local_file_version = 1;
+        }
+        if pic.border_x.iter().any(|&v| v != 0) || pic.border_y.iter().any(|&v| v != 0) {
+            return;
+        }
+        let w = if pic.shape_attr.current_width > 0 {
+            pic.shape_attr.current_width as i32
+        } else {
+            pic.common.width as i32
+        };
+        let h = if pic.shape_attr.current_height > 0 {
+            pic.shape_attr.current_height as i32
+        } else {
+            pic.common.height as i32
+        };
+        if w <= 0 || h <= 0 {
+            return;
+        }
+        // `border_x`/`border_y` 는 이름과 달리 **디스크의 8개 스칼라를 앞뒤로 나눈
+        // 것**이다. 실제 저장 순서는 (x,y) 쌍 4개다 — HWPX 파서가 같은 규약을
+        // 문서화해 두었다(`parser/hwpx/section.rs`). 한컴 저장본 실측도 같다:
+        // 원본 그림 하나가 `(0,0) (w,0) (w,h) (0,h)` 로 들어 있다.
+        pic.border_x = [0, 0, w, 0];
+        pic.border_y = [w, h, 0, h];
+        if pic.crop.right == 0 && pic.crop.bottom == 0 {
+            let ow = if pic.shape_attr.original_width > 0 {
+                pic.shape_attr.original_width as i32
+            } else {
+                w
+            };
+            let oh = if pic.shape_attr.original_height > 0 {
+                pic.shape_attr.original_height as i32
+            } else {
+                h
+            };
+            pic.crop.right = ow;
+            pic.crop.bottom = oh;
+        }
+    }
+    // 그림은 문단 직속 말고도 표 셀·묶음 개체·글상자·머리말/꼬리말/주석 안에 있다.
+    // 한 군데라도 빠뜨리면 그 그림만 기하 0 으로 남아 문서 전체가 거부된다
+    // (hwp3-sample: 5개 중 4개만 채워졌을 때 여전히 거부).
+    fn walk_shape(obj: &mut crate::model::shape::ShapeObject, f: &mut impl FnMut(&mut Paragraph)) {
+        use crate::model::shape::ShapeObject as S;
+        // local file version 은 그림뿐 아니라 **모든 개체 요소**가 1 이어야 한다.
+        // 한컴 저장본은 예외 없이 1 이고, HWP3 변환본은 도형(`$con`/`$rec` 등)만
+        // 0 으로 남아 문서 전체가 거부됐다(그림만 고쳤을 때 20건 중 2건 잔존).
+        if let Some(attr) = shape_attr_mut(obj) {
+            if attr.local_file_version == 0 {
+                attr.local_file_version = 1;
+            }
+        }
+        match obj {
+            S::Picture(pic) => fill(pic),
+            S::Group(g) => {
+                for child in g.children.iter_mut() {
+                    walk_shape(child, f);
+                }
+            }
+            _ => {}
+        }
+        // 글상자를 가진 그리기 개체는 그 안에도 그림이 들어간다.
+        let tb = match obj {
+            S::Line(s) => s.drawing.text_box.as_mut(),
+            S::Rectangle(s) => s.drawing.text_box.as_mut(),
+            S::Ellipse(s) => s.drawing.text_box.as_mut(),
+            S::Arc(s) => s.drawing.text_box.as_mut(),
+            S::Polygon(s) => s.drawing.text_box.as_mut(),
+            S::Curve(s) => s.drawing.text_box.as_mut(),
+            _ => None,
+        };
+        if let Some(tb) = tb {
+            for p in tb.paragraphs.iter_mut() {
+                f(p);
+            }
+        }
+    }
+    fn walk(controls: &mut [Control]) {
+        for ctrl in controls.iter_mut() {
+            match ctrl {
+                Control::Picture(pic) => fill(pic),
+                Control::Shape(obj) => walk_shape(obj, &mut |p: &mut Paragraph| {
+                    walk(&mut p.controls);
+                }),
+                Control::Table(t) => {
+                    for cell in t.cells.iter_mut() {
+                        for p in cell.paragraphs.iter_mut() {
+                            walk(&mut p.controls);
+                        }
+                    }
+                }
+                Control::Header(h) => {
+                    for p in h.paragraphs.iter_mut() {
+                        walk(&mut p.controls);
+                    }
+                }
+                Control::Footer(f) => {
+                    for p in f.paragraphs.iter_mut() {
+                        walk(&mut p.controls);
+                    }
+                }
+                Control::Footnote(n) => {
+                    for p in n.paragraphs.iter_mut() {
+                        walk(&mut p.controls);
+                    }
+                }
+                Control::Endnote(n) => {
+                    for p in n.paragraphs.iter_mut() {
+                        walk(&mut p.controls);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    for section in doc.sections.iter_mut() {
+        for para in section.paragraphs.iter_mut() {
+            walk(&mut para.controls);
+        }
+    }
+}
+
+/// [#3676] 구역마다 `HWPTAG_PAGE_BORDER_FILL` 을 **3개** 채운다 (양쪽/짝수쪽/홀수쪽).
+///
+/// 한컴이 저장한 문서와 rhwp 의 HWP5 왕복본은 예외 없이 3개다. HWP3 파서는
+/// `extra_page_border_fills` 를 채우지 않아 **1개만** 나갔고, 그 스트림을 정상 파일에
+/// 이식하면 한컴이 파일을 거부한다(스트림 단위 이분 탐색으로 확인 — DocInfo 이식은
+/// 정상 열림, BodyText/Section0 이식만 거부).
+///
+/// 세 레코드는 한컴 원본에서도 내용이 완전히 동일하다(attr·간격 모두 같음) — 구분
+/// 플래그가 아니라 **개수 자체가 규격**이므로 첫 레코드를 복제해 채운다.
+/// 이미 2개 이상인 경로(HWPX·HWP5)는 건드리지 않는다.
+fn normalize_page_border_fills_for_hwp(doc: &mut Document) {
+    for section in doc.sections.iter_mut() {
+        let sd = &mut section.section_def;
+        while sd.extra_page_border_fills.len() < 2 {
+            sd.extra_page_border_fills.push(sd.page_border_fill.clone());
+        }
+    }
+}
+
 fn normalize_file_header_for_hwp(doc: &mut Document, report: &mut AdapterReport) {
     let mut changed = false;
 
