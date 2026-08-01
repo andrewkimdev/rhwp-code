@@ -1427,11 +1427,10 @@ impl DocumentCore {
                 cell_idx,
                 cell_para_idx,
             );
-        let focused_styles = focused_target_is_table_cell.then(|| self.styles.clone());
         let focused_base_revision = self.deferred_pagination_revision;
         // insert는 edit start, replace는 교체 전 조합 문자열의 끝이 현재 caret이다.
         let focused_source_offset = char_offset + delete_count;
-        let focused_before = focused_styles.as_ref().and_then(|styles| {
+        let focused_before = if focused_target_is_table_cell {
             self.get_cell_paragraph_ref(
                 section_idx,
                 parent_para_idx,
@@ -1440,9 +1439,11 @@ impl DocumentCore {
                 cell_para_idx,
             )
             .and_then(|paragraph| {
-                focused_cursor_local_geometry(paragraph, focused_source_offset, styles)
+                focused_cursor_local_geometry(paragraph, focused_source_offset, &self.styles)
             })
-        });
+        } else {
+            None
+        };
 
         // 셀 문단 접근 검증 및 텍스트 교체
         let active_field = self.active_field.clone();
@@ -1532,7 +1533,7 @@ impl DocumentCore {
         };
         let cell_flow_changed = flow_advance_before != flow_advance_after;
         let new_offset = char_offset + new_chars_count;
-        let focused_after = focused_styles.as_ref().and_then(|styles| {
+        let focused_after = if focused_target_is_table_cell {
             self.get_cell_paragraph_ref(
                 section_idx,
                 parent_para_idx,
@@ -1540,8 +1541,12 @@ impl DocumentCore {
                 cell_idx,
                 cell_para_idx,
             )
-            .and_then(|paragraph| focused_cursor_local_geometry(paragraph, new_offset, styles))
-        });
+            .and_then(|paragraph| {
+                focused_cursor_local_geometry(paragraph, new_offset, &self.styles)
+            })
+        } else {
+            None
+        };
         let focused_delta_x = focused_cursor_delta_x(focused_before, focused_after);
 
         // Table의 일반 cell만 pointer-key layout cache의 owner다. 표 캡션 sentinel과
@@ -1760,12 +1765,11 @@ impl DocumentCore {
                 cell_idx,
                 cell_para_idx,
             );
-        let focused_styles = focused_target_is_table_cell.then(|| self.styles.clone());
         let focused_base_revision = self.deferred_pagination_revision;
         // Backspace의 현재 caret은 삭제 범위 끝이다. forward Delete는 source 불일치로
         // Studio가 보수적으로 exact query에 fallback한다.
         let focused_source_offset = char_offset + count;
-        let focused_before = focused_styles.as_ref().and_then(|styles| {
+        let focused_before = if focused_target_is_table_cell {
             self.get_cell_paragraph_ref(
                 section_idx,
                 parent_para_idx,
@@ -1774,9 +1778,11 @@ impl DocumentCore {
                 cell_para_idx,
             )
             .and_then(|paragraph| {
-                focused_cursor_local_geometry(paragraph, focused_source_offset, styles)
+                focused_cursor_local_geometry(paragraph, focused_source_offset, &self.styles)
             })
-        });
+        } else {
+            None
+        };
 
         // 셀 문단 접근 검증 및 텍스트 삭제
         let cell_para = self.get_cell_paragraph_mut(
@@ -1834,7 +1840,7 @@ impl DocumentCore {
             )
         };
         let cell_flow_changed = flow_advance_before != flow_advance_after;
-        let focused_after = focused_styles.as_ref().and_then(|styles| {
+        let focused_after = if focused_target_is_table_cell {
             self.get_cell_paragraph_ref(
                 section_idx,
                 parent_para_idx,
@@ -1842,8 +1848,12 @@ impl DocumentCore {
                 cell_idx,
                 cell_para_idx,
             )
-            .and_then(|paragraph| focused_cursor_local_geometry(paragraph, char_offset, styles))
-        });
+            .and_then(|paragraph| {
+                focused_cursor_local_geometry(paragraph, char_offset, &self.styles)
+            })
+        } else {
+            None
+        };
         let focused_delta_x = (deleted_count == count)
             .then(|| focused_cursor_delta_x(focused_before, focused_after))
             .flatten();
