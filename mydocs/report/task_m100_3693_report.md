@@ -4,7 +4,7 @@
 - **상위 이슈**: [#1528](https://github.com/edwardkim/rhwp/issues/1528)
 - **브랜치**: `codex/issue-3693-export-structure-clause`
 - **기준 devel**: `79551f42f`
-- **상태**: WIP 독립 대조·focused 검증·작업지시자 채택 승인 완료, PR 통합 대기
+- **상태**: WIP 채택·최신 devel 병합·full release-test 완료, draft PR 생성 진행
 
 ## 0. 절차 복구 결과
 
@@ -53,6 +53,10 @@
 Stage 2에서 같은 focused 게이트를 다시 실행해 모두 통과했고, `652e2ee27..HEAD`의 소스·테스트 차이가
 0임을 확인했다. 계획 대비 10개 항목도 모두 충족으로 판정했다.
 
+PR 게이트 승인 뒤 `upstream/devel` `f80b910aa`를 merge commit `16b71b015`로 반영했다. 이 최신
+기준선에서 `CARGO_INCREMENTAL=0 cargo test --profile release-test --tests`를 실행해 모든 실행 대상이
+실패 0으로 통과했다. #3693 전용 실문서 회귀 3건도 release-test profile에서 재통과했다.
+
 새 HWP/HWPX fixture와 golden/baseline 변경은 없다. 렌더 경로를 변경하지 않아 시각 검증 대상이 아니다.
 
 ## 5. 호환성과 남은 작업
@@ -60,6 +64,7 @@ Stage 2에서 같은 focused 게이트를 다시 실행해 모두 통과했고, 
 - `StructureDoc`/`StructureNode` 필드, JSON 봉투, CLI exit code는 불변이다.
 - strong marker와 명시적 outline mode는 불변이다.
 - `652e2ee27`은 작업지시자 승인으로 #3693 구현에 채택됐다.
-- full release-test와 GitHub CI는 별도 PR 승인 뒤 수행한다.
+- full release-test는 작업지시자 승인 뒤 최신 devel 기준으로 통과했다.
+- GitHub CI와 리뷰는 draft PR에서 확인한다.
 - 후속 #3695는 별도 수행·구현 계획 승인 뒤 재개한다.
 - #3693 변경이 `devel`에 포함되기 전에는 이슈를 close하지 않는다.
