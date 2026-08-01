@@ -1242,6 +1242,25 @@ impl DocumentCore {
         )
     }
 
+    /// 어댑터를 **복제본에 적용해** HWP5 를 낸다 — 호출자의 IR 은 그대로다.
+    ///
+    /// `export_hwp_with_adapter` 는 살아 있는 IR 을 직접 정규화한다. 저장 직후 종료하는
+    /// CLI 에서는 관측되지 않지만, 저장 뒤에도 계속 쓰이는 핸들(MCP 세션)에서는 저장이
+    /// 문서를 바꿔 버린다. 특히 어댑터는 `Hwpx | Hwp3` 양쪽에서 돌면서 각 구역 첫 문단의
+    /// `controls[0]` 에 `Control::SectionDef` 를 끼워 넣는데, 같은 문단의
+    /// `field_ranges[].control_idx` 는 밀어 주지 않는다 — 저장 한 번에 누름틀이 가리키는
+    /// 컨트롤이 한 칸씩 어긋난다. 저장은 스냅숏이어야 하므로 복제본에만 어댑터를 태운다.
+    ///
+    /// 비용은 `Document` 1회 clone 이다. 그 값을 치를 이유가 없는 CLI 경로는
+    /// `export_hwp_with_adapter` 를 계속 쓴다.
+    pub fn export_hwp_with_adapter_snapshot(&self) -> Result<Vec<u8>, HwpError> {
+        use crate::document_core::converters::hwpx_to_hwp::convert_if_hwpx_source;
+        let mut snapshot = self.document.clone();
+        let _report = convert_if_hwpx_source(&mut snapshot, self.source_format);
+        crate::serializer::serialize_document(&snapshot)
+            .map_err(|e| HwpError::RenderError(e.to_string()))
+    }
+
     /// HWPX 출처 어댑터를 적용한 뒤 HWP5 EncryptVersion 4 비밀번호 문서로 저장한다.
     ///
     /// 일반 HWP 저장과 마찬가지로 HWPX 출처는 반드시 adapter를 먼저 통과한다. 암호화만
@@ -1921,6 +1940,26 @@ impl DocumentCore {
                 // 필드의 end 마커를 컨트롤로 오산해 begin 갭을 유실 — 필드쌍 교차 페어링 유발).
                 if offsets_valid && start < end && end <= orig_offsets.len() {
                     let u_start = orig_offsets[start];
+                    // [#3545] 지워진 본문 run 을 HWPX 저장에서 되살리기 위한 잔재 기록.
+                    // 한컴 정준형은 미기입 누름틀의 안내문을 파일에 본문 run 으로 남기므로
+                    // (form-01.hwpx), 기록 없이 저장하면 파일에서 영구 소실된다. 서식까지
+                    // 되살리도록 그 텍스트를 담던 run 의 char shape 도 함께 남긴다 — 아래
+                    // 수술이 zero-width 로 접기 전의 원본 좌표에서 조회해야 정확하다.
+                    let residue_shape_id = para
+                        .char_shapes
+                        .iter()
+                        .rev()
+                        .find(|cs| cs.start_pos <= u_start)
+                        .map(|cs| cs.char_shape_id)
+                        .unwrap_or(0);
+                    let residue_text: String = orig_chars[start..end].iter().collect();
+                    let ctrl_idx = para.field_ranges[fri].control_idx;
+                    if let Some(Control::Field(f)) = para.controls.get_mut(ctrl_idx) {
+                        f.guide_residue = Some(crate::model::control::GuideResidue {
+                            text: residue_text,
+                            char_shape_id: residue_shape_id,
+                        });
+                    }
                     // 삭제 폭 = 삭제 문자들의 utf16 폭만. orig_offsets[end] 는 필드 end
                     // 마커의 8유닛 갭을 건너뛴 다음 문자 위치라 갭까지 폭에 포함되어
                     // 후속 오프셋에서 마커 갭이 소실된다(슬롯 방출 위치 붕괴).
