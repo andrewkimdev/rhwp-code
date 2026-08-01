@@ -14,7 +14,7 @@ pub mod hwpx;
 pub mod mini_cfb;
 pub mod record_writer;
 
-pub use cfb_writer::serialize_hwp;
+pub use cfb_writer::{serialize_hwp, serialize_hwp_with_password};
 pub use hml::serialize_hml;
 pub use hwpx::serialize_hwpx;
 
