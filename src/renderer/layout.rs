@@ -1440,6 +1440,10 @@ pub struct LayoutEngine {
     /// 본문 하단과 쪽 하단 사이(아래 여백·꼬리말 영역)에 그려진 글자는 실제로 보이므로
     /// 결함이 아니다. 본문 하단으로 재면 그 구간이 통째로 오탐이 된다.
     current_page_height: std::cell::Cell<f64>,
+    /// [#3668] `LAYOUT_OVERFLOW_CELL` 발생 줄 수 누적. 셀 안 줄의 윗변이 쪽 하단 밖
+    /// = 그 줄 확정 소실. stderr 진단과 같은 조건에서만 증가하며,
+    /// `take_overflow_cell_lines` 로 읽으면서 리셋한다.
+    overflow_cell_lines: std::cell::Cell<u32>,
     /// HWP3-origin HWP5 변환본 여부.
     /// [#2403] 소스분기 질의 표면 — set_layout_profile 로 배선 (종전 hwp3_variant/
     /// hwpx_source Cell 2개 통합).
@@ -1542,6 +1546,7 @@ impl LayoutEngine {
             current_paper_width: std::cell::Cell::new(0.0),
             current_body_area: std::cell::Cell::new((0.0, 0.0, 0.0, 0.0)),
             current_page_height: std::cell::Cell::new(0.0),
+            overflow_cell_lines: std::cell::Cell::new(0),
             profile: std::cell::Cell::new(Default::default()),
             use_hwp3_origin_flow_spacing_before: std::cell::Cell::new(false),
             render_normalization: std::cell::RefCell::new(std::sync::Arc::new(
@@ -1591,6 +1596,12 @@ impl LayoutEngine {
     /// 레이아웃 검증 결과 조회 및 리셋
     pub fn take_overflows(&self) -> Vec<LayoutOverflow> {
         self.layout_overflows.borrow_mut().drain(..).collect()
+    }
+
+    /// [#3668] `LAYOUT_OVERFLOW_CELL` 누적 줄 수 조회 및 리셋.
+    /// 페이지 렌더 경계마다 읽으면 페이지 단위 귀속이 된다.
+    pub fn take_overflow_cell_lines(&self) -> u32 {
+        self.overflow_cell_lines.replace(0)
     }
 
     /// 레이아웃 경계 초과 기록
