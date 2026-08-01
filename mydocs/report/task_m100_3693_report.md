@@ -1,16 +1,17 @@
-# task_m100_3693 WIP 결과 스냅샷 — export-structure clause 정확도
+# task_m100_3693 처리결과 보고서 — export-structure clause 정확도
 
 - **Issue**: [#3693](https://github.com/edwardkim/rhwp/issues/3693)
 - **상위 이슈**: [#1528](https://github.com/edwardkim/rhwp/issues/1528)
 - **브랜치**: `codex/issue-3693-export-structure-clause`
 - **기준 devel**: `79551f42f`
-- **상태**: 사전 승인 WIP — 최종 결과보고서 아님, 정정 계획 승인 대기
+- **상태**: WIP 독립 대조·focused 검증·작업지시자 채택 승인 완료, PR 통합 대기
 
-## 0. 문서 성격 정정
+## 0. 절차 복구 결과
 
-이 파일은 계획 승인과 단계별 판정 전에 구현 커밋과 함께 작성됐다. 아래 내용은 `652e2ee27`에서
-관찰한 결과를 보존하는 스냅샷이며, 작업지시자가 승인한 최종 결과를 뜻하지 않는다. 정정 계획 승인 후
-WIP draft를 독립 검토하고, 승인된 단계가 끝났을 때 최종 보고서로 다시 확정한다.
+초기 파일은 계획 승인과 단계별 판정 전에 구현 커밋과 함께 작성돼 WIP 스냅샷으로 재분류했다. 이후
+정정 계획 승인 체크포인트 `8f9064271`을 고정하고, `task_m100_3693_stage2.md`에서 기존 결론을 전제로
+삼지 않은 독립 대조와 focused 재검증을 수행했다. 작업지시자가 그 결과를 검토해 `652e2ee27` 채택을
+승인했으므로 이 문서를 #3693 최종 결과보고서로 확정한다.
 
 ## 1. 결과
 
@@ -49,14 +50,16 @@ WIP draft를 독립 검토하고, 승인된 단계가 끝났을 때 최종 보�
 - export-structure CLI JSON 계약: 4 passed
 - fmt, clippy `-D warnings`, diff check: 통과
 
+Stage 2에서 같은 focused 게이트를 다시 실행해 모두 통과했고, `652e2ee27..HEAD`의 소스·테스트 차이가
+0임을 확인했다. 계획 대비 10개 항목도 모두 충족으로 판정했다.
+
 새 HWP/HWPX fixture와 golden/baseline 변경은 없다. 렌더 경로를 변경하지 않아 시각 검증 대상이 아니다.
 
 ## 5. 호환성과 남은 작업
 
 - `StructureDoc`/`StructureNode` 필드, JSON 봉투, CLI exit code는 불변이다.
 - strong marker와 명시적 outline mode는 불변이다.
-- 정정된 #3693 수행·구현 계획의 승인을 먼저 받는다.
-- 승인 후 WIP draft를 채택·수정·폐기 중 하나로 판정하고 단계별 보고·승인을 복구한다.
-- full release-test와 GitHub CI는 그 이후 별도 PR 승인 뒤 수행한다.
-- 후속 #3695는 #3693의 승인된 단계 완료 후 재개한다.
+- `652e2ee27`은 작업지시자 승인으로 #3693 구현에 채택됐다.
+- full release-test와 GitHub CI는 별도 PR 승인 뒤 수행한다.
+- 후속 #3695는 별도 수행·구현 계획 승인 뒤 재개한다.
 - #3693 변경이 `devel`에 포함되기 전에는 이슈를 close하지 않는다.
