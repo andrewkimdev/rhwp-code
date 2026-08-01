@@ -16,7 +16,7 @@ use crate::model::style::HeadType;
 /// 분류 방식.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StructureMode {
-    /// 개요(Outline/Number head_type) 있으면 개요, 없으면 조문 패턴.
+    /// 명시적 Outline → 강한 조문 marker → Number 순으로 증거를 선택.
     Auto,
     /// IR 개요 수준(para_level)만 사용.
     Outline,
@@ -186,16 +186,46 @@ fn classify_clause(text: &str) -> Option<Heading> {
     None
 }
 
-/// 문서가 개요(Outline/Number) head_type 을 하나라도 쓰는지.
-fn has_outline(doc: &Document) -> bool {
-    doc.sections.iter().any(|s| {
-        s.paragraphs.iter().any(|p| {
-            doc.doc_info
+/// `auto` 모드의 문서 단위 분류.
+///
+/// `HeadType::Outline`은 작성자가 지정한 개요이므로 최우선한다. `HeadType::Number`는
+/// 일반 번호 목록에도 쓰여 단독으로는 약한 증거다. 편·장·절·관·조처럼 문맥 없이도 강한
+/// 법령형 marker가 함께 있으면 clause를 선택하고, 그렇지 않을 때 Number를 outline으로 본다.
+/// 항·호·목은 일반 목록과 모양이 겹치므로 auto 선택 증거로 쓰지 않는다.
+fn select_auto_mode(doc: &Document) -> StructureMode {
+    let mut has_number = false;
+    let mut has_primary_clause = false;
+
+    for section in &doc.sections {
+        for paragraph in &section.paragraphs {
+            if let Some(para_shape) = doc
+                .doc_info
                 .para_shapes
-                .get(p.para_shape_id as usize)
-                .is_some_and(|ps| matches!(ps.head_type, HeadType::Outline | HeadType::Number))
-        })
-    })
+                .get(paragraph.para_shape_id as usize)
+            {
+                match para_shape.head_type {
+                    HeadType::Outline => return StructureMode::Outline,
+                    HeadType::Number => has_number = true,
+                    HeadType::None | HeadType::Bullet => {}
+                }
+            }
+
+            let text = super::rendering::paragraph_text_with_equations(paragraph);
+            if classify_clause(&text)
+                .is_some_and(|heading| matches!(heading.kind, "편" | "장" | "절" | "관" | "조"))
+            {
+                has_primary_clause = true;
+            }
+        }
+    }
+
+    if has_primary_clause {
+        StructureMode::Clause
+    } else if has_number {
+        StructureMode::Outline
+    } else {
+        StructureMode::Clause
+    }
 }
 
 /// 텍스트만으로 모호한 호/목 후보를 현재 법령 계층 문맥에서 수용할지 판정한다.
@@ -216,13 +246,7 @@ fn clause_heading_allowed(heading: &Heading, stack: &[StructureNode]) -> bool {
 /// 문서 구조 트리를 구성한다.
 pub fn build_structure(doc: &Document, mode: StructureMode) -> StructureDoc {
     let effective = match mode {
-        StructureMode::Auto => {
-            if has_outline(doc) {
-                StructureMode::Outline
-            } else {
-                StructureMode::Clause
-            }
-        }
+        StructureMode::Auto => select_auto_mode(doc),
         m => m,
     };
 
