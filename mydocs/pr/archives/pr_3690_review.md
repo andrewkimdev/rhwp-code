@@ -16,7 +16,7 @@ modifiers: intake_and_review, local_validation, rework_and_exceptions(대형 PR)
 loaded documents: pr_review_workflow.md, pr_review/README.md,
   collaborator_self_merge.md, intake_and_review.md, local_validation.md,
   rework_and_exceptions.md
-current head: 5e7ea9ddc (rebase 뒤 force-with-lease push 전 참고값)
+current head: 069c66b21 (문서 갱신 시점 참고값)
 ```
 
 ## 메타데이터
@@ -31,7 +31,9 @@ current head: 5e7ea9ddc (rebase 뒤 force-with-lease push 전 참고값)
 | reviewer 요청 | GitHub requested-reviewers API가 빈 목록을 반환함 |
 
 PR 생성 뒤 `devel`이 앞선 상태여서 최신 `upstream/devel` 위로 7개 task commit을 충돌 없이
-rebase했다. 위 head와 CI 상태는 push 및 merge 직전에 다시 확인해야 한다.
+rebase했다. 그 사이 remote head가 `devel` merge commit을 추가했으므로 중복 patch 7개는 Git이
+자동으로 건너뛰고, 이 review 기록을 그 원격 head 위에 재적용했다. 위 head와 CI 상태는 merge
+직전에 다시 확인해야 한다.
 
 ## 변경 범위
 

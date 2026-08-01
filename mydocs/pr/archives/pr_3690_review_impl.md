@@ -24,8 +24,8 @@ last_verified: 2026-08-01
 
 1. 완료: 최신 `upstream/devel` 위 rebase. 충돌 없음.
 2. 완료: Rust 암호 계약 7개와 Studio 전체 719개 테스트, typecheck, production build를 확인.
-3. 진행 중: rebased head와 archive review 기록을 `task_m100_3604`에 force-with-lease push하고
-   최신 head 기준 CI를 관찰.
+3. 완료: remote의 `devel` merge commit을 보존하고, 중복 구현 patch를 건너뛴 archive review 기록을
+   `task_m100_3604`에 fast-forward push했다. 최신 head 기준 CI를 관찰한다.
 4. 대기: native Finder drag/drop 수동 확인. 암호 입력 dialog와 문서 canvas 표시, renderer 비종료,
    Ctrl+S save-as 전환을 확인한다.
 5. 대기: 최신 head의 required CI 통과와 작업지시자 승인 후 merge 여부를 판정한다.
