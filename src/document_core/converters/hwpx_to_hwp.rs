@@ -179,9 +179,20 @@ impl AdapterReport {
 /// 정확한 vpos 가 채워져 있어 추가 사전계산이 불필요. 직렬화 → 재로드 시에도 vpos 가 그대로
 /// 보존된다 (정수 필드 라운드트립).
 pub fn convert_hwpx_to_hwp_ir(doc: &mut Document) -> AdapterReport {
+    convert_to_hwp_ir(doc)
+}
+
+/// HWPX/HWP3 출처 IR 을 HWP 직렬화기가 기대하는 형태로 정규화한다.
+///
+/// 한컴 HWP5 스트림은 출처와 관계없이 구역당 `PAGE_BORDER_FILL` 레코드 세 개를
+/// 요구한다. HWPX 원본의 단일 BOTH XML 구조 보존은 이 변환을 생략하는 대신,
+/// `DocumentCore` HWP export 경계에서 저장 뒤 PBF overlay를 되돌려 보장한다.
+fn convert_to_hwp_ir(doc: &mut Document) -> AdapterReport {
     let mut report = AdapterReport::new();
 
     normalize_file_header_for_hwp(doc, &mut report);
+    normalize_page_border_fills_for_hwp(doc);
+    normalize_picture_geometry_for_hwp(doc);
     normalize_doc_properties_for_hwp(doc, &mut report);
     materialize_hwp5_bin_data_order(doc, &mut report);
     normalize_bin_data_for_hwp(doc, &mut report);
@@ -572,6 +583,221 @@ fn remap_bin_ref(id: u16, remap: &[u16]) -> u16 {
 /// 임시 헤더를 만든다. 그러나 HWP 저장기는 이 값을 그대로 사용해 DocInfo/BodyText/BinData
 /// 스트림 압축 여부를 결정한다. Stage30 probe의 공통 기준선도 압축 플래그를 켠 상태였으므로,
 /// HWPX -> HWP 저장 adapter는 HWP5 compressed 헤더를 명시적으로 materialize해야 한다.
+/// 개체 요소 속성에 대한 가변 접근 — 도형 종류마다 보관 위치가 달라 한 곳에 모은다.
+fn shape_attr_mut(
+    obj: &mut crate::model::shape::ShapeObject,
+) -> Option<&mut crate::model::shape::ShapeComponentAttr> {
+    use crate::model::shape::ShapeObject as S;
+    Some(match obj {
+        S::Line(s) => &mut s.drawing.shape_attr,
+        S::Rectangle(s) => &mut s.drawing.shape_attr,
+        S::Ellipse(s) => &mut s.drawing.shape_attr,
+        S::Arc(s) => &mut s.drawing.shape_attr,
+        S::Polygon(s) => &mut s.drawing.shape_attr,
+        S::Curve(s) => &mut s.drawing.shape_attr,
+        S::Group(g) => &mut g.shape_attr,
+        S::Picture(p) => &mut p.shape_attr,
+        S::Chart(c) => &mut c.drawing.shape_attr,
+        S::Ole(o) => &mut o.drawing.shape_attr,
+    })
+}
+
+/// [#3676] 그림 개체의 사각형 4점과 자르기 정보가 비어 있으면 크기에서 채운다.
+///
+/// `HWPTAG_SHAPE_COMPONENT_PICTURE` 는 개체의 네 꼭짓점을 (x,y) 쌍 4개로 담는다.
+/// 한컴이 저장한 문서는 `(0,0) (w,0) (w,h) (0,h)` 형태이고 자르기 우/하단에 원본
+/// 크기가 들어간다. HWP3 파서는 이 값들을 채우지 않아 **전부 0** 으로 나갔고,
+/// 크기 0 짜리 그림이 든 문서를 한컴이 거부했다(그림 1개짜리 34KB 문서도 거부 —
+/// 문서 크기가 아니라 그림 유무가 판별자).
+///
+/// 크기는 `SHAPE_COMPONENT` 가 이미 갖고 있다(현재 폭/높이). 그것으로 사각형을
+/// 만들고, 자르기는 원본 크기 기준 전체 영역으로 둔다. 이미 채워진 그림은
+/// 건드리지 않으므로 HWPX·HWP5 경로는 무영향이다.
+fn normalize_picture_geometry_for_hwp(doc: &mut Document) {
+    fn fill(pic: &mut crate::model::image::Picture) {
+        // `SHAPE_COMPONENT` 의 local file version. 한컴 저장본은 1, HWP3 변환본은 0 이다
+        // (같은 그림의 바이트 대조로 확인). 기하와 무관하게 항상 맞춘다.
+        if pic.shape_attr.local_file_version == 0 {
+            pic.shape_attr.local_file_version = 1;
+        }
+        if pic.border_x.iter().any(|&v| v != 0) || pic.border_y.iter().any(|&v| v != 0) {
+            return;
+        }
+        let w = if pic.shape_attr.current_width > 0 {
+            pic.shape_attr.current_width as i32
+        } else {
+            pic.common.width as i32
+        };
+        let h = if pic.shape_attr.current_height > 0 {
+            pic.shape_attr.current_height as i32
+        } else {
+            pic.common.height as i32
+        };
+        if w <= 0 || h <= 0 {
+            return;
+        }
+        // `border_x`/`border_y` 는 이름과 달리 **디스크의 8개 스칼라를 앞뒤로 나눈
+        // 것**이다. 실제 저장 순서는 (x,y) 쌍 4개다 — HWPX 파서가 같은 규약을
+        // 문서화해 두었다(`parser/hwpx/section.rs`). 한컴 저장본 실측도 같다:
+        // 원본 그림 하나가 `(0,0) (w,0) (w,h) (0,h)` 로 들어 있다.
+        pic.border_x = [0, 0, w, 0];
+        pic.border_y = [w, h, 0, h];
+        if pic.crop.right == 0 && pic.crop.bottom == 0 {
+            let ow = if pic.shape_attr.original_width > 0 {
+                pic.shape_attr.original_width as i32
+            } else {
+                w
+            };
+            let oh = if pic.shape_attr.original_height > 0 {
+                pic.shape_attr.original_height as i32
+            } else {
+                h
+            };
+            pic.crop.right = ow;
+            pic.crop.bottom = oh;
+        }
+    }
+    // HWP3 파서는 아래 컨테이너에 실제로 문단을 만든다: 표 셀/캡션, 그림·그리기
+    // 개체 캡션, 글상자, 숨은설명, 머리말·꼬리말·각주·미주, 바탕쪽. 어느 하나라도
+    // 빠뜨리면 그 안의 그림 또는 도형만 HWP5 계약(geometry/local-file-version)을
+    // 잃고, 한컴은 문서 전체를 거부할 수 있다. 각 변환 단계가 독자 walker를 조금씩
+    // 달리 두지 않도록 여기서는 모든 paragraph container를 하나의 재귀로 방문한다.
+    fn walk_paragraphs(paragraphs: &mut [Paragraph]) {
+        for para in paragraphs {
+            walk_controls(&mut para.controls);
+        }
+    }
+
+    fn walk_caption(caption: &mut crate::model::shape::Caption) {
+        walk_paragraphs(&mut caption.paragraphs);
+    }
+
+    fn walk_master_pages(master_pages: &mut [crate::model::header_footer::MasterPage]) {
+        for master_page in master_pages {
+            walk_paragraphs(&mut master_page.paragraphs);
+        }
+    }
+
+    fn walk_drawing(drawing: &mut crate::model::shape::DrawingObjAttr) {
+        if let Some(text_box) = &mut drawing.text_box {
+            walk_paragraphs(&mut text_box.paragraphs);
+        }
+        if let Some(caption) = &mut drawing.caption {
+            walk_caption(caption);
+        }
+    }
+
+    fn walk_shape(shape: &mut ShapeObject) {
+        // local file version 은 그림뿐 아니라 **모든 개체 요소**가 1 이어야 한다.
+        // 한컴 저장본은 예외 없이 1 이고, HWP3 변환본은 도형(`$con`/`$rec` 등)만
+        // 0 으로 남아 문서 전체가 거부됐다(그림만 고쳤을 때 20건 중 2건 잔존).
+        if let Some(attr) = shape_attr_mut(shape) {
+            if attr.local_file_version == 0 {
+                attr.local_file_version = 1;
+            }
+        }
+
+        match shape {
+            ShapeObject::Picture(pic) => {
+                fill(pic);
+                if let Some(caption) = &mut pic.caption {
+                    walk_caption(caption);
+                }
+            }
+            ShapeObject::Group(group) => {
+                for child in &mut group.children {
+                    walk_shape(child);
+                }
+                if let Some(caption) = &mut group.caption {
+                    walk_caption(caption);
+                }
+            }
+            // Chart/OLE은 DrawingObjAttr의 caption과 별개로 HWP3 parser가 채우는
+            // own caption을 가진다. 특히 HWP3 OLE fixup은 picture caption을
+            // `ole.caption`으로 옮긴다. 둘 다 누락하면 0 geometry picture가 남는다.
+            ShapeObject::Chart(chart) => {
+                walk_drawing(&mut chart.drawing);
+                if let Some(caption) = &mut chart.caption {
+                    walk_caption(caption);
+                }
+            }
+            ShapeObject::Ole(ole) => {
+                walk_drawing(&mut ole.drawing);
+                if let Some(caption) = &mut ole.caption {
+                    walk_caption(caption);
+                }
+            }
+            _ => {
+                // Line/Rectangle/Ellipse/Arc/Polygon/Curve의 text box와 caption은
+                // 모두 동일한 paragraph container이므로 같은 walker로 재귀한다.
+                if let Some(drawing) = shape.drawing_mut() {
+                    walk_drawing(drawing);
+                }
+            }
+        }
+    }
+
+    fn walk_controls(controls: &mut [Control]) {
+        for control in controls {
+            match control {
+                Control::Picture(pic) => {
+                    fill(pic);
+                    if let Some(caption) = &mut pic.caption {
+                        walk_caption(caption);
+                    }
+                }
+                Control::Shape(shape) => walk_shape(shape),
+                Control::Table(table) => {
+                    for cell in &mut table.cells {
+                        walk_paragraphs(&mut cell.paragraphs);
+                    }
+                    if let Some(caption) = &mut table.caption {
+                        walk_caption(caption);
+                    }
+                }
+                Control::Header(header) => walk_paragraphs(&mut header.paragraphs),
+                Control::Footer(footer) => walk_paragraphs(&mut footer.paragraphs),
+                Control::Footnote(footnote) => walk_paragraphs(&mut footnote.paragraphs),
+                Control::Endnote(endnote) => walk_paragraphs(&mut endnote.paragraphs),
+                Control::HiddenComment(comment) => walk_paragraphs(&mut comment.paragraphs),
+                // HWPX memo field와 HWP3의 SectionDef control도 문단을 품을 수 있다.
+                // 본문 SectionDef와는 별개 IR 인스턴스이므로 여기서도 안전하게 덮는다.
+                Control::Field(field) => walk_paragraphs(&mut field.memo_paragraphs),
+                Control::SectionDef(section_def) => {
+                    walk_master_pages(&mut section_def.master_pages)
+                }
+                _ => {}
+            }
+        }
+    }
+
+    for section in doc.sections.iter_mut() {
+        walk_paragraphs(&mut section.paragraphs);
+        walk_master_pages(&mut section.section_def.master_pages);
+    }
+}
+
+/// [#3676] HWP 저장 구역마다 `HWPTAG_PAGE_BORDER_FILL` 을 **3개** 채운다
+/// (양쪽/짝수쪽/홀수쪽).
+///
+/// 한컴이 저장한 문서와 rhwp 의 HWP5 왕복본은 예외 없이 3개다. HWP3 파서는
+/// `extra_page_border_fills` 를 채우지 않아 **1개만** 나갔고, 그 스트림을 정상 파일에
+/// 이식하면 한컴이 파일을 거부한다(스트림 단위 이분 탐색으로 확인 — DocInfo 이식은
+/// 정상 열림, BodyText/Section0 이식만 거부).
+///
+/// 세 레코드는 한컴 원본에서도 내용이 완전히 동일하다(attr·간격 모두 같음) — 구분
+/// 플래그가 아니라 **개수 자체가 규격**이므로 첫 레코드를 복제해 채운다.
+/// HWPX 는 실제 문서에서 BOTH 하나만 갖는 것이 보통이지만, HWP 출력에도 같은 세 record가
+/// 필요하다. HWPX live IR 원형은 호출 경계에서 해당 overlay를 복원한다.
+fn normalize_page_border_fills_for_hwp(doc: &mut Document) {
+    for section in doc.sections.iter_mut() {
+        let sd = &mut section.section_def;
+        while sd.extra_page_border_fills.len() < 2 {
+            sd.extra_page_border_fills.push(sd.page_border_fill.clone());
+        }
+    }
+}
+
 fn normalize_file_header_for_hwp(doc: &mut Document, report: &mut AdapterReport) {
     let mut changed = false;
 
@@ -1767,13 +1993,271 @@ pub fn convert_if_hwpx_source(doc: &mut Document, source_format: FileFormat) -> 
         doc.extra_streams
             .push((HWPX_ORIGIN_STREAM_PATH.to_string(), b"1".to_vec()));
     }
-    convert_hwpx_to_hwp_ir(doc)
+    convert_to_hwp_ir(doc)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::model::paragraph::CharShapeRef;
+
+    /// [#3676] HWP3 parser가 실제로 만드는 그림/도형/표 캡션과 HiddenComment, 그리고
+    /// 공통 adapter가 다루는 바탕쪽 글상자를 모두 건너 문단 직속 그림만 보정하면,
+    /// 한컴은 그 하나의 0 geometry를 이유로 문서 전체를 거부할 수 있다. 중첩 그림도
+    /// geometry·crop·local file version 계약을 정확히 받아야 한다.
+    #[test]
+    fn hwp3_nested_caption_hidden_comment_and_master_page_pictures_are_normalized() {
+        use crate::model::control::HiddenComment;
+        use crate::model::header_footer::MasterPage;
+        use crate::model::shape::{
+            Caption, ChartShape, GroupShape, OleShape, RectangleShape, TextBox,
+        };
+
+        fn hwp3_picture(
+            current_width: u32,
+            current_height: u32,
+            original_width: u32,
+            original_height: u32,
+        ) -> Picture {
+            Picture {
+                common: crate::model::shape::CommonObjAttr {
+                    width: current_width,
+                    height: current_height,
+                    ..Default::default()
+                },
+                shape_attr: crate::model::shape::ShapeComponentAttr {
+                    current_width,
+                    current_height,
+                    original_width,
+                    original_height,
+                    // HWP3 파서는 0으로 남긴다. adapter가 한컴 HWP5 contract인
+                    // 정확한 값 1로 보정해야 한다.
+                    local_file_version: 0,
+                    ..Default::default()
+                },
+                ..Default::default()
+            }
+        }
+
+        fn assert_hancom_picture_contract(
+            picture: &Picture,
+            width: i32,
+            height: i32,
+            original_width: i32,
+            original_height: i32,
+        ) {
+            assert_eq!(picture.border_x, [0, 0, width, 0]);
+            assert_eq!(picture.border_y, [width, height, 0, height]);
+            assert_eq!(picture.crop.left, 0);
+            assert_eq!(picture.crop.top, 0);
+            assert_eq!(picture.crop.right, original_width);
+            assert_eq!(picture.crop.bottom, original_height);
+            assert_eq!(picture.shape_attr.local_file_version, 1);
+        }
+
+        // HWP3 picture caption 안의 또 다른 picture. 기존 walker는 이 문단을
+        // 방문하지 않아 inner picture가 모두 0으로 남았다.
+        let mut picture_caption_para = Paragraph::default();
+        picture_caption_para
+            .controls
+            .push(Control::Picture(Box::new(hwp3_picture(120, 80, 240, 160))));
+        let outer_picture = Picture {
+            caption: Some(Caption {
+                paragraphs: vec![picture_caption_para],
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        // HWP3 drawing caption → group caption → table caption → HiddenComment
+        // 경로. 이들 모두 parse_paragraph_list가 반환하는 실제 paragraph container다.
+        let mut hidden_comment_para = Paragraph::default();
+        hidden_comment_para
+            .controls
+            .push(Control::Picture(Box::new(hwp3_picture(101, 202, 303, 404))));
+        let mut table_caption_para = Paragraph::default();
+        table_caption_para
+            .controls
+            .push(Control::HiddenComment(Box::new(HiddenComment {
+                paragraphs: vec![hidden_comment_para],
+            })));
+        let mut group_caption_para = Paragraph::default();
+        group_caption_para
+            .controls
+            .push(Control::Table(Box::new(Table {
+                caption: Some(Caption {
+                    paragraphs: vec![table_caption_para],
+                    ..Default::default()
+                }),
+                ..Default::default()
+            })));
+        let mut drawing_caption_para = Paragraph::default();
+        drawing_caption_para
+            .controls
+            .push(Control::Shape(Box::new(ShapeObject::Group(GroupShape {
+                caption: Some(Caption {
+                    paragraphs: vec![group_caption_para],
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }))));
+        let mut rectangle = RectangleShape::default();
+        rectangle.drawing.caption = Some(Caption {
+            paragraphs: vec![drawing_caption_para],
+            ..Default::default()
+        });
+
+        // Chart는 DrawingObjAttr과 별도로 own caption을 보존한다.
+        let mut chart_caption_para = Paragraph::default();
+        chart_caption_para
+            .controls
+            .push(Control::Picture(Box::new(hwp3_picture(55, 44, 110, 88))));
+        let chart = ChartShape {
+            caption: Some(Caption {
+                paragraphs: vec![chart_caption_para],
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        // 공통 adapter의 바탕쪽 OLE 글상자는 DrawingObjAttr 공통 text_box 경로를 쓴다.
+        let mut master_page_text_box_para = Paragraph::default();
+        master_page_text_box_para
+            .controls
+            .push(Control::Picture(Box::new(hwp3_picture(70, 60, 140, 120))));
+        let mut ole = OleShape::default();
+        ole.drawing.text_box = Some(TextBox {
+            paragraphs: vec![master_page_text_box_para],
+            ..Default::default()
+        });
+        // HWP3 OLE fixup은 picture caption을 이 own caption 필드에 옮긴다.
+        let mut ole_caption_para = Paragraph::default();
+        ole_caption_para
+            .controls
+            .push(Control::Picture(Box::new(hwp3_picture(45, 35, 90, 70))));
+        ole.caption = Some(Caption {
+            paragraphs: vec![ole_caption_para],
+            ..Default::default()
+        });
+        let master_page = MasterPage {
+            paragraphs: vec![Paragraph {
+                controls: vec![Control::Shape(Box::new(ShapeObject::Ole(Box::new(ole))))],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        let mut doc = Document {
+            sections: vec![Section {
+                paragraphs: vec![Paragraph {
+                    controls: vec![
+                        Control::Picture(Box::new(outer_picture)),
+                        Control::Shape(Box::new(ShapeObject::Rectangle(rectangle))),
+                        Control::Shape(Box::new(ShapeObject::Chart(Box::new(chart)))),
+                    ],
+                    ..Default::default()
+                }],
+                section_def: SectionDef {
+                    master_pages: vec![master_page],
+                    ..Default::default()
+                },
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        convert_if_hwpx_source(&mut doc, FileFormat::Hwp3);
+
+        // adapter는 본문 첫 문단에 SectionDef control을 앞에 삽입하므로, 고정
+        // control index 대신 대상 타입을 찾는다.
+        let outer_picture = doc.sections[0].paragraphs[0]
+            .controls
+            .iter()
+            .find_map(|control| match control {
+                Control::Picture(picture) => Some(picture.as_ref()),
+                _ => None,
+            })
+            .expect("outer picture expected");
+        let Control::Picture(caption_picture) =
+            &outer_picture.caption.as_ref().unwrap().paragraphs[0].controls[0]
+        else {
+            panic!("picture expected inside HWP3 picture caption");
+        };
+        assert_hancom_picture_contract(caption_picture, 120, 80, 240, 160);
+
+        let rectangle = doc.sections[0].paragraphs[0]
+            .controls
+            .iter()
+            .find_map(|control| match control {
+                Control::Shape(shape) => match shape.as_ref() {
+                    ShapeObject::Rectangle(rectangle) => Some(rectangle),
+                    _ => None,
+                },
+                _ => None,
+            })
+            .expect("rectangle expected");
+        let Control::Shape(group) =
+            &rectangle.drawing.caption.as_ref().unwrap().paragraphs[0].controls[0]
+        else {
+            panic!("group expected in drawing caption");
+        };
+        let ShapeObject::Group(group) = group.as_ref() else {
+            panic!("group shape expected");
+        };
+        assert_eq!(group.shape_attr.local_file_version, 1);
+        let Control::Table(table) = &group.caption.as_ref().unwrap().paragraphs[0].controls[0]
+        else {
+            panic!("table expected in group caption");
+        };
+        let Control::HiddenComment(comment) =
+            &table.caption.as_ref().unwrap().paragraphs[0].controls[0]
+        else {
+            panic!("HiddenComment expected in table caption");
+        };
+        let Control::Picture(hidden_comment_picture) = &comment.paragraphs[0].controls[0] else {
+            panic!("picture expected inside HiddenComment");
+        };
+        assert_hancom_picture_contract(hidden_comment_picture, 101, 202, 303, 404);
+
+        let chart = doc.sections[0].paragraphs[0]
+            .controls
+            .iter()
+            .find_map(|control| match control {
+                Control::Shape(shape) => match shape.as_ref() {
+                    ShapeObject::Chart(chart) => Some(chart.as_ref()),
+                    _ => None,
+                },
+                _ => None,
+            })
+            .expect("chart expected");
+        let Control::Picture(chart_caption_picture) =
+            &chart.caption.as_ref().unwrap().paragraphs[0].controls[0]
+        else {
+            panic!("picture expected inside chart caption");
+        };
+        assert_hancom_picture_contract(chart_caption_picture, 55, 44, 110, 88);
+
+        let Control::Shape(ole) =
+            &doc.sections[0].section_def.master_pages[0].paragraphs[0].controls[0]
+        else {
+            panic!("OLE expected in master page");
+        };
+        let ShapeObject::Ole(ole) = ole.as_ref() else {
+            panic!("OLE shape expected");
+        };
+        let Control::Picture(master_page_picture) =
+            &ole.drawing.text_box.as_ref().unwrap().paragraphs[0].controls[0]
+        else {
+            panic!("picture expected inside master-page OLE text box");
+        };
+        assert_hancom_picture_contract(master_page_picture, 70, 60, 140, 120);
+        let Control::Picture(ole_caption_picture) =
+            &ole.caption.as_ref().unwrap().paragraphs[0].controls[0]
+        else {
+            panic!("picture expected inside HWP3 OLE caption");
+        };
+        assert_hancom_picture_contract(ole_caption_picture, 45, 35, 90, 70);
+    }
 
     #[test]
     fn border_fill_refs_collected_inside_footnote_and_caption() {
