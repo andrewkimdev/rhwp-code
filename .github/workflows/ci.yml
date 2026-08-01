@@ -72,7 +72,7 @@ jobs:
       - name: Detect review-only fast pass
         id: detect
         continue-on-error: true
-        uses: actions/github-script@v9
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         with:
           # [#2804] API 5xx 일시 오류에 job 이 죽지 않도록 재시도한다.
           # retry-exempt-status-codes 기본값(400,401,403,404,422)이 4xx 를 제외하므로 5xx 만 재시도된다.
@@ -321,7 +321,7 @@ jobs:
       - name: Detect frontend impact
         id: frontend-impact
         continue-on-error: true
-        uses: actions/github-script@v9
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         with:
           # [#2804] API 5xx 일시 오류에 job 이 죽지 않도록 재시도한다.
           # retry-exempt-status-codes 기본값(400,401,403,404,422)이 4xx 를 제외하므로 5xx 만 재시도된다.
@@ -460,7 +460,7 @@ jobs:
       runnable_tests: ${{ steps.count.outputs.runnable_tests }}
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # [Task #1109 / #1192 C] ubuntu-latest runner 의 미사용 사전 설치 toolchain 제거하여
       # 테스트 빌드 시 디스크 한도 초과를 줄인다.
@@ -471,19 +471,19 @@ jobs:
           df -h
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable 브랜치 (2026-08-01 시점)
         with:
           toolchain: 1.93.1
 
       - name: Install cargo-nextest
-        uses: taiki-e/install-action@v2
+        uses: taiki-e/install-action@6a1bd70eaac3c8bdf093356838d7ee09fda951cf # v2.85.5
         with:
           tool: nextest
 
       # [#2393] 수동 restore/save 캐시 → rust-cache (적중률·정리 자동화).
       # 저장 정책은 종전과 동일하게 devel/main push 로 한정.
       - name: Rust build cache
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2.9.1
         with:
           shared-key: test-archive
           save-if: ${{ github.event_name == 'push' && (github.ref == 'refs/heads/devel' || github.ref == 'refs/heads/main') }}
@@ -524,7 +524,7 @@ jobs:
           echo "runnable_tests=$runnable"
 
       - name: Upload test archive
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: test-archive-${{ github.run_id }}
           path: tests.tar.zst
@@ -560,20 +560,20 @@ jobs:
 
     steps:
       # 테스트가 samples/ pdf/ 등 저장소 픽스처를 읽으므로 checkout 필요.
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable 브랜치 (2026-08-01 시점)
         with:
           toolchain: 1.93.1
 
       - name: Install cargo-nextest
-        uses: taiki-e/install-action@v2
+        uses: taiki-e/install-action@6a1bd70eaac3c8bdf093356838d7ee09fda951cf # v2.85.5
         with:
           tool: nextest
 
       - name: Download test archive
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: test-archive-${{ github.run_id }}
 
@@ -605,7 +605,7 @@ jobs:
           cat "shard-count-${{ matrix.shard }}.txt"
 
       - name: Upload shard count
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: shard-count-${{ matrix.shard }}
           path: shard-count-${{ matrix.shard }}.txt
@@ -623,17 +623,17 @@ jobs:
       contents: read
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable 브랜치 (2026-08-01 시점)
         with:
           toolchain: 1.93.1
           components: clippy, rustfmt
           targets: wasm32-unknown-unknown
 
       - name: Rust build cache
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2.9.1
         with:
           shared-key: lint
           save-if: ${{ github.event_name == 'push' && (github.ref == 'refs/heads/devel' || github.ref == 'refs/heads/main') }}
@@ -676,7 +676,7 @@ jobs:
       contents: read
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # [Task #1109 / #1192 C] ubuntu-latest runner 의 미사용 사전 설치 toolchain 제거하여
       # 테스트 빌드 시 디스크 한도 초과를 줄인다.
@@ -689,7 +689,7 @@ jobs:
           df -h
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable 브랜치 (2026-08-01 시점)
         with:
           toolchain: 1.93.1
 
@@ -697,7 +697,7 @@ jobs:
       # Linux-cargo-* namespace 대신 Native Skia 전용 shared key를 사용한다.
       # PR은 restore-only, devel/main push만 save하는 신뢰 경계를 유지한다.
       - name: Rust build cache
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2.9.1
         with:
           shared-key: native-skia
           save-if: ${{ github.event_name == 'push' && (github.ref == 'refs/heads/devel' || github.ref == 'refs/heads/main') }}
@@ -738,10 +738,10 @@ jobs:
       contents: read
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable 브랜치 (2026-08-01 시점)
         with:
           toolchain: 1.93.1
           targets: wasm32-unknown-unknown
@@ -765,7 +765,7 @@ jobs:
         run: wasm-pack build --target web --dev
 
       - name: Set up Node.js
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: '22'
           cache: npm
@@ -845,7 +845,7 @@ jobs:
       # 테스트 수와 일치하는지 검증한다 (fast-pass 시 샤드 미실행이라 생략).
       - name: Download shard counts
         if: ${{ needs.preflight.outputs.fast_pass != 'true' && needs['test-shard'].result == 'success' }}
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           pattern: shard-count-*
           merge-multiple: true
@@ -953,7 +953,7 @@ jobs:
     if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v')
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # [Task #1109 / #1192 C] wasm-build job 도 build-and-test 와 동일 축소 패턴.
       # "크고 빠른" 항목(android/dotnet)만 제거. df -h 로 여유 확인.
@@ -964,7 +964,7 @@ jobs:
           df -h
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable 브랜치 (2026-08-01 시점)
         with:
           toolchain: 1.93.1
           targets: wasm32-unknown-unknown
@@ -973,7 +973,7 @@ jobs:
         uses: ./.github/actions/install-wasm-pack
 
       - name: Cache cargo registry & build
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ~/.cargo/registry
@@ -987,7 +987,7 @@ jobs:
         run: wasm-pack build --target web --release
 
       - name: Upload WASM artifacts
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: rhwp-wasm-pkg
           path: pkg/
