@@ -16,7 +16,7 @@ pub struct LayerTreeSchema {
 pub const LAYER_TREE_SCHEMA: LayerTreeSchema = LayerTreeSchema {
     schema_version: 1,
     // 21: [#3315] 문서 단위 `imageBytes`("inline"|"byKey")와 그림 op 의 `imageBytesOmitted`.
-    //     생략은 opt-in 이라 기존 소비자가 받는 JSON 은 종전과 같다.
+    //     기본 inline 호출도 이 메타데이터와 minor 21을 받지만 그림 payload는 종전대로 유지한다.
     schema_minor_version: 21,
     resource_table_version: 1,
     resource_table_minor_version: 5,

@@ -720,9 +720,11 @@ impl HwpDocument {
 
     /// 페이지 레이어 트리를 profile 별로 반환한다.
     ///
-    /// [Task #3315] `omit_image_bytes` 를 `true` 로 주면 그림 base64 를 싣지 않고
-    /// `sourceImageKey` 만 남긴다 — 바이트는 `getSourceImageBytes(key)` 로 따로 받는다.
-    /// 인자를 생략하면(`undefined`) 종전과 똑같은 JSON 이므로 기존 호출부는 영향이 없다.
+    /// [Task #3315] `omit_image_bytes` 를 `true` 로 주면 `sourceImageKey`를 낼 수 있는 그림만
+    /// base64를 생략하고, 바이트는 `getSourceImageBytes(key)`로 따로 받는다. 키 없는 합성 그림은
+    /// 소비자가 되찾을 방법이 없으므로 같은 `byKey` 요청에서도 인라인 base64를 유지한다.
+    /// 인자를 생략하면(`undefined`) 그림 payload는 inline으로 유지하지만, schema minor 21과
+    /// 최상위 `imageBytes:"inline"` 메타데이터가 있으므로 JSON 전체의 byte identity는 보장하지 않는다.
     #[wasm_bindgen(js_name = getPageLayerTreeWithProfile)]
     pub fn get_page_layer_tree_with_profile(
         &self,

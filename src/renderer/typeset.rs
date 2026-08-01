@@ -555,6 +555,10 @@ pub struct TypesetEngine {
 /// over-fill 한 경우에도 tail 을 현재 페이지에 유지해 near-empty 페이지 over-pagination 을 막는다.
 const TAIL_BREAK_OVERFLOW_TOLERANCE_PX: f64 = 20.0;
 const HWPX_ROWBREAK_SPLIT_ROW_OVERFLOW_TOLERANCE_PX: f64 = 64.0;
+/// [#3236] 1행 1열 RowBreak 표의 선언 높이 신뢰(#1891) 상한 배율. 측정이 선언의
+/// 이 배율을 넘으면 폰트 대체 팽창이 아니라 셀 내용이 진짜로 큰 것이므로 특례를
+/// 적용하지 않고 인트라-로우 분할 경로에 맡긴다.
+const SINGLE_ROW_DECLARED_TRUST_MAX_RATIO: f64 = 1.5;
 /// [Task #2085] 표 분할 첫 조각에 남길 최소 상단 높이 / RowBreak 말미 빈 행 허용 오버플로.
 const MIN_TOP_KEEP_PX: f64 = 25.0;
 
@@ -16417,6 +16421,13 @@ impl TypesetEngine {
             && !para_has_visible_text(para)
             && declared_object_total > 0.0
             && table_total > declared_object_total + HWPX_ROWBREAK_SPLIT_ROW_OVERFLOW_TOLERANCE_PX
+            // [#3236] 선언 신뢰는 측정 초과가 폰트 대체 팽창으로 설명되는 범위까지만.
+            // 실측 팽창은 인접 가드들 기준 10~20% 수준이라 1.5배를 넘는 초과는 셀
+            // 내용이 진짜로 큰 것이다 — 한컴도 이 경우 쪽 경계에서 셀을 분할한다
+            // (issue3236 fixture: 선언 322.6px vs 측정 910.8px(2.82배), 한컴 PDF 가
+            // p2 로 셀 내용을 이어 배치). 상한 없이는 통짜 배치 후 쪽 밖 clip 으로
+            // 내용이 소실된다.
+            && table_total <= declared_object_total * SINGLE_ROW_DECLARED_TRUST_MAX_RATIO
             && table_total <= available + HWPX_ROWBREAK_SPLIT_ROW_OVERFLOW_TOLERANCE_PX
             && st.current_height + declared_object_total
                 <= available + HWPX_ROWBREAK_SPLIT_ROW_OVERFLOW_TOLERANCE_PX;

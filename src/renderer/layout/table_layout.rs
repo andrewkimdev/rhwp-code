@@ -2467,6 +2467,17 @@ impl LayoutEngine {
             let om_left = hwpunit_to_px(table.outer_margin_left as i32, self.dpi);
             let area_x = col_area.x + om_left;
             let area_w = (col_area.width - om_left).max(0.0);
+            // [#3308] 스트레치 하한(0.9) 미만으로 진짜 좁은 비-TAC 중첩 표는 한컴이
+            // 저장된 h_offset(편집기 대화상자 표시값)과 무관하게 셀 안 가운데에
+            // 배치한다 — 정답지 픽셀 실측 0.6px 정합, 선언 offset 모델은 15~21px
+            // 불일치(작업지시자 "표 속성 값으로 조판되지 않음" 판정). 발동을
+            // 비-TAC·셀 내부·비율<0.9 로 좁게 가드한다(한컴 호환 케이스별 원칙).
+            if !table.common.treat_as_char
+                && table_width
+                    < area_w * crate::renderer::render_normalization::NESTED_STRETCH_MIN_RATIO
+            {
+                return area_x + (area_w - table_width).max(0.0) / 2.0;
+            }
             match host_alignment {
                 Alignment::Center | Alignment::Distribute => {
                     area_x + (area_w - table_width).max(0.0) / 2.0

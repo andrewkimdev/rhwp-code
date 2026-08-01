@@ -927,11 +927,12 @@ export class PageRenderer {
       this.imageRetryCounts.delete(pageIdx);
       return;
     }
-    const retryKey = `${imageCount}:${rawSvgCount}:${policy.retrySignature}`;
-    if (this.imageRetryCounts.get(pageIdx) === retryKey) return;
+    const retryKey = this.buildImageRetryKey(pageIdx, imageCount, rawSvgCount, policy);
+    if (retryKey !== null && this.imageRetryCounts.get(pageIdx) === retryKey) return;
 
     this.cancelReRender(pageIdx);
-    this.imageRetryCounts.set(pageIdx, retryKey);
+    if (retryKey === null) this.imageRetryCounts.delete(pageIdx);
+    else this.imageRetryCounts.set(pageIdx, retryKey);
     const prefetchRequestToken = ++this.nextPrefetchRequestToken;
     this.prefetchRequestTokens.set(pageIdx, prefetchRequestToken);
 
@@ -973,6 +974,55 @@ export class PageRenderer {
         })
         .catch(() => {});
     });
+  }
+
+  /**
+   * 재시도 상태를 재사용할지 판정하는 키 (Task #3315).
+   *
+   * 종전 키는 `imageCount:rawSvgCount:overlaySignature` 였다. 그 재료는 **그림 내용을 보지
+   * 못한다** — 밝기/대비를 켜면 워터마크 bake 경로로 바이트가 바뀌는데 개수는 그대로라 키가
+   * 불변이고, 그걸 "변화 없음"으로 읽으면 첫 draw 에서 디코드가 안 끝난 그림이 빈 채로 남는다.
+   *
+   * 그 위험을 막으려고 `refreshPages` 가 매 편집에 `resetImageRetryState()` 로 전부 비웠는데,
+   * 그러면 **페이지마다 재렌더가 한 번 더 돈다** — prefetch 가 서명으로 건너뛰어 `finish()` 가
+   * 즉시 불리고 `reRenderPageCanvases` 가 다시 그린다.
+   *
+   * 비우는 대신 키가 봐야 할 것을 직접 들게 한다.
+   *
+   * - `getPageSourceImageKeys` — `bin:{epoch}:{id}:{variant}` 목록. 밝기/대비로 bake 여부가
+   *   바뀌면 variant 가 `src` ↔ `wmpng` 로 갈리므로 **내용 변화가 키에 나타난다.**
+   * - 문서 신원(digest·generation) — 키의 세대는 문서마다 0 에서 시작해 서로 충돌한다
+   *   (`bin:0:1:src`). 문서 경계를 키가 들지 않으면 새 문서가 옛 재시도 상태를 재사용한다.
+   *   `prefetchedImageSignatures`·`FlowImageUrlCache` 와 같은 이유·같은 방식이다.
+   * - RawSvg — compact 그림 키에는 포함되지 않고, 브라우저의 SVG decode 캐시는 별도로
+   *   비워질 수 있다. 개수만으로는 재렌더 준비 상태를 증명할 수 없으므로 이 페이지는
+   *   재사용하지 않는다.
+   *
+   * 판정 재료가 없으면(`null`) **재사용하지 않는다** — 구형 WASM, 키를 낼 수 없는 합성 그림이
+   * 섞인 페이지(`cacheable:false`), 문서 신원 미상. 안전망을 없애는 쪽이 아니라 이미 끝난 일을
+   * 되풀이하지 않는 쪽으로만 작동해야 한다.
+   */
+  private buildImageRetryKey(
+    pageIdx: number,
+    imageCount: number,
+    rawSvgCount: number,
+    policy: ReRenderPolicy,
+  ): string | null {
+    // RawSvg 차트/OLE는 첫 paint 뒤 비동기 decode가 끝나야 다시 그려진다. source-image key는
+    // Image 노드만 대상으로 하고 브라우저 IMAGE_CACHE의 eviction도 관찰하지 못하므로, 같은
+    // 개수라는 이유로 timer/fallback을 건너뛰면 공백이 고착될 수 있다 (#1456).
+    if (rawSvgCount > 0) return null;
+    const imageKeys = cacheableImageKeySignature(this.wasm.getPageSourceImageKeys(pageIdx));
+    const documentDigest = this.wasm.documentDigest;
+    if (imageKeys === null || documentDigest === null) return null;
+    return [
+      documentDigest,
+      this.wasm.documentGeneration,
+      imageKeys,
+      imageCount,
+      rawSvgCount,
+      policy.retrySignature,
+    ].join('|');
   }
 
   private reRenderPageCanvases(
@@ -1167,8 +1217,17 @@ export class PageRenderer {
     this.prefetchRequestTokens.clear();
   }
 
+  /**
+   * 렌더된 페이지를 통째로 버릴 때 파생 상태를 정리한다.
+   *
+   * [#3315] `imageRetryCounts` 는 **여기서 비우지 않는다.** 이 메서드는 편집마다
+   * (`refreshPages` → `releaseAllRenderedPages`) 불리므로, 비우면 페이지마다 재렌더가 한 번 더
+   * 돈다 — prefetch 가 서명으로 건너뛰어 `finish()` 가 즉시 불리고 다시 그린다.
+   *
+   * 문서 경계와 그림 내용 변화는 재시도 키가 직접 든다(`buildImageRetryKey`). 그래서 바깥에서
+   * 비워 줄 시점을 맞출 필요가 없다 — 맞춰야 하는 계약이 #3648·P1 에서 깨진 그 계약이다.
+   */
   resetImageRetryState(): void {
-    this.imageRetryCounts.clear();
     this.prefetchRequestTokens.clear();
     this.layerSummaryCache.clear();
     this.canvaskitDiagnosticsByPage.clear();
@@ -1176,6 +1235,7 @@ export class PageRenderer {
 
   dispose(): void {
     this.cancelAll();
+    this.imageRetryCounts.clear();
     this.prefetchedImageSignatures.clear();
     this.prefetchRequestTokens.clear();
     this.layerSummaryCache.clear();

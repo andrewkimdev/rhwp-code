@@ -94,9 +94,14 @@ rhwp --password '문서비밀번호' export-text protected.hwp -o output/
 ### `export-svg <파일> [옵션]`
 HWP/HWPX → SVG.
 - `--json` (#3287): 산출물 **매니페스트**를 stdout 에 JSON 으로 출력한다(렌더 동작 무변경).
-  `{"schemaVersion":"1.0","source","format":"svg","outputDir","pageCount","renderedCount","pages":[{"page","path","bytes"}]}`
+  `{"schemaVersion":"1.0","source","format":"svg","outputDir","pageCount","renderedCount","overflowCellLines","pages":[{"page","path","bytes","overflowCellLines"}]}`
   기본 출력(사람용 진행 메시지)은 무변경이며, `--json` 모드에서는 stdout 에 JSON 만 나간다.
   `search --json`(#3283)과 조합하면 **찾은 페이지만 렌더해 VLM 에 넘기는** 루프가 닫힌다.
+  - `overflowCellLines` (#3668): 셀 안 줄의 윗변이 쪽 하단 밖에 그려져 **보이지 않는 줄 수**
+    (`LAYOUT_OVERFLOW_CELL` 진단과 같은 조건). top-level 은 문서 합계, `pages[]` 항목은
+    페이지별 카운트다. 0 이 아니면 그 페이지의 셀 콘텐츠 일부가 소실 렌더된 것이다 —
+    #3236 계열(분할 대신 통짜 배치 후 clip) 조사의 1차 신호. 원장 게이트는
+    [`local_validation.md` 4.3.1](pr_review/local_validation.md#431-새-hwphwpx-fixture의-baseline-등록--ir-sweep--overflow-cell-원장) 참조.
 - `-o`, `-p` (공통)
 - `--show-para-marks` — 문단부호(↵/↓)
 - `--show-control-codes` — 조판부호(문단부호 + 개체 마커)

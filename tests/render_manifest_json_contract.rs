@@ -85,6 +85,15 @@ fn export_svg_json_manifest_contract() {
     let entry = &pages[0];
     assert_eq!(entry["page"], 3, "요청한 페이지 번호가 실려야 합니다: {v}");
     assert!(entry["bytes"].as_u64().unwrap() > 0, "{entry}");
+    // [#3668] 쪽 밖 소실 줄 집계 — 문서 합계와 페이지별 카운트가 봉투에 실린다.
+    assert!(
+        v["overflowCellLines"].is_u64(),
+        "overflowCellLines 문서 합계 누락: {v}"
+    );
+    assert!(
+        entry["overflowCellLines"].is_u64(),
+        "페이지 overflowCellLines 누락: {entry}"
+    );
 
     // 매니페스트의 경로는 실제로 존재해야 한다 — 에이전트가 바로 읽을 수 있어야 하므로.
     let path = entry["path"].as_str().expect("path 문자열");

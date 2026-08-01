@@ -3275,6 +3275,9 @@ impl LayoutEngine {
             if cell_ctx.is_some() && !blank_spacer_line {
                 let page_h = self.current_page_height.get();
                 if page_h > 0.0 && text_y > page_h + 0.5 {
+                    // [#3668] stderr 진단과 같은 조건에서 집계 카운터도 올린다.
+                    self.overflow_cell_lines
+                        .set(self.overflow_cell_lines.get() + 1);
                     eprintln!(
                         "LAYOUT_OVERFLOW_CELL: section={} pi={} line={} y={:.1} \
                          page_bottom={:.1} overflow={:.1}px",
@@ -6396,10 +6399,22 @@ impl LayoutEngine {
                     outline_numbering_id,
                 );
                 let level = para_style.para_level;
-                if numbering_id == 0 {
-                    return None;
-                }
-                let numbering = styles.numberings.get((numbering_id - 1) as usize)?;
+                // [#3307] 개요 문단이 유효한 정의에 도달하지 못하면 한컴 내장
+                // 기본 모양(전 수준 ^N)으로 fallback 한다. NUMBER 는 불변 —
+                // 정의 없는 NUMBER 는 종전대로 번호를 그리지 않는다.
+                let synthesized_default;
+                let numbering = match numbering_id
+                    .checked_sub(1)
+                    .and_then(|i| styles.numberings.get(i as usize))
+                {
+                    Some(n) => n,
+                    None if para_style.head_type == HeadType::Outline => {
+                        synthesized_default =
+                            crate::renderer::layout::utils::default_outline_numbering();
+                        &synthesized_default
+                    }
+                    None => return None,
+                };
 
                 let counters = self.numbering_state.borrow_mut().advance(
                     numbering_id,

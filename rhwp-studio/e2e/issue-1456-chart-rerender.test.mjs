@@ -12,6 +12,9 @@
  *     수정 전이면 rawSvg 단독 페이지가 재렌더 트리거 bail → 공백(유채색 ~0) → FAIL.
  *   케이스 B (비재사용/고착): 같은 세션에서 다른 차트로 교체 로드 → 두 캔버스가
  *     유의미하게 다름(B 가 A 의 캐시 픽셀을 재사용하지 않음). #3(CanvasPool) 판정 입력.
+ *   케이스 C (동일 문서 갱신): B를 다시 로드하지 않고 `refreshPages()`만 호출한 뒤에도
+ *     RawSvg가 비공백이다. #3315의 retry 상태 재사용이 같은 문서 갱신에서 안전망을
+ *     건너뛰지 않는 실제 UI 경계다.
  *
  * 실행:
  *   cd rhwp-studio
@@ -96,4 +99,13 @@ runTest('#1456 차트/OLE rawSvg 첫 로드 재렌더', async ({ page }) => {
 
   const diff = pixelDiffRatio(bufA, bufB);
   assert(diff > 0.02, `차트 B↔A 픽셀 차이 ${(diff * 100).toFixed(2)}% > 2% (B가 A 캐시 미재사용)`);
+
+  // ── 케이스 C: 같은 문서 refresh → 비공백 ────────────────────
+  setTestCase('C: 같은 차트 refreshPages 비공백');
+  await page.evaluate(() => window.__canvasView.refreshPages());
+  await page.waitForSelector('#scroll-container canvas', { timeout: 10000 });
+  await waitReRender(page);
+  const { buffer: bufC } = await captureCanvasScreenshot(page, `${OUT_DIR}/chartB-refresh.png`, 'chart B refresh');
+  const ratioC = coloredPixelRatio(bufC);
+  assert(ratioC > 0.003, `차트 B refresh 유채색 픽셀 ${(ratioC * 100).toFixed(3)}% > 0.3% (동일 문서 비공백)`);
 });

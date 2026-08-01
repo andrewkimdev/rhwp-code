@@ -18,11 +18,51 @@ rhwp-studio의 편집 기능이 늘어나도 다음 사용자 경험을 유지�
 - 문서를 바꾸지 않는 보기/조회 액션은 history에 들어가지 않는다.
 - 복잡한 편집은 snapshot을 허용하되, 허용 조건을 명확히 한다.
 
+## 층위 계약 — undo/redo 는 studio UI 레이어 기능이다
+
+이 문서의 원칙은 **rhwp-studio 의 편집 UI 레이어**를 규율한다. 아래 층위를 먼저 확정한다 — 이
+구분이 없으면 "문서를 바꾸는 모든 호출은 라우터를 통과해야 한다"가 전 층위에 적용되는 것처럼
+읽히고, 실제로 그렇지 않은 표면이 결함으로 오인된다 (#3648).
+
+| 층위 | 히스토리 | 근거 |
+|---|---|---|
+| `rhwp` core (WASM 바인딩) | **비경유** | 순수 문서 엔진이다. 히스토리 개념 자체가 없다. npm `rhwp` 배포 표면(`rhwp_bg.wasm`·`rhwp.js`·`rhwp.d.ts`)에 히스토리 API 가 없다 |
+| `@rhwp/editor` (임베드 transport) | **비경유** | 배포 표면(`index.js`·`transport.js`·`index.d.ts`)에 `HwpCtrl`·`registerAction` 노출이 없다 |
+| `rhwp-studio/src/hwpctl` (자동화 표면) | **비경유 — 정책** | 아래 절 |
+| `rhwp-studio` 편집 UI (`command/`·`engine/input-handler*`·`ui/`) | **경유** | 이 문서의 규율 대상 |
+
+즉 **undo/redo 는 엔진이 보장하는 성질이 아니라 studio UI 레이어가 제공하는 기능**이다. 코어를
+직접 쓰는 소비자(CLI·MCP 세션 도구·임베드 자동화)는 되돌리기를 자기 트랜잭션 경계로 관리한다.
+
+### hwpctl 은 의도적으로 히스토리를 경유하지 않는다 (#3648, 2026-07-31)
+
+`src/hwpctl` 은 한컴 `HwpCtrl` 호환 자동화 표면이고 소비자는 스크립트다. 스크립트는 자기
+트랜잭션 경계를 알기에 "N 개 작업 후 되돌리기"는 호출자가 문서 사본으로 관리할 문제로 판정됐다.
+히스토리 경유는 자동화 레이어를 앱 레이어에 종속시켜 의존 방향을 뒤집는다 — 현재 `HwpCtrl` 은
+raw doc 만 알고 studio 의 `command`/`engine` 을 모른다.
+
+그 결과 세 가지가 따라온다.
+
+1. **raw doc 직접 뮤테이션 23곳은 동결된 현상이다.** 줄여야 할 부채가 아니다.
+   `rhwp-studio/tests/mutation-routing-guard.test.ts` 의 `BASELINE` 이 `src/hwpctl/**` 를 그 수로
+   동결하고, **늘어나는 것만** 리뷰 대상으로 삼는다.
+2. **`Undo`/`Redo` 액션 등록은 유지한다.** 등록을 지우면 호출자에게 "오타로 없는 액션을 불렀다"와
+   "의도적으로 지원하지 않는다"가 똑같이 `미등록` 으로 보인다. 등록을 남기고 사유를 실어야
+   호출자가 둘을 구분해 이 문서로 올 수 있다.
+3. **사유는 조회할 수 있어야 한다.** `Run`/`Execute` 의 반환형은 한컴 호환이라 `boolean` 고정이고,
+   iframe 안 콘솔 경고는 통합자에게 보이지 않는다. `HwpCtrl.GetActionSupport(id)` 가 네 상태를
+   구분한다 — `null`(미등록=오타) / `unimplemented`(구현 대기) / `unsupported`(정책 미지원, 사유·근거
+   포함) / `supported`.
+
+임베드에서 studio UI 와 같은 문서를 공유하는 실사용례가 생기면 히스토리 경유(①안)와 혼합(③안)을
+그 시점에 재검토한다.
+
 ## 기본 원칙
 
 ### 1. 문서 mutation은 라우터를 통과한다
 
-새로운 문서 mutation은 원칙적으로 편집 라우터를 통과해야 한다.
+**studio 편집 UI 레이어**의 새로운 문서 mutation 은 원칙적으로 편집 라우터를 통과해야 한다.
+위 층위 표에서 "비경유"인 표면은 이 원칙의 대상이 아니다.
 
 허용되는 예외:
 
@@ -31,6 +71,7 @@ rhwp-studio의 편집 기능이 늘어나도 다음 사용자 경험을 유지�
 - view state API
 - `EditCommand` 내부의 저수준 `wasm.*` 호출
 - 성능상 drag 중 실시간 preview를 위해 먼저 적용하고 종료 시 `recordApplied`로 기록하는 경로
+- `src/hwpctl` 자동화 표면 — 정책상 비경유 (위 절, #3648)
 
 ### 2. history stack은 하나다
 
@@ -263,11 +304,17 @@ IME/iOS처럼 여러 raw mutation을 묶으면 세 값은 각각 OR 누적되므
 
 PR 검토 시 다음 질문을 확인한다.
 
-- 새 `wasm.*` 호출이 문서를 변경하는가?
+- 어느 층위의 변경인가? (위 층위 표 — 비경유 표면이면 아래 질문은 대상이 아니다)
+- 새 문서 변경 호출이 문서를 변경하는가?
 - 변경한다면 router 또는 `EditCommand` 내부인가?
 - Undo/Redo 기대치가 있는 사용자 액션인가?
 - refresh와 dirty 상태가 일관되게 처리되는가?
 - snapshot을 사용한다면 허용 조건에 맞는가?
 
-향후 `rhwp-studio/src/command/commands`와 `rhwp-studio/src/engine/input-handler*.ts`의 mutation성
-`wasm.*` 호출을 탐지하는 정적 점검을 추가한다.
+정적 점검은 `rhwp-studio/tests/mutation-routing-guard.test.ts` 로 들어갔다(#2327). 스캔 대상은
+`src/ui`·`src/command`·`src/engine/input-handler*`·`src/hwpctl` 이다.
+
+수신자 이름으로 판정하므로 목록(`MUTATION_RECEIVERS`)은 불완전할 수밖에 없다. #3648 은 그
+불완전함이 **조용히** 넘어가서 생겼다 — hwpctl 이 `doc`·`this.wasmDoc` 을 쓰는데 원장은 `wasm`
+만 봐서 23곳이 없는 것처럼 보였고 가드는 통과했다. 그래서 미등재 수신자를 실패로 만드는 검사가
+함께 있다. 새 수신자 이름이 등장하면 세는 쪽이든 세지 않는 쪽이든 의식적으로 분류해야 통과한다.
