@@ -4,7 +4,7 @@
 - **상위 이슈**: [#1528](https://github.com/edwardkim/rhwp/issues/1528)
 - **브랜치**: `codex/issue-3693-export-structure-clause`
 - **기준 devel**: `79551f42f`
-- **상태**: WIP 채택·최신 devel 병합·full release-test 완료, draft PR 생성 진행
+- **상태**: WIP 채택·최신 devel 병합·full release-test 완료, draft PR #3715 CI·리뷰 대기
 
 ## 0. 절차 복구 결과
 
@@ -65,6 +65,7 @@ PR 게이트 승인 뒤 `upstream/devel` `f80b910aa`를 merge commit `16b71b015`
 - strong marker와 명시적 outline mode는 불변이다.
 - `652e2ee27`은 작업지시자 승인으로 #3693 구현에 채택됐다.
 - full release-test는 작업지시자 승인 뒤 최신 devel 기준으로 통과했다.
-- GitHub CI와 리뷰는 draft PR에서 확인한다.
+- [draft PR #3715](https://github.com/edwardkim/rhwp/pull/3715)을 `devel` 대상으로 생성했다.
+- GitHub CI와 리뷰는 PR #3715에서 확인한다.
 - 후속 #3695는 별도 수행·구현 계획 승인 뒤 재개한다.
 - #3693 변경이 `devel`에 포함되기 전에는 이슈를 close하지 않는다.

@@ -5,7 +5,7 @@
 - **브랜치**: `codex/issue-3693-export-structure-clause`
 - **수행계획서**: `mydocs/plans/task_m100_3693.md`
 - **절차 상태**: Stage 2 완료·승인 — `652e2ee27` 구현 채택
-- **PR 게이트**: 승인됨 — 최신 devel 병합과 full release-test 통과, origin push·draft PR 진행
+- **PR 게이트**: 승인·수행 완료 — 최신 devel 병합, full release-test 통과, draft PR #3715 생성
 
 ## 복구 적용 원칙
 
