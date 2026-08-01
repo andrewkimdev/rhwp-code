@@ -644,6 +644,9 @@ jobs:
       - name: Validate Render Diff trigger policy
         run: python3 -m unittest scripts/tests/test_render_diff_workflow.py
 
+      - name: Validate HWP3 openness probe process isolation
+        run: python3 -m unittest scripts/tests/test_hwp3_convert_openable.py
+
       - name: Clippy
         run: cargo clippy -- -D warnings
 
