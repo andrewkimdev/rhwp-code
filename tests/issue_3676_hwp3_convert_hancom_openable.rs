@@ -53,6 +53,13 @@ fn convert_to_hwp5_bytes() -> Vec<u8> {
     rhwp::serializer::cfb_writer::serialize_hwp(&doc).expect("HWP5 직렬화")
 }
 
+/// Public HWP3 API도 source format을 보존한 채 같은 adapter 경로를 탄다.
+fn convert_to_hwp5_bytes_via_document_core() -> Vec<u8> {
+    let raw = std::fs::read(sample_path()).expect("표본 읽기");
+    let mut core = rhwp::document_core::DocumentCore::from_bytes(&raw).expect("HWP3 파싱");
+    core.export_hwp_with_adapter().expect("HWP5 직렬화")
+}
+
 /// 레코드 헤더를 걷으며 `(tag, level, data)` 를 넘긴다.
 fn walk_records(raw: &[u8], mut visit: impl FnMut(u16, u16, &[u8])) {
     let mut i = 0usize;
@@ -127,6 +134,23 @@ fn each_section_has_three_page_border_fills() {
             "구역 {idx} 의 PAGE_BORDER_FILL 이 {n}개다. 한컴은 양쪽/짝수쪽/홀수쪽 \
              3개를 요구하며, 하나라도 모자라면 문서 전체를 거부한다."
         );
+    }
+}
+
+/// 실제 public 저장 경로도 HWP3 출처에만 세 PAGE_BORDER_FILL을 materialize한다.
+#[test]
+fn public_hwp3_export_has_three_page_border_fills() {
+    for (idx, raw) in section_streams(&convert_to_hwp5_bytes_via_document_core())
+        .iter()
+        .enumerate()
+    {
+        let mut n = 0;
+        walk_records(raw, |tag, _, _| {
+            if tag == HWPTAG_PAGE_BORDER_FILL {
+                n += 1;
+            }
+        });
+        assert_eq!(n, 3, "public HWP3 export section {idx} PBF count={n}");
     }
 }
 
