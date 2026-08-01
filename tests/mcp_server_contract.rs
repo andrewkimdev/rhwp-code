@@ -671,3 +671,120 @@ fn invalid_frame_does_not_swallow_the_next_response() {
     assert!(good["result"].is_object(), "{good}");
     assert_eq!(good["id"], 2, "{good}");
 }
+
+// ── [#3627] resources 표면 ─────────────────────────────────────────────────
+
+#[test]
+fn resources_list_declares_manifest_and_docs() {
+    let mut s = Server::started();
+    let r = s.request("resources/list", serde_json::json!({}));
+    let resources = r["result"]["resources"]
+        .as_array()
+        .unwrap_or_else(|| panic!("resources/list 응답에 resources 배열이 없습니다: {r}"));
+    let uris: Vec<&str> = resources
+        .iter()
+        .map(|x| x["uri"].as_str().unwrap_or_default())
+        .collect();
+    for expected in [
+        "rhwp://capabilities/mcp",
+        "rhwp://docs/llms.txt",
+        "rhwp://docs/agent_knowledge_map.md",
+        "rhwp://docs/agent_troubleshooting_guide.md",
+    ] {
+        assert!(uris.contains(&expected), "{expected} 가 없습니다: {uris:?}");
+    }
+    for x in resources {
+        assert!(x["name"].is_string(), "{x}");
+        assert!(x["mimeType"].is_string(), "{x}");
+    }
+}
+
+#[test]
+fn initialize_declares_resources_capability() {
+    let mut s = Server::start();
+    let r = s.request(
+        "initialize",
+        serde_json::json!({
+            "protocolVersion": SERVER_PROTOCOL_VERSION,
+            "capabilities": {},
+            "clientInfo": {"name": "contract-test", "version": "0"}
+        }),
+    );
+    assert!(
+        r["result"]["capabilities"]["resources"].is_object(),
+        "resources capability 선언이 없습니다: {r}"
+    );
+}
+
+#[test]
+fn resources_read_serves_canonical_docs() {
+    let mut s = Server::started();
+    let r = s.request(
+        "resources/read",
+        serde_json::json!({"uri": "rhwp://docs/agent_troubleshooting_guide.md"}),
+    );
+    let c = &r["result"]["contents"][0];
+    assert_eq!(
+        c["uri"], "rhwp://docs/agent_troubleshooting_guide.md",
+        "contents[].uri 는 요청 URI 와 같아야 합니다: {r}"
+    );
+    assert_eq!(c["mimeType"], "text/markdown", "{r}");
+    let text = c["text"]
+        .as_str()
+        .unwrap_or_else(|| panic!("contents[].text 가 없습니다: {r}"));
+    let on_disk = std::fs::read_to_string(sample("mydocs/manual/agent_troubleshooting_guide.md"))
+        .expect("실패 사전 문서 읽기 실패");
+    assert_eq!(
+        text, on_disk,
+        "리소스 본문이 저장소 canonical 문서와 다릅니다 — 복제본이 생겼습니다"
+    );
+}
+
+#[test]
+fn resources_read_capabilities_matches_tools_list() {
+    let mut s = Server::started();
+    let served: Vec<String> = s.request("tools/list", serde_json::json!({}))["result"]["tools"]
+        .as_array()
+        .expect("tools 배열")
+        .iter()
+        .map(|t| t["name"].as_str().unwrap_or_default().to_string())
+        .collect();
+    let r = s.request(
+        "resources/read",
+        serde_json::json!({"uri": "rhwp://capabilities/mcp"}),
+    );
+    let c = &r["result"]["contents"][0];
+    assert_eq!(c["mimeType"], "application/json", "{r}");
+    let manifest: serde_json::Value = serde_json::from_str(
+        c["text"]
+            .as_str()
+            .unwrap_or_else(|| panic!("contents[].text 가 없습니다: {r}")),
+    )
+    .expect("매니페스트가 JSON 이 아닙니다");
+    for t in manifest["tools"].as_array().expect("tools 배열") {
+        let name = t["name"].as_str().unwrap_or_default().to_string();
+        assert!(
+            served.contains(&name),
+            "매니페스트가 광고한 {name} 이 tools/list 에 없습니다: {served:?}"
+        );
+    }
+}
+
+#[test]
+fn resources_read_unknown_uri_returns_resource_not_found() {
+    let mut s = Server::started();
+    let r = s.request(
+        "resources/read",
+        serde_json::json!({"uri": "rhwp://docs/no_such_doc.md"}),
+    );
+    assert_eq!(
+        r["error"]["code"], -32002,
+        "알 수 없는 리소스는 -32002: {r}"
+    );
+    assert_eq!(
+        r["error"]["data"]["uri"], "rhwp://docs/no_such_doc.md",
+        "error.data.uri 로 문제의 URI 를 돌려줘야 합니다: {r}"
+    );
+    let r = s.request("resources/read", serde_json::json!({}));
+    assert_eq!(r["error"]["code"], -32602, "{r}");
+}
