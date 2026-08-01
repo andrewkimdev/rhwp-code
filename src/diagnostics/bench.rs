@@ -45,7 +45,9 @@ fn ms_since(t: Instant) -> f64 {
     t.elapsed().as_secs_f64() * 1000.0
 }
 
-pub fn run(args: &[String]) {
+pub fn run(args: &[String]) -> i32 {
+    // 종료 코드 계약(mydocs/manual/cli_commands.md): 파일 처리 실패는 이미 1 로 끝냈지만
+    // 인자 누락만 0 이었다 — 오타로 대상이 비면 "0개 측정 성공" 이 되어 버린다.
     let mut files: Vec<String> = Vec::new();
     let mut batch: Option<String> = None;
     let mut iters = 3usize;
@@ -72,12 +74,15 @@ pub fn run(args: &[String]) {
     }
 
     if let Some(dir) = &batch {
-        collect_samples(std::path::Path::new(dir), &mut files);
+        if let Err(error) = collect_samples(std::path::Path::new(dir), &mut files) {
+            eprintln!("오류: --batch 폴더를 읽을 수 없습니다 - {dir}: {error}");
+            return super::EXIT_RUNTIME;
+        }
         files.sort();
     }
     if files.is_empty() {
         eprintln!("사용법: rhwp bench <파일...> | --batch <폴더> [-n 반복수] [--tsv 출력.tsv]");
-        return;
+        return super::EXIT_USAGE;
     }
     if iters == 0 {
         iters = 1;
@@ -113,18 +118,18 @@ pub fn run(args: &[String]) {
     // 있으면 non-zero 로 종료해 실패가 성공처럼 숨겨지지 않게 한다.
     if failures > 0 {
         eprintln!("\n{failures}개 파일 처리 실패 — 종료 코드 1");
-        std::process::exit(1);
+        // process::exit 대신 반환한다 — 호출부(main 의 exit_with)가 종료를 맡으면
+        // 이 함수도 다른 진단 명령과 같은 계약 하나만 지키면 된다.
+        return super::EXIT_RUNTIME;
     }
+    super::EXIT_OK
 }
 
-fn collect_samples(dir: &std::path::Path, acc: &mut Vec<String>) {
-    let Ok(rd) = fs::read_dir(dir) else {
-        return;
-    };
-    for e in rd.flatten() {
-        let p = e.path();
+fn collect_samples(dir: &std::path::Path, acc: &mut Vec<String>) -> std::io::Result<()> {
+    for entry in fs::read_dir(dir)? {
+        let p = entry?.path();
         if p.is_dir() {
-            collect_samples(&p, acc);
+            collect_samples(&p, acc)?;
         } else if p.extension().is_some_and(|x| {
             let x = x.to_string_lossy().to_ascii_lowercase();
             x == "hwp" || x == "hwpx"
@@ -132,6 +137,7 @@ fn collect_samples(dir: &std::path::Path, acc: &mut Vec<String>) {
             acc.push(p.to_string_lossy().into_owned());
         }
     }
+    Ok(())
 }
 
 fn bench_one(path: &str, iters: usize) -> Result<Row, String> {
