@@ -15,7 +15,8 @@ use crate::model::style::UnderlineType;
 use crate::paint::{
     GlyphOutlinePayloadKind, GlyphRunDiagnostics, GlyphRunOrientation, GlyphRunReplayEligibility,
     LayerGlyphOutlinePaint, LayerGlyphRunPaint, LayerNode, LayerNodeKind, PageLayerTree, PaintOp,
-    ResourceArena, TextVariantKind, TextVariantQuality, RESOURCE_KEY_ALGORITHM,
+    ResourceArena, TextVariantKind, TextVariantQuality, MAX_PORTABLE_FONT_BLOB_BYTES,
+    RESOURCE_KEY_ALGORITHM,
 };
 use crate::renderer::render_tree::{FieldMarkerType, TextRunNode};
 
@@ -631,9 +632,6 @@ fn glyph_run_font_proof_fallback_reason(
     else {
         return Some("fontFaceMissing".to_string());
     };
-    if face.face_index != 0 {
-        return Some("faceIndexUnsupported".to_string());
-    }
     let Some(blob) = font_resources
         .blobs
         .iter()
@@ -649,6 +647,9 @@ fn glyph_run_font_proof_fallback_reason(
     }
     match resources.font_blob_bytes_for_ref(data_ref) {
         Some(bytes) => {
+            if bytes.len() > MAX_PORTABLE_FONT_BLOB_BYTES {
+                return Some("fontBlobTooLarge".to_string());
+            }
             let actual_digest = crate::paint::resource_digest_hex(bytes);
             if !font_digest_matches_resource_digest(digest, &actual_digest)
                 || !blob.digest.as_ref().is_none_or(|digest| {
@@ -656,6 +657,9 @@ fn glyph_run_font_proof_fallback_reason(
                 })
             {
                 return Some("fontBlobDigestMismatch".to_string());
+            }
+            if ttf_parser::Face::parse(bytes, face.face_index).is_err() {
+                return Some("faceIndexUnsupported".to_string());
             }
         }
         None => {
@@ -808,6 +812,8 @@ mod tests {
     use crate::renderer::render_tree::BoundingBox;
     use crate::renderer::{PathCommand, TextStyle};
 
+    const FIXTURE_TTC: &[u8] = include_bytes!("../../tests/fixtures/fonts/RHWPExactFaceSmoke.ttc");
+
     fn text_run(text: &str) -> TextRunNode {
         TextRunNode {
             text: text.to_string(),
@@ -840,8 +846,11 @@ mod tests {
     }
 
     fn add_portable_font_resources(resources: &mut ResourceArena) {
-        let font_bytes = [0_u8, 1, 2, 3];
-        resources.intern_font_blob_bytes(&font_bytes);
+        add_portable_font_bytes(resources, FIXTURE_TTC, 0);
+    }
+
+    fn add_portable_font_bytes(resources: &mut ResourceArena, font_bytes: &[u8], face_index: u32) {
+        resources.intern_font_blob_bytes(font_bytes);
         let blob_key = FontBlobKey("blob-0".to_string());
         let face_key = FontFaceKey("face-0".to_string());
         let digest_value = resource_digest_hex(font_bytes);
@@ -863,7 +872,7 @@ mod tests {
         resources.font_resources_mut().faces.push(FontFaceResource {
             id: face_key,
             blob_key,
-            face_index: 0,
+            face_index,
             postscript_name: None,
             family_names: Vec::new(),
             style_names: Vec::new(),
@@ -1075,6 +1084,64 @@ mod tests {
         assert_eq!(diagnostics.slot_diagnostics.len(), 1);
         assert!(diagnostics.slot_diagnostics[0].strict_variant_available);
         assert!(!diagnostics.has_errors());
+    }
+
+    #[test]
+    fn exact_collection_face_is_strict_only_when_the_face_exists() {
+        for (face_index, expected_reason) in [(1, None), (2, Some("faceIndexUnsupported"))] {
+            let mut tree = PageLayerTree::new(
+                100.0,
+                100.0,
+                LayerNode::leaf(
+                    BoundingBox::new(0.0, 0.0, 100.0, 100.0),
+                    None,
+                    vec![text_op("A"), glyph_op(None, 0)],
+                ),
+            );
+            add_portable_font_bytes(&mut tree.resources, FIXTURE_TTC, face_index);
+
+            let diagnostics = TextV2Diagnostics::from_layer_tree_with_profile(
+                &tree,
+                TextV2CompatibilityProfile::FallbackFreeStrict,
+            );
+            assert_eq!(diagnostics.has_errors(), expected_reason.is_some());
+            assert_eq!(
+                diagnostics.slot_diagnostics[0].fallback_reason.as_deref(),
+                expected_reason
+            );
+        }
+    }
+
+    #[test]
+    fn strict_font_proof_rejects_invalid_or_oversized_face_data() {
+        for (font_bytes, expected_reason) in [
+            (vec![0, 1, 2, 3], "faceIndexUnsupported"),
+            (
+                vec![0; MAX_PORTABLE_FONT_BLOB_BYTES + 1],
+                "fontBlobTooLarge",
+            ),
+        ] {
+            let mut tree = PageLayerTree::new(
+                100.0,
+                100.0,
+                LayerNode::leaf(
+                    BoundingBox::new(0.0, 0.0, 100.0, 100.0),
+                    None,
+                    vec![text_op("A"), glyph_op(None, 0)],
+                ),
+            );
+            add_portable_font_bytes(&mut tree.resources, &font_bytes, 0);
+
+            let diagnostics = TextV2Diagnostics::from_layer_tree_with_profile(
+                &tree,
+                TextV2CompatibilityProfile::FallbackFreeStrict,
+            );
+            assert!(diagnostics.has_errors());
+            assert_eq!(
+                diagnostics.slot_diagnostics[0].fallback_reason.as_deref(),
+                Some(expected_reason)
+            );
+        }
     }
 
     #[test]

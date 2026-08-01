@@ -3,6 +3,8 @@
 //! semantic render tree를 backend-friendly layer tree로 변환한다.
 
 pub(crate) const MAX_POSITIONED_CONTROL_MARKS_PER_RUN: usize = 4096;
+pub(crate) const MAX_PORTABLE_FONT_BLOB_BYTES: usize = 32 * 1024 * 1024;
+pub(crate) const MAX_PORTABLE_GLYPHS_PER_RUN: usize = 4096;
 
 pub mod builder;
 pub mod font;
