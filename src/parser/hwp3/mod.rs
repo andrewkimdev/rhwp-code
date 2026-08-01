@@ -4692,47 +4692,32 @@ mod tests {
 
     #[test]
     fn read_hwp3_padding_scaled_preserves_negative_values_without_overflow() {
-        // [부호 확장 결함] 종전 `read_i16(..) as u32 * 4` 는 음수 셀 패딩을
-        // 부호 확장된 거대한 u32 로 만들어 debug 빌드에서 곱셈 오버플로 패닉,
-        // release 빌드에서는 랩어라운드된 엉뚱한 값을 만들었다. 이 회귀 테스트는
-        // 음수 입력이 패닉 없이 부호를 보존한 채 ×4 스케일된 결과를 내는지 확인한다.
         let negative_five: [u8; 2] = (-5i16).to_le_bytes();
-        assert_eq!(
-            read_hwp3_padding_scaled(&negative_five),
-            -20,
-            "음수 셀 패딩은 부호를 보존한 채 ×4 스케일돼야 함"
-        );
-
-        let positive: [u8; 2] = 30i16.to_le_bytes();
-        assert_eq!(read_hwp3_padding_scaled(&positive), 120);
-
-        let zero: [u8; 2] = 0i16.to_le_bytes();
-        assert_eq!(read_hwp3_padding_scaled(&zero), 0);
+        assert_eq!(read_hwp3_padding_scaled(&negative_five), -20);
+        assert_eq!(read_hwp3_padding_scaled(&30i16.to_le_bytes()), 120);
+        assert_eq!(read_hwp3_padding_scaled(&0i16.to_le_bytes()), 0);
     }
 
     #[test]
     fn read_hwp3_margin_scaled_preserves_large_negative_values_without_overflow_panic() {
-        // [오버플로 결함] 종전 `read_i16(..) * 4` 는 `i16 * i16` 그대로였다. 절댓값이
-        // 8192 이상인 표 바깥여백/안여백·그림 여백/안여백(HWP3 문서 상 유효한 범위,
-        // 또는 손상/적대적 입력)을 만나면 곱셈이 i16 범위를 넘어 debug 빌드(오버플로
-        // 체크 on, 테스트 기본 프로필)에서 파서 전체가 패닉했다. 이 회귀 테스트는
-        // 그런 큰 음수 입력이 패닉 없이 wrapping 스케일된 결과를 내는지 확인한다.
         let large_negative: [u8; 2] = (-9000i16).to_le_bytes();
-        // -9000 * 4 = -36000, which does not fit in i16 (min -32768) — wraps via i32→i16 cast.
         assert_eq!(
             read_hwp3_margin_scaled(&large_negative),
-            (-36000i32) as i16,
-            "8192 이상 절댓값의 음수 여백은 패닉 없이 wrapping 스케일돼야 함"
+            (-36000i32) as i16
         );
+        assert_eq!(read_hwp3_margin_scaled(&(-100i16).to_le_bytes()), -400);
+        assert_eq!(read_hwp3_margin_scaled(&200i16.to_le_bytes()), 800);
+        assert_eq!(read_hwp3_margin_scaled(&0i16.to_le_bytes()), 0);
+    }
 
-        let small_negative: [u8; 2] = (-100i16).to_le_bytes();
-        assert_eq!(read_hwp3_margin_scaled(&small_negative), -400);
-
-        let positive: [u8; 2] = 200i16.to_le_bytes();
-        assert_eq!(read_hwp3_margin_scaled(&positive), 800);
-
-        let zero: [u8; 2] = 0i16.to_le_bytes();
-        assert_eq!(read_hwp3_margin_scaled(&zero), 0);
+    #[test]
+    fn read_hwp3_padding_scaled_preserves_large_negative_values_without_overflow_panic() {
+        let large_negative: [u8; 2] = (-9000i16).to_le_bytes();
+        assert_eq!(
+            read_hwp3_padding_scaled(&large_negative),
+            (-36000i32) as i16
+        );
+        assert_eq!(read_hwp3_padding_scaled(&(-1i16).to_le_bytes()), -4);
     }
 
     #[test]
