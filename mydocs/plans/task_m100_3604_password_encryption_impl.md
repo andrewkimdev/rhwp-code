@@ -66,6 +66,18 @@ parser와 serializer는 파일 형식의 레이아웃, CFB/ZIP 읽기·쓰기를
 7. Studio는 암호 값 대신 보호 저장 여부 boolean만 메모리에 보관하고, 이후 Ctrl+S에서
    재입력받는다. public WASM JS/type declaration도 새 binding을 제공한다.
 
+## Stage 8 결과
+
+1. Finder/Explorer document drop에서 `DataTransferItem.getAsFileSystemHandle()` capture를
+   제거했다. 암호 HWPX에서 관측된 Chromium renderer 종료를 피하기 위해 `File` bytes만
+   `loadFile()`에 전달한다.
+2. 드롭 문서는 파일 메뉴와 동일한 `loadDocumentForOpen()` 및 password dialog 경로를 사용한다.
+   사용자 열기 확인 이전에는 bytes를 읽지 않는다.
+3. 드롭 문서는 writable handle을 보관하지 않는다. 이후 Ctrl+S는 save-as 흐름을 사용하며,
+   파일 메뉴로 연 문서의 기존 handle 저장 동작은 유지한다.
+4. 관련 TypeScript 테스트 26개, typecheck, production build를 통과했다. 실제 native Finder
+   drag/drop은 검증 호스트의 브라우저 실행 환경 부재로 사용자 수동 확인을 대기한다.
+
 ## 다음 단계
 
 - hwp-convert MCP가 input `password`와 output `output_password`를 분리해 받고,
