@@ -141,7 +141,8 @@ full repaint를 유지한다.
 | 브랜치 | `issue-3137-pr-review-fixes` |
 | review 보정 기준 | `23967640f7aaeb991eb1d2d48938b5c4ce469a4c` + text replay 보정 |
 | 측정 worktree | dirty=true, clone 제거 전 culling-fix production WASM |
-| 기준 `upstream/devel` | `ad16eb45799645ea96f3ef533b24fd07320ec476` |
+| 최초 Stage 4 구현 기준 `upstream/devel` | `ad16eb45799645ea96f3ef533b24fd07320ec476` |
+| review 24개 행렬 head의 `devel` ancestry | `cc382911684c05c041a6b5ae86a873f7321f2153` |
 | Chrome | `150.0.7871.187`, 새 headless 임시 프로필 |
 | Node | `v24.15.0` |
 | production WASM | 7,452,527 bytes |
@@ -165,7 +166,7 @@ IME는 `ㅎ → 하 → 한` 20회에 해당하는 60개 event sample을 측정�
 | HWPX IME | 1.5 / 15.0 | 1.4 / 8.4 | 1.4 / 8.5 | 1.5 / 15.2 |
 
 24개 시나리오와 800개 event sample 모두 최종 text, cursor offset, 원본 format, 115쪽,
-deferred mutation 계약을 만족했다. geometry/page-tree patch/dirty payload는 800/800,
+deferred mutation 계약을 만족했다. geometry/page-tree patch/dirty payload는 800/800/800,
 frame coalescing 뒤 실제 repaint 713회는 모두 partial이었다. exact cursor query, full repaint,
 long task와 동기 pagination 작업은 모두 0회였다.
 
@@ -187,14 +188,14 @@ long task와 동기 pagination 작업은 모두 0회였다.
 
 | 항목 | HWP | HWPX |
 | --- | ---: | ---: |
-| stable operation p95 | 0.7ms | 0.7ms |
+| stable operation p95 | 0.7ms | 0.8ms |
 | flow boundary | 56 | 56 |
-| boundary operation | 81.7ms | 79.5ms |
-| boundary begin | 34.7ms | 33.0ms |
+| boundary operation | 85.5ms | 83.0ms |
+| boundary begin | 36.5ms | 35.5ms |
 | begin / steps / flush | 1 / 115 / 0 | 1 / 115 / 0 |
-| Backspace / Delete WASM | 2.1 / 1.6ms | 1.7 / 1.6ms |
+| Backspace / Delete WASM | 1.9 / 1.7ms | 1.5 / 1.6ms |
 | raw stable/boundary IME·iOS | GREEN | GREEN |
-| save barrier | HWP 229,376 bytes | HWPX 225,699 bytes |
+| save barrier | HWP 229,376 bytes | HWPX 226,139 bytes |
 | print barrier | 115쪽 | HWP suite에서 통과 |
 
 flow 경계 전후 visual crop과 pagination 완료 crop은 기존 비교 계약을 통과했다. 저장과 인쇄는
@@ -213,7 +214,28 @@ pending pagination을 먼저 flush한 뒤 export/render하는 순서를 유지�
 | Studio `npm test` | 679 passed / 0 failed |
 | Studio `npm run build` | 통과 |
 | Stage 4 전체 성능 행렬 | 24 / 24, 800 / 800 |
-| #2214 HWP/HWPX focused/raw/delete/IME/save/print | 전 단계 통과 |
+| #2214 HWP/HWPX focused/raw/delete/IME/save | 전 단계 통과; print는 HWP 1회 통과 |
+
+PR #3745 review 보정을 모두 반영한 source head `6dd0795af35fd030c2ef3fae0fb22cc28092d10c`에서는
+전체 행렬을 반복하지 않고 변경 범위에 맞춘 제한 검증을 수행했다.
+
+| 2026-08-02 review 최종 검증 | 결과 |
+| --- | --- |
+| text replay envelope native unit | 2 / 2 |
+| focused exact-tree / IME replace / deferred delete Rust | 3 / 3 |
+| Studio type check | `npx tsc --noEmit` 통과 |
+| focused Studio unit | 76 / 76 |
+| production WASM | 7,452,333 bytes, SHA-256 `5c42bdf6d6d775bc27a5f0c9181d9c4414b8b65bb3dbe9ab0d9ffb3317da22a7` |
+| 최종 source 80ms smoke | 6 / 6, operation p95 0.7–1.1ms, page repaint p95 1.4–1.5ms, 2-rAF p95 7.5–9.0ms |
+| 최종 source repaint 계약 | partial 200, full/exact/flush/long task 0 |
+| #2214 HWP/HWPX 1회 | focused/raw/delete/IME/save 통과; print는 HWP 1회 통과 |
+
+시각 crop은 HWP/HWPX 모두 55→56 입력에서 7,404 pixel이 바뀌어 4→5줄 전환을 포착했고,
+56 입력의 2-rAF 뒤 100ms·850ms·1600ms·pagination 완료 이미지는 changed pixel 0과 동일
+SHA-256을 유지했다. 대표 자산은
+`mydocs/pr/assets/pr_3745_issue3137_partial_repaint_review.png`이다. 이 transient Canvas 경로는
+정적 PDF visual sweep으로 재현되지 않으므로, browser crop과 `--require-focused-repaint` trace를
+결합해 판정했다.
 
 Stage 4로 #3137의 stable 셀 입력 병목은 cursor와 repaint 양쪽에서 해소됐다. 첫 입력 정규화,
 flow 경계, pagination commit, 복합 content page는 correctness를 위한 의도적 full fallback이므로
