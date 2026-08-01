@@ -297,6 +297,92 @@ pub fn svgs_to_pdf(svg_pages: &[String]) -> Result<Vec<u8>, String> {
     svgs_to_pdf_with_options(svg_pages, &PdfExportOptions::default())
 }
 
+struct PageData {
+    chunk: pdf_writer::Chunk,
+    svg_ref: pdf_writer::Ref,
+    width: f32,
+    height: f32,
+}
+
+/// 페이지 하나를 파싱 + PDF chunk로 변환한다. 페이지 간 상태 공유가 없어
+/// 병렬 호출이 안전하다 (`options`의 fontdb는 Arc로 읽기 전용 공유).
+#[cfg(not(target_arch = "wasm32"))]
+fn render_one_page(
+    svg: &str,
+    export_options: &PdfExportOptions,
+    options: &usvg::Options,
+) -> Result<PageData, String> {
+    let svg_with_fallback = apply_pdf_font_options(svg, export_options);
+    let tree = usvg::Tree::from_str(&svg_with_fallback, options)
+        .map_err(|e| format!("SVG 파싱 실패: {}", e))?;
+
+    // [Task #2264] 텍스트 임베드(폰트 서브셋)가 PDF 변환 메모리의 지배항이다.
+    // `embed_text=false` 면 글리프를 path 로 변환해 서브셋 경로를 통째로 건너뛴다.
+    let mut conversion = svg2pdf::ConversionOptions::default();
+    conversion.embed_text = export_options.embed_text;
+
+    let (chunk, svg_ref) = svg2pdf::to_chunk(&tree, conversion)
+        .map_err(|e| format!("SVG→chunk 변환 실패: {:?}", e))?;
+
+    let dpi_ratio = 72.0 / 96.0; // 96 DPI → 72 pt
+    let w = tree.size().width() * dpi_ratio;
+    let h = tree.size().height() * dpi_ratio;
+
+    Ok(PageData {
+        chunk,
+        svg_ref,
+        width: w,
+        height: h,
+    })
+}
+
+/// 모든 페이지를 파싱+변환한다. 페이지가 2개 이상이면 `available_parallelism()`
+/// 기준으로 청크를 나눠 스레드에 분산한다 (스레드 수가 페이지 수만큼 무한정
+/// 늘지 않도록 상한). 페이지 순서는 청크 순서 + 청크 내부 순차 처리로 그대로
+/// 보존된다 — 이후 재채번/조립 단계는 이 순서에 의존한다.
+#[cfg(not(target_arch = "wasm32"))]
+fn render_pages_to_page_data(
+    svg_pages: &[String],
+    export_options: &PdfExportOptions,
+    options: &usvg::Options,
+) -> Result<Vec<PageData>, String> {
+    if svg_pages.len() <= 1 {
+        return svg_pages
+            .iter()
+            .map(|svg| render_one_page(svg, export_options, options))
+            .collect();
+    }
+
+    let worker_count = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1)
+        .min(svg_pages.len());
+    let chunk_size = svg_pages.len().div_ceil(worker_count.max(1));
+
+    let chunk_results: Vec<Result<Vec<PageData>, String>> = std::thread::scope(|scope| {
+        svg_pages
+            .chunks(chunk_size.max(1))
+            .map(|chunk| {
+                scope.spawn(move || {
+                    chunk
+                        .iter()
+                        .map(|svg| render_one_page(svg, export_options, options))
+                        .collect::<Result<Vec<_>, _>>()
+                })
+            })
+            .collect::<Vec<_>>()
+            .into_iter()
+            .map(|handle| handle.join().expect("페이지 렌더 스레드 패닉"))
+            .collect()
+    });
+
+    let mut page_datas = Vec::with_capacity(svg_pages.len());
+    for chunk_result in chunk_results {
+        page_datas.extend(chunk_result?);
+    }
+    Ok(page_datas)
+}
+
 /// 여러 SVG 페이지를 옵션 기반 단일 다중 페이지 PDF로 생성
 #[cfg(not(target_arch = "wasm32"))]
 pub fn svgs_to_pdf_with_options(
@@ -318,39 +404,16 @@ pub fn svgs_to_pdf_with_options(
     let page_tree_ref = alloc.bump();
 
     // 각 페이지의 SVG를 파싱하여 chunk + page 정보 수집
-    struct PageData {
-        chunk: pdf_writer::Chunk,
-        svg_ref: Ref,
-        width: f32,
-        height: f32,
-    }
-
-    let mut page_datas: Vec<PageData> = Vec::new();
-
-    for svg in svg_pages {
-        let svg_with_fallback = apply_pdf_font_options(svg, export_options);
-        let tree = usvg::Tree::from_str(&svg_with_fallback, &options)
-            .map_err(|e| format!("SVG 파싱 실패: {}", e))?;
-
-        // [Task #2264] 텍스트 임베드(폰트 서브셋)가 PDF 변환 메모리의 지배항이다.
-        // `embed_text=false` 면 글리프를 path 로 변환해 서브셋 경로를 통째로 건너뛴다.
-        let mut conversion = svg2pdf::ConversionOptions::default();
-        conversion.embed_text = export_options.embed_text;
-
-        let (chunk, svg_ref) = svg2pdf::to_chunk(&tree, conversion)
-            .map_err(|e| format!("SVG→chunk 변환 실패: {:?}", e))?;
-
-        let dpi_ratio = 72.0 / 96.0; // 96 DPI → 72 pt
-        let w = tree.size().width() * dpi_ratio;
-        let h = tree.size().height() * dpi_ratio;
-
-        page_datas.push(PageData {
-            chunk,
-            svg_ref,
-            width: w,
-            height: h,
-        });
-    }
+    //
+    // [벤더 패치: 페이지 병렬화] usvg::Tree::from_str(텍스트/글리프 셰이핑)이
+    // export-pdf 총 시간의 ~75%를 차지한다는 것이 실측으로 확인됐고, 각 페이지의
+    // 파싱+변환(chunk 채번은 여기서 페이지 로컬로만 일어나고, 전역 alloc은 이 뒤
+    // 재채번 루프에서만 쓰인다)은 페이지 간 상태 공유가 없어 병렬화해도 안전하다.
+    // `options`(내부 Arc<fontdb>)는 읽기 전용으로 스레드 간 공유. 페이지 수가
+    // 코어 수를 크게 넘어도 스레드가 무한정 늘지 않도록 available_parallelism()
+    // 기준으로 청크를 나눠 스레드 수를 상한한다. 0/1페이지는 스레드 생성 비용이
+    // 이득보다 커 순차 경로를 그대로 둔다.
+    let page_datas: Vec<PageData> = render_pages_to_page_data(svg_pages, export_options, &options)?;
 
     // 각 chunk를 재번호화하고 페이지 참조 수집
     let mut page_refs: Vec<Ref> = Vec::new();
