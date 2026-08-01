@@ -14,6 +14,10 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 
 const SAMPLE: &str = "samples/hwp3-sample.hwp";
+/// 서버가 실제로 말하는 개정판. src/mcp_serve.rs 의 PROTOCOL_VERSION 과 짝이다.
+const SERVER_PROTOCOL_VERSION: &str = "2025-06-18";
+/// 무응답 결함을 재현할 때 테스트가 hang 하지 않게 하는 상한.
+const RESPONSE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
 fn sample(rel: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join(rel)
@@ -258,15 +262,15 @@ fn unknown_tool_returns_is_error() {
     assert_eq!(r["result"]["isError"], true, "{r}");
 }
 
-/// stdin 도구(hwp_batch)를 paths 없이 부르면 자식이 서버의 프로토콜 stdin 을
-/// 상속해 이후 JSON-RPC 프레임을 파일 경로로 소비했다 — 응답은 클라이언트가
-/// stdin 을 닫아야만 돌아오고, 그 사이 요청은 영원히 사라진다. 수정 후에는
-/// 자식을 띄우기 전에 거부하므로 stdin 이 열린 채로도 즉시 응답이 와야 한다.
+// ── 프로토콜 적합성 회귀 ────────────────────────────────────────────────────
+
+/// 원시 프레임들을 순서대로 보내고 응답 줄을 **타임아웃과 함께** `want` 개까지 모은다.
 ///
-/// 회귀 시 Server::request 는 영원히 블록되므로, 이 테스트만은 읽기 전용
-/// 스레드 + 타임아웃으로 하네스를 직접 구성한다(테스트 자체가 행하지 않도록).
-#[test]
-fn batch_without_paths_fails_fast_and_protocol_stays_alive() {
+/// `Server::request` 를 못 쓰는 이유: 그쪽은 `read_line` 에서 무한정 막힌다. 여기서
+/// 검증하려는 결함이 바로 "응답을 아예 안 쓴다"이므로, 그 harness 로는 테스트가
+/// 실패하지 않고 **hang** 해버린다. 별도 스레드로 읽고 `recv_timeout` 으로 끊어야
+/// 무응답이 실패로 보고된다.
+fn raw_frames(frames: &[&str], want: usize) -> Vec<serde_json::Value> {
     let mut child = Command::new(env!("CARGO_BIN_EXE_rhwp"))
         .arg("mcp-serve")
         .stdin(Stdio::piped())
@@ -277,63 +281,68 @@ fn batch_without_paths_fails_fast_and_protocol_stays_alive() {
     let mut stdin = child.stdin.take().expect("stdin");
     let stdout = child.stdout.take().expect("stdout");
 
-    let (tx, rx) = std::sync::mpsc::channel::<serde_json::Value>();
+    let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
-        let reader = BufReader::new(stdout);
-        for line in reader.lines() {
-            let Ok(line) = line else { break };
-            if line.trim().is_empty() {
-                continue;
-            }
-            if let Ok(v) = serde_json::from_str::<serde_json::Value>(line.trim()) {
-                if tx.send(v).is_err() {
-                    break;
-                }
+        for line in BufReader::new(stdout).lines() {
+            let Ok(line) = line else {
+                break;
+            };
+            if tx.send(line).is_err() {
+                break;
             }
         }
     });
-    let recv = |what: &str| -> serde_json::Value {
-        rx.recv_timeout(std::time::Duration::from_secs(20))
-            .unwrap_or_else(|_| {
-                panic!(
-                    "{what} 응답이 오지 않았습니다 — 자식이 서버의 프로토콜 stdin 을 \
-                 상속해 스트림을 소비하고 있을 가능성이 큽니다"
-                )
-            })
-    };
 
-    writeln!(
-        stdin,
-        r#"{{"jsonrpc":"2.0","id":1,"method":"initialize","params":{{"protocolVersion":"2025-06-18","capabilities":{{}},"clientInfo":{{"name":"t","version":"0"}}}}}}"#
-    )
-    .expect("initialize 쓰기");
+    for f in frames {
+        writeln!(stdin, "{f}").expect("프레임 쓰기 실패");
+    }
     stdin.flush().expect("flush");
-    let r = recv("initialize");
-    assert_eq!(r["id"], 1, "{r}");
 
-    // 핵심: stdin 을 계속 연 채로 paths 없는 batch 호출 → 즉시 도구 오류.
-    writeln!(
-        stdin,
-        r#"{{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{{"name":"hwp_batch","arguments":{{"subcommand":"info"}}}}}}"#
-    )
-    .expect("batch 쓰기");
-    stdin.flush().expect("flush");
-    let r = recv("paths 없는 hwp_batch");
-    assert_eq!(r["id"], 2, "{r}");
-    assert_eq!(r["result"]["isError"], true, "선검증 거부여야 한다: {r}");
-
-    // 프로토콜 생존 증명: 다음 요청이 자식에게 도둑맞지 않고 응답받는다.
-    writeln!(stdin, r#"{{"jsonrpc":"2.0","id":3,"method":"ping"}}"#).expect("ping 쓰기");
-    stdin.flush().expect("flush");
-    let r = recv("후속 ping");
-    assert_eq!(r["id"], 3, "ping 이 자식에게 소비되면 안 된다: {r}");
+    let mut out = Vec::new();
+    while out.len() < want {
+        match rx.recv_timeout(RESPONSE_TIMEOUT) {
+            Ok(line) if line.trim().is_empty() => continue,
+            Ok(line) => {
+                out.push(serde_json::from_str(line.trim()).unwrap_or_else(|e| {
+                    panic!("stdout 이 순수 JSON-RPC 가 아닙니다 ({e}): {line}")
+                }))
+            }
+            // 무응답 — hang 대신 여기서 끊고 개수로 호출자가 판정한다.
+            Err(_) => break,
+        }
+    }
 
     drop(stdin);
+    let _ = child.kill();
     let _ = child.wait();
+    out
 }
 
-/// paths 형태 오류 3종(비배열·비문자열 항목·빈 배열)은 자식 실행 전에 명확한
-/// 메시지로 거부된다 — 비문자열을 조용히 걸러 "0건 스윕"을 만드는 대신.
+/// paths 없는 stdin 도구는 서버의 JSON-RPC stdin을 자식에게 넘기지 않고 즉시 거부해야
+/// 하며, 뒤따르는 요청도 정상 처리해야 한다.
+#[test]
+fn batch_without_paths_fails_fast_and_protocol_stays_alive() {
+    let out = raw_frames(
+        &[
+            r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"t","version":"0"}}}"#,
+            r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"hwp_batch","arguments":{"subcommand":"info"}}}"#,
+            r#"{"jsonrpc":"2.0","id":3,"method":"ping"}"#,
+        ],
+        3,
+    );
+    assert_eq!(
+        out.len(),
+        3,
+        "batch 오류 뒤에도 세 응답이 와야 합니다: {out:?}"
+    );
+    assert_eq!(out[0]["id"], 1, "{out:?}");
+    assert_eq!(out[1]["id"], 2, "{out:?}");
+    assert_eq!(out[1]["result"]["isError"], true, "{out:?}");
+    assert_eq!(out[2]["id"], 3, "{out:?}");
+    assert!(out[2]["result"].is_object(), "{out:?}");
+}
+
+/// paths의 형식 오류는 자식 실행 전에 명확히 거부하고, 서버는 계속 살아 있어야 한다.
 #[test]
 fn batch_paths_wrong_shapes_rejected_before_spawn() {
     let mut s = Server::started();
@@ -348,7 +357,7 @@ fn batch_paths_wrong_shapes_rejected_before_spawn() {
         ),
         (
             serde_json::json!({"subcommand": "info", "paths": []}),
-            "빈 배열은 '0건 스윕 실패' 오보 대신 선거부한다",
+            "빈 배열은 선거부한다",
         ),
     ] {
         let r = s.request(
@@ -357,17 +366,13 @@ fn batch_paths_wrong_shapes_rejected_before_spawn() {
         );
         assert_eq!(r["result"]["isError"], true, "{why}: {r}");
         let msg = r["result"]["content"][0]["text"].as_str().unwrap_or("");
-        assert!(
-            msg.contains("paths"),
-            "{why} — 메시지가 paths 를 짚어야 한다: {r}"
-        );
+        assert!(msg.contains("paths"), "{why}: {r}");
     }
-    // 거부 뒤에도 서버는 정상 동작한다.
     let r = s.request("ping", serde_json::json!({}));
     assert!(r["result"].is_object(), "{r}");
 }
 
-/// 대조군: 올바른 paths 배열은 종전대로 stdin 파이프로 흘러 NDJSON 결과를 낸다.
+/// 올바른 paths 배열은 기존대로 batch stdin 파이프로 흘러야 한다.
 #[test]
 fn batch_with_paths_still_streams() {
     let mut s = Server::started();
@@ -378,6 +383,172 @@ fn batch_with_paths_still_streams() {
     assert_eq!(envelope["schemaVersion"], "1.0", "{envelope}");
     assert!(
         envelope["pageCount"].as_u64().unwrap_or(0) > 0,
-        "batch info 레코드에 pageCount 가 있어야 한다: {envelope}"
+        "batch info 레코드에 pageCount 가 있어야 합니다: {envelope}"
     );
+}
+
+/// [MCP 2025-06-18 lifecycle §Version Negotiation]
+///   "If the server supports the requested protocol version, it MUST respond with
+///    the same version. Otherwise, the server MUST respond with another protocol
+///    version it supports."
+///
+/// 결함일 때 서버는 요청값을 **무조건 그대로** 되비췄다 — "9999-99-99" 도 "banana" 도
+/// 합의된 것처럼 보였다. 그래 놓고 몸통은 2025-06-18 전용 표면(structuredContent)을
+/// 내보내므로, 엄격한 클라이언트는 끊어야 할 신호를 못 받은 채 못 읽는 응답을 받는다.
+#[test]
+fn initialize_negotiates_instead_of_echoing_client_version() {
+    for requested in ["9999-99-99", "2024-11-05", "2025-03-26", "banana", ""] {
+        let mut s = Server::start();
+        let r = s.request(
+            "initialize",
+            serde_json::json!({
+                "protocolVersion": requested,
+                "capabilities": {},
+                "clientInfo": {"name": "contract-test", "version": "0"}
+            }),
+        );
+        let negotiated = r["result"]["protocolVersion"]
+            .as_str()
+            .unwrap_or_else(|| panic!("initialize 응답에 protocolVersion 이 없습니다: {r}"));
+        assert_ne!(
+            negotiated, requested,
+            "지원하지 않는 개정판을 그대로 되비추면 안 됩니다(요청={requested}): {r}"
+        );
+        assert_eq!(
+            negotiated, SERVER_PROTOCOL_VERSION,
+            "지원하지 않는 개정판에는 서버가 지원하는 개정판을 제시해야 합니다: {r}"
+        );
+    }
+}
+
+/// 지원하는 개정판은 **같은 값**으로 돌려줘야 한다(MUST) — 협상이 아니라 확인이다.
+/// 위 테스트만 있으면 "항상 서버 버전을 박아라"로 잘못 고쳐도 통과하므로 짝이 필요하다.
+#[test]
+fn initialize_keeps_supported_version_and_defaults_when_absent() {
+    let mut s = Server::start();
+    let r = s.request(
+        "initialize",
+        serde_json::json!({
+            "protocolVersion": SERVER_PROTOCOL_VERSION,
+            "capabilities": {},
+            "clientInfo": {"name": "contract-test", "version": "0"}
+        }),
+    );
+    assert_eq!(
+        r["result"]["protocolVersion"], SERVER_PROTOCOL_VERSION,
+        "지원하는 개정판은 같은 값으로 되돌려줘야 합니다: {r}"
+    );
+
+    // 버전이 없거나 문자열이 아닌 경우 — 둘 다 "요청한 개정판이 목록에 없다"와 같은
+    // 갈래이므로 서버 기준판을 제시한다.
+    for params in [
+        serde_json::json!({"capabilities": {}, "clientInfo": {"name": "t", "version": "0"}}),
+        serde_json::json!({"protocolVersion": 20250618, "capabilities": {}}),
+    ] {
+        let mut s = Server::start();
+        let r = s.request("initialize", params);
+        assert_eq!(
+            r["result"]["protocolVersion"], SERVER_PROTOCOL_VERSION,
+            "protocolVersion 이 없거나 문자열이 아니면 서버 기준판: {r}"
+        );
+    }
+}
+
+/// [JSON-RPC 2.0 §5] 파싱은 됐지만 Request 객체가 아닌 프레임은 -32600 으로 답해야
+/// 하고, 프레임에서 id 를 알아낼 수 없으므로 id 는 null 이다.
+///
+/// 결함일 때 이 경로는 **한 바이트도 쓰지 않았다** — 그래서 read_line 이 아니라
+/// 타임아웃 읽기로 확인한다. 무응답이면 hang 이 아니라 실패로 잡혀야 한다.
+#[test]
+fn non_object_frames_get_invalid_request_instead_of_silence() {
+    for frame in [
+        r#"[{"jsonrpc":"2.0","id":1,"method":"ping"}]"#, // JSON-RPC 배치
+        r#""ping""#,                                     // 문자열
+        "42",                                            // 숫자
+        "true",                                          // 불리언
+        "null",                                          // null
+    ] {
+        let out = raw_frames(&[frame], 1);
+        assert_eq!(
+            out.len(),
+            1,
+            "비객체 프레임에 응답이 없습니다 — 클라이언트가 영원히 대기합니다: {frame}"
+        );
+        let r = &out[0];
+        assert_eq!(r["jsonrpc"], "2.0", "{r}");
+        assert_eq!(
+            r["error"]["code"], -32600,
+            "비객체 프레임은 -32600 Invalid Request 여야 합니다({frame}): {r}"
+        );
+        assert_eq!(
+            r["id"],
+            serde_json::Value::Null,
+            "id 를 알아낼 수 없으면 null 이어야 합니다({frame}): {r}"
+        );
+    }
+}
+
+/// MCP 2025-06-18 changelog 는 "Remove support for JSON-RPC batching" 이다.
+/// 배열은 그냥 형식 오류가 아니라 **이 개정판에서 사라진 기능**이므로, 사유에
+/// 개정판을 밝혀야 호스트가 요청을 한 줄씩 푸는 쪽으로 고칠 수 있다.
+#[test]
+fn jsonrpc_batch_is_rejected_with_batching_removed_note() {
+    let out = raw_frames(
+        &[r#"[{"jsonrpc":"2.0","id":1,"method":"ping"},{"jsonrpc":"2.0","id":2,"method":"ping"}]"#],
+        1,
+    );
+    assert_eq!(out.len(), 1, "배치 프레임에 응답이 없습니다");
+    let r = &out[0];
+    assert_eq!(r["error"]["code"], -32600, "{r}");
+    let msg = r["error"]["message"].as_str().unwrap_or_default();
+    assert!(
+        msg.contains("배치") && msg.contains("2025-06-18"),
+        "배치 거절 사유는 어느 개정판에서 사라졌는지 밝혀야 합니다: {r}"
+    );
+}
+
+/// [JSON-RPC 2.0 §4] method 는 문자열이어야 한다 — 없거나 다른 타입이면 요청 구조가
+/// 틀린 것(-32600)이지 메서드가 없는 것(-32601)이 아니다. 결함일 때는 unwrap_or("")
+/// 로 빈 이름을 만들어 -32601 과 "지원하지 않는 메서드: " 라는 빈 문구를 냈다.
+#[test]
+fn request_without_string_method_is_invalid_request_not_method_not_found() {
+    for (frame, want_id) in [
+        (r#"{"jsonrpc":"2.0","id":7}"#, 7),
+        (r#"{"jsonrpc":"2.0","id":8,"method":123}"#, 8),
+        (r#"{"jsonrpc":"2.0","id":9,"method":null}"#, 9),
+    ] {
+        let out = raw_frames(&[frame], 1);
+        assert_eq!(out.len(), 1, "응답이 없습니다: {frame}");
+        let r = &out[0];
+        assert_eq!(
+            r["error"]["code"], -32600,
+            "method 가 문자열이 아니면 -32600({frame}): {r}"
+        );
+        assert_eq!(r["id"], want_id, "id 는 그대로 되돌려줍니다({frame}): {r}");
+    }
+}
+
+/// 결함일 때 배치 프레임은 0 바이트를 냈고 뒤이은 ping 만 응답을 받았다 — 즉 스트림은
+/// 살아 있는데 응답 하나가 통째로 증발했다. 고친 뒤에는 프레임 2건에 응답 2건이,
+/// 그것도 보낸 순서대로 나와야 한다(단일 루프이므로 순서는 계약이다).
+#[test]
+fn invalid_frame_does_not_swallow_the_next_response() {
+    let out = raw_frames(
+        &[
+            r#"[{"jsonrpc":"2.0","id":1,"method":"ping"}]"#,
+            r#"{"jsonrpc":"2.0","id":2,"method":"ping"}"#,
+        ],
+        2,
+    );
+    assert_eq!(
+        out.len(),
+        2,
+        "프레임 2건에 응답 2건이 나와야 합니다: {out:?}"
+    );
+    let bad = &out[0];
+    let good = &out[1];
+    assert_eq!(bad["error"]["code"], -32600, "{bad}");
+    assert_eq!(bad["id"], serde_json::Value::Null, "{bad}");
+    assert!(good["result"].is_object(), "{good}");
+    assert_eq!(good["id"], 2, "{good}");
 }
