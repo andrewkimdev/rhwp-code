@@ -8789,9 +8789,30 @@ impl LayoutEngine {
                             // LINE_SEG 1회분을 진행한다. FullParagraph 가 있으면
                             // 이미 진행되었으므로 result_y(=y_offset)를 유지한다.
                             if !has_full_para_item {
+                                // 텍스트 없는 호스트 문단에서 자리차지 개체는 하나가
+                                // 한 줄을 차지한다. 그러니 진행분은 **이 개체의** 줄
+                                // 이어야 하는데 first() 는 언제나 첫 줄이다. 같은
+                                // 문단에 선행 자리차지 개체가 있으면(표+글상자 등)
+                                // 앞 개체의 줄 높이로 전진해 그만큼 과전진한다
+                                // (1351000 정책연구용역 중간보고서 pi=1920:
+                                // ls[0] 표 449.9px 로 전진, 실제 도형 줄은 222.1px
+                                // — 227.8px 과전진이 뒤따르는 문단 10개를 쪽 밖으로
+                                // 밀어냈다). 선행 자리차지 개체 수를 줄 인덱스로 쓴다.
+                                let line_idx = para
+                                    .controls
+                                    .iter()
+                                    .take(control_index)
+                                    .filter(|c| match c {
+                                        Control::Table(t) => t.common.treat_as_char,
+                                        Control::Picture(p) => p.common.treat_as_char,
+                                        Control::Shape(s) => s.common().treat_as_char,
+                                        _ => false,
+                                    })
+                                    .count();
                                 let line_advance = para
                                     .line_segs
-                                    .first()
+                                    .get(line_idx)
+                                    .or_else(|| para.line_segs.first())
                                     .map(|ls| {
                                         hwpunit_to_px(ls.line_height + ls.line_spacing, self.dpi)
                                     })

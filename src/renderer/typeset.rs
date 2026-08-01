@@ -14164,6 +14164,59 @@ impl TypesetEngine {
                     }
                 }
             }
+            // [#3738] 위 합은 표만 센다. 그런데 같은 문단의 **선행 자리차지 개체가
+            // 있는** TAC 그림/글상자는 Task #402 경로가 자기 line_seg 만큼 이미
+            // current_height 에 더했다(위 13980 블록). cap 이 그 줄을 빼놓으면
+            // 방금 더한 만큼을 도로 되감아, 표 뒤 개체가 높이 0 으로 계상된다
+            // (1351000 정책연구용역 중간보고서 pi=1920: 표+글상자인데 cap=447.0 이
+            // 글상자 222.1px 를 삭제 → 문단 10개가 쪽 밖으로 밀림). 가산 조건을
+            // Task #402 와 글자 그대로 맞춘다.
+            for (ci, c) in para.controls.iter().enumerate() {
+                let is_tac_pic_or_shape = match c {
+                    Control::Picture(p) => p.common.treat_as_char,
+                    Control::Shape(s) => s.common().treat_as_char,
+                    _ => false,
+                };
+                if !is_tac_pic_or_shape {
+                    continue;
+                }
+                let prior_tac_count = para
+                    .controls
+                    .iter()
+                    .take(ci)
+                    .filter(|c| match c {
+                        Control::Table(t) => t.common.treat_as_char,
+                        Control::Picture(p) => p.common.treat_as_char,
+                        Control::Shape(s) => s.common().treat_as_char,
+                        _ => false,
+                    })
+                    .count();
+                if prior_tac_count == 0 {
+                    continue;
+                }
+                if let Some(seg) = para.line_segs.get(prior_tac_count) {
+                    let lh = hwpunit_to_px(seg.line_height, self.dpi);
+                    let ls_extra = if seg.line_spacing > 0 {
+                        hwpunit_to_px(seg.line_spacing, self.dpi)
+                    } else {
+                        0.0
+                    };
+                    tac_seg_total += lh + ls_extra;
+                    if std::env::var("RHWP_DIAG_TACSIB").is_ok() {
+                        eprintln!(
+                            "DIAG_TACSIB pi={} ci={} line_idx={} add={:.1} first_seg={:.1}",
+                            para_idx,
+                            ci,
+                            prior_tac_count,
+                            lh + ls_extra,
+                            para.line_segs
+                                .first()
+                                .map(|s0| hwpunit_to_px(s0.line_height + s0.line_spacing, self.dpi))
+                                .unwrap_or(0.0),
+                        );
+                    }
+                }
+            }
             let cap = if tac_seg_total > 0.0 {
                 let is_col_top = height_before < 1.0;
                 let effective_sb = if is_col_top { 0.0 } else { fmt.spacing_before };
@@ -14269,6 +14322,19 @@ impl TypesetEngine {
             } else {
                 cap
             };
+            if std::env::var("RHWP_DIAG_TACCAP").is_ok() {
+                eprintln!(
+                    "DIAG_TACCAP pi={} tac_seg_total={:.1} cap={:.1} fmt_total={:.1} sb={:.1} cur_h={:.1} snapped_base={:.1} clamp={}",
+                    para_idx,
+                    tac_seg_total,
+                    cap,
+                    fmt.total_height,
+                    fmt.spacing_before,
+                    st.current_height,
+                    snapped_base,
+                    st.current_height - snapped_base > cap
+                );
+            }
             if st.current_height - snapped_base > cap {
                 st.current_height = snapped_base + cap;
             }
