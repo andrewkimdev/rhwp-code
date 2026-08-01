@@ -125,6 +125,13 @@ const EXEMPT: &[(&str, &str, Exempt, &str)] = &[
          선행 편집 뮤테이터가 이미 무효화했다.",
     ),
     (
+        "queries/changed_pages.rs",
+        "pages_covering_paragraphs",
+        Exempt::SessionState,
+        "조판 커버리지를 읽어 페이지 번호만 돌려주는 조회. `&mut` 는 paginate_if_needed \
+         한 줄 때문이며 문서 IR 무변경 — 편집 IR은 선행 뮤테이터가 이미 무효화.",
+    ),
+    (
         "commands/clipboard.rs",
         "clear_clipboard_native",
         Exempt::SessionState,
