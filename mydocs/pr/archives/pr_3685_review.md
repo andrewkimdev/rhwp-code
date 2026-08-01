@@ -1,113 +1,91 @@
 ---
 kind: review
-status: maintainer-correction-pending-ci
+status: code-ci-success-review-only-fast-pass-pending
 canonical: mydocs/pr/archives/pr_3685_review.md
 last_verified: 2026-08-01
 ---
 
 # PR #3685 검토·메인터너 보정 기록 — HWP3 변환본 한컴 열기 저장 계약
 
-## 라우팅과 범위
+## 결론과 범위
 
-```text
-base route: collaborator external PR
-modifiers: intake_and_review.md, local_validation.md, rework_and_exceptions.md
-current source head: 2f81e673308b5f253528541c3963e452e1cf2e41 (작성 시점 참고)
-```
-
-이 기록은 [PR #3685](https://github.com/edwardkim/rhwp/pull/3685)의 HWP3→HWP5 저장 계약 보정과
-Windows 한글 열기 검사 도구를 검토한 결과다. 작성자 `@planet6897`은 재기여자이며, 관련 이슈는
+[PR #3685](https://github.com/edwardkim/rhwp/pull/3685)는 HWP3→HWP5 변환본을 실제 한글이
+열 수 있게 하는 저장 계약 보정이다. 작성자 `@planet6897`은 재기여자이며 관련 이슈는
 [#3676](https://github.com/edwardkim/rhwp/issues/3676)이다.
 
-시각 sweep/PDF 증적은 적용하지 않는다. 변경은 renderer·typesetter·페이지 layout 또는 기준 fixture의
-시각 결과가 아니라 HWP 바이너리 저장 계약과 Windows 외부 오라클 검사 도구에 관한 것이다. 이 경우의
-정답지는 PDF 겹침 비교가 아니라 실제 한글 열기이며, 그 Windows 실물 검증은 작업지시자가 완료했다고
-확인했다. 같은 검증을 중복 실행하지 않았다.
+최종 source/test candidate `C` = `1aa0aadbe9c5136ea16a2fbcd0745ffad841492b`는 로컬
+focused·전체 integration·Clippy, Windows의 실제 한글 외부 오라클, GitHub의 최신 full CI를
+모두 통과했다. 이 문서와 구현 기록, 오늘할일만 담은 후속 Markdown tail을 원 contributor
+브랜치에 올린 뒤에는 **review-only fast-pass A**의 preflight와 required `Build & Test`
+aggregate까지 성공해야 승인·merge할 수 있다.
 
-## PR metadata
+시각 sweep/PDF 증적은 적용하지 않는다. 변경 대상은 renderer·typesetter·페이지 layout이 아니라 HWP
+바이너리 저장 계약과 Windows 한글 COM 외부 오라클이다. 이 경우의 정답지는 PDF 겹침 비교가 아니라
+실제 한글의 독립 인스턴스 열기다.
+
+## PR metadata와 commit 경계
 
 | 항목 | 값 |
 | --- | --- |
 | PR / 작성자 | [#3685](https://github.com/edwardkim/rhwp/pull/3685) / `@planet6897` |
-| base / head | `devel` `f80b910aabeda5939972752719b0916129eb3a53` / `fix/3676-hwp3-convert-hancom-openable` `2f81e673308b5f253528541c3963e452e1cf2e41` |
-| 원 PR 변경 규모 | 3 files, +475 / -0 |
-| 메인터너 code tail | `fcf101e68` (Windows 격리), `af00f9245` (HWP3 PBF 범위), `4c7082710`·`b23de3a5` (중첩 개체·Chart/OLE caption walker) |
-| 변경 파일 | 원 PR 3개와 `scripts/tests/test_hwp3_convert_openable.py`, review·오늘할일 |
-| reviewer | `@edwardkim` 요청 완료 |
-| merge 상태 | `CLEAN` (작성 시점 참고) |
+| contributor 원 source head | `2f81e673308b5f253528541c3963e452e1cf2e41` |
+| 최종 code candidate `C` | `1aa0aadbe9c5136ea16a2fbcd0745ffad841492b` |
+| `C` 직전 원 contributor remote head | `de75f2d5df508d07447f9e26d213d2f38e09817c` |
+| base | `devel` `f80b910aabeda5939972752719b0916129eb3a53` (이 기록 작성 시점 참고값) |
+| code CI | [CI run 30701824447](https://github.com/edwardkim/rhwp/actions/runs/30701824447) success |
+| CodeQL | [CodeQL run 30701824446](https://github.com/edwardkim/rhwp/actions/runs/30701824446) success |
 
-## 확인한 근거
+`C`에는 공개 HWP3 저장 경로의 byte contract를 고정한 `7cbaee46c`, HWPX PBF overlay를 저장 뒤
+복원하는 `9204055a2`, 평문·비밀번호 HWP 저장 경로가 adapter 위임을 명시적으로 유지하게 한
+`1aa0aadbe`가 포함된다. 그 이전 maintainer tail의 Windows 프로세스 격리, HWP3 PBF·중첩
+geometry/local-file-version 보정도 그대로 보존한다. contributor의 원 commit을 rewrite하거나
+force-push하지 않았고, `C`는 `de75f2d5`의 descendant로 원 contributor head에 fast-forward했다.
+
+## 발견한 경계와 최종 보정
+
+### HWP 출력의 세 PAGE_BORDER_FILL과 HWPX live IR 보존을 함께 만족해야 한다
+
+중간 보정은 HWPX의 원래 단일 `BOTH` `pageBorderFill` XML을 지키기 위해 세
+`PAGE_BORDER_FILL` materialization을 HWP3 source로만 제한했다. 그러나 정확한 Windows 외부
+오라클에서 HWPX→HWP 출력도 세 record가 필요하다는 반례가 나왔다. 내부
+`--verify --verify-pages`는 성공했지만, 당시 HWPX 변환본을 한글로 열면 `RESULT 0 -1 -1`이었다.
+
+최종 보정은 출처와 관계없이 **HWP 파일에는 구역마다 세 PBF record**를 materialize한다. 동시에
+HWPX source라면 저장 직전에 root `SectionDef`와 serializer가 읽는 모든
+`Control::SectionDef`의 PBF extras를 snapshot하고, serialize 성공·실패와 무관하게 저장 직후
+원래 overlay를 restore한다. 따라서 HWP 출력은 한글 호환 계약을 충족하고, 같은 `DocumentCore`를
+이어 HWPX로 저장해도 단일 `BOTH` 문서에 없던 EVEN/ODD XML을 남기지 않는다.
+
+평문과 비밀번호 HWP public export는 모두 이 adapter를 직접 호출한다. 저장 뒤 live IR 불변과
+passthrough invalidation의 정적 delegation contract도 별도 회귀로 고정했다.
+
+### 기존 P1 보정도 최종 candidate에 포함한다
+
+- HWP3 실제 paragraph container 안의 caption·HiddenComment·master page·Chart/OLE caption까지
+  geometry/crop/local-file-version 정규화 walker가 도달하도록 보정했다.
+- Windows batch 도구는 `Hwp(new=True, visible=False)`만 만들며 전역 `taskkill`이나 기존 사용자
+  한글 인스턴스 attach를 사용하지 않도록 보정했다.
+
+## 검증 근거
 
 | 항목 | 결과 |
 | --- | --- |
-| 원 source head CI | `2f81e673`의 CI preflight, lint, test archive, Native Skia, default-feature 8 shards, `Build & Test`, CodeQL 모두 success; WASM·frontend gate의 skipped는 preflight 판정에 따른 정상 생략 |
-| Windows 기능 오라클 | 작업지시자가 `win10-ted`에서 한글 실물 열기 검증 완료를 확인. 이 검토에서는 중복 실행하지 않음 |
-| Windows tool regression | `python3 -m py_compile`, `python3 -m unittest scripts/tests/test_hwp3_convert_openable.py` 2 passed, `--help`, `git diff --check` 성공. Windows 전용 보조 도구이므로 Linux CI gate는 추가하지 않았고 Rust release-test도 실행하지 않음 |
-| HWP3 PBF regression | `cargo test --profile release-test --test issue_3676_hwp3_convert_hancom_openable -- --nocapture` 4 passed, 0 failed. 단일 BOTH HWPX의 HWP→HWPX 보존과 기존 HWP3 3-record 계약을 함께 확인 |
-| 중첩 walker regression | `cargo test --profile release-test --lib document_core::converters::hwpx_to_hwp::tests::hwp3_nested_caption_hidden_comment_and_master_page_pictures_are_normalized -- --exact --nocapture` 1 passed, 0 failed |
-| 추가 전체 Cargo | 최신 CI와 중복되며 실행하지 않음. 검토 초기에 시작된 중복 전체 suite는 완료 결과로 사용하지 않고 범위 변경 직후 종료 |
-| 시각 검증 | N/A. renderer/layout·PDF 기준 문서 변경이 아니며, 이 PR의 외부 정답지는 한글 열기 계약 |
-| LFS 사전 판독 | review Markdown과 오늘할일은 `filter`/LFS attribute 모두 `unspecified`, `git lfs status` 대상 없음 |
+| PBF·공개 저장 경로 regression | `CARGO_TARGET_DIR=target/review-planet6897-20260801-final CARGO_INCREMENTAL=0 cargo test --profile release-test --test issue_3676_hwp3_convert_hancom_openable -- --nocapture` → 5 passed, 0 failed |
+| passthrough invalidation static contract | `CARGO_TARGET_DIR=target/review-planet6897-20260801-final CARGO_INCREMENTAL=0 cargo test --profile release-test --test issue_2724_passthrough_invalidation_guard -- --nocapture` → 5 passed, 0 failed |
+| 전체 Rust integration | `CARGO_TARGET_DIR=target/review-planet6897-20260801-final CARGO_INCREMENTAL=0 cargo test --profile release-test --tests` → 최종 exit 0 |
+| Clippy | `CARGO_TARGET_DIR=target/review-planet6897-20260801-final CARGO_INCREMENTAL=0 cargo clippy --all-targets -- -D warnings` → exit 0 |
+| Windows 도구 안전 회귀 | `python3 -m unittest scripts/tests/test_hwp3_convert_openable.py` → 2 passed |
+| Windows release-test binary | exact `C`에서 `cargo build --profile release-test --bin rhwp` → exit 0 |
+| HWP3 외부 오라클 | `samples/hwp3-sample.hwp` → HWP5 `--verify --verify-pages` 성공, 16쪽·IR diff 없음, 독립 `Hwp(new=True)` 실제 열기 `RESULT 1 16 16` |
+| HWPX PBF 외부 오라클 | `samples/task2093/saved_single_line_spacing_after.hwpx` → HWP5 `--verify --verify-pages` 성공, 1쪽·IR diff 없음, 독립 `Hwp(new=True)` 실제 열기 `RESULT 1 1 1` |
+| 사용자 한글 프로세스 보호 | `win10-ted`에서 기존 `Hwp`/`HwpApp` process 수 0을 전후 대조했고 전역 `taskkill` 없이 0 유지 |
+| GitHub code CI | CI preflight, lint, build archive, Native Skia, default-feature 8 shards, `Build & Test` 모두 success; CodeQL Python/Rust/JavaScript 분석도 success |
+| LFS 사전 판독 | code/test 변경 3개 파일의 `filter`가 모두 `unspecified`, `git lfs status` 대상 없음 |
 
-## 발견한 P1과 메인터너 보정 범위
+## 현재 판단
 
-### P1 — HWPX 입력의 단일 BOTH `pageBorderFill`을 EVEN/ODD로 만들어 버린다
-
-새 `convert_hwpx_to_hwp_ir()`는 `normalize_page_border_fills_for_hwp()`를 무조건 호출하고,
-그 함수는 `extra_page_border_fills`가 두 개가 될 때까지 BOTH를 복제한다
-(`src/document_core/converters/hwpx_to_hwp.rs:181-186`, `734-750`). 그러나 이 adapter는
-`FileFormat::Hwpx`와 `FileFormat::Hwp3` 모두에 적용되고(`1933-1948`),
-`export_hwp_with_adapter()`는 같은 `DocumentCore`의 IR을 in-place로 바꾼다
-(`src/document_core/commands/document.rs:1154-1164`).
-
-따라서 단일 BOTH가 정상인 실제 HWPX를 HWP로 저장한 뒤 이어서 HWPX로 저장하면, 원래 없던 EVEN/ODD가
-재방출된다. 현재 HWPX serializer는 단일 BOTH 문서에서 그 복제를 명시적으로 금지한다. 복제하면
-원본에 없던 요소가 생기고 #2896 IR field sweep baseline이 발산하기 때문이다
-(`src/serializer/hwpx/section.rs:2544-2553`). 이는 이 PR이 기존 HWPX→HWP→HWPX 보존 계약에 도입하는
-회귀다.
-
-**적용한 보정:** `af00f9245`가 공통 HWPX adapter와 HWP3 materialization을 분리했다. HWPX source는
-`extra_page_border_fills`를 보존하고, `convert_if_hwpx_source(..., Hwp3)`에서만 세 record를 채운다.
-실제 단일-BOTH HWPX의 HWP→HWPX 재저장 XML에 EVEN/ODD가 생기지 않는 회귀를 추가했으며, 기존 HWP3
-3-record 검사도 유지했다.
-
-### P1 — HWP3가 실제 만드는 caption·숨은 주석 내부 그림을 보정 walker가 빠뜨린다
-
-새 geometry/local-file-version walker는 본문, 표 셀, 일부 text box, 머리말/꼬리말, 각주/미주만 순회한다
-(`src/document_core/converters/hwpx_to_hwp.rs:651-731`). PR의 전제처럼 개체 하나라도 0 값이 남으면
-한글이 문서를 거부할 수 있는데, HWP3 parser가 실제 만드는 다음 경로를 방문하지 않는다.
-
-- Picture caption (`src/parser/hwp3/mod.rs:1455-1488`): `Control::Picture` arm은 caption을 재귀하지 않는다.
-- Table caption (`1272-1297`): Table arm은 셀만 순회하고 `table.caption`을 건너뛴다.
-- Group/classic drawing caption (`1490-1544`): group child와 일부 text box만 처리하고 caption을 건너뛴다.
-- `HiddenComment` (`1941-1946`)와 HWP3 OLE로 옮겨진 caption (`4539-4572`): walker에 해당 재귀가 없다.
-
-공통 adapter 경로에서는 Chart/OLE text box와 `section_def.master_pages`도 같은 이유로 누락된다. 반면 기존
-bin-order/remap/adapt walker는 caption·HiddenComment·drawing text box·master page를 모두 방문한다
-(`hwpx_to_hwp.rs:390-461`, `469-554`, `1098-1141`, `1468-1487`, `1723-1738`).
-
-**적용한 보정:** `4c7082710`이 paragraph/control/shape 공통 재귀 walker로 교체해 Picture/Table/Group/
-drawing/OLE caption, HiddenComment, 모든 `drawing_mut()` text box, field memo, SectionDef와 master page를
-함께 방문한다. HWP3 실제 caption·HiddenComment 경로와 공통 adapter의 master-page OLE text box 안 nested
-Picture에 대해 geometry·crop·`local_file_version == 1`을 정확히 고정하는 library regression을 추가했다.
-
-### P1 — Windows batch 도구가 사용 중인 한글 프로세스를 강제 종료할 수 있다
-
-`tools/hwp3_convert_openable.py`의 child는 `Hwp(visible=False)`를 사용한다(28행). 설치된
-`pyhwpx 1.7.2`의 기본 `new=False`는 ROT의 기존 `!HwpObject.*`에 attach할 수 있으며, finally의
-`hwp.quit()`(36-40행)은 attach한 인스턴스에도 `Quit()`을 호출한다. 더 직접적으로 `kill_hangul()`은
-`taskkill /F /IM Hwp.exe`와 `HwpApp.exe`를 모든 문서 전(80행)과 timeout 뒤(90행)에 실행한다
-(43-46행). 저장하지 않은 사용자의 한글 작업까지 잃을 수 있다.
-
-**적용한 보정:** `fcf101e68`이 child를 `Hwp(new=True, visible=False)`로 명시하고 이미지명 전역
-`taskkill`과 timeout 뒤 전역 종료를 제거했다. timeout은 검사 Python 자식만 끝내며, COM 서버가 남을 수
-있는 환경은 전용 Windows 검증 호스트에서 정리해야 한다는 precondition을 명시했다. Python mock regression은
-새 hidden instance 생성, 자기 instance의 `quit()`, timeout 경로의 전역 kill 부재를 고정한다.
-
-## 현재 상태와 권고
-
-**권고: 메인터너 보정 완료, 최신 CI 대기 — merge 보류.** 세 P1은 focused regression으로 보정했으며
-full suite는 원 source CI와 중복돼 실행하지 않았다. 이 tail을 contributor source PR head에 push한 뒤 새
-latest head의 required CI success·`CLEAN`을 다시 확인한다. 그 뒤에만 리뷰 승인과 merge 판단을 재개한다.
-
-이 maintainer tail은 위 P1을 해소하는 source/test와 review 기록·오늘할일만 바꾼다. 별도 PR은 만들지 않는다.
+**승인 권고, 단 Markdown tail의 fast-pass 성공 전에는 merge 보류.** `C`의 source/test 검증은
+완료됐고, 이후 tail은 이 archive review·implementation record·오늘할일만 바꾸는 single-parent
+문서 commit이다. push 직전 contributor remote head와 LFS 속성을 다시 고정하고, push 뒤 candidate
+`C`의 green CI 및 새 docs head의 preflight·required aggregate·`CLEAN`/`MERGEABLE`을 재확인한다.
+그 조건을 충족하면 LF가 실제로 들어 있는 body file로 approve review를 게시하고 merge한다.
