@@ -1,10 +1,17 @@
-# task_m100_3695 처리결과 보고서 — export-structure auto 선택 정책
+# task_m100_3695 WIP 결과 스냅샷 — export-structure auto 선택 정책
 
 - **Issue**: [#3695](https://github.com/edwardkim/rhwp/issues/3695)
 - **상위 이슈**: [#1528](https://github.com/edwardkim/rhwp/issues/1528)
 - **선행 작업**: [#3693](https://github.com/edwardkim/rhwp/issues/3693), commit `652e2ee27`
 - **브랜치**: `codex/issue-3695-export-structure-auto`
-- **상태**: 로컬 구현·focused 검증 완료, PR 통합 대기
+- **상태**: 사전 승인 WIP — 최종 결과보고서 아님, #3693 선행 게이트와 계획 승인 대기
+
+## 0. 문서 성격 정정
+
+이 파일은 #3693의 승인된 단계 완료와 #3695 계획 승인 전에 구현 커밋과 함께 작성됐다. 아래 내용은
+`8343c98c6`에서 관찰한 결과를 보존하는 스냅샷이며, 작업지시자가 승인한 최종 결과를 뜻하지 않는다.
+선행 게이트와 #3695 계획 승인 후 WIP draft를 독립 검토하고, 승인된 단계가 끝났을 때 최종 보고서로
+다시 확정한다.
 
 ## 1. 결과
 
@@ -51,6 +58,8 @@
 
 ## 5. 남은 작업
 
-- 현재 변경을 #3695 커밋으로 고정하고 이슈에 결과를 공유한다.
-- full release-test와 GitHub CI는 PR 승인 뒤 수행한다.
+- #3693의 정정 계획 승인과 승인된 단계 완료를 먼저 진행한다.
+- 이후 #3695 수행·구현 계획의 별도 승인을 받는다.
+- 승인 후 WIP draft를 채택·수정·폐기 중 하나로 판정하고 단계별 보고·승인을 복구한다.
+- full release-test와 GitHub CI는 그 이후 별도 PR 승인 뒤 수행한다.
 - #3693·#3695가 `devel`에 포함되기 전에는 이슈와 상위 #1528을 close하지 않는다.
