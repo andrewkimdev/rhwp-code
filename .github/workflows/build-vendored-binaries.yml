@@ -1,13 +1,18 @@
 name: Build vendored binaries (all platforms)
 
 # Builds native rhwp release binaries for all 4 platforms hwpx-template-engine
-# vendors (vendor/rhwp/<platform>/). Every job builds *natively* on its own
-# runner architecture (no cross-compilation, and none of the toolchain-vs-PATH
-# gotchas that hit local cross-builds) by picking macos-13 (Intel) for
-# x86_64-apple-darwin alongside macos-14 (Apple Silicon) for
-# aarch64-apple-darwin. See ../../PATCHES.md in the consuming repo
-# (hwpx-template-engine/vendor/rhwp/PATCHES.md) for how to use the resulting
-# artifacts to re-vendor after a patch update or an upstream resync.
+# vendors (vendor/rhwp/<platform>/). linux-x86_64, windows-x86_64, and
+# macos-aarch64 build natively on their own runner architecture.
+# macos-x86_64 is cross-compiled *from* the macos-14 (Apple Silicon) runner
+# instead of running on a native macos-13 (Intel) runner — GitHub's Intel
+# macOS runner pool has very limited/no capacity (a real run of this workflow
+# saw the macos-13 job queue for 28+ minutes with zero runner assigned while
+# every other job started within seconds), so relying on it is not viable.
+# Cross-compiling avoids that entirely; see PATCHES.md in the consuming repo
+# (hwpx-template-engine/vendor/rhwp/PATCHES.md) for the toolchain-vs-PATH
+# gotcha this ran into when done locally with a non-rustup rustc on PATH
+# (not applicable here since GitHub's macOS runners only have the
+# rustup-managed toolchain).
 
 on:
   workflow_dispatch:
@@ -32,18 +37,22 @@ jobs:
             target: aarch64-apple-darwin
             artifact_name: macos-aarch64
             binary_name: rhwp
-          - os: macos-13
+            native: true
+          - os: macos-14
             target: x86_64-apple-darwin
             artifact_name: macos-x86_64
             binary_name: rhwp
+            native: false
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             artifact_name: linux-x86_64
             binary_name: rhwp
+            native: true
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             artifact_name: windows-x86_64
             binary_name: rhwp.exe
+            native: true
 
     steps:
       - name: Checkout
@@ -66,7 +75,8 @@ jobs:
           restore-keys: |
             ${{ matrix.target }}-cargo-
 
-      - name: Run test suite (native target, so tests actually execute)
+      - name: Run test suite (native targets only; cross-compiled test binaries can't execute on the build host)
+        if: matrix.native
         run: cargo test --release
         shell: bash
 
