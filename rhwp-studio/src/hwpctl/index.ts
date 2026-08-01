@@ -5,6 +5,7 @@
  * 내부적으로 rhwp WASM API를 호출한다.
  */
 import { Action } from './action';
+import type { ActionSupport } from './action';
 import { ParameterSet } from './parameter-set';
 import { getActionDef, getRegisteredCount, getImplementedCount, getAllActions } from './action-registry';
 
@@ -19,6 +20,7 @@ import './actions/page';
 
 export { ParameterSet } from './parameter-set';
 export { Action } from './action';
+export type { ActionSupport, ActionUnsupportedReason } from './action';
 
 export type SaveCallback = () => void;
 
@@ -140,6 +142,25 @@ export class HwpCtrl {
       });
     }
     return new Action(this, def);
+  }
+
+  /**
+   * 액션의 지원 상태를 조회한다 (#3648).
+   *
+   * `Run`/`Execute` 는 한컴 `HwpCtrl` 호환이라 `boolean` 만 돌려주므로, 실패의 **종류**를
+   * 구분할 수 없다. 특히 iframe 안에서는 콘솔 경고가 통합자에게 보이지 않아 원인 판별이
+   * 불가능하다. 이 조회가 세 상태를 구분해 준다.
+   *
+   * - `null` — 등록되지 않은 id. **오타이거나 이 빌드가 모르는 액션이다.**
+   * - `{status:'unimplemented'}` — 등록돼 있고 아직 구현되지 않았다. 기다리면 채워진다.
+   * - `{status:'unsupported', ...}` — 정책상 지원하지 않는다. 사유와 근거가 함께 온다.
+   * - `{status:'supported'}` — 실행할 수 있다.
+   */
+  GetActionSupport(actionId: string): ActionSupport | null {
+    const def = getActionDef(actionId);
+    if (!def) return null;
+    if (def.unsupported) return { status: 'unsupported', ...def.unsupported };
+    return def.executor ? { status: 'supported' } : { status: 'unimplemented' };
   }
 
   /** ParameterSet 생성 */
