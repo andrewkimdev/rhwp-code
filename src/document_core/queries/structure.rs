@@ -128,9 +128,11 @@ fn classify_clause(text: &str) -> Option<Heading> {
                     _ => ("", 0),
                 };
                 if level > 0 {
-                    // 가지번호 조문은 `제1조`에서 끊지 않고 `의2`까지 marker로 보존한다.
+                    // 가지번호는 `제1조`에서 끊지 않고 `의2`까지 marker로 보존한다. 조뿐 아니라
+                    // 편/장/절/관에도 쓰이므로(`제5장의2`) 단위를 가리지 않는다. 뒤에 숫자가 없는
+                    // `제1조의무`·`제3조의 규정`은 아래 `k > j + 2` 조건이 걸러낸다.
                     let mut marker_end = j;
-                    if unit == '조' && chars.get(j + 1) == Some(&'의') {
+                    if chars.get(j + 1) == Some(&'의') {
                         let mut k = j + 2;
                         while k < chars.len() && chars[k].is_ascii_digit() {
                             k += 1;
@@ -398,6 +400,34 @@ mod tests {
         assert_eq!(classify_clause("②다음").unwrap().marker, "②");
         assert_eq!(classify_clause("12) 다음").unwrap().marker, "12)");
         assert_eq!(classify_clause("가) 다음").unwrap().marker, "가)");
+    }
+
+    #[test]
+    fn clause_marker_keeps_variant_number_for_every_unit() {
+        // 가지번호는 조 전용이 아니다.
+        for (text, kind, marker) in [
+            ("제5장의2 국세환급금", "장", "제5장의2"),
+            ("제2절의3 특례", "절", "제2절의3"),
+            ("제1편의2 총칙", "편", "제1편의2"),
+            ("제4관의2 보칙", "관", "제4관의2"),
+            ("제7조의4(적용)", "조", "제7조의4"),
+        ] {
+            let h = classify_clause(text).unwrap_or_else(|| panic!("미검출: {text}"));
+            assert_eq!((h.kind, h.marker.as_str()), (kind, marker), "{text}");
+        }
+
+        // `의` 뒤에 숫자가 없으면 가지번호가 아니다.
+        assert_eq!(classify_clause("제1조의무 규정").unwrap().marker, "제1조");
+        assert_eq!(
+            classify_clause("제3조의 규정에 따라").unwrap().marker,
+            "제3조"
+        );
+        assert_eq!(classify_clause("제2장의 적용").unwrap().marker, "제2장");
+        // 가지번호 뒤에 이어지는 조사도 marker에 포함하지 않는다.
+        assert_eq!(
+            classify_clause("제3조의2의 규정에 따라").unwrap().marker,
+            "제3조의2"
+        );
     }
 
     #[test]

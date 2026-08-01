@@ -2,11 +2,11 @@
 
 - **이슈**: #3695
 - **상위 이슈**: #1528
-- **선행 커밋**: #3693 `652e2ee27`
+- **선행 작업**: #3693, PR #3715, merge commit `fe9749d542f46643e408c23878229c326e341363`
 - **브랜치**: `codex/issue-3695-export-structure-auto`
 - **수행계획서**: `mydocs/plans/task_m100_3695.md`
-- **절차 상태**: Stage 2 완료·승인 — `8343c98c6` 구현 채택
-- **다음 승인 경계**: full release-test·push·PR은 별도 승인
+- **절차 상태**: Stage 3 최신 `devel` 통합·PR 전 전체 검증 완료
+- **다음 승인 경계**: 원격 push·PR 생성
 - **WIP 증적**: `8343c98c6`
 
 ## 복구 적용 원칙
@@ -55,6 +55,14 @@
 3. `mydocs/working/task_m100_3695_stage1.md`와
    `mydocs/report/task_m100_3695_report.md`에 red·green·실측 결과를 기록한다.
 4. 오늘할일 #3695 상태를 단계 승인 결과에 맞춰 갱신하고 단계 변경 전 커밋한다.
+
+## Stage 5 — 최신 devel 통합과 PR 준비
+
+1. WIP 감사 커밋을 재작성하지 않고 `upstream/devel` `fe9749d54`를 merge한다.
+2. #3715가 확장한 marker·clause gate와 #3695 `select_auto_mode()`를 모두 보존한다.
+3. focused 검증 뒤 `cargo test --profile release-test --tests`, fmt, diff check, clippy를 순차 실행한다.
+4. 새 Stage 3 보고서와 최종 보고서를 갱신해 로컬 merge commit에 포함한다.
+5. 원격 push와 PR 생성은 작업지시자 승인 뒤 수행한다.
 
 ## 비적용
 

@@ -5,7 +5,7 @@
 - **브랜치**: `codex/issue-3693-export-structure-clause`
 - **수행계획서**: `mydocs/plans/task_m100_3693.md`
 - **절차 상태**: Stage 2 완료·승인 — `652e2ee27` 구현 채택
-- **다음 승인 경계**: full release-test·push·PR은 별도 승인
+- **PR 게이트**: 승인·수행 완료 — 최신 devel 병합, full release-test 통과, draft PR #3715 생성
 
 ## 복구 적용 원칙
 
@@ -16,6 +16,9 @@
 
 2026-08-01 독립 대조와 focused 검증 뒤 작업지시자가 WIP 채택을 승인했다. 위 원칙에 따라 기존
 커밋은 재작성하지 않고 승인된 #3693 구현으로 사용한다.
+
+같은 날 PR 게이트 승인 뒤 `upstream/devel` `f80b910aa`를 merge commit `16b71b015`로 반영하고
+`cargo test --profile release-test --tests` 전체를 실패 0으로 통과했다.
 
 ## Stage 1 — clause marker 파싱
 
