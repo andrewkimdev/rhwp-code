@@ -1,0 +1,89 @@
+name: Build vendored binaries (all platforms)
+
+# Builds native rhwp release binaries for all 4 platforms hwpx-template-engine
+# vendors (vendor/rhwp/<platform>/). Every job builds *natively* on its own
+# runner architecture (no cross-compilation, and none of the toolchain-vs-PATH
+# gotchas that hit local cross-builds) by picking macos-13 (Intel) for
+# x86_64-apple-darwin alongside macos-14 (Apple Silicon) for
+# aarch64-apple-darwin. See ../../PATCHES.md in the consuming repo
+# (hwpx-template-engine/vendor/rhwp/PATCHES.md) for how to use the resulting
+# artifacts to re-vendor after a patch update or an upstream resync.
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Branch or tag to build (defaults to whichever ref triggered this run)"
+        required: false
+        type: string
+  push:
+    branches:
+      - "patch/**"
+
+jobs:
+  build:
+    name: ${{ matrix.artifact_name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            target: aarch64-apple-darwin
+            artifact_name: macos-aarch64
+            binary_name: rhwp
+          - os: macos-13
+            target: x86_64-apple-darwin
+            artifact_name: macos-x86_64
+            binary_name: rhwp
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            artifact_name: linux-x86_64
+            binary_name: rhwp
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            artifact_name: windows-x86_64
+            binary_name: rhwp.exe
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+
+      - name: Install Rust target (rust-toolchain.toml pins the channel)
+        run: rustup target add ${{ matrix.target }}
+        shell: bash
+
+      - name: Cache cargo registry + build artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ matrix.target }}-cargo-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            ${{ matrix.target }}-cargo-
+
+      - name: Run test suite (native target, so tests actually execute)
+        run: cargo test --release
+        shell: bash
+
+      - name: Build release binary
+        run: cargo build --release --target ${{ matrix.target }}
+        shell: bash
+
+      - name: Stage binary for upload
+        shell: bash
+        run: |
+          mkdir -p "dist/${{ matrix.artifact_name }}"
+          cp "target/${{ matrix.target }}/release/${{ matrix.binary_name }}" \
+             "dist/${{ matrix.artifact_name }}/${{ matrix.binary_name }}"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: rhwp-${{ matrix.artifact_name }}
+          path: dist/${{ matrix.artifact_name }}/${{ matrix.binary_name }}
+          if-no-files-found: error
