@@ -39,6 +39,10 @@ pub struct RenderPath {
     pub target_control_index: Option<usize>,
 }
 
+/// [#3308] 중첩 표 셀-폭 스트레치의 하한 비율. 이 값 미만(진짜 좁은 표)은
+/// 선언 폭을 유지하고 셀 내 가운데 배치한다(레이아웃 쪽 처리).
+pub(crate) const NESTED_STRETCH_MIN_RATIO: f64 = 0.9;
+
 impl RenderPath {
     pub fn top_level(section_index: usize, parent_paragraph_index: usize) -> Self {
         Self {
@@ -112,9 +116,17 @@ impl RenderNormalizationOverlay {
                     nested_path.target_control_index = Some(control_index);
 
                     let source_width = nested.common.width;
+                    // [#3308] 스트레치는 근소 미달(셀 폭의 90% 이상)에만 적용한다.
+                    // 기원(#2195) 보호 대상(규제영향분석서 계열)의 실측 비율은 전부
+                    // 0.956~0.995 인 반면, 한컴이 선언 폭을 유지·가운데 배치하는
+                    // 진짜 좁은 표(직인 1×2, 0.679)까지 셀 폭으로 늘리면 열 원점이
+                    // 오른쪽으로 밀린다(정답지 대비 +97.5px). 한컴 편집기 크기 판독
+                    // (115.13mm=선언값)·재저장 실험·정답지 픽셀로 3중 확인.
                     if !nested.common.treat_as_char
                         && source_width > 0
                         && u64::from(source_width) < u64::from(cell.width)
+                        && f64::from(source_width)
+                            >= f64::from(cell.width) * NESTED_STRETCH_MIN_RATIO
                     {
                         let effective_width = cell.width;
                         let table_pointer = nested.as_ref() as *const Table as usize;
