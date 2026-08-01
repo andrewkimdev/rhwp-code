@@ -984,19 +984,32 @@ export function onKeyDown(this: any, e: KeyboardEvent): void {
       }
       return;
     }
-    // Ctrl/Cmd/Alt+방향키: 셀 크기 조절
-    if ((e.ctrlKey || e.metaKey || e.altKey) && (
-        e.key === 'ArrowUp' || e.key === 'ArrowDown' ||
-        e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
+    // 셀 크기 조절 — 한컴 3모드 (help.hancom.com hwp/table/table(size).htm):
+    //   Ctrl/Cmd+방향키  = 칸/줄 전체 크기 조절, 표 전체 크기 변화
+    //   Alt+방향키       = 선택 칸만 조절, 표 전체 크기 유지 (같은 줄 나머지가 흡수)
+    //   Shift+방향키     = 경계 이동 — 셀이 커진 만큼 이웃 셀이 작아짐
+    const isArrow = e.key === 'ArrowUp' || e.key === 'ArrowDown' ||
+        e.key === 'ArrowLeft' || e.key === 'ArrowRight';
+    if ((e.ctrlKey || e.metaKey) && isArrow) {
       e.preventDefault();
       const phase = this.cursor.getCellSelectionPhase();
       if (phase === 3) {
         // phase 3: 전체 표 비율 리사이즈 (모든 셀에 동일 delta)
         this.resizeTableProportional(e.key as 'ArrowUp' | 'ArrowDown' | 'ArrowLeft' | 'ArrowRight');
       } else {
-        // phase 1, 2: 선택 셀 크기 조절 (이웃 셀 반대 delta)
+        // phase 1, 2: 선택 칸/줄 전체 크기 조절
         this.resizeCellByKeyboard(e.key as 'ArrowUp' | 'ArrowDown' | 'ArrowLeft' | 'ArrowRight');
       }
+      return;
+    }
+    if (e.altKey && isArrow) {
+      e.preventDefault();
+      this.resizeCellLocalByKeyboard(e.key as 'ArrowUp' | 'ArrowDown' | 'ArrowLeft' | 'ArrowRight');
+      return;
+    }
+    if (e.shiftKey && isArrow) {
+      e.preventDefault();
+      this.resizeCellBoundaryByKeyboard(e.key as 'ArrowUp' | 'ArrowDown' | 'ArrowLeft' | 'ArrowRight');
       return;
     }
     if (e.key === 'ArrowUp' || e.key === 'ArrowDown' ||
