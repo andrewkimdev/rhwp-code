@@ -189,6 +189,20 @@ mod tests {
     use crate::model::paragraph::Paragraph;
     use crate::model::table::Cell;
 
+    /// [#3308] 스트레치 하한 계약 — 근소 미달만 투영, 진짜 좁은 표는 선언 폭 유지.
+    #[test]
+    fn stretch_floor_excludes_truly_narrow_nested_tables() {
+        // 하한(0.9) 미만: 투영 없음 → width_scale 1.0 (선언 폭 유지, 셀 내 가운데는 레이아웃 담당)
+        let narrow = document_with_nested_table(1_358, 2_000); // 0.679 — 직인 fixture 실측 비율
+        let overlay = RenderNormalizationOverlay::from_document(&narrow);
+        assert_eq!(overlay.nested_table_projection_count(), 0);
+
+        // 하한 이상(근소 미달): 셀 폭 스트레치 유지 (#2195 보호 대상 0.956~0.995 계열)
+        let near_fit = document_with_nested_table(1_912, 2_000); // 0.956
+        let overlay = RenderNormalizationOverlay::from_document(&near_fit);
+        assert_eq!(overlay.nested_table_projection_count(), 1);
+    }
+
     fn document_with_nested_table(source_width: u32, parent_width: u32) -> Document {
         let mut nested = Table::default();
         nested.row_count = 1;
@@ -253,23 +267,25 @@ mod tests {
 
     #[test]
     fn nested_width_projection_keeps_source_ir_immutable() {
-        let document = document_with_nested_table(1_000, 2_000);
+        let document = document_with_nested_table(1_900, 2_000);
         let overlay = RenderNormalizationOverlay::from_document(&document);
         let nested = nested_table(&document);
         let projection = overlay
             .projection_for_path(&nested_path())
             .expect("nested width projection");
 
-        assert_eq!(nested.common.width, 1_000, "source width must not change");
-        assert_eq!(nested.cells[0].width, 1_000, "source cell width");
-        assert_eq!(projection.source_width, 1_000);
+        assert_eq!(nested.common.width, 1_900, "source width must not change");
+        assert_eq!(nested.cells[0].width, 1_900, "source cell width");
+        assert_eq!(projection.source_width, 1_900);
         assert_eq!(projection.effective_width, 2_000);
-        assert!((overlay.nested_table_width_scale(nested) - 2.0).abs() < f64::EPSILON);
+        assert!(
+            (overlay.nested_table_width_scale(nested) - 2_000.0 / 1_900.0).abs() < f64::EPSILON
+        );
     }
 
     #[test]
     fn stable_projection_reuses_arc_identity() {
-        let document = document_with_nested_table(1_000, 2_000);
+        let document = document_with_nested_table(1_900, 2_000);
         let first = RenderNormalizationOverlay::from_document(&document);
         let second = RenderNormalizationOverlay::from_document_reusing(&document, &first);
         let first_projection = first
@@ -284,7 +300,7 @@ mod tests {
 
     #[test]
     fn unrelated_path_edit_reuses_nested_projection_identity() {
-        let mut document = document_with_nested_table(1_000, 2_000);
+        let mut document = document_with_nested_table(1_900, 2_000);
         let first = RenderNormalizationOverlay::from_document(&document);
         let first_projection = first
             .projection_for_path(&nested_path())
@@ -304,7 +320,7 @@ mod tests {
 
     #[test]
     fn removed_source_path_does_not_reuse_stale_projection() {
-        let mut document = document_with_nested_table(1_000, 2_000);
+        let mut document = document_with_nested_table(1_900, 2_000);
         let first = RenderNormalizationOverlay::from_document(&document);
         let Control::Table(owner) = &mut document.sections[0].paragraphs[0].controls[0] else {
             panic!("owner table");
