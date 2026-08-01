@@ -179,25 +179,19 @@ impl AdapterReport {
 /// 정확한 vpos 가 채워져 있어 추가 사전계산이 불필요. 직렬화 → 재로드 시에도 vpos 가 그대로
 /// 보존된다 (정수 필드 라운드트립).
 pub fn convert_hwpx_to_hwp_ir(doc: &mut Document) -> AdapterReport {
-    convert_to_hwp_ir(doc, false)
+    convert_to_hwp_ir(doc)
 }
 
 /// HWPX/HWP3 출처 IR 을 HWP 직렬화기가 기대하는 형태로 정규화한다.
 ///
-/// HWP3 변환본은 한컴 HWP5 스트림에 구역당 `PAGE_BORDER_FILL` 레코드가 세 개 있어야
-/// 하지만, 실제 HWPX 는 대개 BOTH 하나만 가진다. 후자의 EVEN/ODD 슬롯을 HWP 저장을
-/// 위해 채우면 같은 IR 을 다시 HWPX 로 저장할 때 원본에 없던 요소가 생긴다. 따라서
-/// pageBorderFill materialization 은 HWP3 진입점에서만 요청한다.
-fn convert_to_hwp_ir(
-    doc: &mut Document,
-    materialize_hwp3_page_border_fills: bool,
-) -> AdapterReport {
+/// 한컴 HWP5 스트림은 출처와 관계없이 구역당 `PAGE_BORDER_FILL` 레코드 세 개를
+/// 요구한다. HWPX 원본의 단일 BOTH XML 구조 보존은 이 변환을 생략하는 대신,
+/// `DocumentCore` HWP export 경계에서 저장 뒤 PBF overlay를 되돌려 보장한다.
+fn convert_to_hwp_ir(doc: &mut Document) -> AdapterReport {
     let mut report = AdapterReport::new();
 
     normalize_file_header_for_hwp(doc, &mut report);
-    if materialize_hwp3_page_border_fills {
-        normalize_page_border_fills_for_hwp3(doc);
-    }
+    normalize_page_border_fills_for_hwp(doc);
     normalize_picture_geometry_for_hwp(doc);
     normalize_doc_properties_for_hwp(doc, &mut report);
     materialize_hwp5_bin_data_order(doc, &mut report);
@@ -783,7 +777,7 @@ fn normalize_picture_geometry_for_hwp(doc: &mut Document) {
     }
 }
 
-/// [#3676] HWP3 출처 구역마다 `HWPTAG_PAGE_BORDER_FILL` 을 **3개** 채운다
+/// [#3676] HWP 저장 구역마다 `HWPTAG_PAGE_BORDER_FILL` 을 **3개** 채운다
 /// (양쪽/짝수쪽/홀수쪽).
 ///
 /// 한컴이 저장한 문서와 rhwp 의 HWP5 왕복본은 예외 없이 3개다. HWP3 파서는
@@ -793,8 +787,9 @@ fn normalize_picture_geometry_for_hwp(doc: &mut Document) {
 ///
 /// 세 레코드는 한컴 원본에서도 내용이 완전히 동일하다(attr·간격 모두 같음) — 구분
 /// 플래그가 아니라 **개수 자체가 규격**이므로 첫 레코드를 복제해 채운다.
-/// HWPX 는 실제 문서에서 BOTH 하나만 갖는 것이 보통이므로 이 보정을 적용하지 않는다.
-fn normalize_page_border_fills_for_hwp3(doc: &mut Document) {
+/// HWPX 는 실제 문서에서 BOTH 하나만 갖는 것이 보통이지만, HWP 출력에도 같은 세 record가
+/// 필요하다. HWPX live IR 원형은 호출 경계에서 해당 overlay를 복원한다.
+fn normalize_page_border_fills_for_hwp(doc: &mut Document) {
     for section in doc.sections.iter_mut() {
         let sd = &mut section.section_def;
         while sd.extra_page_border_fills.len() < 2 {
@@ -1998,7 +1993,7 @@ pub fn convert_if_hwpx_source(doc: &mut Document, source_format: FileFormat) -> 
         doc.extra_streams
             .push((HWPX_ORIGIN_STREAM_PATH.to_string(), b"1".to_vec()));
     }
-    convert_to_hwp_ir(doc, matches!(source_format, FileFormat::Hwp3))
+    convert_to_hwp_ir(doc)
 }
 
 #[cfg(test)]

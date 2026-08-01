@@ -172,14 +172,36 @@ fn hwpx_single_both_stays_single_after_hwp_then_hwpx_export() {
         "표본은 BOTH 하나만 가져야 한다"
     );
 
-    core.export_hwp_with_adapter().expect("HWP 저장");
+    let hwp = core.export_hwp_with_adapter().expect("HWP 저장");
+    for (idx, raw) in section_streams(&hwp).iter().enumerate() {
+        let mut n = 0;
+        walk_records(raw, |tag, _, _| {
+            if tag == HWPTAG_PAGE_BORDER_FILL {
+                n += 1;
+            }
+        });
+        assert_eq!(n, 3, "HWPX export section {idx} PBF count={n}");
+    }
     assert!(
         core.document().sections[0]
             .section_def
             .extra_page_border_fills
             .is_empty(),
-        "HWPX 출처 IR에 HWP3 전용 EVEN/ODD를 주입하면 안 된다"
+        "HWPX live IR에 HWP5 전용 EVEN/ODD를 주입하면 안 된다"
     );
+    for section in &core.document().sections {
+        for paragraph in &section.paragraphs {
+            for control in &paragraph.controls {
+                let rhwp::model::control::Control::SectionDef(section_def) = control else {
+                    continue;
+                };
+                assert!(
+                    section_def.extra_page_border_fills.is_empty(),
+                    "HWPX live SectionDef control에 HWP5 전용 EVEN/ODD를 남기면 안 된다"
+                );
+            }
+        }
+    }
 
     let hwpx = core.export_hwpx_native().expect("HWPX 재저장");
     let xml = section0_xml(&hwpx);
