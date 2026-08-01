@@ -93,6 +93,24 @@ pub fn resolve_numbering_id(
     }
 }
 
+/// [#3307] 정의 없는 개요의 한컴 내장 기본 모양.
+///
+/// 개요 문단이 유효한 numbering 정의에 도달하지 못하면(문서에 `<hh:numbering>` 이
+/// 없고 `outlineShapeIDRef=0`) 한컴 2020 은 **전 수준 레벨 경로 + 후행 마침표**로
+/// 렌더한다 — level 0 `1.`, level 1 `2.1.`, … level 6 `2.5.1.1.1.2.1.`
+/// (fixture 수준 스윕을 한컴 2020 MCP 로 실측, task #3307 Stage 1). 이는 기존
+/// `^N` 제어코드와 동일하므로 형식 문자열만 합성한다. 기본 모양은 한컴이 파일에
+/// 실체화하지 않는 편집기 내장 동작이라(재저장 실험으로 확인) 합성이 유일한 경로다.
+pub(crate) fn default_outline_numbering() -> Numbering {
+    let mut n = Numbering::default();
+    for f in n.level_formats.iter_mut() {
+        *f = "^N".to_string();
+    }
+    n.start_number = 1;
+    n.level_start_numbers = [1; 7];
+    n
+}
+
 /// 번호 형식 문자열의 `^` 제어코드를 실제 번호로 치환.
 ///
 /// - `^1`~`^7`: 해당 수준의 번호
