@@ -1319,9 +1319,18 @@ fn capabilities_command_entries() -> Vec<serde_json::Value> {
             "batch",
             "stdin 파일 목록을 한 프로세스에서 파일 간 병렬 처리, NDJSON 스트림 출력",
             true,
-            // --query 는 같은 매니페스트가 광고하는 search 축의 **필수** 인자다
-            // (없으면 exit 2). 축 단위 batch.flags 에는 있는데 명령 항목에만 빠져 있었다.
-            &["--json", "--threads", "--mode", "--query"],
+            // --query 는 search 축의 필수 인자다(없으면 exit 2). --out-dir,
+            // --verify, --verify-pages 는 convert 축 전용이다. 모두 같은 top-level
+            // batch 명령의 인자이므로 축 단위 batch.flags 와 함께 명령 항목에도 선언한다.
+            &[
+                "--json",
+                "--threads",
+                "--mode",
+                "--query",
+                "--out-dir",
+                "--verify",
+                "--verify-pages",
+            ],
             &["schemaVersion", "source", "error", "exitClass"],
         ),
         // ── 진단 ──
