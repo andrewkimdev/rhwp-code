@@ -8346,6 +8346,36 @@ mod tests {
     }
 
     #[test]
+    fn bugfind_ole_unsigned_wrapped_pos_offset_is_preserved() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<hs:sec xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph"
+        xmlns:hs="http://www.hancom.co.kr/hwpml/2011/section"
+        xmlns:hc="http://www.hancom.co.kr/hwpml/2011/core">
+  <hp:p id="0" paraPrIDRef="0" styleIDRef="0">
+    <hp:run charPrIDRef="0">
+      <hp:ole id="1" zOrder="0" binaryItemIDRef="ole1">
+        <hp:sz width="2600" height="2600"/>
+        <hp:pos treatAsChar="0" vertRelTo="PARA" horzRelTo="PARA"
+                vertOffset="4294965296" horzOffset="4294964867"/>
+        <hc:extent x="1" y="1"/>
+      </hp:ole>
+      <hp:t/>
+    </hp:run>
+  </hp:p>
+</hs:sec>"#;
+
+        let section = parse_hwpx_section(xml).unwrap();
+        let Control::Shape(shape) = &section.paragraphs[0].controls[0] else {
+            panic!("expected shape control");
+        };
+        let ShapeObject::Ole(ole) = shape.as_ref() else {
+            panic!("expected ole shape");
+        };
+        assert_eq!(ole.common.vertical_offset as i32, -2000);
+        assert_eq!(ole.common.horizontal_offset as i32, -2429);
+    }
+
+    #[test]
     fn bugfind_ole_shape_comment_is_parsed_into_common_description() {
         // 실측: samples/bitmap.hwp 를 export-hwpx --verify 로 왕복하면
         // OLE 개체(그림판 개체)의 "OLE 개체입니다.\r\n개체 형식은 Paintbrush
