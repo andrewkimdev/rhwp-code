@@ -231,16 +231,47 @@ async function promptFallbackName(
   suggestedName: string,
   format: SaveFormat,
 ): Promise<string | null> {
-  const result = await showSaveAs(saveBaseNameFor(suggestedName, format), format);
-  return result ? fileNameForFormat(result, format) : null;
+  const result = await showSaveAs(saveBaseNameFor(suggestedName, format), format, {
+    allowPassword: false,
+  });
+  return result?.fileName ?? null;
+}
+
+interface SaveAsOptions {
+  fileName: string;
+  password: string | null;
+}
+
+async function promptSaveAsOptions(
+  services: CommandServices,
+  format: SaveFormat,
+): Promise<SaveAsOptions | null> {
+  const selection = await showSaveAs(
+    saveBaseNameFor(services.wasm.fileName, format),
+    format,
+    { allowPassword: format !== 'hml' },
+  );
+  if (selection === null) return null;
+  if (!selection.configurePassword) {
+    return { fileName: selection.fileName, password: null };
+  }
+
+  const password = await showHwpSavePasswordDialog(selection.fileName);
+  if (password === null) return null;
+  return { fileName: selection.fileName, password };
 }
 
 async function saveAsFormat(services: CommandServices, format: SaveFormat): Promise<void> {
+  let password: string | null = null;
   try {
-    flushDeferredPaginationBeforeExplicitOutput(services, 'save-as');
     const sourceFormat = services.wasm.getSourceFormat();
-    const saveName = fileNameForFormat(services.wasm.fileName, format);
-    const blob = createSaveBlob(services, format);
+    const options = await promptSaveAsOptions(services, format);
+    if (options === null) return;
+    password = options.password;
+
+    flushDeferredPaginationBeforeExplicitOutput(services, 'save-as');
+    const saveName = options.fileName;
+    const blob = createSaveBlob(services, format, password ?? undefined);
     const originalHandle = sourceFormat === 'hml' ? services.wasm.currentFileHandle : null;
     const result = await tryFileSystemSave(
       services,
@@ -252,53 +283,17 @@ async function saveAsFormat(services: CommandServices, format: SaveFormat): Prom
     );
     if (result === 'cancelled') return;
     if (result.method !== 'fallback') {
-      completeHandleSave(services, sourceFormat, result, 'save-as');
+      completeHandleSave(services, sourceFormat, result, 'save-as', password !== null);
       return;
     }
     const downloadName = await promptFallbackName(saveName, format);
     if (!downloadName) return;
     services.wasm.fileName = downloadName;
-    services.wasm.requiresPasswordForSave = false;
+    services.wasm.requiresPasswordForSave = password !== null;
     downloadBlob(blob, downloadName);
     services.documentState.markClean('save-as');
   } catch (error) {
     reportSaveError('file:save-as', error);
-  }
-}
-
-async function saveAsFormatWithPassword(services: CommandServices, format: SaveFormat): Promise<void> {
-  let password: string | null = null;
-  try {
-    const passwordFormat = requirePasswordSaveFormat(format);
-    password = await showHwpSavePasswordDialog(fileNameForFormat(services.wasm.fileName, passwordFormat));
-    if (password === null) return;
-
-    flushDeferredPaginationBeforeExplicitOutput(services, 'save-as-password');
-    const sourceFormat = services.wasm.getSourceFormat();
-    const saveName = fileNameForFormat(services.wasm.fileName, passwordFormat);
-    const blob = createSaveBlob(services, passwordFormat, password);
-    const originalHandle = sourceFormat === 'hml' ? services.wasm.currentFileHandle : null;
-    const result = await tryFileSystemSave(
-      services,
-      passwordFormat,
-      blob,
-      saveName,
-      true,
-      originalHandle,
-    );
-    if (result === 'cancelled') return;
-    if (result.method !== 'fallback') {
-      completeHandleSave(services, sourceFormat, result, 'save-as', true);
-      return;
-    }
-    const downloadName = await promptFallbackName(saveName, passwordFormat);
-    if (!downloadName) return;
-    services.wasm.fileName = downloadName;
-    services.wasm.requiresPasswordForSave = true;
-    downloadBlob(blob, downloadName);
-    services.documentState.markClean('save-as');
-  } catch (error) {
-    reportSaveError('file:save-as-password', error);
   } finally {
     password = '';
   }
@@ -649,15 +644,6 @@ export const fileCommands: CommandDef[] = [
     canExecute: () => true,
     execute(services) {
       services.eventBus.emit('create-new-document');
-    },
-  },
-  {
-    id: 'file:save-as-password',
-    label: '암호 설정하여 저장',
-    canExecute: (ctx) => ctx.hasDocument,
-    async execute(services) {
-      const format = await chooseSaveAsFormat(services);
-      if (format !== null) await saveAsFormatWithPassword(services, format);
     },
   },
   {

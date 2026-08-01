@@ -20,7 +20,7 @@ last_verified: 2026-08-01
 2. 두 stdin 옵션을 같이 쓸 때 입력 암호를 첫 줄, 출력 암호를 둘째 줄로 읽도록 고정하고 도움말에 기록한다.
 3. `DocumentCore`와 WASM facade에 HWP5/HWPX 암호 저장 entrypoint를 추가한다. HWP 출력은 기존 HWPX-to-HWP adapter를 반드시 거친다.
 4. `convert`와 `export-hwpx`가 출력 암호가 있으면 새 entrypoint를 사용하고, 검증 재열기도 해당 암호로 연다.
-5. `rhwp-studio` 파일 메뉴에 암호 저장 command와 새 암호/확인 dialog를 추가한다. browser session에는 암호 값 대신 보호 저장 여부만 유지하고 다음 저장 시 재입력받는다.
+5. `rhwp-studio` 저장 흐름에 암호 설정과 새 암호/확인 dialog를 추가한다. browser session에는 암호 값 대신 보호 저장 여부만 유지하고 다음 저장 시 재입력받는다.
 6. 실제 HWP5/HWPX fixture에서 평문 열기 거부, 올바른 암호 재열기, 잘못된 암호 거부를 CLI와 Rust/Studio 테스트로 확인한다.
 
 ## 범위와 보안
@@ -64,8 +64,8 @@ last_verified: 2026-08-01
 - CLI는 output password 존재 여부만 JSON envelope의 `passwordProtected`로 표시하며 암호 값은
   출력하지 않는다.
 - manual은 입력·출력 암호 stdin 순서와 `convert`/`export-hwpx` 범위를 현행화했다.
-- Studio 파일 메뉴의 `암호 설정하여 저장...`는 새 암호·확인 dialog를 열고 HWP5 또는 HWPX
-  serializer만 호출한다. HML은 저장 전에 거부한다.
+- Studio는 HWP/HWPX 저장 대화상자의 암호 설정 선택에서 새 암호·확인 dialog를 열고 해당
+  serializer만 호출한다. HML에는 암호 설정 control을 제공하지 않는다.
 - Studio는 암호 문자열을 브라우저 저장소, 파일명, 로그, 다음 저장 상태에 보관하지 않는다.
   보호 저장 여부 boolean만 유지하고, 다음 Ctrl+S에서 새 암호와 확인을 다시 입력받는다.
 - public WASM JavaScript와 type declaration에도 두 password export binding을 추가했다.
