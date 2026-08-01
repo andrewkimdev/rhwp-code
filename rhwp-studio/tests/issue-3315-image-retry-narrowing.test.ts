@@ -51,6 +51,14 @@ test('[#3315] 재시도 키는 문서 신원과 그림 내용을 직접 든다',
   assert.match(body, /documentDigest/);
   assert.match(body, /documentGeneration/);
 
+  // RawSvg는 source-image key에 없고 decoder cache readiness도 별도이므로, 같은 개수로
+  // 재시도 안전망을 생략하면 안 된다.
+  assert.match(
+    body,
+    /if \(rawSvgCount > 0\) return null;/,
+    'RawSvg가 있으면 timer/fallback 재렌더를 재사용으로 건너뛰면 안 된다',
+  );
+
   // 판정 재료가 없으면 재사용을 포기한다(안전망 쪽으로 기운다).
   assert.match(body, /return null;/);
 });
