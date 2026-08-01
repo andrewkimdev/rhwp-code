@@ -994,6 +994,9 @@ export class PageRenderer {
    * - 문서 신원(digest·generation) — 키의 세대는 문서마다 0 에서 시작해 서로 충돌한다
    *   (`bin:0:1:src`). 문서 경계를 키가 들지 않으면 새 문서가 옛 재시도 상태를 재사용한다.
    *   `prefetchedImageSignatures`·`FlowImageUrlCache` 와 같은 이유·같은 방식이다.
+   * - RawSvg — compact 그림 키에는 포함되지 않고, 브라우저의 SVG decode 캐시는 별도로
+   *   비워질 수 있다. 개수만으로는 재렌더 준비 상태를 증명할 수 없으므로 이 페이지는
+   *   재사용하지 않는다.
    *
    * 판정 재료가 없으면(`null`) **재사용하지 않는다** — 구형 WASM, 키를 낼 수 없는 합성 그림이
    * 섞인 페이지(`cacheable:false`), 문서 신원 미상. 안전망을 없애는 쪽이 아니라 이미 끝난 일을
@@ -1005,6 +1008,10 @@ export class PageRenderer {
     rawSvgCount: number,
     policy: ReRenderPolicy,
   ): string | null {
+    // RawSvg 차트/OLE는 첫 paint 뒤 비동기 decode가 끝나야 다시 그려진다. source-image key는
+    // Image 노드만 대상으로 하고 브라우저 IMAGE_CACHE의 eviction도 관찰하지 못하므로, 같은
+    // 개수라는 이유로 timer/fallback을 건너뛰면 공백이 고착될 수 있다 (#1456).
+    if (rawSvgCount > 0) return null;
     const imageKeys = cacheableImageKeySignature(this.wasm.getPageSourceImageKeys(pageIdx));
     const documentDigest = this.wasm.documentDigest;
     if (imageKeys === null || documentDigest === null) return null;

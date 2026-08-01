@@ -523,6 +523,11 @@ test('PageRenderer deferred image rerender preserves static layer reuse policy',
   assert.match(keyBody, /documentDigest/, '문서 digest 를 재료로 쓴다');
   assert.match(keyBody, /documentGeneration/, '문서 generation 을 재료로 쓴다');
   assert.match(keyBody, /policy\.retrySignature/, 'overlay 서명도 유지한다');
+  assert.match(
+    keyBody,
+    /if \(rawSvgCount > 0\) return null;/,
+    'RawSvg는 source-image key와 decoder cache 상태로 판정할 수 없으므로 재사용하지 않는다',
+  );
   // 판정 재료가 없으면 재사용하지 않는다 — 안전망을 없애는 쪽으로 작동해서는 안 된다.
   assert.match(
     keyBody,

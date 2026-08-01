@@ -157,10 +157,19 @@ const NON_MUTATION_RECEIVERS: Readonly<Record<string, string>> = {
  * 표준 JS 메서드와 이름이 겹치는 뮤테이터.
  *
  * `replaceAll` 은 브리지의 찾아 바꾸기이면서 `String.prototype.replaceAll` 이기도 하다.
- * 문자열 지역변수 이름은 자유롭게 늘어나므로 수신자로 걸러내면 원장이 이름 하나 늘 때마다
- * 흔들린다. 이름 층위에서 한 번 선언해 두면 어떤 변수명이든 영향이 없다.
+ * 다만 이름만으로 모든 비브리지 수신자를 건너뛰면 새 raw-document alias까지 조용히 빠진다.
+ * 현재 문자열 수신자만 명시적으로 비뮤테이션으로 분류하고, 모르는 수신자는 원장의
+ * `모든 뮤테이터 호출` 검사에서 실패시킨다.
  */
 const BUILTIN_NAME_COLLISIONS = new Set(['replaceAll']);
+const BUILTIN_NON_MUTATION_RECEIVERS: Readonly<Record<string, string>> = {
+  text: 'String.prototype.replaceAll을 쓰는 HTML escape 문자열',
+  value: 'String.prototype.replaceAll을 쓰는 비교 문자열',
+};
+
+function isKnownBuiltinNonMutationCall(receiver: string, method: string): boolean {
+  return BUILTIN_NAME_COLLISIONS.has(method) && receiver in BUILTIN_NON_MUTATION_RECEIVERS;
+}
 
 /** `수신자.메서드(` 를 훑는다. 수신자는 점 앞의 마지막 식별자(`this.wasmDoc` → `wasmDoc`). */
 function mutatorCalls(src: string): { receiver: string; method: string }[] {
@@ -280,11 +289,9 @@ test('모든 뮤테이터 호출의 수신자는 분류돼 있어야 한다(미�
 
   for (const rel of scanFiles()) {
     for (const { receiver, method } of mutatorCalls(source(rel))) {
-      // 표준 JS 와 이름이 겹치는 호출은 브리지 수신자일 때만 뮤테이션이다.
-      if (BUILTIN_NAME_COLLISIONS.has(method)
-        && !(MUTATION_RECEIVERS as readonly string[]).includes(receiver)) {
-        continue;
-      }
+      // 동명이인이라도 미리 분류한 문자열 수신자만 건너뛴다. 미지 수신자는 raw-document
+      // alias일 수 있으므로 아래 분류 실패로 드러나야 한다.
+      if (isKnownBuiltinNonMutationCall(receiver, method)) continue;
       if ((MUTATION_RECEIVERS as readonly string[]).includes(receiver)) continue;
       if (receiver in NON_MUTATION_RECEIVERS) continue;
 
@@ -309,6 +316,14 @@ test('모든 뮤테이터 호출의 수신자는 분류돼 있어야 한다(미�
       + '변형하지 않으면(위임·동명이인) NON_MUTATION_RECEIVERS 에 사유와 함께 등재하세요.\n'
       + '이 검사가 없으면 새 수신자의 뮤테이션이 원장에서 조용히 빠집니다(#3648).',
   );
+});
+
+test('replaceAll 동명이인은 알려진 문자열 수신자만 비뮤테이션으로 분류한다', () => {
+  assert.equal(isKnownBuiltinNonMutationCall('text', 'replaceAll'), true);
+  assert.equal(isKnownBuiltinNonMutationCall('value', 'replaceAll'), true);
+  assert.equal(isKnownBuiltinNonMutationCall('wasm', 'replaceAll'), false);
+  assert.equal(isKnownBuiltinNonMutationCall('rawDoc', 'replaceAll'), false,
+    '새 raw-document alias는 수신자 분류 실패로 리뷰에 드러나야 한다');
 });
 
 // hwpctl 이 스캔 대상에 실제로 들어왔는지 — #3648 의 "이중 미스" 두 겹을 각각 못박는다.
