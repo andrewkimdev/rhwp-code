@@ -35,6 +35,25 @@ fn run_with_stdin(args: &[&str], stdin_body: &str) -> Output {
     child.wait_with_output().expect("rhwp 종료 대기 실패")
 }
 
+/// 잘못 해석된 출력 경로가 저장소 루트에 파일을 만들지 않도록 실행 위치를 격리한다.
+fn run_with_stdin_in_dir(args: &[&str], stdin_body: &str, current_dir: &Path) -> Output {
+    let mut child = Command::new(env!("CARGO_BIN_EXE_rhwp"))
+        .args(args)
+        .current_dir(current_dir)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("rhwp 실행 실패");
+    child
+        .stdin
+        .as_mut()
+        .expect("stdin")
+        .write_all(stdin_body.as_bytes())
+        .expect("stdin 쓰기 실패");
+    child.wait_with_output().expect("rhwp 종료 대기 실패")
+}
+
 fn describe(args: &[&str], output: &Output) -> String {
     format!(
         "명령: rhwp {}\nstdout:\n{}\nstderr:\n{}",
@@ -256,6 +275,10 @@ fn mcp_batch_tools_are_invocable_from_their_declaration() {
         !subs.contains(&"search"),
         "search 는 --query 가 필수라 hwp_batch 로는 호출할 수 없습니다: {subs:?}"
     );
+    assert!(
+        !subs.contains(&"convert"),
+        "convert 는 파일을 쓰므로 hwp_batch MCP 도구로 호출할 수 없습니다: {subs:?}"
+    );
 
     let search = tools
         .iter()
@@ -291,6 +314,25 @@ fn convert_tmp_dir(tag: &str) -> PathBuf {
     ));
     std::fs::create_dir_all(&dir).expect("임시 폴더 생성 실패");
     dir
+}
+
+/// 실패 assertion 뒤에도 convert 회귀 테스트의 산출물을 남기지 않는다.
+struct ConvertTmpDir(PathBuf);
+
+impl ConvertTmpDir {
+    fn new(tag: &str) -> Self {
+        Self(convert_tmp_dir(tag))
+    }
+
+    fn path(&self) -> &Path {
+        &self.0
+    }
+}
+
+impl Drop for ConvertTmpDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
 }
 
 fn field_names(v: &serde_json::Value) -> Vec<String> {
@@ -469,6 +511,150 @@ fn batch_convert_output_collision_is_refused_before_any_write() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
+/// batch 는 stdin 전체를 파일 경로 목록으로 쓰므로, 전역 인증 옵션과 섞으면 안 된다.
+/// 특히 `*-stdin` 옵션을 일반 전처리에서 먼저 읽으면 첫 경로뿐 아니라 뒤의 모든 경로가
+/// 사라진 채 0건 성공으로 끝날 수 있다. 거부는 입력을 소비하기 전에 usage 오류여야 한다.
+#[test]
+fn batch_global_auth_options_are_rejected_before_consuming_path_stdin() {
+    let input = sample(SAMPLE);
+    let input = input.to_str().expect("UTF-8 fixture path");
+    let cases = [
+        (
+            "--password",
+            vec!["batch", "info", "--json", "--password", "not-a-password"],
+            format!("{input}\n"),
+        ),
+        (
+            "--password-stdin",
+            vec!["batch", "info", "--json", "--password-stdin"],
+            format!("not-a-password\n{input}\n"),
+        ),
+        (
+            "--password-stdin (명령 앞)",
+            vec!["--password-stdin", "batch", "info", "--json"],
+            format!("not-a-password\n{input}\n"),
+        ),
+        (
+            "--output-password",
+            vec![
+                "batch",
+                "info",
+                "--json",
+                "--output-password",
+                "not-an-output-password",
+            ],
+            format!("{input}\n"),
+        ),
+        (
+            "--output-password-stdin",
+            vec!["batch", "info", "--json", "--output-password-stdin"],
+            format!("not-an-output-password\n{input}\n"),
+        ),
+    ];
+
+    for (option, args, stdin_body) in cases {
+        let output = run_with_stdin(&args, &stdin_body);
+        assert_eq!(
+            output.status.code(),
+            Some(2),
+            "batch 의 {option} 는 stdin 경로 계약과 충돌하므로 usage 오류여야 합니다\n{}",
+            describe(&args, &output)
+        );
+        assert!(
+            output.stdout.is_empty(),
+            "거부된 batch 실행은 레코드를 내지 않아야 합니다 ({option})\n{}",
+            describe(&args, &output)
+        );
+    }
+}
+
+/// `--out-dir` 의 다음 토큰이 또 다른 플래그이면 그것을 목적지로 삼아 파일을 쓰면 안 된다.
+/// 별도 cwd에서 실행해 현재 구현이 `--verify/`를 잘못 만들더라도 저장소에는 흔적을 남기지
+/// 않고, 고정 뒤에는 stdout·산출물 모두 비어 있는 usage 오류를 요구한다.
+#[test]
+fn batch_convert_rejects_flag_as_out_dir_before_any_write() {
+    let root = ConvertTmpDir::new("out-dir-flag");
+    let input = sample(SAMPLE);
+    let input = input.to_str().expect("UTF-8 fixture path");
+    let args = ["batch", "convert", "--out-dir", "--verify", "--json"];
+    let output = run_with_stdin_in_dir(&args, &format!("{input}\n"), root.path());
+
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "--out-dir 다음 플래그를 경로로 해석하면 안 됩니다\n{}",
+        describe(&args, &output)
+    );
+    assert!(
+        output.stdout.is_empty(),
+        "사용법 오류는 레코드를 내지 않아야 합니다\n{}",
+        describe(&args, &output)
+    );
+    let written = std::fs::read_dir(root.path())
+        .expect("격리 폴더 열기")
+        .count();
+    assert_eq!(
+        written,
+        0,
+        "플래그를 목적지로 오인해 산출물을 쓰면 안 됩니다\n{}",
+        describe(&args, &output)
+    );
+}
+
+/// macOS/Windows의 대소문자 비구분 파일 시스템에서도 `A.hwp`와 `a.hwp`는 같은
+/// 산출물을 가리킨다. 입력 폴더를 나눠 어느 호스트에서도 두 파일을 만들 수 있게 하고,
+/// 쓰기 전에 충돌을 거부하는 계약을 고정한다.
+#[test]
+fn batch_convert_case_only_output_collision_is_refused_before_any_write() {
+    let root = ConvertTmpDir::new("case-collide");
+    let dir_upper = root.path().join("upper");
+    let dir_lower = root.path().join("lower");
+    std::fs::create_dir_all(&dir_upper).expect("upper 폴더");
+    std::fs::create_dir_all(&dir_lower).expect("lower 폴더");
+
+    let src = sample(SAMPLE);
+    let upper = dir_upper.join("A.hwp");
+    let lower = dir_lower.join("a.hwp");
+    std::fs::copy(&src, &upper).expect("대문자 입력 복사");
+    std::fs::copy(&src, &lower).expect("소문자 입력 복사");
+    let out = root.path().join("out");
+    let args = [
+        "batch",
+        "convert",
+        "--out-dir",
+        out.to_str().expect("UTF-8 output path"),
+        "--json",
+    ];
+    let output = run_with_stdin(
+        &args,
+        &format!(
+            "{}\n{}\n",
+            upper.to_str().expect("UTF-8 upper path"),
+            lower.to_str().expect("UTF-8 lower path")
+        ),
+    );
+
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "대소문자만 다른 산출 경로는 쓰기 전에 usage 오류여야 합니다\n{}",
+        describe(&args, &output)
+    );
+    assert!(
+        output.stdout.is_empty(),
+        "거부된 실행은 레코드를 내지 않아야 합니다\n{}",
+        describe(&args, &output)
+    );
+    let written = std::fs::read_dir(&out).map(|d| d.count()).unwrap_or(0);
+    assert_eq!(
+        written,
+        0,
+        "대소문자 충돌에서 부분 산출물이 남으면 안 됩니다: {}\n{}",
+        out.display(),
+        describe(&args, &output)
+    );
+}
+
 /// 목적지를 추측하지 않는다 — stdin 경로 목록만으로 파일을 흩뿌리면 안 된다.
 /// 그리고 convert 전용 플래그는 다른 축에서 거부된다(`--query`·`--mode` 와 같은 규약).
 #[test]
@@ -531,5 +717,9 @@ fn capabilities_batch_declares_convert_axis_and_exit_aggregation() {
     assert!(
         v["batch"]["exitAggregation"].is_string(),
         "종료 코드 집계 규칙이 자기서술에 있어야 합니다: {v}"
+    );
+    assert!(
+        v["batch"]["mcp"]["excluded"]["convert"].as_str().is_some(),
+        "convert 의 CLI-only 경계를 자기서술해야 합니다: {v}"
     );
 }

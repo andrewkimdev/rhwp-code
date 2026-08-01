@@ -199,7 +199,7 @@ rhwp export-pdf input.hwp -o out.pdf \
 - 옵션은 파일 앞뒤 어디에 와도 된다 (#3349, export-structure/export-tables 와 동일 규약).
   파일 positional 을 두 번 주면 exit 2.
 
-### `batch <export-text|info|export-structure|export-tables|fields|search> --json [옵션]` (#3238, #3261, #3346)
+### `batch <export-text|info|export-structure|export-tables|fields|search|convert> --json [옵션]` (#3238, #3261, #3346, #3626)
 stdin 의 파일 목록(한 줄당 경로 하나)을 **한 프로세스에서 파일 간 병렬**로 처리해
 NDJSON(한 줄당 레코드 하나)을 stdin 입력 순서대로 스트림 출력한다.
 - `batch export-text` 성공 레코드: `{"schemaVersion":"1.0","source","pageCount","text"}`
@@ -213,6 +213,19 @@ NDJSON(한 줄당 레코드 하나)을 stdin 입력 순서대로 스트림 출�
   **`--query <검색어>` 는 이 축 전용이며 필수**다(없으면 사용법 오류 2).
   대량 코퍼스에서 스트림이 부풀지 않도록 **파일당 매치 1,000건 상한**을 둔다
   (단건 `search --limit` 과 같은 취지). 대소문자는 구분한다.
+- `batch convert` 는 **CLI 전용 쓰기 축**이다. `--out-dir <폴더>`가 필수이고,
+  `--verify`·`--verify-pages`를 선택할 수 있다. 입력마다 `<out-dir>/<입력이름>.hwp`를
+  한 번만 쓴 뒤 단건 `convert --json`과 같은 봉투를 NDJSON으로 낸다. MCP `hwp_batch`에는
+  쓰기 산출물 계약을 아직 노출하지 않는다.
+- convert는 쓰기 전에 모든 산출 이름을 예약한다. 같은 이름뿐 아니라 대소문자만 다른
+  이름도 충돌로 처리해 exit 2로 끝내며, 산출 파일을 하나도 쓰지 않는다. 이 보수적
+  규약은 macOS/Windows 기본 파일시스템과 Linux 재실행에서 같은 결과를 보장한다.
+- stdin은 **파일 경로 목록 전용**이다. `batch`는 전역 인증 옵션
+  `--password`·`--password-stdin`·`--output-password`·`--output-password-stdin`을
+  지원하지 않으며, 함께 주면 입력을 소비하지 않고 exit 2로 거부한다. 암호화 문서의
+  batch 처리/암호화 산출물은 credential 전달·산출 형식 계약이 정의된 뒤 별도로 제공한다.
+- `--out-dir`의 값은 다음 플래그가 될 수 없다. 이름이 `-`로 시작하는 실제 폴더를
+  지정할 때는 `./-결과`처럼 명시한다.
 - 실패 레코드(공통): `{"schemaVersion":"1.0","source","error","exitClass":"runtime"}`
 - 건별 실패(읽기·파싱·추출·panic)는 레코드로 격리하고 스트림을 계속한다.
   하나라도 실패하면 최종 종료 코드 1 (#2707 계약).
@@ -230,6 +243,9 @@ find docs/ -name '*.hwp' | rhwp batch search --query "위임전결" --json   | j
 # 코퍼스 표 수확 / 서식 템플릿 일괄 조사
 find docs/ -name '*.hwp' | rhwp batch export-tables --json | jq -c '{source, tableCount}'
 find forms/ -name '*.hwp' | rhwp batch fields --json | jq -c 'select(.fieldCount>0) | {source, fieldCount}'
+
+# 편집 가능한 HWP5를 한 폴더에 만들고 저장본 검증까지 집계 (CLI 전용)
+find inbox/ -name '*.hwp' | rhwp batch convert --out-dir converted --verify --verify-pages --json > converted.ndjson
 ```
 
 검증된 에이전트·파이프라인 시나리오(선별→추출, RAG 청킹, 실패 처리)는

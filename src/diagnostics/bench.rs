@@ -74,7 +74,10 @@ pub fn run(args: &[String]) -> i32 {
     }
 
     if let Some(dir) = &batch {
-        collect_samples(std::path::Path::new(dir), &mut files);
+        if let Err(error) = collect_samples(std::path::Path::new(dir), &mut files) {
+            eprintln!("오류: --batch 폴더를 읽을 수 없습니다 - {dir}: {error}");
+            return super::EXIT_RUNTIME;
+        }
         files.sort();
     }
     if files.is_empty() {
@@ -122,14 +125,11 @@ pub fn run(args: &[String]) -> i32 {
     super::EXIT_OK
 }
 
-fn collect_samples(dir: &std::path::Path, acc: &mut Vec<String>) {
-    let Ok(rd) = fs::read_dir(dir) else {
-        return;
-    };
-    for e in rd.flatten() {
-        let p = e.path();
+fn collect_samples(dir: &std::path::Path, acc: &mut Vec<String>) -> std::io::Result<()> {
+    for entry in fs::read_dir(dir)? {
+        let p = entry?.path();
         if p.is_dir() {
-            collect_samples(&p, acc);
+            collect_samples(&p, acc)?;
         } else if p.extension().is_some_and(|x| {
             let x = x.to_string_lossy().to_ascii_lowercase();
             x == "hwp" || x == "hwpx"
@@ -137,6 +137,7 @@ fn collect_samples(dir: &std::path::Path, acc: &mut Vec<String>) {
             acc.push(p.to_string_lossy().into_owned());
         }
     }
+    Ok(())
 }
 
 fn bench_one(path: &str, iters: usize) -> Result<Row, String> {

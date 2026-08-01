@@ -24,6 +24,26 @@ fn temp_path(tag: &str, ext: &str) -> PathBuf {
     ))
 }
 
+/// 테스트 중단·assertion 실패에도 합성한 계획·HWPX·산출물을 남기지 않는다.
+/// 회귀 입력은 실제 문서처럼 보일 수 있으므로 임시 파일의 생명주기를 명시한다.
+struct TempFileGuard(PathBuf);
+
+impl TempFileGuard {
+    fn new(path: PathBuf) -> Self {
+        Self(path)
+    }
+
+    fn path(&self) -> &Path {
+        &self.0
+    }
+}
+
+impl Drop for TempFileGuard {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
 fn run(args: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_rhwp"))
         .args(args)
@@ -35,6 +55,50 @@ fn write_plan(tag: &str, plan: &serde_json::Value) -> PathBuf {
     let p = temp_path(tag, "json");
     std::fs::write(&p, serde_json::to_vec_pretty(plan).unwrap()).unwrap();
     p
+}
+
+/// 누름틀 두 개의 이름을 화면상 같은 Latin/Cyrillic 쌍으로 바꾼 임시 HWPX.
+/// 공격용 fixture를 저장소에 남기지 않고 `run`의 JSON 저널 계약만 검증한다.
+fn hwpx_with_field_names(tag: &str, first: &str, second: &str) -> TempFileGuard {
+    let source = sample();
+    let source_hwpx = TempFileGuard::new(temp_path(&format!("{tag}-source"), "hwpx"));
+    let export = run(&[
+        "export-hwpx",
+        source.to_str().expect("입력 경로 UTF-8"),
+        source_hwpx.path().to_str().expect("임시 경로 UTF-8"),
+    ]);
+    assert_eq!(
+        export.status.code(),
+        Some(0),
+        "confusable 회귀용 HWPX 변환 실패: {}",
+        String::from_utf8_lossy(&export.stderr)
+    );
+
+    let bytes = std::fs::read(source_hwpx.path()).expect("HWPX 읽기");
+    let mut zin = zip::ZipArchive::new(std::io::Cursor::new(bytes)).expect("zip 열기");
+    let patched = TempFileGuard::new(temp_path(&format!("{tag}-patched"), "hwpx"));
+    let mut zout = zip::ZipWriter::new(std::fs::File::create(patched.path()).expect("출력 zip"));
+    for i in 0..zin.len() {
+        let mut entry = zin.by_index(i).expect("zip 항목");
+        let name = entry.name().to_string();
+        let mut buf = Vec::new();
+        std::io::copy(&mut entry, &mut buf).expect("zip 항목 읽기");
+        if name == "Contents/section0.xml" {
+            let section = String::from_utf8_lossy(&buf)
+                .replace("name=\"회사명\"", &format!("name=\"{first}\""))
+                .replace("name=\"작성자\"", &format!("name=\"{second}\""));
+            buf = section.into_bytes();
+        }
+        zout.start_file(
+            name,
+            zip::write::SimpleFileOptions::default()
+                .compression_method(zip::CompressionMethod::Deflated),
+        )
+        .expect("zip 항목 쓰기 시작");
+        std::io::Write::write_all(&mut zout, &buf).expect("zip 항목 쓰기");
+    }
+    zout.finish().expect("zip 마감");
+    patched
 }
 
 /// 선검증 실패는 실행 0 — exit 2 에 출력 파일이 아예 생기지 않아야 한다.
@@ -97,6 +161,104 @@ fn mid_plan_invalid_step_leaves_disk_unchanged() {
     assert_eq!(output.status.code(), Some(2), "중간 불가 = 전체 불가");
     assert!(!out.exists(), "선행 step 도 디스크에 닿지 않는다");
     let _ = std::fs::remove_file(&plan_path);
+}
+
+/// `set_cell` 행·열은 HWP 격자 주소(u16)다. JSON u64를 무조건 캐스팅하면 65536이
+/// 0으로 감겨 전혀 다른 셀을 고치므로, 선검증에서 이유와 함께 거부해야 한다.
+#[test]
+fn set_cell_u16_overflow_is_invalid_without_output() {
+    let input = Path::new(env!("CARGO_MANIFEST_DIR")).join("samples/table-001.hwp");
+    if !input.exists() {
+        eprintln!("표 샘플 없음 — 건너뜀");
+        return;
+    }
+    for (axis, row, col) in [("row", 65536, 0), ("col", 0, 65536)] {
+        let out = TempFileGuard::new(temp_path(&format!("set-cell-u16-overflow-{axis}"), "hwp"));
+        let plan = serde_json::json!({
+            "planVersion": "1.0",
+            "input": input.to_str().unwrap(),
+            "output": out.path().to_str().unwrap(),
+            "steps": [
+                { "action": "set_cell", "table": 0, "row": row, "col": col, "text": "범위초과" },
+            ],
+        });
+        let plan_path =
+            TempFileGuard::new(write_plan(&format!("set-cell-u16-overflow-{axis}"), &plan));
+        let args = [
+            "run",
+            plan_path.path().to_str().expect("계획 경로 UTF-8"),
+            "--json",
+        ];
+        let output = run(&args);
+        assert_eq!(
+            output.status.code(),
+            Some(2),
+            "{axis}=65536은 u16 범위 밖이므로 선검증에서 거부해야 한다. stdout: {} stderr: {}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+        assert!(
+            !out.path().exists(),
+            "{axis}=65536 선검증 실패는 다른 셀을 0으로 감아 저장하지 않아야 한다"
+        );
+        let journal: serde_json::Value =
+            serde_json::from_slice(&output.stdout).expect("선검증 JSON 저널");
+        let invalid = journal["invalid"].as_array().expect("invalid[]");
+        assert_eq!(invalid.len(), 1, "{journal}");
+        assert_eq!(invalid[0]["step"], 0, "{journal}");
+        assert_eq!(invalid[0]["action"], "set_cell", "{journal}");
+        assert!(
+            invalid[0]["reason"]
+                .as_str()
+                .is_some_and(|reason| !reason.trim().is_empty()),
+            "범위 초과의 사유를 invalid[]에 남겨야 한다: {journal}"
+        );
+    }
+}
+
+/// 계획 실행기의 `fill_fields` JSON 저널도 직접 `edit fill-fields --json`처럼
+/// 화면상 같은 필드명 쌍을 confusable로 공개해야 한다. 그렇지 않으면 자동 실행이
+/// 키릴 문자 하나가 다른 필드를 조용히 채운다.
+#[test]
+fn plan_fill_fields_journal_reports_confusable_twin() {
+    let input = hwpx_with_field_names("plan-confusable", "Total", "\u{0422}otal");
+    let out = TempFileGuard::new(temp_path("plan-confusable-output", "hwpx"));
+    let plan = serde_json::json!({
+        "planVersion": "1.0",
+        "input": input.path().to_str().unwrap(),
+        "output": out.path().to_str().unwrap(),
+        "steps": [
+            { "action": "fill_fields", "data": { "Total": "999" } },
+        ],
+    });
+    let plan_path = TempFileGuard::new(write_plan("plan-confusable", &plan));
+    let args = [
+        "run",
+        plan_path.path().to_str().expect("계획 경로 UTF-8"),
+        "--json",
+    ];
+    let output = run(&args);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "계획 실행 실패. stdout: {} stderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+    let journal: serde_json::Value = serde_json::from_slice(&output.stdout).expect("실행 저널");
+    let steps = journal["steps"].as_array().expect("steps[]");
+    assert_eq!(steps.len(), 1, "{journal}");
+    let confusable = steps[0]["confusable"]
+        .as_array()
+        .expect("run fill_fields 저널은 confusable 배열을 항상 제공해야 한다");
+    assert_eq!(confusable.len(), 1, "쌍둥이 필드 경고 누락: {journal}");
+    assert_eq!(confusable[0]["name"], "Total", "{journal}");
+    assert_eq!(
+        confusable[0]["lookalikes"].as_array().map(Vec::len),
+        Some(1),
+        "키릴 동형자도 함께 기록해야 한다: {journal}"
+    );
+    assert!(out.path().exists(), "성공한 계획은 산출물을 한 번 저장한다");
 }
 
 /// 정상 계획: 저널이 step 별 결과와 verify 자기검증을 담고 exit 0.

@@ -122,6 +122,35 @@ fn load_document_core(data: &[u8]) -> Result<rhwp::document_core::DocumentCore, 
     result.map_err(|e| classify_hwp_error(&e.to_string()))
 }
 
+/// `batch` 는 stdin 전체를 파일 경로 목록으로 소비한다. 전역 인증 옵션 중 stdin
+/// 변형은 그 목록과 같은 바이트 스트림을 두 번 읽으려 하고, 리터럴 변형도 worker
+/// thread-local 인증 상태로 전달되지 않는다. 따라서 암호화 batch 를 정식으로 설계하기
+/// 전에는 네 옵션을 모두 호출 경계에서 거부한다.
+///
+/// 명령 위치 앞의 전역 인증 옵션만 건너뛰어 `batch` 여부를 판정한다. 단순히 모든 인자에서
+/// `batch` 문자열을 찾으면 `search --query batch` 같은 정상 호출을 잘못 막게 된다.
+fn is_batch_invocation(args: &[String]) -> bool {
+    let mut i = 1; // args[0] 은 프로그램 경로
+    while let Some(arg) = args.get(i) {
+        match arg.as_str() {
+            "--password" | "--output-password" => i += 2,
+            "--password-stdin" | "--output-password-stdin" => i += 1,
+            _ => return arg == "batch",
+        }
+    }
+    false
+}
+
+/// `batch` 명령이 실제로 보이면, 그 뒤·앞 어느 위치의 전역 인증 옵션도 거부한다.
+fn has_global_auth_option(args: &[String]) -> bool {
+    args.iter().skip(1).any(|arg| {
+        matches!(
+            arg.as_str(),
+            "--password" | "--password-stdin" | "--output-password" | "--output-password-stdin"
+        )
+    })
+}
+
 /// args 전체를 스캔해 입력·출력 인증 옵션을 떼어낸다.
 ///
 /// 뽑아낸 입력 암호와 출력 암호는 이 함수 안에서 thread-local 상태로 소비하고,
@@ -213,6 +242,12 @@ fn strip_global_auth_options(mut args: Vec<String>) -> Result<Vec<String>, i32> 
 
 fn main() {
     let raw_args: Vec<String> = env::args().collect();
+    if is_batch_invocation(&raw_args) && has_global_auth_option(&raw_args) {
+        eprintln!(
+            "오류: batch 는 --password·--password-stdin·--output-password·--output-password-stdin 을 지원하지 않습니다. stdin 은 파일 경로 목록 전용입니다."
+        );
+        process::exit(EXIT_USAGE);
+    }
     // 전역 인증 pre-scan: 어느 위치든 입력/출력 비밀번호 옵션을 뽑아낸다.
     // 비밀번호는 pre-scan 안에서 thread-local 상태로 들어가고 여기로는 돌아오지 않는다.
     let args = match strip_global_auth_options(raw_args) {
@@ -750,7 +785,7 @@ fn mcp_tool_definitions() -> Vec<serde_json::Value> {
         ),
         tool_with_optional_args(
             "hwp_batch",
-            "여러 문서를 한 프로세스에서 병렬 처리해 NDJSON 스트림으로 받는다. 파일 목록은 stdin 으로 한 줄에 하나씩 넣는다. 아카이브 전체를 스윕할 때 쓴다.",
+            "여러 문서를 한 프로세스에서 병렬 처리해 NDJSON 스트림으로 받는다. 파일 목록은 stdin 으로 한 줄에 하나씩 넣는다. 읽기 전용 5축만 제공하며, 파일을 쓰는 batch convert 는 CLI 전용이다. 아카이브 전체를 스윕할 때 쓴다.",
             serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -806,6 +841,7 @@ fn mcp_tool_definitions() -> Vec<serde_json::Value> {
                 "filled",
                 "notFound",
                 "ambiguous",
+                "confusable",
                 "output",
                 "outputFormat",
                 "changedPages",
@@ -906,7 +942,7 @@ fn mcp_tool_definitions() -> Vec<serde_json::Value> {
         ),
         tool(
             "hwp_run_plan",
-            "[#3703] 선언적 편집 계획(JSON)을 정적 선검증→원자 실행→저널로 수행한다. 도구 호출을 체이닝하는 대신 의도를 계획서 하나로 선언하면, 전 step 의 실행 가능성을 미리 판정하고(불가 시 실행 0·invalid[]·exit 2) 인메모리로 적용해 단언(verify 자기검증) 통과 시에만 단 한 번 저장한다 — 실패 시 디스크 무변경. steps: fill_fields{data} · replace_text{find,replace[,occurrence]} · set_cell{table,row,col,text[,keepStyle]} · set_checkbox{occurrence}.",
+            "[#3703] 선언적 편집 계획(JSON)을 정적 선검증→원자 실행→저널로 수행한다. 도구 호출을 체이닝하는 대신 의도를 계획서 하나로 선언하면, 전 step 의 실행 가능성을 미리 판정하고(불가 시 실행 0·invalid[]·exit 2) 인메모리로 적용해 단언(verify 자기검증) 통과 시에만 단 한 번 저장한다 — 실패 시 디스크 무변경. fill_fields step 은 화면상 구별되지 않는 필드 이름을 steps[].confusable 로 경고한다. steps: fill_fields{data} · replace_text{find,replace[,occurrence]} · set_cell{table,row,col,text[,keepStyle]} · set_checkbox{occurrence}.",
             serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -919,7 +955,7 @@ fn mcp_tool_definitions() -> Vec<serde_json::Value> {
             }),
             "run",
             serde_json::json!(["run", "--plan-json", "{plan}", "--json"]),
-            &["schemaVersion", "planVersion", "input", "output", "outputFormat", "steps", "verify", "invalid", "changedPages"],
+            &["schemaVersion", "planVersion", "input", "output", "outputFormat", "steps", "steps[].confusable", "verify", "invalid", "changedPages"],
         ),
     ];
     for definition in &mut tools {
@@ -1545,16 +1581,21 @@ fn show_capabilities(args: &[String]) -> i32 {
                 "status": ["clean", "warning"],
                 "kinds": ["confusableFieldName", "mixedScript", "bidiControl", "invisibleChar", "ansiEscape"],
                 "policy": "보고 전용 — 문서 문자열을 수정하지 않는다",
-                "surfaces": ["fields --json", "edit fill-fields --json(confusable)"],
+                "surfaces": ["fields --json", "edit fill-fields --json(confusable)", "run --json(steps[].confusable)"],
             },
         },
         "batch": {
             "subcommands": ["export-text", "info", "export-structure", "export-tables", "fields", "search", "convert"],
             "flags": ["--json", "--threads", "--mode", "--query", "--out-dir", "--verify", "--verify-pages"],
             "ordering": "stdin 입력 순서 보존",
-            "input": "stdin, 한 줄당 파일 경로 하나",
+            "input": "stdin, 한 줄당 파일 경로 하나 (batch 에서는 경로 목록 전용)",
+            "authentication": "지원하지 않음 — --password·--password-stdin·--output-password·--output-password-stdin 은 usage error; 암호화 batch 의 credential 전달 계약은 아직 정의되지 않았다",
             // [#3626] convert 축만 파일을 쓴다 — 목적지·충돌 규약·종료 코드 집계를 밝힌다.
-            "output": "convert 축만 파일을 쓴다 — 목적지는 --out-dir 하나, 이름은 <입력이름>.hwp. 같은 이름이 둘 이상이면 한 건도 쓰지 않고 exit 2",
+            "output": "convert 축만 파일을 쓴다 — 목적지는 --out-dir 하나, 이름은 <입력이름>.hwp. 대소문자만 다른 이름을 포함해 같은 이름이 둘 이상이면 한 건도 쓰지 않고 exit 2",
+            "mcp": {
+                "available": ["export-text", "info", "export-structure", "export-tables", "fields", "search (hwp_batch_search)"],
+                "excluded": { "convert": "파일을 쓰는 축이라 현재 hwp_batch MCP 도구에는 노출하지 않으며 CLI 에서만 사용한다" },
+            },
             "exitAggregation": "error 레코드가 하나라도 있으면 1, 없고 verifyPages 불일치가 있으면 4, verify 차이만 있으면 3, 전부 통과면 0",
         },
         "commands": commands,
@@ -4000,7 +4041,7 @@ fn export_markdown(args: &[String]) -> i32 {
 fn run_batch(args: &[String]) -> i32 {
     use std::io::{BufRead, Write};
 
-    const USAGE: &str = "사용법: <파일 목록> | rhwp batch <export-text|info|export-structure|export-tables|fields|search> --json [--mode auto|outline|clause] [--query <검색어>] [--threads <N>]  (stdin: 한 줄당 파일 경로 하나)";
+    const USAGE: &str = "사용법: <파일 목록> | rhwp batch <export-text|info|export-structure|export-tables|fields|search|convert> --json [--mode auto|outline|clause] [--query <검색어>] [--threads <N>] [convert: --out-dir <폴더> [--verify] [--verify-pages]]  (stdin: 한 줄당 파일 경로 하나)";
 
     let subcommand = args.first().map(String::as_str);
     let is_structure = subcommand == Some("export-structure");
@@ -4057,8 +4098,10 @@ fn run_batch(args: &[String]) -> i32 {
                     eprintln!("오류: --out-dir 뒤에 폴더 경로가 필요합니다.");
                     return EXIT_USAGE;
                 };
-                if value.is_empty() {
-                    eprintln!("오류: --out-dir 폴더 경로가 비어 있습니다.");
+                if value.is_empty() || value.starts_with('-') {
+                    eprintln!(
+                        "오류: --out-dir 뒤에 플래그가 아닌 폴더 경로가 필요합니다 (이름이 - 로 시작하면 ./ 를 붙이세요)."
+                    );
                     return EXIT_USAGE;
                 }
                 out_dir = Some(std::path::PathBuf::from(value));
@@ -4199,19 +4242,13 @@ fn run_batch(args: &[String]) -> i32 {
     // 겹침을 레코드로 보고하며 진행하면 이미 절반이 변환된 산출 폴더가 남는다. 한 바이트도
     // 쓰기 전에 전건을 미리 계산해 잡고, 잡히면 사용법 오류로 끝낸다(부분 산출물 없음).
     if let BatchMode::Convert { out_dir, .. } = mode {
-        if let Err(e) = fs::create_dir_all(out_dir) {
-            eprintln!(
-                "오류: 출력 폴더를 만들 수 없습니다 - {}: {}",
-                out_dir.display(),
-                e
-            );
-            return EXIT_RUNTIME;
-        }
-        let mut claimed: std::collections::HashMap<std::path::PathBuf, &str> =
+        let mut claimed: std::collections::HashMap<String, &str> =
             std::collections::HashMap::with_capacity(paths.len());
         for path in &paths {
             let candidate = batch_convert_output_path(out_dir, Path::new(path));
-            if let Some(first) = claimed.insert(candidate.clone(), path.as_str()) {
+            if let Some(first) =
+                claimed.insert(batch_convert_collision_key(&candidate), path.as_str())
+            {
                 eprintln!(
                     "오류: 산출 경로가 겹칩니다 - {} ← {} · {}",
                     candidate.display(),
@@ -4223,6 +4260,14 @@ fn run_batch(args: &[String]) -> i32 {
                 );
                 return EXIT_USAGE;
             }
+        }
+        if let Err(e) = fs::create_dir_all(out_dir) {
+            eprintln!(
+                "오류: 출력 폴더를 만들 수 없습니다 - {}: {}",
+                out_dir.display(),
+                e
+            );
+            return EXIT_RUNTIME;
         }
     }
 
@@ -4544,6 +4589,13 @@ fn batch_convert_output_path(out_dir: &Path, input: &Path) -> std::path::PathBuf
         .map(|s| s.to_string_lossy().to_string())
         .unwrap_or_else(|| "output".to_string());
     out_dir.join(format!("{stem}.hwp"))
+}
+
+/// batch convert 는 macOS/Windows 기본 파일시스템에서도 안전해야 한다. 따라서
+/// 대소문자만 다른 두 입력이 같은 산출물을 덮어쓰는 일을 모든 호스트에서 미리
+/// 금지한다. Linux 에서도 이 보수적 규약을 공유해야 OS를 바꾼 재실행이 달라지지 않는다.
+fn batch_convert_collision_key(output: &Path) -> String {
+    output.to_string_lossy().to_lowercase()
 }
 
 /// [#3626] 검증 판정 봉투가 "차이 있음"인가. 필드가 없거나 null 이면 판정 자체가 없다.
@@ -10747,6 +10799,18 @@ fn cmd_run_plan(args: &[String]) -> i32 {
             journal["steps"].as_array().map(|s| s.len()).unwrap_or(0),
             journal["output"].as_str().unwrap_or("-")
         );
+        if let Some(steps) = journal["steps"].as_array() {
+            for step in steps {
+                if let Some(confusable) = step["confusable"].as_array() {
+                    for item in confusable {
+                        eprintln!(
+                            "경고: '{}' 과(와) 화면상 구별되지 않는 이름의 누름틀이 문서에 함께 있습니다 — 채운 칸이 의도한 칸인지 확인하세요.",
+                            item["name"].as_str().unwrap_or("")
+                        );
+                    }
+                }
+            }
+        }
     } else {
         // 사람 모드에서도 판정 근거는 저널 그대로 남긴다 — 달리 설명할 출처가 없다.
         eprintln!("{}", journal);
@@ -10813,6 +10877,10 @@ fn run_plan_engine(plan: &serde_json::Value) -> (serde_json::Value, i32) {
                 .push((fi.location.section_index, fi.location.para_index));
         }
     }
+    // `edit fill-fields`·세션 경로와 같은 text-security 판정이다. 계획 실행만
+    // 이 경고를 누락하면 선언적 경로가 화면상 같은 필드 이름을 침묵 속에 통과시킨다.
+    let all_names: Vec<String> = name_counts.keys().cloned().collect();
+    let confusable_groups = rhwp::document_core::text_security::confusable_collisions(&all_names);
     let mut invalid: Vec<serde_json::Value> = Vec::new();
     for (idx, step) in steps.iter().enumerate() {
         let action = step["action"].as_str().unwrap_or("");
@@ -10885,8 +10953,31 @@ fn run_plan_engine(plan: &serde_json::Value) -> (serde_json::Value, i32) {
                         "reason": "text 에 줄바꿈·탭은 넣을 수 없습니다 (한 줄 값 기록)" }));
                     continue;
                 }
-                if let Err(e) = resolve_table_cell(doc.document(), t as usize, r as u16, c as u16)
-                {
+                let table = match usize::try_from(t) {
+                    Ok(value) => value,
+                    Err(_) => {
+                        invalid.push(serde_json::json!({ "step": idx, "action": action,
+                            "reason": format!("table {} 이(가) 이 플랫폼의 인덱스 범위를 벗어났습니다", t) }));
+                        continue;
+                    }
+                };
+                let row = match u16::try_from(r) {
+                    Ok(value) => value,
+                    Err(_) => {
+                        invalid.push(serde_json::json!({ "step": idx, "action": action,
+                            "reason": format!("row {} 이(가) 0..65535 범위를 벗어났습니다", r) }));
+                        continue;
+                    }
+                };
+                let col = match u16::try_from(c) {
+                    Ok(value) => value,
+                    Err(_) => {
+                        invalid.push(serde_json::json!({ "step": idx, "action": action,
+                            "reason": format!("col {} 이(가) 0..65535 범위를 벗어났습니다", c) }));
+                        continue;
+                    }
+                };
+                if let Err(e) = resolve_table_cell(doc.document(), table, row, col) {
                     let (CellResolveError::Usage(msg) | CellResolveError::Runtime(msg)) = e;
                     invalid
                         .push(serde_json::json!({ "step": idx, "action": action, "reason": msg }));
@@ -10920,6 +11011,7 @@ fn run_plan_engine(plan: &serde_json::Value) -> (serde_json::Value, i32) {
                 let data = step["data"].as_object().expect("선검증 통과");
                 let mut filled: Vec<serde_json::Value> = Vec::new();
                 let mut ambiguous: Vec<serde_json::Value> = Vec::new();
+                let mut confusable: Vec<serde_json::Value> = Vec::new();
                 for (key, value) in data {
                     let value_str = match value {
                         serde_json::Value::String(s) => s.clone(),
@@ -10931,6 +11023,20 @@ fn run_plan_engine(plan: &serde_json::Value) -> (serde_json::Value, i32) {
                         ambiguous.push(
                             serde_json::json!({ "name": name, "matched": 1, "total": total }),
                         );
+                    }
+                    if let Some((_, group)) = confusable_groups
+                        .iter()
+                        .find(|(_, group)| group.iter().any(|candidate| candidate == name))
+                    {
+                        let others: Vec<&String> = group
+                            .iter()
+                            .filter(|candidate| *candidate != name)
+                            .collect();
+                        confusable.push(serde_json::json!({
+                            "name": name,
+                            "lookalikes": others,
+                            "note": "화면상 구별되지 않는 이름의 누름틀이 이 문서에 함께 있습니다 — 채운 칸이 의도한 칸인지 확인하세요.",
+                        }));
                     }
                     if let Err(e) = doc.set_field_value_by_name_at(name, occurrence, &value_str) {
                         return fail(format!("step {}: 필드 '{}' 설정 실패 - {}", idx, key, e));
@@ -10945,7 +11051,7 @@ fn run_plan_engine(plan: &serde_json::Value) -> (serde_json::Value, i32) {
                 journal_steps.push(serde_json::json!({
                     "step": idx, "action": "fill_fields",
                     "filledCount": filled.len(), "filled": filled,
-                    "notFound": [], "ambiguous": ambiguous,
+                    "notFound": [], "ambiguous": ambiguous, "confusable": confusable,
                 }));
             }
             "replace_text" => {
@@ -10998,9 +11104,12 @@ fn run_plan_engine(plan: &serde_json::Value) -> (serde_json::Value, i32) {
                 }));
             }
             "set_cell" => {
-                let t = step["table"].as_u64().expect("선검증 통과") as usize;
-                let r = step["row"].as_u64().expect("선검증 통과") as u16;
-                let c = step["col"].as_u64().expect("선검증 통과") as u16;
+                let t = usize::try_from(step["table"].as_u64().expect("선검증 통과"))
+                    .expect("선검증 통과");
+                let r =
+                    u16::try_from(step["row"].as_u64().expect("선검증 통과")).expect("선검증 통과");
+                let c =
+                    u16::try_from(step["col"].as_u64().expect("선검증 통과")).expect("선검증 통과");
                 let text = step["text"].as_str().expect("선검증 통과");
                 let keep_style = step["keepStyle"].as_bool().unwrap_or(false);
                 // 앞 step 의 편집으로 좌표가 밀릴 수 있어 실행 시점에 재해석한다.

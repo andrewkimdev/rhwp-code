@@ -294,3 +294,26 @@ fn remaining_diagnostics_report_runtime_failure_on_unreadable_input() {
         );
     }
 }
+
+/// `bench --batch`의 대상 폴더는 명시한 입력이다. 읽을 수 없으면 빈 코퍼스로
+/// 바꾸거나 함께 준 파일만 측정해 성공할 수 없으며, stdout을 열기 전에 exit 1로
+/// 끝내야 한다.
+#[test]
+fn bench_batch_unreadable_directory_reports_runtime_failure() {
+    let missing = std::env::temp_dir().join(format!(
+        "rhwp-missing-bench-batch-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system clock")
+            .as_nanos()
+    ));
+    let missing = missing.to_str().expect("UTF-8 temporary path");
+    let args = ["bench", "--batch", missing];
+    let output = assert_code(&args, 1);
+    assert!(
+        output.stdout.is_empty(),
+        "읽을 수 없는 batch 루트에서는 측정 결과를 내면 안 됩니다: {}",
+        describe(&args, &output)
+    );
+}
