@@ -70,3 +70,20 @@ python tools/clipping_gate.py --check <base> --fixture <docs.tsv>            # �
 - baseline: `tests/fixtures/clipping_baseline.tsv` (controlset 92문서, 현재 **클리핑 0**).
 - 검증: byeolpyo4(23.5px 클리핑)를 0-baseline 으로 대조 시 **회귀 1건 정확 검출**.
 - 보조 신호: rhwp render 자체의 `LAYOUT_OVERFLOW`(layout.rs) — 표/줄이 col_bottom 초과 시 stderr 진단.
+
+## 관련 인프라 — layout 시점 셀 소실 카운터 (#3668)
+
+이 문서의 두 도구(SVG 사후 분석)와 별개로, 렌더 엔진에 **layout 시점** 카운터가 내장되어
+있다: `LAYOUT_OVERFLOW_CELL`(셀 안 줄의 윗변이 쪽 하단 밖 = 그 줄 확정 소실, MATCH 80건
+오탐 0 판정 기준).
+
+| 축 | 이 문서 도구 (`detect_table_clipping.py`/`clipping_gate.py`) | #3668 카운터 |
+|---|---|---|
+| 시점 | SVG 산출물 사후 분석 | layout 중 (진단 발생 지점) |
+| 판정 대상 | body-clip 하단 초과 요소 전반 | 셀 안 텍스트 줄 한정 |
+| 소비 표면 | Python 도구 실행 | `export-svg --json` 의 `overflowCellLines`(페이지별+합계), `tests/overflow_cell_baseline.rs` 기본 스위트 래칫 |
+| baseline | `tests/fixtures/clipping_baseline.tsv` (controlset 92) | `tests/fixtures/overflow_cell_baseline.tsv` (samples 전수 662) |
+
+용도 구분: **빠른 1차 신호와 상시 회귀 가드**는 #3668 카운터(스위트에 항상 돈다),
+**요소 단위 정밀 분석·임의 문서군 비교**는 이 문서의 Python 도구. 절차는
+[`local_validation.md` 4.3.1](../pr_review/local_validation.md#431-새-hwphwpx-fixture의-baseline-등록--ir-sweep--overflow-cell-원장) 참조.

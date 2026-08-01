@@ -96,10 +96,10 @@ CARGO_INCREMENTAL=0 cargo test --profile release-test --features native-skia --t
 CARGO_INCREMENTAL=0 wasm-pack build --target web --out-dir pkg
 ~~~
 
-## 4.3.1 새 HWP/HWPX fixture의 IR field sweep baseline 등록
+## 4.3.1 새 HWP/HWPX fixture의 baseline 등록 — IR sweep + overflow-cell 원장
 
 samples 아래 HWP 또는 HWPX fixture를 새로 추가·교체·이동하면 renderer 변경 여부와 무관하게 PR 생성 또는
-draft 해제 전에 전수 sweep을 수행한다.
+draft 해제 전에 **두 baseline 절차**를 수행한다: ① IR field sweep(아래), ② overflow-cell 원장(이 절 말미).
 
 ~~~bash
 RHWP_IR_SWEEP_DUMP=/tmp/ir_field_sweep_current.tsv \
@@ -114,6 +114,27 @@ diff -u tests/fixtures/ir_field_sweep_baseline.tsv /tmp/ir_field_sweep_current.t
 - 원인을 모르는 증가분을 baseline으로 숨기지 않는다.
 - TSV 행을 추가하면 fixture 경로·SHA-256·lane·필드·건수·상세 값 변화·판정 근거를 review 문서에 적는다.
 - 마지막으로 CARGO_INCREMENTAL=0 cargo test --profile release-test --tests가 통과해야 한다.
+
+### overflow-cell 원장 (#3668)
+
+새 fixture 에 **쪽 밖 소실 줄**(셀 안 줄의 윗변이 쪽 하단 밖 — `LAYOUT_OVERFLOW_CELL`)이
+있으면 `overflow_cell_baseline` 게이트가 "신규 발생"으로 실패한다. 절차는 IR sweep 과 같은
+래칫 규약이다:
+
+~~~bash
+RHWP_OVERFLOW_CELL_DUMP=/tmp/overflow_cell_current.tsv \
+  CARGO_INCREMENTAL=0 cargo test --profile release-test \
+  --test overflow_cell_baseline -- --nocapture
+diff -u tests/fixtures/overflow_cell_baseline.tsv /tmp/overflow_cell_current.tsv
+~~~
+
+- 원장은 0 이 아닌 문서만 `상대경로\t줄수` 사전순으로 기록한다. 0 인 문서는 행을 만들지 않는다.
+- **원인 정정이 원칙이다** — 소실 줄은 사용자에게 보이지 않는 콘텐츠(#3236 계열)이므로,
+  fixture 가 의도적으로 그 결함을 재현하는 경우(회귀 fixture)에만 행을 추가한다.
+  페이지별 발생 위치는 `rhwp export-svg <파일> -o <dir> --json` 의 `overflowCellLines` 로 좁힌다.
+- 기존 문서의 수치 **증가**는 렌더 회귀다 — baseline 으로 숨기지 않는다. 감소·해소는
+  diff 로 확인한 뒤 래칫을 조인다(행 갱신·삭제).
+- 행을 추가·갱신하면 문서 경로·줄수·판정 근거를 review 문서에 적는다.
 
 ## 4.3.2 @rhwp/editor package 검증
 
