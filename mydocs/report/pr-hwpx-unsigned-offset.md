@@ -61,7 +61,7 @@ let y = (sa.offset_y as u32).to_string();
 red 로그 발췌 (실물 샘플 재저장 산출물):
 
 ```
-hp:offset x/y 는 XSD unsigned — 음수 방출은 스키마 위반: 
+hp:offset x/y 는 XSD unsigned — 음수 방출은 스키마 위반:
 ["<hp:offset x=\"-81046\" y=\"-36735\"/>", "<hp:offset x=\"-1303\" y=\"1477\"/>",
  "<hp:offset x=\"-87\" y=\"-2429\"/>", "<hp:offset x=\"-27876\" y=\"-33148\"/>", …]
 ```
