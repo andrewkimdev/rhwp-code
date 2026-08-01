@@ -18,7 +18,7 @@ e2e 스크립트의 **단일 권위 목록**이다. 파일 추가/변경/폐기 
 | `blogform.test.mjs` | 상시 | active | BlogForm_BookReview.hwp 누름틀 안내문 | BlogForm_BookReview.hwp | 수동 |  |
 | `body-outside-click-fallback.test.mjs` | 진단 | hold | 보류 ② 본문 외곽 클릭 fallback 결함 — 가설 (b) master page 글상자 hit 확정 e2e | hwpctl_Action_Table__v1.1.hwp | 수동 | legacy-name · 보류② 이슈 종속 |
 | `canvas-render-diff.test.mjs` | 상시 | active | Browser canvas visual diff between the legacy PageRenderTree path  | — | npm+CI |  |
-| `canvaskit-font-coverage.test.mjs` | 상시 | active | CanvasKit 번들 폰트 등록/커버리지 검증 (NotoSansKR) | — | npm+CI |  |
+| `canvaskit-font-coverage.test.mjs` | 상시 | active | CanvasKit 번들 폰트와 exact TTC GlyphRun 등록/픽셀 replay 검증 | — | npm+CI |  |
 | `command-palette.test.mjs` | 상시 | active | /커맨드 팔레트 | — | 수동 |  |
 | `copy-paste.test.mjs` | 상시 | active | 텍스트 블럭 복사/붙여넣기 버그 (Task 227) | — | 수동 |  |
 | `debug-pagination.mjs` | 진단 | active | E2E 디버그: 50줄 입력 후 페이지네이션 확인 | — | 수동 | 수동 디버그 |
