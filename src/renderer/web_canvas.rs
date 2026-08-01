@@ -13,6 +13,7 @@ use wasm_bindgen::JsCast;
 use web_sys::{CanvasRenderingContext2d, HtmlCanvasElement, HtmlImageElement};
 
 use super::layer_renderer::{LayerRenderResult, LayerRenderer};
+use super::partial_replay::{expanded_plain_text_replay_bounds, expanded_text_replay_bounds};
 use super::pua_oldhangul::map_pua_old_hangul;
 use super::render_tree::{
     BoundingBox, EllipseNode, EquationNode, FootnoteMarkerNode, FormObjectNode, ImageNode,
@@ -35,6 +36,25 @@ use crate::paint::{
 };
 
 const TEXT_MARK_CLIP_RIGHT_PAD: f64 = 48.0;
+
+/// Returns a conservative replay envelope for text ops that may be culled.
+/// `None` means fail closed: replay the op and let the Canvas clip decide.
+fn partial_text_replay_bounds(op: &PaintOp) -> Option<BoundingBox> {
+    match op {
+        PaintOp::TextRun { bbox, run } => expanded_text_replay_bounds(
+            *bbox,
+            &run.style,
+            run.rotation,
+            run.is_vertical,
+            run.char_overlap.is_some(),
+        ),
+        PaintOp::FootnoteMarker { bbox, marker } => Some(expanded_plain_text_replay_bounds(
+            *bbox,
+            marker.base_font_size,
+        )),
+        _ => None,
+    }
+}
 
 /// Canvas 폰트의 실측 폭을 레이아웃 advance에 맞출 때 적용할 배율을 계산한다.
 ///
@@ -353,7 +373,8 @@ pub struct WebCanvasRenderer {
     /// [#3137 Stage 4] 기존 Canvas의 좁은 영역만 다시 그릴 때 사용하는 page-space clip.
     ///
     /// full render는 `None`을 유지한다. partial render는 canvas 크기를 바꾸지 않고
-    /// 이 영역만 clear/replay하며, 영역 밖 text op는 Canvas 호출 전에 건너뛴다.
+    /// 이 영역만 clear/replay한다. text op는 layout bbox를 그대로 사용하지 않고
+    /// 보수적인 ink envelope와 겹치지 않을 때만 Canvas 호출 전에 건너뛴다.
     partial_clip: Option<BoundingBox>,
     partial_context_saved: bool,
 }
@@ -1353,22 +1374,16 @@ impl WebCanvasRenderer {
                     if !self.should_render_op(op, active_layer) {
                         continue;
                     }
-                    // 좁은 repaint에서 페이지 밖의 text/glyph 호출까지 브라우저에 넘기면
-                    // clip되어도 font shaping 비용이 남는다. bbox 계약이 명확한 text 계열만
-                    // 보수적으로 cull하고, 배경/선/도형/이미지는 clip 안에서 그대로 재생한다.
-                    if self.partial_clip.is_some_and(|clip| {
-                        matches!(
-                            op,
-                            PaintOp::TextRun { .. }
-                                | PaintOp::GlyphRun { .. }
-                                | PaintOp::GlyphOutline { .. }
-                                | PaintOp::CharOverlap { .. }
-                                | PaintOp::TextControlMark { .. }
-                                | PaintOp::TabLeader { .. }
-                                | PaintOp::TextDecoration { .. }
-                                | PaintOp::FootnoteMarker { .. }
-                        ) && !op.bounds().intersects(&clip)
-                    }) {
+                    // Layout bbox alone does not contain all glyph ink. Cull only plain text
+                    // whose expanded replay envelope is outside the clip; risky effects and
+                    // editor-only text marks fail closed and are always replayed.
+                    if !self.show_paragraph_marks
+                        && !self.show_control_codes
+                        && self.partial_clip.is_some_and(|clip| {
+                            partial_text_replay_bounds(op)
+                                .is_some_and(|bounds| !bounds.intersects(&clip))
+                        })
+                    {
                         continue;
                     }
                     self.render_paint_op(op);

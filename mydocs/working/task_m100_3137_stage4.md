@@ -11,22 +11,22 @@ focused line의 partial repaint로 바꿨다.
 | 항목 | 결과 |
 | --- | ---: |
 | focused geometry / page-tree patch / dirty payload | 800 / 800 / 800 |
-| 실제 partial repaint | 709 |
+| 실제 partial repaint | 713 |
 | full repaint / exact cursor query | 0 / 0 |
 | sync flush / begin / step | 0 / 0 / 0 |
-| stable operation p95 범위 | 0.6–4.1ms |
-| mutation p95 범위 | 0.4–2.3ms |
-| page repaint p95 범위 | 0.8–2.2ms |
-| partial WASM replay p95 범위 | 0.7–1.8ms |
-| input → 2-rAF p95 범위 | 7.8–15.9ms |
+| stable operation p95 범위 | 0.7–1.3ms |
+| mutation p95 범위 | 0.4–0.5ms |
+| page repaint p95 범위 | 1.4–1.6ms |
+| partial WASM replay p95 범위 | 1.3–1.4ms |
+| input → 2-rAF p95 범위 | 8.4–15.6ms |
 | long task | 0 |
 | frame-budget gate | 24 / 24 통과 |
 
-800개 mutation에 대해 repaint가 709회인 것은 0ms cadence와 IME의 여러 mutation이 같은 animation
+800개 mutation에 대해 repaint가 713회인 것은 0ms cadence와 IME의 여러 mutation이 같은 animation
 frame에 합쳐졌기 때문이다. 같은 page의 dirty rect를 합집합으로 만든 뒤 한 번만 그렸으며,
-측정된 repaint 709회는 전부 partial path였다.
+측정된 repaint 713회는 전부 partial path였다.
 
-Stage 3의 `input → 2-rAF` p95 67.8–85.2ms가 최종 7.8–15.9ms로 내려갔다. 따라서 #3137의
+Stage 3의 `input → 2-rAF` p95 67.8–85.2ms가 최종 8.4–15.6ms로 내려갔다. 따라서 #3137의
 stable 입력 범위에서는 동기 cursor와 화면 반영이 모두 16.7ms frame budget 안에 들어왔다.
 
 ## 2. 잔여 지연 분해
@@ -76,10 +76,26 @@ WASM에 `renderPagePatchToCanvasFilteredWithProfile`을 추가했다. 이 API는
 - 기존 Canvas extent가 현재 page와 정확히 같을 때만 실행
 - Canvas 크기와 rect 밖 픽셀을 유지
 - transform을 저장·초기화한 뒤 page-space rect만 clip/clear/replay
-- clip 밖 text/glyph/decorative text op를 Canvas 호출과 font shaping 전에 제거
+- plain `TextRun`/`FootnoteMarker`는 `2 × max(line height, font size)`로 확장한 replay
+  envelope가 clip 밖일 때만 Canvas 호출과 font shaping 전에 제거
+- italic, shadow, outline, emboss/engrave, rotation, vertical text, char overlap처럼 독립적인
+  잉크 범위를 갖는 text와 paragraph/control editor mark는 culling하지 않고 fail-closed replay
 
 배경·선·도형 등 나머지 op는 correctness를 위해 기존 순서로 replay하되 Canvas clip이 실제 변경 영역을
 제한한다. API 오류는 호출자에 반환해 기존 full repaint로 복구한다.
+
+PR #3745 review에서 layout bbox가 실제 glyph ink를 포함한다는 계약이 없다는 점을 보정했다.
+text culling을 전부 제거한 80ms smoke는 정확성에는 안전했지만 focused patch p95 17.6–18.0ms,
+page repaint p95 17.7–18.3ms, `input → 2-rAF` p95 19.8–20.4ms로 6개 시나리오 모두
+frame budget을 넘겼다(gate 0/6). 위 보수적 envelope와 fail-closed 정책은 같은 smoke에서 각각
+1.3–1.4ms, 1.4–1.5ms, 8.3–9.0ms로 6/6을 통과했다. 고정 line box보다 큰 font extent와
+독립 잉크 효과의 culling 금지는 native unit test로 고정했다.
+
+no-cull 비교 산출물은 `output/poc/task3137/pr3745-no-cull-smoke/`에 있으며 production WASM
+SHA-256은 `5640e034517ec42e1df58874dc97e2bcad4c3a550956210e5dc907a69bcc9be7`이다.
+선택 증거인 conservative 80ms smoke는
+`output/poc/task3137/pr3745-conservative-cull-smoke/`에 있다. 두 smoke는 정책 선택을 위한
+비교이고, 최종 canonical 성능 기준은 §6의 24개 행렬이다.
 
 ### 3.3 Studio 전달과 coalescing
 
@@ -114,18 +130,23 @@ full repaint를 유지한다.
 재동기화 지점이다. #2214 trace에서도 첫 입력, 56번째 flow 경계, shadow commit 뒤 exact rect
 갱신은 기존대로 유지됐다.
 
+이 목록은 편집 대상의 focused fast path admission 조건이다. 같은 페이지의 이웃 text에 위험한
+잉크 효과가 있는 경우에는 full-page fallback하지 않고 해당 op를 partial replay에 포함하며,
+최종 변경 영역은 Canvas clip을 authority로 삼는다.
+
 ## 5. 실행 환경
 
 | 항목 | 값 |
 | --- | --- |
-| 브랜치 | `codex/issue-3137-perf-harness` |
-| working-tree HEAD | `16e0840eb3a9a4eb8b971307d44deac4b1131608` + Stage 4 변경 |
+| 브랜치 | `issue-3137-pr-review-fixes` |
+| review 보정 기준 | `23967640f7aaeb991eb1d2d48938b5c4ce469a4c` + text replay 보정 |
+| 측정 worktree | dirty=true, clone 제거 전 culling-fix production WASM |
 | 기준 `upstream/devel` | `ad16eb45799645ea96f3ef533b24fd07320ec476` |
 | Chrome | `150.0.7871.187`, 새 headless 임시 프로필 |
 | Node | `v24.15.0` |
-| production WASM | 7,269,136 bytes |
-| WASM SHA-256 | `a74fb57d1a4fab0b1107f5dca20ac0bb9b432d026722e8a32d86e60ebe60932c` |
-| 최종 성능 결과 | `output/poc/task3137/stage4-final-partial-matrix/` |
+| production WASM | 7,452,527 bytes |
+| WASM SHA-256 | `dfa390f7e9785b4094396567903ef8ae5bfbc5c7a7d8865331991506a0c32cb4` |
+| 최종 성능 결과 | `output/poc/task3137/pr3745-conservative-cull-matrix/` |
 | cache-only 중간 결과 | `output/poc/task3137/stage4-final-full-matrix/` |
 | correctness 결과 | `output/poc/task3137/stage4-partial-issue2214/` |
 
@@ -136,16 +157,17 @@ IME는 `ㅎ → 하 → 한` 20회에 해당하는 60개 event sample을 측정�
 
 | 포맷·입력 | 0ms | 80ms | 150ms | 250ms |
 | --- | ---: | ---: | ---: | ---: |
-| HWP 영문 | 1.1 / 15.0 | 2.1 / 8.6 | 2.1 / 15.1 | 1.8 / 13.7 |
-| HWP 숫자 | 0.9 / 15.4 | 1.9 / 10.0 | 2.0 / 9.7 | 1.8 / 12.8 |
-| HWP IME | 0.8 / 15.9 | 0.8 / 8.7 | 0.9 / 8.5 | 0.8 / 13.8 |
-| HWPX 영문 | 1.0 / 15.0 | 0.9 / 9.1 | 0.8 / 8.5 | 0.9 / 15.7 |
-| HWPX 숫자 | 1.0 / 14.9 | 1.0 / 8.5 | 0.9 / 7.8 | 0.8 / 15.3 |
-| HWPX IME | 0.9 / 15.2 | 0.9 / 8.4 | 1.0 / 8.6 | 2.2 / 13.6 |
+| HWP 영문 | 1.5 / 14.6 | 1.4 / 9.3 | 1.5 / 9.0 | 1.6 / 15.1 |
+| HWP 숫자 | 1.5 / 14.7 | 1.5 / 9.2 | 1.5 / 8.5 | 1.5 / 13.5 |
+| HWP IME | 1.4 / 15.1 | 1.4 / 9.2 | 1.4 / 8.7 | 1.5 / 13.5 |
+| HWPX 영문 | 1.4 / 15.6 | 1.4 / 8.4 | 1.4 / 8.5 | 1.4 / 13.6 |
+| HWPX 숫자 | 1.5 / 14.6 | 1.4 / 8.4 | 1.5 / 8.7 | 1.5 / 13.7 |
+| HWPX IME | 1.5 / 15.0 | 1.4 / 8.4 | 1.4 / 8.5 | 1.5 / 15.2 |
 
 24개 시나리오와 800개 event sample 모두 최종 text, cursor offset, 원본 format, 115쪽,
 deferred mutation 계약을 만족했다. geometry/page-tree patch/dirty payload는 800/800,
-exact cursor query와 동기 pagination 작업은 모두 0회였다.
+frame coalescing 뒤 실제 repaint 713회는 모두 partial이었다. exact cursor query, full repaint,
+long task와 동기 pagination 작업은 모두 0회였다.
 
 단계별 변화는 다음과 같다.
 
@@ -156,8 +178,8 @@ exact cursor query와 동기 pagination 작업은 모두 0회였다.
 | Stage 3 | input → 2-rAF p95 | 67.8–85.2ms |
 | Stage 4 cache patch | full Canvas replay p95 | 17.9–26.1ms |
 | Stage 4 cache patch | input → 2-rAF p95 | 20.5–31.3ms |
-| Stage 4 partial repaint | page repaint p95 | 0.8–2.2ms |
-| Stage 4 partial repaint | input → 2-rAF p95 | 7.8–15.9ms |
+| Stage 4 partial repaint + review 보정 | page repaint p95 | 1.4–1.6ms |
+| Stage 4 partial repaint + review 보정 | input → 2-rAF p95 | 8.4–15.6ms |
 
 ## 7. #2214/#2424 correctness 게이트
 
