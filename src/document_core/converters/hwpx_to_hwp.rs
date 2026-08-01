@@ -684,6 +684,15 @@ fn normalize_picture_geometry_for_hwp(doc: &mut Document) {
         }
     }
 
+    fn walk_drawing(drawing: &mut crate::model::shape::DrawingObjAttr) {
+        if let Some(text_box) = &mut drawing.text_box {
+            walk_paragraphs(&mut text_box.paragraphs);
+        }
+        if let Some(caption) = &mut drawing.caption {
+            walk_caption(caption);
+        }
+    }
+
     fn walk_shape(shape: &mut ShapeObject) {
         // local file version 은 그림뿐 아니라 **모든 개체 요소**가 1 이어야 한다.
         // 한컴 저장본은 예외 없이 1 이고, HWP3 변환본은 도형(`$con`/`$rec` 등)만
@@ -709,17 +718,26 @@ fn normalize_picture_geometry_for_hwp(doc: &mut Document) {
                     walk_caption(caption);
                 }
             }
+            // Chart/OLE은 DrawingObjAttr의 caption과 별개로 HWP3 parser가 채우는
+            // own caption을 가진다. 특히 HWP3 OLE fixup은 picture caption을
+            // `ole.caption`으로 옮긴다. 둘 다 누락하면 0 geometry picture가 남는다.
+            ShapeObject::Chart(chart) => {
+                walk_drawing(&mut chart.drawing);
+                if let Some(caption) = &mut chart.caption {
+                    walk_caption(caption);
+                }
+            }
+            ShapeObject::Ole(ole) => {
+                walk_drawing(&mut ole.drawing);
+                if let Some(caption) = &mut ole.caption {
+                    walk_caption(caption);
+                }
+            }
             _ => {
-                // `drawing_mut`는 Line/Rectangle/Ellipse/Arc/Polygon/Curve뿐 아니라
-                // Chart와 OLE도 포괄한다. 각 개체의 text box와 caption은 모두 동일한
-                // paragraph container이므로 같은 walker로 재귀한다.
+                // Line/Rectangle/Ellipse/Arc/Polygon/Curve의 text box와 caption은
+                // 모두 동일한 paragraph container이므로 같은 walker로 재귀한다.
                 if let Some(drawing) = shape.drawing_mut() {
-                    if let Some(text_box) = &mut drawing.text_box {
-                        walk_paragraphs(&mut text_box.paragraphs);
-                    }
-                    if let Some(caption) = &mut drawing.caption {
-                        walk_caption(caption);
-                    }
+                    walk_drawing(drawing);
                 }
             }
         }
@@ -1988,15 +2006,17 @@ mod tests {
     use super::*;
     use crate::model::paragraph::CharShapeRef;
 
-    /// [#3676] HWP3 parser가 실제로 만드는 중첩 paragraph container(그림/도형/표
-    /// 캡션, HiddenComment, 바탕쪽 글상자)를 모두 건너 문단 직속 그림만 보정하면,
-    /// 한컴은 그 하나의 0 geometry를 이유로 문서 전체를 거부한다. 중첩 그림도
+    /// [#3676] HWP3 parser가 실제로 만드는 그림/도형/표 캡션과 HiddenComment, 그리고
+    /// 공통 adapter가 다루는 바탕쪽 글상자를 모두 건너 문단 직속 그림만 보정하면,
+    /// 한컴은 그 하나의 0 geometry를 이유로 문서 전체를 거부할 수 있다. 중첩 그림도
     /// geometry·crop·local file version 계약을 정확히 받아야 한다.
     #[test]
     fn hwp3_nested_caption_hidden_comment_and_master_page_pictures_are_normalized() {
         use crate::model::control::HiddenComment;
         use crate::model::header_footer::MasterPage;
-        use crate::model::shape::{Caption, GroupShape, OleShape, RectangleShape, TextBox};
+        use crate::model::shape::{
+            Caption, ChartShape, GroupShape, OleShape, RectangleShape, TextBox,
+        };
 
         fn hwp3_picture(
             current_width: u32,
@@ -2092,7 +2112,20 @@ mod tests {
             ..Default::default()
         });
 
-        // 바탕쪽의 OLE 글상자는 DrawingObjAttr 공통 text_box 경로를 사용한다.
+        // Chart는 DrawingObjAttr과 별도로 own caption을 보존한다.
+        let mut chart_caption_para = Paragraph::default();
+        chart_caption_para
+            .controls
+            .push(Control::Picture(Box::new(hwp3_picture(55, 44, 110, 88))));
+        let chart = ChartShape {
+            caption: Some(Caption {
+                paragraphs: vec![chart_caption_para],
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        // 공통 adapter의 바탕쪽 OLE 글상자는 DrawingObjAttr 공통 text_box 경로를 쓴다.
         let mut master_page_text_box_para = Paragraph::default();
         master_page_text_box_para
             .controls
@@ -2100,6 +2133,15 @@ mod tests {
         let mut ole = OleShape::default();
         ole.drawing.text_box = Some(TextBox {
             paragraphs: vec![master_page_text_box_para],
+            ..Default::default()
+        });
+        // HWP3 OLE fixup은 picture caption을 이 own caption 필드에 옮긴다.
+        let mut ole_caption_para = Paragraph::default();
+        ole_caption_para
+            .controls
+            .push(Control::Picture(Box::new(hwp3_picture(45, 35, 90, 70))));
+        ole.caption = Some(Caption {
+            paragraphs: vec![ole_caption_para],
             ..Default::default()
         });
         let master_page = MasterPage {
@@ -2116,6 +2158,7 @@ mod tests {
                     controls: vec![
                         Control::Picture(Box::new(outer_picture)),
                         Control::Shape(Box::new(ShapeObject::Rectangle(rectangle))),
+                        Control::Shape(Box::new(ShapeObject::Chart(Box::new(chart)))),
                     ],
                     ..Default::default()
                 }],
@@ -2181,6 +2224,24 @@ mod tests {
         };
         assert_hancom_picture_contract(hidden_comment_picture, 101, 202, 303, 404);
 
+        let chart = doc.sections[0].paragraphs[0]
+            .controls
+            .iter()
+            .find_map(|control| match control {
+                Control::Shape(shape) => match shape.as_ref() {
+                    ShapeObject::Chart(chart) => Some(chart.as_ref()),
+                    _ => None,
+                },
+                _ => None,
+            })
+            .expect("chart expected");
+        let Control::Picture(chart_caption_picture) =
+            &chart.caption.as_ref().unwrap().paragraphs[0].controls[0]
+        else {
+            panic!("picture expected inside chart caption");
+        };
+        assert_hancom_picture_contract(chart_caption_picture, 55, 44, 110, 88);
+
         let Control::Shape(ole) =
             &doc.sections[0].section_def.master_pages[0].paragraphs[0].controls[0]
         else {
@@ -2195,6 +2256,12 @@ mod tests {
             panic!("picture expected inside master-page OLE text box");
         };
         assert_hancom_picture_contract(master_page_picture, 70, 60, 140, 120);
+        let Control::Picture(ole_caption_picture) =
+            &ole.caption.as_ref().unwrap().paragraphs[0].controls[0]
+        else {
+            panic!("picture expected inside HWP3 OLE caption");
+        };
+        assert_hancom_picture_contract(ole_caption_picture, 45, 35, 90, 70);
     }
 
     #[test]
