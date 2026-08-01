@@ -326,7 +326,7 @@ fn set_cell_envelope_carries_keep_style_and_overflow_text() {
         serde_json::json!({"docId": d, "table": 0, "row": 0, "col": 0, "text": "기본"}),
     );
     assert!(!err, "{d2}");
-    assert_eq!(v["keepStyle"].is_boolean(), true, "{v}");
+    assert!(v["keepStyle"].is_boolean(), "{v}");
     assert_eq!(d2["keepStyle"], serde_json::json!(false), "{d2}");
 
     // 넘치는 값을 넣어 overflow 를 강제하고 CLI 와 키 집합을 대조한다.
