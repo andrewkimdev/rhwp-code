@@ -344,3 +344,56 @@ fn session_fill_repaginates_page_vocabulary() {
 
     let _ = std::fs::remove_file(&out);
 }
+
+/// 저장은 스냅숏이다. HWP3 핸들은 저장 뒤에도 같은 본문·메타를 유지하고 연속 저장은
+/// 같은 바이트를 내며, 뒤이은 편집도 가능해야 한다.
+#[test]
+fn session_save_does_not_mutate_live_handle_hwp3_source() {
+    let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("samples/hwp3-sample.hwp");
+    if !src.exists() {
+        eprintln!("HWP3 샘플 없음 — 건너뜀");
+        return;
+    }
+    let mut s = Server::started();
+    let doc_id = s.open(&src);
+    let (err, before) = s.call("hwp_doc_text", serde_json::json!({"docId": doc_id}));
+    assert!(!err, "{before}");
+    let (err, info_before) = s.call("hwp_doc_info", serde_json::json!({"docId": doc_id}));
+    assert!(!err, "{info_before}");
+
+    let out = temp_path("hwp3snap", "hwp");
+    let (err, sv) = s.call(
+        "hwp_doc_save",
+        serde_json::json!({"docId": doc_id, "output": out.to_str().unwrap()}),
+    );
+    assert!(!err, "{sv}");
+    assert_eq!(sv["outputFormat"], "hwp5", "{sv}");
+
+    let (err, after) = s.call("hwp_doc_text", serde_json::json!({"docId": doc_id}));
+    assert!(!err, "{after}");
+    let (err, info_after) = s.call("hwp_doc_info", serde_json::json!({"docId": doc_id}));
+    assert!(!err, "{info_after}");
+    assert_eq!(before, after, "저장이 핸들의 본문을 바꿨습니다");
+    assert_eq!(info_before, info_after, "저장이 핸들의 메타를 바꿨습니다");
+
+    let out2 = temp_path("hwp3snap2", "hwp");
+    let (err, sv2) = s.call(
+        "hwp_doc_save",
+        serde_json::json!({"docId": doc_id, "output": out2.to_str().unwrap()}),
+    );
+    assert!(!err, "{sv2}");
+    assert_eq!(
+        std::fs::read(&out).expect("1차 산출물"),
+        std::fs::read(&out2).expect("2차 산출물"),
+        "연속 저장이 서로 다른 바이트를 냈습니다 — 저장이 상태를 남겼다는 뜻입니다"
+    );
+
+    let (err, rep) = s.call(
+        "hwp_doc_replace_text",
+        serde_json::json!({"docId": doc_id, "find": "그림", "replace": "그림"}),
+    );
+    assert!(!err, "저장 후 편집이 실패했습니다: {rep}");
+
+    let _ = std::fs::remove_file(&out);
+    let _ = std::fs::remove_file(&out2);
+}
