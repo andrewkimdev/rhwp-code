@@ -6399,10 +6399,22 @@ impl LayoutEngine {
                     outline_numbering_id,
                 );
                 let level = para_style.para_level;
-                if numbering_id == 0 {
-                    return None;
-                }
-                let numbering = styles.numberings.get((numbering_id - 1) as usize)?;
+                // [#3307] 개요 문단이 유효한 정의에 도달하지 못하면 한컴 내장
+                // 기본 모양(전 수준 ^N)으로 fallback 한다. NUMBER 는 불변 —
+                // 정의 없는 NUMBER 는 종전대로 번호를 그리지 않는다.
+                let synthesized_default;
+                let numbering = match numbering_id
+                    .checked_sub(1)
+                    .and_then(|i| styles.numberings.get(i as usize))
+                {
+                    Some(n) => n,
+                    None if para_style.head_type == HeadType::Outline => {
+                        synthesized_default =
+                            crate::renderer::layout::utils::default_outline_numbering();
+                        &synthesized_default
+                    }
+                    None => return None,
+                };
 
                 let counters = self.numbering_state.borrow_mut().advance(
                     numbering_id,
