@@ -5,7 +5,10 @@ rhwp 는 자기가 쓴 파일을 읽을 수 있으므로 왕복 정합을 rhwp �
 "완벽" 으로 보인다. 실제 판정은 한컴이 여는지다.
 
 한글 COM 은 open 실패 뒤 인스턴스가 죽어 다음 측정을 오염시킨다 —
-**문서 1건당 프로세스 1개**로 격리하고, 사이에 프로세스를 정리한다.
+**문서 1건당 새 프로세스 1개**로 격리한다. 이 도구는 기존 한글 세션에
+접속하거나 다른 한글 프로세스를 종료하지 않는다. 개별 검사 timeout 은
+검사 자식 프로세스만 끝내며, COM 서버 정리는 정상 종료 경로의 ``quit()`` 에
+맡긴다.
 
 사용:
   python tools/hwp3_convert_openable.py --exe <rhwp.exe> --list <hwp3목록.txt> [--limit N] [--out t.tsv]
@@ -17,7 +20,6 @@ import io
 import os
 import subprocess
 import sys
-import time
 
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
@@ -25,7 +27,11 @@ sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 def child(src, dst):
     """한 문서만 열어 결과를 한 줄로 찍는다. 실패해도 부모는 살아남는다."""
     from pyhwpx import Hwp
-    hwp = Hwp(visible=False)
+
+    # pyhwpx 의 기본값(new=False)은 실행 중인 한글 COM 인스턴스에 연결할 수 있다.
+    # 이 작업자는 자신이 만든 인스턴스만 quit 해야 하므로 새 hidden 인스턴스를
+    # 명시한다.
+    hwp = Hwp(new=True, visible=False)
     try:
         ok = bool(hwp.open(dst))
         pages = hwp.PageCount if ok else -1
@@ -40,10 +46,20 @@ def child(src, dst):
             pass
 
 
-def kill_hangul():
-    for image in ("Hwp.exe", "HwpApp.exe"):
-        subprocess.run(["taskkill", "/F", "/IM", image],
-                       capture_output=True, shell=False)
+def run_child(src, dst, timeout):
+    """분리된 검사 자식을 실행하고, timeout이면 그 자식만 중단한다.
+
+    전역 image-name 종료는 사용자의 열린 한글 문서까지 손상시킬 수 있으므로
+    의도적으로 하지 않는다. timeout 뒤 COM 서버가 남는 환경에서는 격리된
+    검증 호스트를 정리한 뒤 다시 실행해야 한다.
+    """
+    try:
+        p = subprocess.run([sys.executable, __file__, "--child", src, dst],
+                           capture_output=True, text=True, encoding="utf-8",
+                           errors="replace", timeout=timeout)
+    except subprocess.TimeoutExpired:
+        return None
+    return p.stdout
 
 
 def main():
@@ -77,19 +93,11 @@ def main():
                          "src_pages": ""})
             print(f"[{i}/{len(docs)}] {name[:44]:44} 변환실패", flush=True)
             continue
-        kill_hangul()
-        time.sleep(9)
         # [함정] 한글이 특정 문서에서 응답 없이 멈춘다(모달 대기 추정). 문서 하나의
-        # hang 이 전체 실행을 죽이지 않도록 개별로 잡고 프로세스를 정리한다.
-        try:
-            p = subprocess.run([sys.executable, __file__, "--child", src, dst],
-                               capture_output=True, text=True, encoding="utf-8",
-                               errors="replace", timeout=a.child_timeout)
-            out = p.stdout
-        except subprocess.TimeoutExpired:
-            kill_hangul()
-            time.sleep(5)
-            out = ""
+        # hang 이 전체 실행을 죽이지 않도록 개별 자식만 timeout 처리한다. 기존
+        # 한글 프로세스에는 접속하거나 종료하지 않는다.
+        out = run_child(src, dst, a.child_timeout)
+        if out is None:
             print(f"[{i}/{len(docs)}] {name[:44]:44} HANG(무응답)", flush=True)
             rows.append({"sample": name, "convert": 1, "open": "hang",
                          "pages": "", "src_pages": ""})
