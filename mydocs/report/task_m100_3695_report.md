@@ -4,7 +4,8 @@
 - **상위 이슈**: [#1528](https://github.com/edwardkim/rhwp/issues/1528)
 - **선행 작업**: [#3693](https://github.com/edwardkim/rhwp/issues/3693), [PR #3715](https://github.com/edwardkim/rhwp/pull/3715), merge commit `fe9749d542f46643e408c23878229c326e341363`
 - **브랜치**: `codex/issue-3695-export-structure-auto`
-- **상태**: 최신 `devel` 통합·PR 전 전체 검증 완료, 원격 push·PR 승인 대기
+- **Draft PR**: [#3749](https://github.com/edwardkim/rhwp/pull/3749)
+- **상태**: 최신 `devel` `cc3829116` 재동기화·focused 검증 완료, PR CI·리뷰 대기
 
 ## 0. 절차 복구 결과
 
@@ -53,7 +54,7 @@ focused 재검증을 수행했다. 작업지시자가 그 결과를 검토해 `8
 - #3695 auto 정책 통합: 8 passed
 - #3693 clause 실문서 회귀: 3 passed
 - export-structure CLI JSON 계약: 4 passed
-- 전체 release-test: 406 test binaries, 4,480 passed / 0 failed / 26 ignored
+- 전체 release-test(`fe9749d54` 통합 트리): 406 test binaries, 4,480 passed / 0 failed / 26 ignored
 - fmt, clippy `-D warnings`, diff check: 통과
 
 모든 Cargo 실행은 `CARGO_INCREMENTAL=0`으로 순차 수행했다. 신규 테스트의 red 기준은 5 passed /
@@ -67,9 +68,15 @@ Stage 3에서 `upstream/devel` `fe9749d54`를 WIP 감사 이력을 유지하는 
 대비 net diff는 기존 #3695의 9개 파일·593 insertions/19 deletions 범위와 일치하며, #3715의 clause
 marker·문맥 테스트와 #3695 selector 테스트가 focused·전체 프로필에서 함께 통과했다.
 
+draft PR #3749 생성 직후 `devel`이 PR #3742 merge로 `cc3829116`까지 전진해 GitHub가 conflict를
+보고했다. 최신 base를 다시 merge한 결과 소스 충돌은 없었고, add/add 오늘할일 문서만 양쪽 내용을
+보존해 해결했다. 이 최신 결합 트리에서 structure 6건, #3695 8건, #3693 3건, CLI JSON 4건과 fmt,
+diff check, clippy를 다시 통과했다. 전체 release-test는 직전 `fe9749d54` 통합 트리의 결과이고,
+`cc3829116` 자체는 PR #3742의 full CI를 통과했으며 최종 결합은 PR #3749 CI에서 다시 검증한다.
+
 ## 5. 호환성과 남은 작업
 
 - `8343c98c6`은 작업지시자 승인으로 #3695 구현에 채택됐다.
 - PR 전 full release-test는 최신 `devel` 통합 트리에서 완료했다.
-- 원격 push·PR 생성과 GitHub CI는 다음 승인 뒤 수행한다.
+- draft PR #3749를 생성했고 최신 base 동기화 head의 GitHub CI·리뷰를 기다린다.
 - #3695를 merge해도 후속 #3744와 최종 통합 검증 전에는 상위 #1528을 close하지 않는다.

@@ -5,8 +5,9 @@
 - **선행 작업**: #3693, PR #3715, merge commit `fe9749d542f46643e408c23878229c326e341363`
 - **브랜치**: `codex/issue-3695-export-structure-auto`
 - **수행계획서**: `mydocs/plans/task_m100_3695.md`
-- **절차 상태**: Stage 3 최신 `devel` 통합·PR 전 전체 검증 완료
-- **다음 승인 경계**: 원격 push·PR 생성
+- **절차 상태**: Stage 4 PR head 최신 `devel` 재동기화·focused 검증 완료
+- **Draft PR**: [#3749](https://github.com/edwardkim/rhwp/pull/3749)
+- **다음 승인 경계**: PR 최신 CI·리뷰와 ready/merge 판정
 - **WIP 증적**: `8343c98c6`
 
 ## 복구 적용 원칙
@@ -63,6 +64,13 @@
 3. focused 검증 뒤 `cargo test --profile release-test --tests`, fmt, diff check, clippy를 순차 실행한다.
 4. 새 Stage 3 보고서와 최종 보고서를 갱신해 로컬 merge commit에 포함한다.
 5. 원격 push와 PR 생성은 작업지시자 승인 뒤 수행한다.
+
+## Stage 6 — PR head base drift 동기화
+
+1. draft PR #3749 생성 뒤 최신 `upstream/devel`을 다시 fetch한다.
+2. PR #3742 merge로 전진한 `cc3829116`을 merge하고 충돌을 양쪽 기록 보존 방식으로 해결한다.
+3. 결합 경계인 structure, #3695, #3693, CLI JSON focused 테스트와 fmt·diff·clippy를 재실행한다.
+4. Stage 4 보고와 PR 본문을 실제 검증 기준에 맞춰 갱신한 뒤 head를 push한다.
 
 ## 비적용
 

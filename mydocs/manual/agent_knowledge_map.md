@@ -32,7 +32,7 @@ rhwp 를 도구로 부리는 AI 에이전트·스크립트가 **첫 번째로 �
 | 표 기록 — 격자 좌표 | `export-tables` → `edit set-cell` (`hwp_set_cell`) | `overflow`·`oldText`/`newText` | [서식 가이드 §2](form_filling_guide.md#2-set-cell-심화) |
 | 치환 — 문구 일괄 교체 | `edit replace-text` → `search` 재독 (`hwp_replace_text`) | `replacedCount` | [서식 가이드 §3](form_filling_guide.md#3-replace-text-심화) |
 | 생성 — JSON 명세 → HWPX | `build-from-ingest` (`hwp_build_from_ingest`) | 재독 대조(`export-text`) | [CLI 매뉴얼](cli_commands.md) §build-from-ingest, [예제집 5](agent_task_playbook.md) |
-| 대량 — 아카이브 스윕 | `batch` 6축 NDJSON (`hwp_batch`·`hwp_batch_search`) | 레코드별 `error`·`exitClass` | [JSON 파이프라인 가이드](cli_json_pipeline_guide.md) |
+| 대량 — 아카이브 스윕 | `batch` 7축 NDJSON — 읽기 6축은 `hwp_batch`·`hwp_batch_search`, 쓰기 `convert`는 CLI 전용 | 레코드별 `error`·`exitClass` | [JSON 파이프라인 가이드](cli_json_pipeline_guide.md) |
 | 세션 — 재파싱 없는 반복 | `mcp-serve` 전용: `hwp_open` → `hwp_doc_*` → `hwp_doc_save`/`hwp_close` | `docId` 핸들 | [MCP 가이드 §세션](mcp_integration_guide.md#세션-도구--재파싱-없는-반복-조회-서버-전용) |
 
 온보딩은 명령 추측이 아니라 자기서술로 한다: `rhwp capabilities` 1회 호출로 전
@@ -89,6 +89,9 @@ rhwp 를 도구로 부리는 AI 에이전트·스크립트가 **첫 번째로 �
 
 - **페이지는 0 기준**: `-p`, `search` 의 `matches[].page`, `export-text` 의
   `pages[].page` 가 전부 같은 좌표계다. 사람에게 보여줄 때만 +1 한다.
+  - **예외 하나 — `extract-pages` 의 `--from`/`--to` 는 1 기준이다**(첫 쪽이 1).
+    다른 축의 값을 그대로 옮기면 **오류 없이 한 쪽 밀린 문서**가 나온다.
+    `search` 가 `page: 1`(2쪽)을 줬다면 잘라 낼 때는 `--from 2 --to 2` 다.
 - **반복 필드는 `이름[N]`**: 같은 이름이 여러 번 나오는 서식은 0 기준 순번으로
   지목한다. 순번은 `fields --json` 목록 순서와 같다 (#3476).
 - **표 격자 좌표는 `export-tables` 와 동형**: `edit set-cell` 의
