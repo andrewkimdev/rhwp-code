@@ -100,5 +100,5 @@ LFS 사전 판독에서도 새 LFS object 또는 변경 경로가 없었다.
 - MCP password는 의도적으로 argv에 넣지 않는다. `passwordStdin` 계약을 검증해
   프로세스 목록 노출을 막는다.
 
-**현재 권고: draft 유지.** 최신 `dce827e96` head의 CI가 모두 통과하고, merge 직전
-mergeability 및 source PR head 변동을 다시 확인한 뒤 작업지시자 승인 범위에서 ready/merge를 판단한다.
+**현재 권고: merge 보류.** 최신 PR head의 CI가 모두 통과하고, merge 직전 mergeability 및
+source PR head 변동을 다시 확인한 뒤 작업지시자 승인 범위에서 merge를 판단한다.
