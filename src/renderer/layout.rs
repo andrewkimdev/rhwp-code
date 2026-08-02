@@ -7236,7 +7236,13 @@ impl LayoutEngine {
                 };
                 let allow_para_top_bleed =
                     is_current_visible_para_float && signed_hwpunit(t.common.vertical_offset) < 0;
-                let outer_host_stored_vpos_hu = if self.profile.get().native_hwp5_layout() {
+                // 이월된 빈 RowBreak 그림 표의 stale negative picture offset은 native
+                // HWP5와 original HWPX 모두 outer host의 저장 vpos가 있어야만 정확히
+                // page-local top으로 정규화할 수 있다. nested/header/footer 호출은 아래
+                // 인자 경로에서 계속 None으로 제한된다 (#3738).
+                let outer_host_stored_vpos_hu = if self.profile.get().native_hwp5_layout()
+                    || self.profile.get().hwpx_stored_layout()
+                {
                     para.line_segs
                         .iter()
                         .find(|seg| {
