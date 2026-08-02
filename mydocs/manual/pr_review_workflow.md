@@ -149,6 +149,19 @@ CI가 끝난 뒤 또는 contributor가 새 commit을 push한 뒤에는 head SHA,
 PR review 문서는 merge 후에도 모순되지 않아야 한다. draft, mergeable, head SHA, CI 상태는
 작성 시점 참고값으로만 적고, 최종 조건에는 항상 최신 head의 CI와 작업지시자 승인을 둔다.
 
+### 4.1 완료한 검증의 시제
+
+로컬 CI 성격의 검증(Cargo, npm, lint, fixture, 시각 검증)을 이미 실행해 종료 결과를 얻었다면,
+review 문서에는 계획형이나 미래형으로 쓰지 않는다. 실행한 명령, 대상 head, 결과를 과거형 사실로
+기록한다.
+
+- 올바른 예: "`cargo test --profile release-test --tests`를 실행해 통과했다."
+- 잘못된 예: "PR 전에 전체 테스트를 실행할 예정이다."
+
+아직 실행하지 않은 GitHub Actions, contributor의 새 push, 작업지시자 승인 뒤의 ready 전환·merge·
+후속 정리는 미래 조건으로 분리해 적을 수 있다. 완료된 로컬 결과와 대기 중인 외부 조건을 한 문장에
+섞어 검증 상태가 불명확해지지 않게 한다.
+
 review 문서 경로, review_impl 작성 조건, 사전 판단 report의 범위는 선택한 기본 경로와
 [PR 접수와 리뷰 기록](pr_review/intake_and_review.md)을 따른다. 시각 검증을 실제 판단 근거로 사용하면
 임시 output 경로만 남기지 말고, 대표 review PNG를 mydocs/pr/assets 아래 안정 경로에 보존한 뒤

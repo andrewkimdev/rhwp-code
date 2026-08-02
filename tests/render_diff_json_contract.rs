@@ -117,6 +117,11 @@ fn render_diff_json_roundtrip_envelope_contract() {
     }
     assert_eq!(v["status"], "PASS", "{v}");
     assert_eq!(v["regression"], false, "{v}");
+    assert_eq!(
+        v["untrustedContent"], false,
+        "기하 진단 봉투에는 본문이 없습니다: {v}"
+    );
+    assert_eq!(v["untrustedFields"], serde_json::json!([]), "{v}");
 
     let pages = v["pages"].as_array().expect("pages 는 배열");
     assert_eq!(
