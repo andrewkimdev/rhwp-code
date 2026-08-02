@@ -269,6 +269,8 @@ fn main() {
         Some("export-hwpx") => exit_with(export_hwpx(&args[2..])),
         Some("export-hml") => export_hml(&args[2..]),
         Some("export-doclang") => exit_with(export_doclang(&args[2..])),
+        Some("export-ir-schema") => exit_with(cmd_export_ir_schema(&args[2..])),
+        Some("export-capabilities-schema") => exit_with(cmd_export_capabilities_schema(&args[2..])),
         Some("capabilities") => exit_with(show_capabilities(&args[2..])),
         Some("mcp-serve") => exit_with(mcp_serve::run(&args[2..])),
         Some("batch") => exit_with(run_batch(&args[2..])),
@@ -284,8 +286,10 @@ fn main() {
         Some("convert") => exit_with(convert_hwp(&args[2..])),
         Some("extract-pages") => exit_with(extract_pages(&args[2..])),
         Some("build-from-ingest") => exit_with(build_from_ingest(&args[2..])),
-        Some("hwp5-inventory") => rhwp::diagnostics::hwp5_inventory::run(&args[2..]),
-        Some("hwp5-inventory-diff") => rhwp::diagnostics::hwp5_inventory_diff::run(&args[2..]),
+        Some("hwp5-inventory") => exit_with(rhwp::diagnostics::hwp5_inventory::run(&args[2..])),
+        Some("hwp5-inventory-diff") => {
+            exit_with(rhwp::diagnostics::hwp5_inventory_diff::run(&args[2..]))
+        }
         Some("hwp5-contract-analyze") => {
             exit_with(rhwp::diagnostics::hwp5_contract_analyze::run(&args[2..]))
         }
@@ -305,7 +309,9 @@ fn main() {
         Some("hwp5-first-para-control-probe") => exit_with(
             rhwp::diagnostics::hwp5_first_para_control_probe::run(&args[2..]),
         ),
-        Some("hwp5-anchor-trace") => rhwp::diagnostics::hwp5_anchor_trace::run(&args[2..]),
+        Some("hwp5-anchor-trace") => {
+            exit_with(rhwp::diagnostics::hwp5_anchor_trace::run(&args[2..]))
+        }
         Some("hwp5-cell-header-probe") => {
             exit_with(rhwp::diagnostics::hwp5_cell_header_probe::run(&args[2..]))
         }
@@ -940,6 +946,26 @@ fn mcp_tool_definitions() -> Vec<serde_json::Value> {
             ]),
             &["schemaVersion", "source", "table", "row", "col", "oldText", "newText", "dryRun", "overflow", "output", "outputFormat", "changedPages"],
         ),
+        tool_with_optional_args(
+            "hwp_export_ir_schema",
+            "[#3762] 공개 문서 IR 의 JSON Schema 를 돌려준다. capabilities 가 *명령 표면*의 자기서술이라면 이것은 *문서 모델*의 자기서술이다 — 표·문단·누름틀·컨트롤이 어떤 모양인지 기계가 읽을 수 있다. 문서를 입력으로 받지 않는다(타입의 서술이지 특정 문서의 속성이 아니다). 외부 바인딩·코드 생성기가 단일 출처로 쓴다.",
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "bare": {
+                        "type": "boolean",
+                        "description": "참이면 봉투 없이 스키마 본문만 (JSON Schema 도구에 바로 먹일 때)"
+                    }
+                },
+                // 문서를 받지 않으므로 필수 인자가 없다 — 그래도 빈 배열을 선언한다.
+                // 소비자가 required 의 부재와 "필수 없음"을 구분할 수 없으면 안 된다.
+                "required": [],
+            }),
+            "export-ir-schema",
+            serde_json::json!(["export-ir-schema", "--json"]),
+            serde_json::json!([{ "when": "bare", "args": ["--bare"] }]),
+            &["schemaVersion", "irSchemaVersion", "dialect", "definitionCount", "schema"],
+        ),
         tool(
             "hwp_run_plan",
             "[#3703] 선언적 편집 계획(JSON)을 정적 선검증→원자 실행→저널로 수행한다. 도구 호출을 체이닝하는 대신 의도를 계획서 하나로 선언하면, 전 step 의 실행 가능성을 미리 판정하고(불가 시 실행 0·invalid[]·exit 2) 인메모리로 적용해 단언(verify 자기검증) 통과 시에만 단 한 번 저장한다 — 실패 시 디스크 무변경. fill_fields step 은 화면상 구별되지 않는 필드 이름을 steps[].confusable 로 경고한다. steps: fill_fields{data} · replace_text{find,replace[,occurrence]} · set_cell{table,row,col,text[,keepStyle]} · set_checkbox{occurrence}.",
@@ -948,14 +974,57 @@ fn mcp_tool_definitions() -> Vec<serde_json::Value> {
                 "properties": {
                     "plan": {
                         "type": "object",
-                        "description": "계획서. { planVersion:\"1.0\", input:<원본 경로>, output:<산출 경로>, steps:[{action:…}…], assertions:{ notFoundEmpty?, verify? } }"
+                        "description": "계획서. { planVersion:\"1.0\", input:<원본 경로>, output:<산출 경로>, steps:[{action:…}…], assertions:{ notFoundEmpty?, verify? }, dryRun?:true } — dryRun:true 면 선검증만 하고 preview 저널을 낸다(디스크 무변경). 계획을 실행 전에 검사할 때 쓴다."
                     }
                 },
                 "required": ["plan"],
             }),
             "run",
             serde_json::json!(["run", "--plan-json", "{plan}", "--json"]),
-            &["schemaVersion", "planVersion", "input", "output", "outputFormat", "steps", "steps[].confusable", "verify", "invalid", "changedPages"],
+            &["schemaVersion", "planVersion", "input", "output", "outputFormat", "steps", "steps[].confusable", "verify", "invalid", "changedPages", "dryRun", "preview"],
+        ),
+        tool_with_optional_args(
+            "hwp_export_capabilities_schema",
+            "[#3776] capabilities 자기서술 **자체**의 JSON Schema 를 돌려준다. capabilities 가 명령 표면을 설명한다면 이것은 그 설명의 모양을 설명한다 — 외부 바인딩·코드 생성기가 commands[].recordFields·flags·exitCodes 를 안전하게 읽으려면 이 모양이 고정돼야 한다. 문서를 입력으로 받지 않는다(명령 표면의 서술이지 특정 문서의 속성이 아니다). 봉투는 capabilities 스키마(schema)와 capabilities --mcp 매니페스트 스키마(mcpSchema)를 함께 싣는다.",
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "bare": {
+                        "type": "boolean",
+                        "description": "참이면 봉투 없이 capabilities 스키마 본문만 (JSON Schema 도구에 바로 먹일 때)"
+                    }
+                },
+                // 문서를 받지 않으므로 필수 인자가 없다 — 그래도 빈 배열을 선언한다.
+                // 소비자가 required 의 부재와 "필수 없음"을 구분할 수 없으면 안 된다.
+                "required": [],
+            }),
+            "export-capabilities-schema",
+            serde_json::json!(["export-capabilities-schema", "--json"]),
+            serde_json::json!([{ "when": "bare", "args": ["--bare"] }]),
+            &["schemaVersion", "capabilitiesSchemaVersion", "dialect", "definitionCount", "schema", "mcpSchema"],
+        ),
+        tool_with_optional_args(
+            "hwp_render_diff",
+            "두 렌더의 페이지별 bbox 변위(px)를 재어 시각 회귀를 판정한다. pathB 를 주면 두 문서 직접 비교, 없으면 자기 라운드트립(원본 IR vs 직렬화→재로드 IR, via 로 경유 포맷 선택)이다. 판정은 status(PASS/WARN_TEXTRUN/OVER/STRUCT_MISMATCH/PAGE_MISMATCH)와 regression 으로 읽고, maxDisp·pages[].topDeltas 로 어디가 얼마나 밀렸는지 좁힌다. 회귀를 찾으면 종료 코드 3 이지만 봉투는 정상 산출된다(도구 실패가 아니라 검출이다).",
+            path_schema(serde_json::json!({
+                "pathB": { "type": "string", "description": "비교 대상 문서 경로. 주면 pair 모드(라운드트립 아님), 생략하면 자기 라운드트립" },
+                "via": { "type": "string", "enum": ["hwpx", "hwp"], "description": "자기 라운드트립 경유 포맷. 기본 hwpx. pathB 를 준 pair 모드에서는 무의미하다" },
+                "page": { "type": "integer", "minimum": 0, "description": "특정 페이지만 (0 기준). 비교 범위 밖이면 usage error(2)" },
+                "maxDisp": { "type": "number", "minimum": 0, "description": "변위 임계값(px). 기본 1.0 — 초과 페이지가 있으면 status=OVER" }
+            })),
+            "render-diff",
+            serde_json::json!(["render-diff", "--json", "{path}"]),
+            serde_json::json!([
+                { "when": "pathB", "args": ["{pathB}"] },
+                { "when": "via", "args": ["--via", "{via}"] },
+                { "when": "page", "args": ["-p", "{page}"] },
+                { "when": "maxDisp", "args": ["--max-disp", "{maxDisp}"] }
+            ]),
+            &[
+                "schemaVersion", "mode", "sourceA", "sourceB", "via", "pageFilter", "threshold",
+                "pageCountA", "pageCountB", "pageCountMismatch", "maxDisp", "worstPage",
+                "overPages", "structPages", "hardStructPages", "status", "regression", "pages",
+            ],
         ),
     ];
     for definition in &mut tools {
@@ -1065,11 +1134,19 @@ fn capabilities_command_entries() -> Vec<serde_json::Value> {
             ],
         ),
         cmd_json(
+            "export-ir-schema",
+            "export",
+            "공개 IR 의 JSON Schema 산출 — 외부 바인딩 코드 생성의 단일 출처 (#3762)",
+            false,
+            &["--json", "--bare", "-o"],
+            &["schemaVersion", "irSchemaVersion", "dialect", "definitionCount", "schema"],
+        ),
+        cmd_json(
             "run",
             "edit",
             "선언적 편집 계획 실행 — 정적 선검증·원자 실행·저널 (#3703)",
             false,
-            &["--json", "--plan-json"],
+            &["--json", "--plan-json", "--dry-run"],
             &[
                 "schemaVersion",
                 "planVersion",
@@ -1199,6 +1276,21 @@ fn capabilities_command_entries() -> Vec<serde_json::Value> {
                 "assetsDir",
                 "assetCount",
                 "lossCount",
+            ],
+        ),
+        cmd_json(
+            "export-capabilities-schema",
+            "export",
+            "capabilities 자기서술 자체의 JSON Schema 산출 — 명령 표면 코드 생성의 단일 출처 (#3776)",
+            false,
+            &["--json", "--bare", "-o"],
+            &[
+                "schemaVersion",
+                "capabilitiesSchemaVersion",
+                "dialect",
+                "definitionCount",
+                "schema",
+                "mcpSchema",
             ],
         ),
         cmd_json(
@@ -1413,10 +1505,32 @@ fn capabilities_command_entries() -> Vec<serde_json::Value> {
                 "categories",
             ],
         ),
-        cmd(
+        cmd_json(
             "render-diff",
             "diagnostic",
-            "왕복/두 파일 렌더 기하 차이 검증",
+            "왕복/두 파일 렌더 기하 차이 검증 — --json 회귀 검출은 exit 3 (--batch 는 NDJSON)",
+            false,
+            &["--json", "--batch", "--via", "-p", "--max-disp", "-o"],
+            &[
+                "schemaVersion",
+                "mode",
+                "sourceA",
+                "sourceB",
+                "via",
+                "pageFilter",
+                "threshold",
+                "pageCountA",
+                "pageCountB",
+                "pageCountMismatch",
+                "maxDisp",
+                "worstPage",
+                "overPages",
+                "structPages",
+                "hardStructPages",
+                "status",
+                "regression",
+                "pages",
+            ],
         ),
         cmd("hwpx-roundtrip", "diagnostic", "HWPX 왕복 무손실 게이트"),
         cmd("hwp5-roundtrip", "diagnostic", "HWP5 왕복 무손실 게이트"),
@@ -1566,7 +1680,7 @@ fn show_capabilities(args: &[String]) -> i32 {
             "0": "성공",
             "1": "런타임 실패 (읽기·파싱·렌더·쓰기)",
             "2": "사용법 오류 (인자 없음, 알 수 없는 옵션/명령, 페이지 범위 초과)",
-            "3": "검증 단언 실패 — convert/export-hwpx --verify IR 차이, edit 3종 --verify 저장본 불일치, run 계획 assertions 미충족",
+            "3": "검증 단언 실패 — convert/export-hwpx --verify IR 차이, edit 3종 --verify 저장본 불일치, run 계획 assertions 미충족, render-diff --json 시각 회귀 검출(사람 모드는 종전대로 1)",
             "4": "--verify-pages 페이지 수 불일치 (convert/export-hwpx)",
         },
         "jsonContract": {
@@ -1785,6 +1899,13 @@ fn print_help() {
     println!();
     println!("      --mcp                   MCP 도구 정의(name/description/inputSchema) 출력");
     println!();
+    println!("  export-capabilities-schema [--bare] [-o <파일>] [--json]");
+    println!("      capabilities 자기서술 자체의 JSON Schema 출력 — 바인딩 코드 생성의 단일 출처");
+    println!();
+    println!("      --bare                  봉투 없이 capabilities 스키마 본문만 출력");
+    println!("      -o, --out <파일>        스키마를 파일로 저장 (생략 시 stdout)");
+    println!("      --json                  -o 와 함께 쓰면 저장 결과를 JSON 봉투로 보고");
+    println!();
     println!("  mcp-serve");
     println!("      MCP 서버 실행 (stdio JSON-RPC) — AI 에이전트 호스트가 도구로 연결 (#3140)");
     println!("      capabilities --mcp 의 도구 전부 + 세션(hwp_open/hwp_doc_text/hwp_close)");
@@ -1870,12 +1991,16 @@ fn print_help() {
     println!("  hwp5-roundtrip <파일.hwp | --batch 폴더> [-o <출력폴더>]");
     println!("      HWP5 → IR → HWP5 roundtrip 무손실 검증 (Task #1552)");
     println!("      재조립 .rt.hwp와 inventory.tsv를 출력 폴더(기본 output/poc/task1552)에 생성");
-    println!("  render-diff <파일> [--via hwpx|hwp] [-p <페이지>] [--max-disp <px>]");
-    println!("  render-diff <파일A> <파일B> [-p <페이지>] [--max-disp <px>]");
-    println!("  render-diff --batch <폴더> [--via hwpx] [-o <출력폴더>] [--max-disp <px>]");
+    println!("  render-diff <파일> [--via hwpx|hwp] [-p <페이지>] [--max-disp <px>] [--json]");
+    println!("  render-diff <파일A> <파일B> [-p <페이지>] [--max-disp <px>] [--json]");
+    println!(
+        "  render-diff --batch <폴더> [--via hwpx] [-o <출력폴더>] [--max-disp <px>] [--json]"
+    );
     println!("      라운드트립 시각 정합성 게이트 — 페이지별 RenderNode bbox 변위(px) 정량화");
     println!("      자기 라운드트립(원본 IR vs 직렬화→재로드 IR) 또는 두 파일 직접 비교");
     println!("      배치: geom_inventory.tsv 산출(기본 output/poc/render_diff)");
+    println!("      --json: 단건은 한 줄 봉투, --batch 는 NDJSON(로드 실패도 error 레코드로 남김)");
+    println!("      --json 회귀 검출은 종료 코드 3(검증 단언 실패) — 사람 모드는 종전대로 1");
     println!("  bench <파일...> | --batch <폴더> [-n <반복수>] [--tsv <출력.tsv>]");
     println!("      단계별 처리 성능 계측 — parse/layout/render/serialize median(ms)");
     println!("      워밍업 1회 후 N회(기본 3) 반복. 파일별 크기/쪽수 + total 표 + TSV");
@@ -1932,12 +2057,16 @@ fn print_help() {
     println!("      HWPX 입력에 -o ….hwp 를 지정하면 그 경로를 존중해 HWP5 로 저장하되");
     println!("      형식 변경(이미지·차트 유실 가능)을 stderr 로 경고한다.");
     println!();
+    println!("  export-ir-schema [--bare] [-o <파일>] [--json]");
+    println!("      공개 IR 의 JSON Schema — 외부 바인딩 코드 생성의 단일 출처");
+    println!("      --bare 는 봉투 없이 스키마 본문만 (JSON Schema 도구 입력용)");
     println!("  run <계획.json> [--json]              선언적 편집 계획 실행 (#3703)");
     println!("      전 step 을 정적 선검증(불가 시 실행 0·exit 2)하고 인메모리로 원자");
     println!("      실행해 단언(verify) 통과 시에만 단 한 번 저장한다 — 실패 시 디스크 무변경.");
     println!("      steps: fill_fields{{data}} · replace_text{{find,replace[,occurrence]}}");
     println!("             · set_cell{{table,row,col,text}} · set_checkbox{{occurrence}}");
     println!("      --plan-json '<JSON>'      파일 대신 인라인 계획 (MCP hwp_run_plan 경로)");
+    println!("      --dry-run                 선검증만 — preview 저널, 디스크 무변경 (계획서 dryRun:true 와 동일)");
     println!("      단언 실패는 exit 3 — 저널(steps[]·verify)로 판정을 데이터로 보고");
     println!();
     println!("내부 개발·회귀 도구 (일반 사용자 대상 아님):");
@@ -7739,7 +7868,14 @@ fn search_document(args: &[String]) -> i32 {
                 }
             }
             other if !end_of_options && other.starts_with('-') => {
-                eprintln!("알 수 없는 옵션: {other}");
+                // 옵션 오타는 계속 거부한다(삼키면 오타가 검색어가 되어 조용히 0건이 된다).
+                // 다만 검색어가 정말 '-' 로 시작하는 경우 빠져나갈 길을 알려줘야 한다 —
+                // 안내가 없으면 에이전트는 "고치라"는 exit 2 를 받고도 고칠 방법을 모른다.
+                eprintln!(
+                    "알 수 없는 옵션: {other}\n\
+                     힌트: 검색어가 '-' 로 시작한다면 `--` 뒤에 두세요 — \
+                     rhwp search <파일> --json -- <검색어>"
+                );
                 return EXIT_USAGE;
             }
             other => {
@@ -10735,6 +10871,145 @@ fn edit_serialize(
     .map_err(|e| e.to_string())
 }
 
+/// [#3762] `export-ir-schema` — 공개 IR 의 JSON Schema 를 낸다 (M18 바인딩 착수 조건).
+///
+/// 문서를 입력으로 받지 않는다 — 스키마는 **타입의 자기서술**이지 특정 문서의
+/// 속성이 아니다. capabilities 가 명령 표면을 설명하듯, 이 명령은 문서 모델을
+/// 설명한다. 외부 바인딩 세대가 코드 생성의 단일 출처로 쓴다.
+fn cmd_export_ir_schema(args: &[String]) -> i32 {
+    let mut out_path: Option<&str> = None;
+    let mut json_mode = false;
+    let mut bare = false;
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--json" => json_mode = true,
+            // 봉투 없이 스키마 본문만 — JSON Schema 도구에 바로 먹이려는 용도.
+            "--bare" => bare = true,
+            "-o" | "--out" => {
+                i += 1;
+                match args.get(i) {
+                    Some(v) => out_path = Some(v.as_str()),
+                    None => {
+                        eprintln!("오류: -o 뒤에 출력 경로가 필요합니다.");
+                        return EXIT_USAGE;
+                    }
+                }
+            }
+            other => {
+                eprintln!("오류: 알 수 없는 옵션입니다 - {}", other);
+                return EXIT_USAGE;
+            }
+        }
+        i += 1;
+    }
+
+    let payload = if bare {
+        rhwp::ir_schema::ir_schema()
+    } else {
+        rhwp::ir_schema::envelope()
+    };
+    let text = match serde_json::to_string_pretty(&payload) {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln!("오류: 스키마 직렬화 실패 - {}", e);
+            return EXIT_RUNTIME;
+        }
+    };
+
+    if let Some(path) = out_path {
+        if let Err(e) = fs::write(path, text.as_bytes()) {
+            eprintln!("오류: 스키마를 쓸 수 없습니다 - {}: {}", path, e);
+            return EXIT_RUNTIME;
+        }
+        if json_mode {
+            // 파일로 뺐어도 stdout 은 기계 계약을 유지한다 — 어디에 썼는지 알려준다.
+            println!(
+                "{}",
+                serde_json::json!({
+                    "schemaVersion": "1.0",
+                    "irSchemaVersion": rhwp::ir_schema::IR_SCHEMA_VERSION,
+                    "output": path,
+                    "bytes": text.len(),
+                })
+            );
+        } else {
+            println!("IR 스키마 저장: {} ({} bytes)", path, text.len());
+        }
+        return EXIT_OK;
+    }
+
+    println!("{text}");
+    EXIT_OK
+}
+
+/// [#3776] `export-capabilities-schema` — capabilities 자체의 JSON Schema 를 낸다.
+fn cmd_export_capabilities_schema(args: &[String]) -> i32 {
+    let mut out_path: Option<&str> = None;
+    let mut json_mode = false;
+    let mut bare = false;
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--json" => json_mode = true,
+            "--bare" => bare = true,
+            "-o" | "--out" => {
+                i += 1;
+                match args.get(i) {
+                    Some(v) => out_path = Some(v.as_str()),
+                    None => {
+                        eprintln!("오류: -o 뒤에 출력 경로가 필요합니다.");
+                        return EXIT_USAGE;
+                    }
+                }
+            }
+            other => {
+                eprintln!("오류: 알 수 없는 옵션입니다 - {}", other);
+                return EXIT_USAGE;
+            }
+        }
+        i += 1;
+    }
+
+    let payload = if bare {
+        rhwp::capabilities_schema::capabilities_schema()
+    } else {
+        rhwp::capabilities_schema::envelope()
+    };
+    let text = match serde_json::to_string_pretty(&payload) {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln!("오류: 스키마 직렬화 실패 - {}", e);
+            return EXIT_RUNTIME;
+        }
+    };
+
+    if let Some(path) = out_path {
+        if let Err(e) = fs::write(path, text.as_bytes()) {
+            eprintln!("오류: 스키마를 쓸 수 없습니다 - {}: {}", path, e);
+            return EXIT_RUNTIME;
+        }
+        if json_mode {
+            println!(
+                "{}",
+                serde_json::json!({
+                    "schemaVersion": "1.0",
+                    "capabilitiesSchemaVersion":
+                        rhwp::capabilities_schema::CAPABILITIES_SCHEMA_VERSION,
+                    "output": path,
+                    "bytes": text.len(),
+                })
+            );
+        } else {
+            println!("capabilities 스키마 저장: {} ({} bytes)", path, text.len());
+        }
+        return EXIT_OK;
+    }
+
+    println!("{text}");
+    EXIT_OK
+}
+
 // ─── [#3703] 계획 실행기 — 명령(CLI)·도구(MCP) 위의 3층: 선언적 편집 계획 ───
 
 /// `rhwp run <계획.json>` — 계획서를 정적 선검증 → 원자 실행 → 저널로 수행한다.
@@ -10747,10 +11022,13 @@ fn cmd_run_plan(args: &[String]) -> i32 {
     let mut plan_path: Option<&str> = None;
     let mut plan_inline: Option<&str> = None;
     let mut json_mode = false;
+    // [#3721] 선검증만 돌리고 디스크는 건드리지 않는다 — 계획을 제출 전에 검사.
+    let mut dry_run = false;
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
             "--json" => json_mode = true,
+            "--dry-run" => dry_run = true,
             "--plan-json" => {
                 i += 1;
                 match args.get(i) {
@@ -10779,20 +11057,38 @@ fn cmd_run_plan(args: &[String]) -> i32 {
             }
         },
         (None, None) => {
-            eprintln!("사용법: rhwp run <계획.json> [--json]  (파일 대신 --plan-json '<JSON>')");
+            eprintln!("사용법: rhwp run <계획.json> [--json] [--dry-run]  (파일 대신 --plan-json '<JSON>')");
             return EXIT_USAGE;
         }
     };
-    let plan: serde_json::Value = match serde_json::from_str(&plan_text) {
+    let mut plan: serde_json::Value = match serde_json::from_str(&plan_text) {
         Ok(v) => v,
         Err(e) => {
             eprintln!("오류: 계획 JSON 파싱 실패 - {}", e);
             return EXIT_USAGE;
         }
     };
+    // 플래그는 계획서 필드를 덮어쓴다 — 의도의 단일 출처는 계획서이고, CLI 는 그 편의 입구다.
+    // (계획서가 dryRun 을 실을 수 있으므로 MCP hwp_run_plan 은 인자 추가 없이 같은 계약을 얻는다.)
+    if dry_run {
+        if let Some(obj) = plan.as_object_mut() {
+            obj.insert("dryRun".to_string(), serde_json::Value::Bool(true));
+        }
+    }
     let (journal, code) = run_plan_engine(&plan);
     if json_mode {
         println!("{}", journal);
+    } else if code == EXIT_OK && journal["dryRun"] == true {
+        println!(
+            "검사 통과: {} step 실행 가능 (디스크 무변경, 산출 예정 {})",
+            journal["preview"].as_array().map(|s| s.len()).unwrap_or(0),
+            journal["output"].as_str().unwrap_or("-")
+        );
+        if let Some(preview) = journal["preview"].as_array() {
+            for step in preview {
+                println!("  - {}", preview_line(step));
+            }
+        }
     } else if code == EXIT_OK {
         println!(
             "완료: {} step 적용, 산출 {}",
@@ -10816,6 +11112,40 @@ fn cmd_run_plan(args: &[String]) -> i32 {
         eprintln!("{}", journal);
     }
     code
+}
+
+/// [#3721] dry-run 미리보기 한 줄 — 사람 모드에서 "무엇이 얼마나 바뀌나"를 읽게 한다.
+fn preview_line(step: &serde_json::Value) -> String {
+    let idx = step["step"].as_u64().unwrap_or(0);
+    match step["action"].as_str().unwrap_or("") {
+        "fill_fields" => format!(
+            "step {}: 누름틀 {}칸 채움",
+            idx,
+            step["targets"].as_array().map(|a| a.len()).unwrap_or(0)
+        ),
+        "replace_text" => format!(
+            "step {}: '{}' {}건 중 {}건 치환",
+            idx,
+            step["find"].as_str().unwrap_or(""),
+            step["matches"].as_u64().unwrap_or(0),
+            step["willReplace"].as_u64().unwrap_or(0)
+        ),
+        "set_checkbox" => format!(
+            "step {}: 빈 체크박스 {}개 중 {}번째 표시",
+            idx,
+            step["available"].as_u64().unwrap_or(0),
+            step["occurrence"].as_u64().unwrap_or(0)
+        ),
+        "set_cell" => format!(
+            "step {}: 표 {} ({},{}) 기록 — 현재값 {:?}",
+            idx,
+            step["table"].as_u64().unwrap_or(0),
+            step["row"].as_u64().unwrap_or(0),
+            step["col"].as_u64().unwrap_or(0),
+            step["currentText"].as_str().unwrap_or("")
+        ),
+        other => format!("step {}: {}", idx, other),
+    }
 }
 
 /// 계획 실행 본체 — (저널, 종료 코드). CLI 와 MCP `hwp_run_plan` 이 같은 판정을 공유한다.
@@ -10882,6 +11212,9 @@ fn run_plan_engine(plan: &serde_json::Value) -> (serde_json::Value, i32) {
     let all_names: Vec<String> = name_counts.keys().cloned().collect();
     let confusable_groups = rhwp::document_core::text_security::confusable_collisions(&all_names);
     let mut invalid: Vec<serde_json::Value> = Vec::new();
+    // [#3721] 선검증이 이미 계산한 값을 미리보기로 모은다 — dry-run 은 이걸 그대로 낸다.
+    // (실행 모드에서는 쓰이지 않지만, 판정자와 미리보기가 같은 계산이라 어긋날 수 없다.)
+    let mut preview: Vec<serde_json::Value> = Vec::new();
     for (idx, step) in steps.iter().enumerate() {
         let action = step["action"].as_str().unwrap_or("");
         match action {
@@ -10891,14 +11224,24 @@ fn run_plan_engine(plan: &serde_json::Value) -> (serde_json::Value, i32) {
                         "reason": "data 는 {\"필드이름\":\"값\"} 객체여야 합니다" }));
                     continue;
                 };
-                for key in data.keys() {
+                let mut targets: Vec<serde_json::Value> = Vec::new();
+                for (key, value) in data.iter() {
                     let (name, occurrence) = parse_field_key(key);
                     let total = name_counts.get(name).copied().unwrap_or(0);
                     if total == 0 || occurrence >= total {
                         invalid.push(serde_json::json!({ "step": idx, "action": action,
                             "reason": format!("필드 '{}' 이(가) 없거나 순번이 범위 밖입니다 (동명 {}개)", key, total) }));
+                        continue;
                     }
+                    targets.push(serde_json::json!({
+                        "name": name, "occurrence": occurrence, "sameNameCount": total,
+                        "value": value.as_str().map(|v| v.to_string())
+                            .unwrap_or_else(|| value.to_string()),
+                    }));
                 }
+                preview.push(
+                    serde_json::json!({ "step": idx, "action": action, "targets": targets }),
+                );
             }
             "replace_text" => {
                 let Some(find) = step["find"].as_str().filter(|s| !s.is_empty()) else {
@@ -10922,7 +11265,12 @@ fn run_plan_engine(plan: &serde_json::Value) -> (serde_json::Value, i32) {
                         invalid.push(serde_json::json!({ "step": idx, "action": action,
                             "reason": format!("'{}' 일치 0건 — 치환할 곳이 없습니다", find) }));
                     }
-                    _ => {}
+                    // occurrence 지정이면 1건만, 아니면 전건 — 실행 분기와 같은 규칙.
+                    occurrence => preview.push(serde_json::json!({
+                        "step": idx, "action": action, "find": find,
+                        "matches": count,
+                        "willReplace": if occurrence.is_some() { 1 } else { count },
+                    })),
                 }
             }
             "set_checkbox" => {
@@ -10935,6 +11283,9 @@ fn run_plan_engine(plan: &serde_json::Value) -> (serde_json::Value, i32) {
                 if (n as usize) >= count {
                     invalid.push(serde_json::json!({ "step": idx, "action": action,
                         "reason": format!("occurrence {} 이(가) 범위 밖입니다 (빈 체크박스 □ {}건)", n, count) }));
+                } else {
+                    preview.push(serde_json::json!({ "step": idx, "action": action,
+                        "occurrence": n, "available": count }));
                 }
             }
             "set_cell" => {
@@ -10977,10 +11328,18 @@ fn run_plan_engine(plan: &serde_json::Value) -> (serde_json::Value, i32) {
                         continue;
                     }
                 };
-                if let Err(e) = resolve_table_cell(doc.document(), table, row, col) {
-                    let (CellResolveError::Usage(msg) | CellResolveError::Runtime(msg)) = e;
-                    invalid
-                        .push(serde_json::json!({ "step": idx, "action": action, "reason": msg }));
+                match resolve_table_cell(doc.document(), table, row, col) {
+                    Err(e) => {
+                        let (CellResolveError::Usage(msg) | CellResolveError::Runtime(msg)) = e;
+                        invalid.push(
+                            serde_json::json!({ "step": idx, "action": action, "reason": msg }),
+                        );
+                    }
+                    Ok((.., current)) => preview.push(serde_json::json!({
+                        "step": idx, "action": action,
+                        "table": table, "row": row, "col": col,
+                        "currentText": current, "newText": text,
+                    })),
                 }
             }
             "" => {
@@ -10997,6 +11356,21 @@ fn run_plan_engine(plan: &serde_json::Value) -> (serde_json::Value, i32) {
                 "input": input, "output": output, "invalid": invalid,
             }),
             EXIT_USAGE,
+        );
+    }
+
+    // [#3721] dry-run — 선검증만 하고 여기서 끝낸다. 실행도, 저장도 없다.
+    // 계획을 *제출 전에* 검사하는 가장 싼 안전장치이고, 미리보기는 위에서 판정자가
+    // 이미 계산한 값 그대로라 "검사 결과와 실제 실행이 다를" 여지가 없다.
+    if plan["dryRun"].as_bool().unwrap_or(false) {
+        return (
+            serde_json::json!({
+                "schemaVersion": "1.0", "planVersion": "1.0", "dryRun": true,
+                "input": input, "output": output,
+                "preview": preview, "invalid": [],
+                "assertions": { "notFoundEmpty": assert_not_found_empty, "verify": assert_verify },
+            }),
+            EXIT_OK,
         );
     }
 

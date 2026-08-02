@@ -2654,17 +2654,17 @@ fn parse_picture(
                         for attr in ce.attributes().flatten() {
                             match attr.key.as_ref() {
                                 b"x" => {
-                                    let v = parse_u32(&attr);
-                                    shape_attr.offset_x = v as i32;
+                                    let v = parse_i32_wrapping(&attr);
+                                    shape_attr.offset_x = v;
                                     if !has_pos {
-                                        common.horizontal_offset = v;
+                                        common.horizontal_offset = v as u32;
                                     }
                                 }
                                 b"y" => {
-                                    let v = parse_u32(&attr);
-                                    shape_attr.offset_y = v as i32;
+                                    let v = parse_i32_wrapping(&attr);
+                                    shape_attr.offset_y = v;
                                     if !has_pos {
-                                        common.vertical_offset = v;
+                                        common.vertical_offset = v as u32;
                                     }
                                 }
                                 _ => {}
@@ -3157,17 +3157,17 @@ fn parse_object_layout_child(
             for attr in ce.attributes().flatten() {
                 match attr.key.as_ref() {
                     b"x" => {
-                        let v = parse_u32(&attr);
-                        shape_attr.offset_x = v as i32;
+                        let v = parse_i32_wrapping(&attr);
+                        shape_attr.offset_x = v;
                         if !*has_pos {
-                            common.horizontal_offset = v;
+                            common.horizontal_offset = v as u32;
                         }
                     }
                     b"y" => {
-                        let v = parse_u32(&attr);
-                        shape_attr.offset_y = v as i32;
+                        let v = parse_i32_wrapping(&attr);
+                        shape_attr.offset_y = v;
                         if !*has_pos {
-                            common.vertical_offset = v;
+                            common.vertical_offset = v as u32;
                         }
                     }
                     _ => {}
@@ -6302,8 +6302,16 @@ fn parse_common_shape_children(
                                         _ => HorzAlign::Left,
                                     };
                                 }
-                                b"vertOffset" => common.vertical_offset = parse_u32(&attr),
-                                b"horzOffset" => common.horizontal_offset = parse_u32(&attr),
+                                // [버그 수정] chart/OLE 공용 <hp:pos> 파서만 유일하게 `parse_u32`
+                                // 를 써서 음수 오프셋(왼쪽/위쪽 앵커 이탈)을 0 으로 뭉갰다 —
+                                // 이미지·표 등 다른 개체 <hp:pos> 파서(위 parse_i32_wrapping 분기)
+                                // 와 동형으로 맞춘다.
+                                b"vertOffset" => {
+                                    common.vertical_offset = parse_i32_wrapping(&attr) as u32
+                                }
+                                b"horzOffset" => {
+                                    common.horizontal_offset = parse_i32_wrapping(&attr) as u32
+                                }
                                 b"treatAsChar" => common.treat_as_char = parse_bool(&attr),
                                 // [#2784] affectLSpacing(줄 간격에 영향) — 공통 개체 pos 되읽기.
                                 b"affectLSpacing" => common.affect_line_spacing = parse_bool(&attr),
@@ -8010,6 +8018,57 @@ mod tests {
     }
 
     #[test]
+    fn bugfind_shape_offset_negative_x_y_not_dropped_to_zero() {
+        // hp:offset(개체 내부 shape-transform 오프셋) x/y 는 음수일 수 있는데,
+        // 종전엔 parse_u32 로 읽어 "-500" 같은 문자열이 파싱 실패로 0 이 됐다
+        // (hp:pos 의 vertOffset/horzOffset 형제 필드는 이미 parse_i32_wrapping 사용).
+        // hp:pos 가 없어 offset 이 common.horizontal_offset/vertical_offset 에도
+        // 그대로 폴백되는 경로를 함께 확인한다.
+        let xml = r##"<?xml version="1.0" encoding="UTF-8"?>
+<hs:sec xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph"
+        xmlns:hs="http://www.hancom.co.kr/hwpml/2011/section">
+  <hp:p id="0" paraPrIDRef="0" styleIDRef="0">
+    <hp:run charPrIDRef="0">
+      <hp:connectLine id="1" zOrder="0" textWrap="SQUARE" textFlow="BOTH_SIDES" instid="1" type="STRAIGHT_ONEWAY">
+        <hp:offset x="-500" y="-800"/>
+        <hp:orgSz width="100" height="1"/>
+        <hp:curSz width="100" height="0"/>
+        <hp:lineShape color="#000000" width="141" style="SOLID" headStyle="NORMAL" tailStyle="NORMAL" headfill="1" tailfill="1" headSz="MEDIUM_MEDIUM" tailSz="MEDIUM_MEDIUM"/>
+        <hp:startPt x="0" y="0" subjectIDRef="1" subjectIdx="0"/>
+        <hp:endPt x="100" y="0" subjectIDRef="2" subjectIdx="0"/>
+      </hp:connectLine>
+      <hp:t/>
+    </hp:run>
+  </hp:p>
+</hs:sec>"##;
+
+        let section = parse_hwpx_section(xml).unwrap();
+        let Control::Shape(shape) = &section.paragraphs[0].controls[0] else {
+            panic!("expected shape control");
+        };
+        let ShapeObject::Line(line) = shape.as_ref() else {
+            panic!("expected line shape");
+        };
+
+        assert_eq!(
+            line.drawing.shape_attr.offset_x, -500,
+            "offset x=-500 이 0으로 뭉개지면 안 됨"
+        );
+        assert_eq!(
+            line.drawing.shape_attr.offset_y, -800,
+            "offset y=-800 이 0으로 뭉개지면 안 됨"
+        );
+        assert_eq!(
+            line.common.horizontal_offset as i32, -500,
+            "hp:pos 가 없으면 offset 이 common.horizontal_offset 으로 폴백돼야 함"
+        );
+        assert_eq!(
+            line.common.vertical_offset as i32, -800,
+            "hp:pos 가 없으면 offset 이 common.vertical_offset 으로 폴백돼야 함"
+        );
+    }
+
+    #[test]
     fn test_parse_rect_ratio_as_round_rate() {
         let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
 <hs:sec xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph"
@@ -8293,6 +8352,78 @@ mod tests {
             crate::model::shape::OleDrawingAspect::Icon,
             "drawAspect=ICON 이 보존돼야 함"
         );
+    }
+
+    #[test]
+    fn bugfind_ole_negative_pos_offset_is_not_zeroed() {
+        // [버그] `parse_common_shape_children` (chart/OLE 공용 `<hp:pos>` 파서)는
+        // vertOffset/horzOffset 을 `parse_u32` 로 읽는다 — `str::parse::<u32>` 는
+        // 부호 문자를 거부해 실패 시 `unwrap_or(0)` 로 조용히 0 이 된다. 반면 이미지/
+        // 표 등 다른 개체의 `<hp:pos>` 파서(section.rs:3150-3151, parse_object_layout_child)
+        // 는 `parse_i32_wrapping` 을 써서 음수 오프셋(왼쪽/위쪽으로 벗어난 앵커 상대
+        // 배치)을 올바르게 보존한다. 우리 자신의 직렬화기(serializer/hwpx/shape.rs)가
+        // signed 오프셋을 그대로 십진수로 방출하므로(예: "-100"), 그런 OLE/차트가
+        // 저장 후 재로드되면 위치가 0 으로 뭉개진다.
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<hs:sec xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph"
+        xmlns:hs="http://www.hancom.co.kr/hwpml/2011/section"
+        xmlns:hc="http://www.hancom.co.kr/hwpml/2011/core">
+  <hp:p id="0" paraPrIDRef="0" styleIDRef="0">
+    <hp:run charPrIDRef="0">
+      <hp:ole id="1" zOrder="0" binaryItemIDRef="ole1">
+        <hp:sz width="2600" height="2600"/>
+        <hp:pos treatAsChar="0" vertRelTo="PARA" horzRelTo="PARA" vertOffset="-200" horzOffset="-100"/>
+      </hp:ole>
+      <hp:t/>
+    </hp:run>
+  </hp:p>
+</hs:sec>"#;
+
+        let section = parse_hwpx_section(xml).unwrap();
+        let Control::Shape(shape) = &section.paragraphs[0].controls[0] else {
+            panic!("expected shape control");
+        };
+        let ShapeObject::Ole(ole) = shape.as_ref() else {
+            panic!("expected ole shape");
+        };
+        assert_eq!(
+            ole.common.horizontal_offset as i32, -100,
+            "hp:pos horzOffset=\"-100\" 이 0 으로 뭉개지면 안 됨"
+        );
+        assert_eq!(
+            ole.common.vertical_offset as i32, -200,
+            "hp:pos vertOffset=\"-200\" 이 0 으로 뭉개지면 안 됨"
+        );
+    }
+
+    #[test]
+    fn bugfind_ole_unsigned_wrapped_pos_offset_is_preserved() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<hs:sec xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph"
+        xmlns:hs="http://www.hancom.co.kr/hwpml/2011/section"
+        xmlns:hc="http://www.hancom.co.kr/hwpml/2011/core">
+  <hp:p id="0" paraPrIDRef="0" styleIDRef="0">
+    <hp:run charPrIDRef="0">
+      <hp:ole id="1" zOrder="0" binaryItemIDRef="ole1">
+        <hp:sz width="2600" height="2600"/>
+        <hp:pos treatAsChar="0" vertRelTo="PARA" horzRelTo="PARA"
+                vertOffset="4294965296" horzOffset="4294964867"/>
+        <hc:extent x="1" y="1"/>
+      </hp:ole>
+      <hp:t/>
+    </hp:run>
+  </hp:p>
+</hs:sec>"#;
+
+        let section = parse_hwpx_section(xml).unwrap();
+        let Control::Shape(shape) = &section.paragraphs[0].controls[0] else {
+            panic!("expected shape control");
+        };
+        let ShapeObject::Ole(ole) = shape.as_ref() else {
+            panic!("expected ole shape");
+        };
+        assert_eq!(ole.common.vertical_offset as i32, -2000);
+        assert_eq!(ole.common.horizontal_offset as i32, -2429);
     }
 
     #[test]
