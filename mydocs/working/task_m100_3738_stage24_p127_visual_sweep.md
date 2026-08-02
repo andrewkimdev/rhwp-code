@@ -67,10 +67,30 @@ page  body_footnote_lines  table_footer  table_outside_frame  image_outside_fram
 128   0                    0             0                    0                    0
 ```
 
-수정 전 p127 render tree에서는 그림 56과 `pi=1356` 13개 줄이 물리적으로 교차했다. 새 detector의 3행
-threshold를 넘는 구조이므로, image owner/textWrap JSON을 노출한 현재 detector 기준에서는 이 종류의 회귀가
-우선 검토 후보가 된다. Python positive/negative regression은 Square 3행 교차를 1건으로 내고
+### 실제 수정 전/후 detector 재현
+
+자동 후보화가 가정이 아니라 실제 수정 전 출력에서도 성립하는지, detector가 들어간 직후이면서 p127 보정 전인
+`d90b3d9de83ff21d540c1cd7a8d3fc627c08de75`를 분리 build하여 같은 direct-pair 명령으로 p127만 재실행했다.
+수정 전 binary SHA-256은 `1072dd1e94eeb403d85aa1bb3b01122a17b0e9f00479d58bf2739c43c4115d7a`다.
+
+```text
+RHWP_BIN=target/review-fidelity-pre-p127-d90/release-test/rhwp \
+  python3 tools/fidelity_compare/fidelity_compare.py 126 126 \
+  --source 'samples/정책연구용역사업 중간진도보고서(살아있는 간장 기증자의 의학적 선별기준 연구).hwp' \
+  --reference-pdf 'pdf/pr3740/hwp/정책연구용역사업 중간진도보고서(살아있는 간장 기증자의 의학적 선별기준 연구)-2020.pdf' \
+  --label issue3738-p127-pre-fix-detector \
+  --reference-grade '한컴 2020 기준 PDF' --text-only --layout-ledger
+```
+
+수정 전은 `square_wrap_text_overlap=1`, 수정 후 clean revision은 `0`이다. 수정 전 candidate의 source owner는
+그림 56 `pi=1355/ci=0`, `textWrap=Square`이고, image bbox `[401.9,130.7,253.1,340.7]`를 본문 13행이
+교차했다(첫 행 `[112.1,136.5,587.2,13.3]`, 마지막 행 `[112.1,456.5,587.2,13.3]`). 전·후 `text-report.tsv`의
+p127 문자 multiset 차이는 모두 0이므로, 이것은 PDF 문자 비교가 구별하지 못하는 physical overlap을 별도
+layout ledger가 포착한 경우다. Python positive/negative regression은 Square 3행 교차를 1건으로 내고
 `InFrontOfText` overlay는 제외한다.
+
+Stage 22의 과거 render-tree는 이 JSON schema(`pi`/`ci`/`textWrap`)가 추가되기 전 산출물이므로, 그 파일을
+나중 detector에 그대로 재입력한 0은 결함 부재 판정이 아니다. 위 exact revision 재실행이 그 공백을 메운다.
 
 ## focused 회귀
 
@@ -94,11 +114,15 @@ asset을 복사하기 전에 `git check-attr filter diff merge`와 `git lfs trac
 `filter/diff/merge=unspecified`이고 LFS tracked pattern과 일치하지 않아 일반 Git 증적으로 보관한다.
 
 - [run manifest](../pr/assets/pr_3740_issue3738_stage24/run_manifest.json), [구조 지표](../pr/assets/pr_3740_issue3738_stage24/metrics.json), [자동 후보](../pr/assets/pr_3740_issue3738_stage24/flagged_pages.json), [overlay 지표](../pr/assets/pr_3740_issue3738_stage24/overlay_metrics.json), [contact sheet](../pr/assets/pr_3740_issue3738_stage24/review_contact_sheet.png)
-- [fidelity layout ledger](../pr/assets/pr_3740_issue3738_stage24/fidelity_layout_candidates.tsv), [text ledger](../pr/assets/pr_3740_issue3738_stage24/fidelity_text_report.tsv), [run state](../pr/assets/pr_3740_issue3738_stage24/fidelity_run_state.tsv)
+- [수정 후 fidelity layout ledger](../pr/assets/pr_3740_issue3738_stage24/fidelity_layout_candidates.tsv), [수정 후 text ledger](../pr/assets/pr_3740_issue3738_stage24/fidelity_text_report.tsv), [수정 후 run state](../pr/assets/pr_3740_issue3738_stage24/fidelity_run_state.tsv)
+- [수정 전 fidelity layout ledger](../pr/assets/pr_3740_issue3738_stage24/fidelity_pre_fix_layout_candidates.tsv), [수정 전 text ledger](../pr/assets/pr_3740_issue3738_stage24/fidelity_pre_fix_text_report.tsv), [수정 전 run state](../pr/assets/pr_3740_issue3738_stage24/fidelity_pre_fix_run_state.tsv)
 - HWP SHA-256: `50094a3db2b2003b293c5cbf43014d001aa97929acb488cef0cb7ea0e16b3113`
 - HWPX SHA-256: `8ae9dc95643d0902fcced2af73badd732aea86c1cc5b875ef7b1272bccba862c`
 - PDF SHA-256: `7879ffee6313575132187c44c0090cd2e62c32c12c29b7eabd989181acf27b3a`
 - rhwp binary SHA-256: `0b1aad707db06258d40640bf71d40869127b4bb2f09d8bd06dd2da6730b64c7b`
+- 수정 전 layout ledger SHA-256: `f0a06a9eb5da16f7cbfb19f026953d5eb30130d98146b176cdc04acb309b74f7`
+- 수정 전 text ledger SHA-256: `5ca7c54f3f213ef60b8ed90e90142cb0d0991e1c84a97dbfcb3167a9599e0f1c`
+- 수정 전 run state SHA-256: `fc0c09ea63d2db2da7671c5842d839635dca7b0f34f1ce91779357ec3c7e7cbc`
 - review PNG SHA-256: p126 `684859d9f14419451dd6526f818c29bec0c552851097a4b6e810f7988409f102`, p127 `9b3578ebf48d32adff0de2b980d517381fdb19bd5f8d5864b5bbcce245efa43e`, p155 `9fcc4896d7c5eeee02cc4f21a97fe7e3f38c4188318502345255d2ede95abcca`, p156 `9efa2a90a1357e6ed21e7cde157b4f6d6ff735464b3a0eefb1afcfd3b8626c02`
 - run manifest SHA-256: `b69970ba93f175073dbc05708759b141ffddefb70f93f5012f171cf37b9c6001`
 
