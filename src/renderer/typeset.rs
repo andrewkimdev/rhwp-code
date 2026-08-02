@@ -799,6 +799,11 @@ struct TypesetState {
     defer_host_line_item_para: Option<usize>,
     /// 첫 각주 여부
     is_first_footnote_on_page: bool,
+    /// 현재 physical page에 실제로 그려질 각주 구분선이 이미 예약됐는가.
+    /// 번호 없는 continuation tail은 첫 항목이어도 구분선을 생략할 수 있으므로,
+    /// `is_first_footnote_on_page`만으로는 뒤에 오는 일반 note의 separator 비용을
+    /// 판정할 수 없다.
+    current_page_has_footnote_separator: bool,
     /// 각주 구분선 오버헤드
     footnote_separator_overhead: f64,
     /// 각주 사이 간격
@@ -2678,6 +2683,7 @@ impl TypesetState {
             page_has_page_abs_top_table: false,
             defer_host_line_item_para: None,
             is_first_footnote_on_page: true,
+            current_page_has_footnote_separator: false,
             footnote_separator_overhead,
             footnote_between_notes_margin,
             footnote_safety_margin,
@@ -2842,13 +2848,42 @@ impl TypesetState {
         if self.is_first_footnote_on_page {
             if draw_separator {
                 self.current_footnote_height += self.footnote_separator_overhead;
+                self.current_page_has_footnote_separator = true;
             }
             self.is_first_footnote_on_page = false;
         } else {
+            // 번호 없는 tail이 page의 첫 각주였고, 뒤의 일반 note가 처음으로
+            // separator를 요구하는 경우다. layout은 footnote 전체 중 하나라도
+            // draw_separator이면 선을 그리므로, reservation도 같은 시점에 한 번
+            // 보충해야 본문/FootnoteArea 충돌이 생기지 않는다.
+            if draw_separator && !self.current_page_has_footnote_separator {
+                self.current_footnote_height += self.footnote_separator_overhead;
+                self.current_page_has_footnote_separator = true;
+            }
             self.current_footnote_height += self.footnote_between_notes_margin;
         }
         self.current_footnote_height += height;
         self.sync_current_page_footnote_area();
+    }
+
+    /// 하나의 각주 fragment를 현재 page에 더했을 때의 높이.
+    ///
+    /// 일반 note와 달리 continuation tail은 separator 없이 시작할 수 있으므로,
+    /// queue fit 판정은 `projected_footnote_height`의 "첫 note면 separator" 가정이
+    /// 아니라 실제 fragment flag를 사용해야 한다.
+    fn projected_footnote_fragment_height(&self, content_height: f64, draw_separator: bool) -> f64 {
+        self.current_footnote_height
+            + if self.is_first_footnote_on_page {
+                0.0
+            } else {
+                self.footnote_between_notes_margin
+            }
+            + if draw_separator && !self.current_page_has_footnote_separator {
+                self.footnote_separator_overhead
+            } else {
+                0.0
+            }
+            + content_height
     }
 
     /// 이미 flush된 분할 문단의 앵커 page에 첫 native-HWP5 각주를 소급 등록한다.
@@ -2868,6 +2903,12 @@ impl TypesetState {
             return false;
         };
         let first = page.footnotes.is_empty();
+        let has_separator = page.footnotes.iter().any(|footnote| {
+            footnote
+                .fragment
+                .map(|fragment| fragment.draw_separator)
+                .unwrap_or(true)
+        });
         let existing_height = page.layout.footnote_area.height.max(0.0);
         page.footnotes.push(FootnoteRef {
             number,
@@ -2875,8 +2916,13 @@ impl TypesetState {
             fragment: None,
         });
         let added_height = content_height
-            + if first {
+            + if has_separator {
+                0.0
+            } else {
                 self.footnote_separator_overhead
+            }
+            + if first {
+                0.0
             } else {
                 self.footnote_between_notes_margin
             };
@@ -2898,6 +2944,12 @@ impl TypesetState {
             return false;
         };
         let first = page.footnotes.is_empty();
+        let has_separator = page.footnotes.iter().any(|footnote| {
+            footnote
+                .fragment
+                .map(|existing| existing.draw_separator)
+                .unwrap_or(true)
+        });
         let existing_height = page.layout.footnote_area.height.max(0.0);
         page.footnotes.push(FootnoteRef {
             number,
@@ -2905,9 +2957,12 @@ impl TypesetState {
             fragment: Some(fragment),
         });
         let added_height = content_height
-            + if first && fragment.draw_separator {
+            + if fragment.draw_separator && !has_separator {
                 self.footnote_separator_overhead
-            } else if !first {
+            } else {
+                0.0
+            }
+            + if !first {
                 self.footnote_between_notes_margin
             } else {
                 0.0
@@ -2921,10 +2976,10 @@ impl TypesetState {
         if note_count == 0 {
             return self.current_footnote_height;
         }
-        let separator = if self.is_first_footnote_on_page {
-            self.footnote_separator_overhead
-        } else {
+        let separator = if self.current_page_has_footnote_separator {
             0.0
+        } else {
+            self.footnote_separator_overhead
         };
         let between_count = if self.is_first_footnote_on_page {
             note_count.saturating_sub(1)
@@ -3106,6 +3161,7 @@ impl TypesetState {
         self.bottom_fixed_consumed_flow = 0.0;
         self.page_has_page_abs_top_table = false;
         self.is_first_footnote_on_page = true;
+        self.current_page_has_footnote_separator = false;
         self.current_zone_y_offset = 0.0;
         self.current_zone_layout = None;
         self.on_first_multicolumn_page = false;
@@ -18726,11 +18782,12 @@ impl TypesetEngine {
         ctrl_idx: usize,
         fragment_start_row: usize,
         fragment_end_row: usize,
+        fragment_has_intra_row_cut: bool,
         terminal_fragment: bool,
         relax_terminal_table_footnote_fit: bool,
     ) {
-        let note_fits = |st: &TypesetState, content_height: f64| {
-            let projected = st.projected_footnote_height(content_height, 1);
+        let note_fits = |st: &TypesetState, content_height: f64, draw_separator: bool| {
+            let projected = st.projected_footnote_fragment_height(content_height, draw_separator);
             // 단일단의 중간 RowBreak fragment 뒤에는 같은 page에 이어질 본문이 없다.
             // 다음 fragment가 새 page에서 시작하므로, 이 fragment의 table-cell 각주는
             // 일반 본문 후속 배치를 위한 40px safety buffer를 중복 예약하지 않는다.
@@ -18815,7 +18872,7 @@ impl TypesetEngine {
             if st.is_first_footnote_on_page && continuation.next_table_footnote < notes.len() {
                 tail.draw_separator = true;
             }
-            if !note_fits(st, split.suffix_height) {
+            if !note_fits(st, split.suffix_height, tail.draw_separator) {
                 return;
             }
             add_note(st, note, Some(tail), split.suffix_height);
@@ -18823,7 +18880,7 @@ impl TypesetEngine {
         }
 
         while let Some(note) = notes.get(continuation.next_table_footnote) {
-            if !note_fits(st, note.content_height) {
+            if !note_fits(st, note.content_height, true) {
                 // p728 note 77처럼 table cell 안의 stored vpos reset이 실제 footnote
                 // page boundary를 명시하고, marker row가 지금 확정한 intermediate
                 // fragment에 있을 때만 note를 line fragment로 나눈다. 단순 capacity
@@ -18832,11 +18889,14 @@ impl TypesetEngine {
                 let split = note.fragment_split.filter(|_| {
                     !terminal_fragment
                         && st.col_count == 1
+                        && !fragment_has_intra_row_cut
                         && continuation.pending_table_footnote_fragment.is_none()
                         && note.row >= fragment_start_row
                         && note.row < fragment_end_row
                 });
-                if let Some(split) = split.filter(|split| note_fits(st, split.prefix_height)) {
+                if let Some(split) = split
+                    .filter(|split| note_fits(st, split.prefix_height, split.prefix.draw_separator))
+                {
                     add_note(st, note, Some(split.prefix), split.prefix_height);
                     continuation.pending_table_footnote_fragment =
                         Some(PendingTableFootnoteFragment {
@@ -18891,7 +18951,12 @@ impl TypesetEngine {
             let cursor_row = continuation.row;
             let is_continuation = continuation.is_continuation;
             let start_cut_is_block = continuation.start_cut_is_block;
-            let start_cut = &continuation.start_cut;
+            // `register_queued_table_footnotes` can advance the continuation while
+            // the rest of this iteration still needs the original cut geometry.
+            // Keep that geometry as a local value rather than borrowing the cursor
+            // across the terminal-fragment queue registration.
+            let start_cut = continuation.start_cut.clone();
+            let fragment_starts_intra_row = start_cut_is_block || !start_cut.is_empty();
             // 이전 분할에서 모든 콘텐츠가 소진된 행은 건너뜀.
             // [Task #1025] 블록 컷(start_cut_is_block)은 per-row(row_span==1) 컷이 아니라
             // 블록-셀 인덱스다. advance_row_cut(per-row)로 판정하면 블록 첫 행이 소진돼도
@@ -18902,7 +18967,7 @@ impl TypesetEngine {
                 && !start_cut.is_empty()
                 && can_intra_split
                 && layout_engine
-                    .advance_row_cut(table, cursor_row, start_cut, f64::MAX, styles)
+                    .advance_row_cut(table, cursor_row, &start_cut, f64::MAX, styles)
                     .consumed_height
                     <= 0.0
             {
@@ -19135,7 +19200,7 @@ impl TypesetEngine {
                 styles,
                 cut_row_h,
                 rowspan_touched,
-                start_cut,
+                &start_cut,
                 BlockRowScanVars {
                     cursor_row,
                     row_count,
@@ -19228,7 +19293,7 @@ impl TypesetEngine {
                             styles,
                             cut_row_h,
                             rowspan_touched,
-                            start_cut,
+                            &start_cut,
                             BlockRowScanVars {
                                 cursor_row,
                                 row_count,
@@ -19321,7 +19386,7 @@ impl TypesetEngine {
                     && caption_overhead <= 0.5
                     && partial_height < MIN_TOP_KEEP_PX
                     && (cursor_row..end_row).all(|r| {
-                        let su: &[usize] = if r == cursor_row { start_cut } else { &[] };
+                        let su: &[usize] = if r == cursor_row { &start_cut } else { &[] };
                         !layout_engine.row_cut_range_has_visible_content(table, r, su, &[], styles)
                     });
                 if skip_terminal_empty_sliver {
@@ -19371,6 +19436,7 @@ impl TypesetEngine {
                         ctrl_idx,
                         cursor_row,
                         end_row,
+                        fragment_starts_intra_row,
                         true,
                         relax_terminal_table_footnote_fit && is_continuation,
                     );
@@ -19393,6 +19459,7 @@ impl TypesetEngine {
                             ctrl_idx,
                             cursor_row,
                             end_row,
+                            fragment_starts_intra_row,
                             true,
                             relax_terminal_table_footnote_fit && is_continuation,
                         );
@@ -19449,6 +19516,7 @@ impl TypesetEngine {
                     ctrl_idx,
                     cursor_row,
                     end_row,
+                    fragment_starts_intra_row || !split_end_cut.is_empty(),
                     false,
                     false,
                 );
