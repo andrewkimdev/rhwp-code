@@ -1,0 +1,14 @@
+[package]
+name = "glyph_cache_repro"
+version = "0.1.0"
+edition = "2021"
+description = "Committed reproduction of the glyph-outline disk-cache spike for RHWP_GLYPH_OUTLINE_CACHE_PLAN.md. Pins the exact dependency versions rhwp/usvg 0.45.1 uses (fontdb 0.23.0, ttf-parser 0.25.1, tiny-skia-path 0.11.4) so the numbers are reproducible against the real crates, not an approximation."
+
+[dependencies]
+# Pinned to match crates/usvg's Cargo.lock at resvg v0.45.1 exactly.
+fontdb = "=0.23.0"
+ttf-parser = "=0.25.1"
+tiny-skia-path = "=0.11.4"
+dashmap = "6"
+serde = { version = "1", features = ["derive"] }
+bincode = "1"
