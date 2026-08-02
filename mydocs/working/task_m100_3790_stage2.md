@@ -2,11 +2,12 @@
 
 - **Issue**: [#3790](https://github.com/edwardkim/rhwp/issues/3790)
 - **Stage 1 PR**: [#3792](https://github.com/edwardkim/rhwp/pull/3792)
+- **Stage 2.5 PR**: [#3823](https://github.com/edwardkim/rhwp/pull/3823) (draft)
 - **브랜치**: `codex/issue-3790-shadow-observation`
 - **기준**: `upstream/devel` `91f513181`
 - **live 관찰 시작**: 2026-08-02 17:28:53 UTC, #3792 merge 직후
 - **기록 시각**: 2026-08-03 KST
-- **상태**: 1차 실측 완료, Stage 2.5 trusted-base shadow 로컬 구현 완료, Stage 3 활성화 보류
+- **상태**: 1차 실측 및 Stage 2.5 구현 완료, draft PR 원격 검증 중, Stage 3 활성화 보류
 
 ## 1. 측정 방법과 해석 경계
 
@@ -195,3 +196,7 @@ git diff --check
 Rust·Studio 소스와 worker 실행 계약은 바꾸지 않았으므로 장시간 Rust 전체 테스트는 로컬 범위에서
 제외한다. 원격 PR에서는 기존 full CI가 그대로 실행되어 shadow 변경이 worker 결과를 바꾸지 않는지
 확인한다.
+
+2026-08-03 KST에 [draft PR #3823](https://github.com/edwardkim/rhwp/pull/3823)을 `devel` 대상으로
+생성했다. review request는 보내지 않았으며, 원격 CI 통과와 trusted authority summary 확인 전에는
+ready for review로 전환하지 않는다.
