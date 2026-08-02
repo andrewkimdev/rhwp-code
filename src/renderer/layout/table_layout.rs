@@ -3281,32 +3281,48 @@ impl LayoutEngine {
                             // [Task #1151 v4] 셀 안 non-inline picture (tac=false 자리차지 등):
                             // outer paragraph idx + inner picture ctrl idx +
                             // cell_ctx 전달.
-                            if detached_from_inline_table_flow || unrestricted_take_place_cell_float
+                            let picture_parent = if detached_from_inline_table_flow
+                                || unrestricted_take_place_cell_float
                             {
-                                self.layout_picture(
-                                    tree,
-                                    table_node,
-                                    &pic_for_layout,
-                                    &pic_area,
-                                    bin_data_content,
-                                    Alignment::Left,
-                                    Some(section_index),
-                                    cell_context.as_ref().map(|c| c.parent_para_index),
-                                    Some(ctrl_idx),
-                                    cell_context.as_ref(),
-                                );
+                                &mut *table_node
                             } else {
-                                self.layout_picture(
+                                &mut *cell_node
+                            };
+                            self.layout_picture(
+                                tree,
+                                picture_parent,
+                                &pic_for_layout,
+                                &pic_area,
+                                bin_data_content,
+                                Alignment::Left,
+                                Some(section_index),
+                                cell_context.as_ref().map(|c| c.parent_para_index),
+                                Some(ctrl_idx),
+                                cell_context.as_ref(),
+                            );
+                            // 셀 안 부동 그림도 본문/각주 그림과 마찬가지로 자체 caption을
+                            // 방출해야 한다. 이 경로가 빠져 있으면 HWP5 LIST_HEADER의
+                            // 그림 caption은 파싱돼도 화면에는 사라지고 후속 flow의 기준도
+                            // 달라진다. 현재는 image frame 아래에 놓이는 Bottom caption만
+                            // 이 경로의 cell-local placement와 같은 좌표계로 렌더한다.
+                            if let Some(caption) = pic.caption.as_ref().filter(|caption| {
+                                matches!(caption.direction, CaptionDirection::Bottom)
+                                    && !caption.paragraphs.is_empty()
+                            }) {
+                                let caption_spacing =
+                                    hwpunit_to_px(caption.spacing as i32, self.dpi);
+                                self.layout_caption(
                                     tree,
-                                    cell_node,
-                                    &pic_for_layout,
-                                    &pic_area,
+                                    picture_parent,
+                                    caption,
+                                    styles,
+                                    &inner_area,
+                                    pic_x,
+                                    pic_w,
+                                    pic_y + pic_h + caption_spacing,
+                                    &mut self.auto_counter.borrow_mut(),
                                     bin_data_content,
-                                    Alignment::Left,
-                                    Some(section_index),
-                                    cell_context.as_ref().map(|c| c.parent_para_index),
-                                    Some(ctrl_idx),
-                                    cell_context.as_ref(),
+                                    cell_context.clone(),
                                 );
                             }
                             if matches!(pic.common.text_wrap, TextWrap::TopAndBottom) {

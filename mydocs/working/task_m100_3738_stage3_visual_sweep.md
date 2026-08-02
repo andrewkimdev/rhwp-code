@@ -35,9 +35,9 @@ HWPX output root: `/private/tmp/rhwp-issue-3738-stage3-hwpx-MetjfB`
 
 ![HWP p24 review](../pr/assets/pr_3740_issue3738_stage3/hwp_p024_review.png)
 
-HWP page 24 — 그림 23의 전체 graph와 caption은 기준 PDF의 page-local top으로 복원됐다. 그러나 rhwp의
-outer table bbox는 `y=90.6, h=490.4px`인 반면 그림/캡션이 차지하는 실제 높이 뒤에도 여분을 소비하여,
-EU 문단과 표 4가 기준보다 아래에 놓인다.
+HWP page 24 — 그림 23의 graph는 기준 PDF의 page-local top으로 복원됐다. 이 시점의 셀 내부 picture
+경로는 caption을 아직 방출하지 않았고, rhwp의 outer table bbox는 `y=90.6, h=490.4px`인 반면 그림 뒤에도
+여분을 소비하여 EU 문단과 표 4가 기준보다 아래에 놓인다.
 
 ## 결론
 

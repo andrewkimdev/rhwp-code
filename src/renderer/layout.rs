@@ -34,7 +34,7 @@ use crate::model::shape::{
 use crate::model::style::{
     Alignment, BorderLine, BorderLineType, HeadType, Numbering, UnderlineType,
 };
-use crate::model::table::VerticalAlign;
+use crate::model::table::{TablePageBreak, VerticalAlign};
 
 /// layout_column_item의 읽기 전용 컨텍스트 (파라미터 묶음)
 struct ColumnItemCtx<'a> {
@@ -813,6 +813,89 @@ fn native_empty_single_topbottom_table_saved_top(
     let bottom = top + hwpunit_to_px(table.common.height as i32, dpi);
     (top >= col_area.y + col_area.height * 0.5 && bottom <= col_area.y + col_area.height + 0.5)
         .then_some(top)
+}
+
+/// HWP5에서 페이지를 넘긴 빈 RowBreak 그림 표는 저장된 cell height가 그 페이지의
+/// 실제 그림+caption flow보다 크게 남을 수 있다. 표 frame은 원본을 보존한 채, 뒤의
+/// 문단은 다음 저장 LINE_SEG anchor부터 재개해야 하는 형상만 골라 그 flow cursor를
+/// 반환한다.
+fn native_hwp5_relocated_empty_rowbreak_picture_next_flow_top(
+    native_hwp5_layout: bool,
+    host_para: &Paragraph,
+    table: &crate::model::table::Table,
+    next_para: Option<&Paragraph>,
+    col_area: &LayoutRect,
+    dpi: f64,
+) -> Option<f64> {
+    if !native_hwp5_layout
+        || para_has_visible_text(host_para)
+        || host_para.controls.len() != 1
+        || table.row_count != 1
+        || table.col_count != 1
+        || table.cells.len() != 1
+        || !matches!(table.page_break, TablePageBreak::RowBreak)
+        || !is_para_topbottom_float(&table.common)
+        || !matches!(table.common.vert_rel_to, VertRelTo::Para)
+    {
+        return None;
+    }
+    let host_seg = host_para
+        .line_segs
+        .iter()
+        .find(|seg| seg.tag & crate::model::paragraph::LineSeg::TAG_IMPLEMENTATION_PROPERTY == 0)?;
+    let next_seg = next_para?
+        .line_segs
+        .iter()
+        .find(|seg| seg.tag & crate::model::paragraph::LineSeg::TAG_IMPLEMENTATION_PROPERTY == 0)?;
+    if host_seg.vertical_pos <= 0
+        || next_seg.vertical_pos <= 0
+        || next_seg.vertical_pos >= host_seg.vertical_pos
+    {
+        return None;
+    }
+
+    let cell = table.cells.first()?;
+    if cell.row != 0
+        || cell.col != 0
+        || cell.row_span != 1
+        || cell.col_span != 1
+        || cell.height <= table.common.height
+        || cell.paragraphs.len() != 1
+    {
+        return None;
+    }
+    let cell_para = cell.paragraphs.first()?;
+    let cell_seg = cell_para
+        .line_segs
+        .iter()
+        .find(|seg| seg.tag & crate::model::paragraph::LineSeg::TAG_IMPLEMENTATION_PROPERTY == 0)?;
+    let Control::Picture(picture) = cell_para.controls.first()? else {
+        return None;
+    };
+    if !cell_para.text.trim().is_empty()
+        || cell_para.controls.len() != 1
+        || cell_para.line_segs.len() != 1
+        || cell_seg.vertical_pos != 0
+        || picture.common.treat_as_char
+        || !picture.common.flow_with_text
+        || !matches!(picture.common.text_wrap, TextWrap::TopAndBottom)
+        || !matches!(picture.common.vert_rel_to, VertRelTo::Para)
+        || !picture.caption.as_ref().is_some_and(|caption| {
+            matches!(caption.direction, CaptionDirection::Bottom) && !caption.paragraphs.is_empty()
+        })
+    {
+        return None;
+    }
+
+    let boundary_sum = i64::from(host_seg.vertical_pos)
+        + i64::from(signed_hwpunit(table.common.vertical_offset))
+        + i64::from(signed_hwpunit(picture.common.vertical_offset));
+    if boundary_sum.abs() > 8 {
+        return None;
+    }
+
+    let top = col_area.y + hwpunit_to_px(next_seg.vertical_pos, dpi);
+    (top >= col_area.y && top <= col_area.y + col_area.height).then_some(top)
 }
 
 /// HWP5의 본문 포함 TopAndBottom 표 중, 여러 저장 줄 뒤에 그림 표가 이어지는
@@ -7550,6 +7633,22 @@ impl LayoutEngine {
                                 && !para_has_visible_text(para)
                     )
                 }) == Some(control_index);
+            let relocated_next_flow_top =
+                para.controls
+                    .get(control_index)
+                    .and_then(|control| match control {
+                        Control::Table(table) => {
+                            native_hwp5_relocated_empty_rowbreak_picture_next_flow_top(
+                                self.profile.get().native_hwp5_layout(),
+                                para,
+                                table,
+                                paragraphs.get(para_index + 1),
+                                col_area,
+                                self.dpi,
+                            )
+                        }
+                        _ => None,
+                    });
             // ── 표 위 간격 ──
             {
                 let comp = composed.get(para_index);
@@ -7942,6 +8041,12 @@ impl LayoutEngine {
                         }
                     }
                 }
+            }
+            // 이월 표의 paint frame/cell height는 유지한다. 단, HWP5가 다음 문단에
+            // 새 page-local LINE_SEG anchor를 저장한 좁은 형상에서는 stale cell bottom을
+            // 후속 문단 flow로 소비하지 않는다.
+            if let Some(next_flow_top) = relocated_next_flow_top {
+                y_offset = next_flow_top;
             }
         }
         (y_offset, false)
