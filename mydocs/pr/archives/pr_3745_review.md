@@ -14,7 +14,8 @@ base route: collaborator self-merge
 modifiers: intake_and_review.md, local_validation.md,
   visual_fixture_evidence.md, rework_and_exceptions.md (1,000줄 초과)
 review 의견 시점 head: a0891ab2b10e65f960bd8641d4133a35a7864162
-review 보정 시작/현재 원격 head: 95dc3e1261b0de47e12d762428a842fe988c2b2a
+review 보정 시작 원격 head: 95dc3e1261b0de47e12d762428a842fe988c2b2a
+게시 직전 동기화 원격 head: 00b2fa3adc4c462b0ce7cedb1ae2144cb8f5dca5
 로컬 code candidate: 6dd0795af35fd030c2ef3fae0fb22cc28092d10c
 ```
 
@@ -28,7 +29,8 @@ review 보정 시작/현재 원격 head: 95dc3e1261b0de47e12d762428a842fe988c2b2
 | 작성자 | `@postmelee` |
 | base / 원격 head | `devel` / `issue-3137-stable-input-fast-path` |
 | review 의견 시점 head | `a0891ab2b10e65f960bd8641d4133a35a7864162` |
-| review 보정 시작/현재 원격 head | `95dc3e1261b0de47e12d762428a842fe988c2b2a` (작성 시점 참고) |
+| review 보정 시작 원격 head | `95dc3e1261b0de47e12d762428a842fe988c2b2a` |
+| 게시 직전 동기화 원격 head | `00b2fa3adc4c462b0ce7cedb1ae2144cb8f5dca5` (최신 `devel` merge) |
 | review 의견 | [issuecomment-5152897760](https://github.com/edwardkim/rhwp/pull/3745#issuecomment-5152897760) |
 | 원격 변경 규모 | 24 files, +4,728 / -34 (작성 시점 참고) |
 | 원격 상태 | open, ready, mergeable (작성 시점 참고) |
@@ -39,9 +41,10 @@ stable horizontal tail edit에서 exact cursor page-tree rebuild와 full Canvas 
 자동 줄바꿈·Enter·문단 split/merge·pending pagination은 정확성을 위해 기존 전체 경로를 유지한다.
 
 review 지적 3건은 로컬 code candidate에서 보정했고, focused Rust·Studio·production WASM·browser
-검증과 transient Canvas 시각 증적이 통과했다. 다만 원격 head에는 아직 이 보정이 없고 현재 CI의
-default-feature shard 3과 `Build & Test` aggregate가 실패했고 shard 4·5는 취소됐다. 따라서 현재 판정은
-**보정 완료·push 승인 대기**이며, 최신 보정 head의 CI 성공과 작업지시자 승인 전에는 merge하지 않는다.
+검증과 transient Canvas 시각 증적이 통과했다. 보정 시작 head `95dc3e126`의 CI는 default-feature
+shard 3과 `Build & Test` aggregate가 실패했고 shard 4·5는 취소됐다. 게시 직전에는 원격의 최신
+`devel` merge `00b2fa3ad`를 로컬 후보에 병합했다. 따라서 현재 판정은 **보정 완료·push 승인 반영**이며,
+최신 보정 head의 CI 성공과 작업지시자 승인 전에는 merge하지 않는다.
 
 ## Review 보정
 
@@ -127,6 +130,6 @@ full render의 unclipped 경로, 실제 `PageRenderer`의 patch 전달을 검증
 
 ## 원격 상태 변경과 최종 권고
 
-이 review 보정 세션에서는 원격 push, PR comment/review reply, thread resolve, approve, ready/draft
-변경, merge, issue close를 수행하지 않았다. 작업지시자 승인 뒤 원 PR branch에 push하고 최신 head
-CI를 확인하기 전의 권고는 **보정 완료·게시 승인 대기**다.
+작업지시자 승인에 따라 보정 후보를 원 PR branch에 push하되, PR comment/review reply, thread
+resolve, approve, ready/draft 변경, merge, issue close는 수행하지 않는다. 최신 head CI를 확인하기
+전의 권고는 **보정 게시·CI 확인 대기**다.
