@@ -63,7 +63,8 @@ p157 94.55227%, p158 95.61487%다. Hancom/로컬 글꼴 raster 차이를 포함�
   p155 `eaa89c5d75478d75eeaef5efb445138b06e466a0a05da7a8e9ee225e458b9223`,
   p157 `e355936b1f5f109bdde5410464c74270c05a26e766b9599cb566c439165cb451`,
   p158 `88aedb4e82c7afef7f8b47e91397487982e0bb2d1064efa752059c854477090b`
-- run manifest SHA-256: `498e89c5ff99dba9c7c1f795ae02b09a033fc5551011885ef9ade87c5632929d`
+- 구현 revision: `edeb2396e2d64207a53b019916963d513556da92`
+- run manifest SHA-256: `f6b7ac7eb5cea54e3f4263244135547c58584b9380a8a941a251827232023bd5`
 
 원본 HWP/HWPX/PDF는 위 저장소 경로에 보관한다. 이 Stage는 220→219의 단일 page-map 분기만 해소했다.
 p155 분홍 흐름도 오배치, 기준 PDF 215쪽 대비 native HWP 219쪽의 잔여 차이, p43·54·67·85·106 등의 독립

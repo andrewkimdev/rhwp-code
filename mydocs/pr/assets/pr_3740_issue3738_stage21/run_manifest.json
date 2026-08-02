@@ -10,7 +10,7 @@
       "path": "pdf/pr3740/hwp/정책연구용역사업 중간진도보고서(살아있는 간장 기증자의 의학적 선별기준 연구)-2020.pdf",
       "sha256": "7879ffee6313575132187c44c0090cd2e62c32c12c29b7eabd989181acf27b3a"
     },
-    "git_head": "d032211daa470d31c80eca42f702137e69aef119",
+    "git_head": "edeb2396e2d64207a53b019916963d513556da92",
     "sweep_script": {
       "path": "scripts/task1274_visual_sweep.py",
       "sha256": "a01638b3bac0640cddf4772a4a4626d46de4fe95626f4cfaf5f7fe3ef415ee89"
