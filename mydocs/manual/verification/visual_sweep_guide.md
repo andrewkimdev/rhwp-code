@@ -21,6 +21,7 @@ last_verified: 2026-07-30
 - frame/tail overflow 후보
 - 수식/본문 겹침 후보
 - 줄 band/order drift 후보
+- **그림·float 주변의 본문이 좁은 세로 열로 재흐름한 단별 text-flow collapse 후보**
 - **구조 heuristic에 걸리지 않는 glyph·PUA·제품명 표시 차이**의 review 후보
 
 이 도구의 절차상 지위는 [시각 검증 거버넌스의 라우팅 표](visual_verification_governance.md)를
@@ -398,6 +399,7 @@ summary: /path/to/rhwp/output/task1274/summary.json
 | `red` | 빨간 문항 marker drift 후보 |
 | `line` | 페이지 전체 line band drift 후보 |
 | `column` | 단별 line band drift 후보 |
+| `flowcollapse` | 같은 단에서 PDF와 line-band 수와 y 흐름이 함께 크게 달라진 본문 flow 붕괴 후보 |
 | `eq` | 수식/본문 겹침 후보 |
 | `title` | 문항 제목/본문 겹침 후보 |
 | `order` | 줄 순서 겹침 후보 |
@@ -415,13 +417,15 @@ summary: /path/to/rhwp/output/task1274/summary.json
 - PR 의 실제 변경 목적을 먼저 확인한다. 렌더링 개선 PR 이 아니면 visual sweep 차이는 참고 자료이며,
   그 차이만으로 merge 보류나 reject 결론을 내리지 않는다.
 - `frame`, `question`, `title`, `tail`, `eq` 후보는 우선 검토 대상이다.
+- `flowcollapse`은 본문이 그림 옆의 비정상적인 세로 열로 분해되는 회귀를 우선 올리는 강한 후보다.
+  자동 불합격은 아니지만 `review`와 PDF를 즉시 대조한다.
 - `line`, `column`, `order` 후보는 실제 시각 차이인지 false positive인지 비교 이미지를 열어 확인한다.
 - 후보가 남아도 메인테이너 SVG/웹/한컴 시각 판정이 통과하면 blocker가 아닐 수 있다.
 
 요약만 빠르게 보기:
 
 ```bash
-jq -r '.[] | [.key, .svg_pages, .pdf_pages, (.visual_metrics.flagged_page_count // 0), (.visual_metrics.frame_overflow_pages|join(",")), (.visual_metrics.line_band_drift_pages|join(",")), (.visual_metrics.column_line_band_drift_pages|join(",")), (.visual_metrics.line_order_overlap_pages|join(",")), (.visual_metrics.question_marker_drift_pages|join(",")), (.visual_metrics.legacy_glyph_visual_pages|join(","))] | @tsv' output/task1274/summary.json
+jq -r '.[] | [.key, .svg_pages, .pdf_pages, (.visual_metrics.flagged_page_count // 0), (.visual_metrics.frame_overflow_pages|join(",")), (.visual_metrics.line_band_drift_pages|join(",")), (.visual_metrics.column_line_band_drift_pages|join(",")), (.visual_metrics.column_text_flow_collapse_pages|join(",")), (.visual_metrics.line_order_overlap_pages|join(",")), (.visual_metrics.question_marker_drift_pages|join(",")), (.visual_metrics.legacy_glyph_visual_pages|join(","))] | @tsv' output/task1274/summary.json
 ```
 
 ## PR에 기록할 때

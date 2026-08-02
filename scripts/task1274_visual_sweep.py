@@ -40,6 +40,12 @@ LINE_BAND_DRIFT_MEAN_LIMIT_PX = 60.0
 LINE_BAND_DRIFT_P90_LIMIT_PX = 120.0
 COLUMN_LINE_DRIFT_MEAN_LIMIT_PX = 42.0
 COLUMN_LINE_DRIFT_P90_LIMIT_PX = 70.0
+# 본문이 그림 주변에서 세로 열로 붕괴하는 경우처럼, 한 column의 line-band 수와
+# y 흐름이 PDF와 함께 크게 달라진 형상은 일반 column drift보다 강한 검토 신호다.
+# 폰트 차이만으로 생기는 소폭 baseline shift는 이 조합을 만족하지 않는다.
+COLUMN_TEXT_FLOW_COLLAPSE_MIN_BAND_COUNT_DELTA = 3
+COLUMN_TEXT_FLOW_COLLAPSE_MEAN_DRIFT_LIMIT_PX = 80.0
+COLUMN_TEXT_FLOW_COLLAPSE_P90_DRIFT_LIMIT_PX = 120.0
 EQUATION_OVERLAP_LIMIT = 0.08
 EQUATION_OVERLAP_MIN_PX = 4.0
 EQUATION_FLOW_LINE_OVERLAP_TOLERANCE_PX = 8.0
@@ -779,6 +785,7 @@ def visual_summary_for_pages(
         "question_marker_flow_drift_pages": flagged_numbers("question_marker_flow_drift"),
         "line_band_drift_pages": flagged_numbers("line_band_drift"),
         "column_line_band_drift_pages": flagged_numbers("column_line_band_drift"),
+        "column_text_flow_collapse_pages": flagged_numbers("column_text_flow_collapse"),
         "large_ink_region_drift_pages": flagged_numbers("large_ink_region_drift"),
         "endnote_separator_gap_drift_pages": flagged_numbers("endnote_separator_gap_drift"),
         "endnote_separator_observed_pages": [
@@ -1721,6 +1728,41 @@ def column_line_band_drift_candidates(drifts: list[dict[str, object]]) -> list[d
             continue
         if mean >= COLUMN_LINE_DRIFT_MEAN_LIMIT_PX and p90 >= COLUMN_LINE_DRIFT_P90_LIMIT_PX:
             candidates.append(item)
+    return candidates
+
+
+def column_text_flow_collapse_candidates(
+    drifts: list[dict[str, object]],
+) -> list[dict[str, object]]:
+    """Return high-confidence one-column text-flow collapse candidates.
+
+    A regular font/raster difference can move many baselines by a small amount.
+    This rule additionally requires a material line-band count change in the same
+    column, so it is aimed at failures such as text being reflowed into narrow
+    vertical strips beside a floating drawing.  It is still a review candidate,
+    not an automatic pass/fail decision.
+    """
+    candidates: list[dict[str, object]] = []
+    for item in drifts:
+        drift = item.get("drift")
+        if not isinstance(drift, dict):
+            continue
+        rhwp_count = drift.get("rhwp_count")
+        pdf_count = drift.get("pdf_count")
+        mean = drift.get("mean_abs_delta_px")
+        p90 = drift.get("p90_abs_delta_px")
+        if not all(isinstance(value, (int, float)) for value in (rhwp_count, pdf_count, mean, p90)):
+            continue
+        band_count_delta = abs(int(rhwp_count) - int(pdf_count))
+        if (
+            band_count_delta >= COLUMN_TEXT_FLOW_COLLAPSE_MIN_BAND_COUNT_DELTA
+            and float(mean) >= COLUMN_TEXT_FLOW_COLLAPSE_MEAN_DRIFT_LIMIT_PX
+            and float(p90) >= COLUMN_TEXT_FLOW_COLLAPSE_P90_DRIFT_LIMIT_PX
+        ):
+            candidate = dict(item)
+            candidate["band_count_delta"] = band_count_delta
+            candidate["reason"] = "column_line_count_and_y_flow_diverge"
+            candidates.append(candidate)
     return candidates
 
 
@@ -3119,6 +3161,7 @@ def analyze_page(
     line_drift = compare_ordered_y(rhwp_bands, pdf_bands)
     column_line_drifts = column_line_band_drifts(rhwp, pdf, rhwp_frame, pdf_frame)
     column_line_drift_candidates = column_line_band_drift_candidates(column_line_drifts)
+    column_text_flow_collapse = column_text_flow_collapse_candidates(column_line_drifts)
     large_region_drift = compare_large_ink_regions(
         large_ink_regions(rhwp, frame=rhwp_frame),
         large_ink_regions(pdf, frame=pdf_frame),
@@ -3309,6 +3352,8 @@ def analyze_page(
         flags.append("question_title_text_overlap")
     if line_order_overlaps:
         flags.append("line_order_overlap")
+    if column_text_flow_collapse:
+        flags.append("column_text_flow_collapse")
     frame_tail_flow_overflow = bool(frame_tail_overflows and (column_line_drift_candidates or rhwp_out_pixels > 0))
     if frame_tail_flow_overflow:
         flags.append("render_tree_frame_tail_overflow")
@@ -3355,6 +3400,7 @@ def analyze_page(
                 "render_tree_frame_tail_overflow": frame_tail_overflows,
                 "question_marker_drift": question_marker_drifts,
                 "column_line_band_drift": column_line_drift_candidates,
+                "column_text_flow_collapse": column_text_flow_collapse,
                 "legacy_glyph_visual": legacy_glyph_visual_candidates,
             },
         )
@@ -3379,6 +3425,7 @@ def analyze_page(
         "line_band_drift": line_drift,
         "column_line_band_drift": column_line_drifts,
         "column_line_band_drift_candidates": column_line_drift_candidates,
+        "column_text_flow_collapse_candidates": column_text_flow_collapse,
         "large_ink_region_drift": large_region_drift,
         "endnote_shape_ui": endnote_shape_ui,
         "endnote_separator_gap": {
@@ -3472,6 +3519,17 @@ def draw_render_tree_overlays(
             f"max={drift.get('max_abs_delta_px')}"
         )
         draw.text((18, label_h + 18 + index * 20), label, fill=(180, 0, 0), font=font)
+
+    for index, item in enumerate(render_overlays.get("column_text_flow_collapse", [])[:4]):
+        drift = item.get("drift")
+        if not isinstance(drift, dict):
+            continue
+        label = (
+            f"TEXT FLOW COLLAPSE c{item.get('column')} "
+            f"band-delta={item.get('band_count_delta')} "
+            f"mean={drift.get('mean_abs_delta_px')} p90={drift.get('p90_abs_delta_px')}"
+        )
+        draw.text((18, label_h + 110 + index * 20), label, fill=(220, 0, 0), font=font)
 
     def draw_bbox(
         box: object,
@@ -3617,6 +3675,9 @@ def analyze_pages(
         "column_line_band_drift_pages": [
             page["page"] for page in flagged_pages if "column_line_band_drift" in page["flags"]
         ],
+        "column_text_flow_collapse_pages": [
+            page["page"] for page in flagged_pages if "column_text_flow_collapse" in page["flags"]
+        ],
         "large_ink_region_drift_pages": [
             page["page"] for page in flagged_pages if "large_ink_region_drift" in page["flags"]
         ],
@@ -3676,6 +3737,7 @@ def analyze_pages(
         f"frame={summary['frame_overflow_pages']} red={summary['red_marker_drift_pages']} "
         f"qflow={summary['question_marker_flow_drift_pages']} "
         f"line={summary['line_band_drift_pages']} column={summary['column_line_band_drift_pages']} "
+        f"flowcollapse={summary['column_text_flow_collapse_pages']} "
         f"sep={summary['endnote_separator_gap_drift_pages']} "
         f"eq={summary['equation_text_overlap_pages']} "
         f"title={summary['question_title_text_overlap_pages']} "

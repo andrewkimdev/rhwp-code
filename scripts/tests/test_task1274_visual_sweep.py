@@ -290,5 +290,42 @@ class LegacyGlyphVisualCandidateTests(unittest.TestCase):
         self.assertEqual(candidates[0]["codepoints"], ["U+E001"])
 
 
+class ColumnTextFlowCollapseCandidateTests(unittest.TestCase):
+    def test_detects_large_single_column_band_count_and_y_flow_divergence(self) -> None:
+        drifts = [
+            {
+                "column": 1,
+                "drift": {
+                    "rhwp_count": 34,
+                    "pdf_count": 37,
+                    "mean_abs_delta_px": 109.4,
+                    "p90_abs_delta_px": 157.0,
+                },
+            }
+        ]
+
+        candidates = SWEEP.column_text_flow_collapse_candidates(drifts)
+
+        self.assertEqual(len(candidates), 1)
+        self.assertEqual(candidates[0]["column"], 1)
+        self.assertEqual(candidates[0]["band_count_delta"], 3)
+        self.assertEqual(candidates[0]["reason"], "column_line_count_and_y_flow_diverge")
+
+    def test_does_not_treat_small_font_baseline_shift_as_flow_collapse(self) -> None:
+        drifts = [
+            {
+                "column": 0,
+                "drift": {
+                    "rhwp_count": 37,
+                    "pdf_count": 37,
+                    "mean_abs_delta_px": 95.0,
+                    "p90_abs_delta_px": 150.0,
+                },
+            }
+        ]
+
+        self.assertEqual(SWEEP.column_text_flow_collapse_candidates(drifts), [])
+
+
 if __name__ == "__main__":
     unittest.main()

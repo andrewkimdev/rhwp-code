@@ -90,6 +90,14 @@ CARGO_TARGET_DIR=target/review-planet6897-20260802 CARGO_INCREMENTAL=0 \
 직접 대조했다. 그림 56·64는 각각 p127·p156에서만 확인되고, p126·p155에서는 표·본문·각주를 덮지
 않는다. p155의 본문/각주 211 및 p156의 그림 64 caption·뒤 표의 physical owner도 기준 PDF와 같다.
 
+### 후속 정정 — p127 그림 주변 본문 wrap
+
+위 결과는 **그림 physical owner**에 한정한다. 이후 유지보수자 직접 비교에서 p127의 그림 56은 올바른
+쪽에 있으나, 다음 문단 `pi=1356`의 저장 narrow wrap band(`cs=0`, `sw=23057HU`)가 다음-page 그림의
+wrap anchor로 복원되지 않아 본문이 PDF와 다른 비정상 세로 열로 흐르는 결함이 확인됐다. 따라서 이
+Stage는 그림 owner만 완료로 유지하고, p127 본문 flow는 Stage 23에서 독립 P0 결함으로 이월한다. 이
+정정은 Stage 22가 p127 전체를 정상이라고 해석될 수 있는 표현을 제한한다.
+
 완전한 실행 명령, PNG, 입력 해시, 자동 후보의 사람 판정은
 [Stage 22 visual sweep](task_m100_3738_stage22_visual_sweep.md)에 고정했다. focused regression은 13/13
 통과했고 native HWP page count는 219로 유지됐다.
