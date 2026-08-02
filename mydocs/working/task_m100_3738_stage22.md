@@ -1,6 +1,6 @@
 ---
 kind: investigation
-status: active
+status: completed
 canonical: mydocs/manual/bug_hunting_playbook.md
 last_verified: 2026-08-02
 ---
@@ -84,13 +84,18 @@ CARGO_TARGET_DIR=target/review-planet6897-20260802 CARGO_INCREMENTAL=0 \
   p127에 `pi=1355/ci=0` Image 하나와 좁은 본문·caption이 남는지 고정.
 - 기존 Stage 9–21 회귀 11개도 함께 통과했고 native page count는 다시 `219`다.
 
-## 다음 검증
+## 결과와 증적
 
-코드 commit을 고정한 뒤 p126·127·155·156을 PDF direct visual sweep으로 대조한다. review PNG와 manifest,
-overlay metric은 별도 `task_m100_3738_stage22_visual_sweep.md`와 asset directory에 남긴다.
+코드 revision `a5612fd2534dbe5ccf4b85e330769213ce30f93c`를 고정한 뒤 p126·127·155·156을 한컴 PDF와
+직접 대조했다. 그림 56·64는 각각 p127·p156에서만 확인되고, p126·p155에서는 표·본문·각주를 덮지
+않는다. p155의 본문/각주 211 및 p156의 그림 64 caption·뒤 표의 physical owner도 기준 PDF와 같다.
 
-## 완료 기준
+완전한 실행 명령, PNG, 입력 해시, 자동 후보의 사람 판정은
+[Stage 22 visual sweep](task_m100_3738_stage22_visual_sweep.md)에 고정했다. focused regression은 13/13
+통과했고 native HWP page count는 219로 유지됐다.
 
-- 그림 56·64가 기준 PDF와 같이 각각 p127·p156에 나타나고 p126·p155에서 표·본문·각주를 덮지 않는다.
-- p155의 본문/각주 211 및 p156의 그림 64 caption/뒤 표가 같은 순서로 남는다.
-- focused regression과 visual evidence를 기록하고, 잔여가 있으면 커밋 뒤 다음 Stage로 이월한다.
+## 다음 단계 이월
+
+이 Stage는 두 Square 그림의 next-page owner만 해소한다. 기준 PDF 215쪽과 native HWP 219쪽의 전체
+page-map 차이와 p43의 본문/각주 겹침을 포함한 독립 잔여 후보는 이 증적 commit 뒤 다음 Stage에서
+현재 `devel` 기준으로 재현·원인 분석한다.
