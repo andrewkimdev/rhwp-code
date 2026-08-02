@@ -437,13 +437,15 @@ jobs:
               setResult(true, 'detection-error');
             }
 
-      # [#3790 Stage 1] PR checkout의 classifier는 아직 trusted skip 근거가 아니다.
-      # 토큰을 전달하지 않는 별도 node step에서 판정하고 summary에만 기록한다.
-      - name: Check out repository for advisory impact classifier
+      # [#3790 Stage 2.5] PR의 classifier 구현은 PR head가 아닌 base SHA에 고정한다.
+      # 아직 worker skip에는 사용하지 않으며 토큰 없는 별도 node step에서 shadow 판정만 기록한다.
+      - name: Check out trusted CI impact classifier
+        id: checkout-impact-classifier
         if: ${{ steps.detect.outputs.fast_pass != 'true' }}
         continue-on-error: true
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.sha }}
           persist-credentials: false
           sparse-checkout: scripts/ci-impact-classifier.cjs
           sparse-checkout-cone-mode: false
@@ -453,6 +455,8 @@ jobs:
         if: ${{ steps.detect.outputs.fast_pass != 'true' }}
         continue-on-error: true
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          CLASSIFIER_CHECKOUT_OUTCOME: ${{ steps.checkout-impact-classifier.outcome }}
         with:
           retries: 3
           script: |
@@ -463,9 +467,12 @@ jobs:
               process.env.GITHUB_WORKSPACE || process.cwd(),
               '.ci-impact-input.json',
             );
-            const authority = context.eventName === 'pull_request'
-              ? 'pr-merge-advisory'
-              : 'checked-out-ref-advisory';
+            const checkoutSucceeded = process.env.CLASSIFIER_CHECKOUT_OUTCOME === 'success';
+            const authority = !checkoutSucceeded
+              ? 'unavailable-advisory'
+              : context.eventName === 'pull_request'
+                ? 'pr-base-trusted-shadow'
+                : 'checked-out-ref-advisory';
             core.setOutput('authority', authority);
 
             function writeInput(input) {
@@ -571,8 +578,8 @@ jobs:
           {
             echo '### Shadow CI impact classification'
             echo
-            echo '> Advisory only: existing worker conditions are unchanged in #3790 Stage 1.'
-            echo '> Review-only fast-pass skips the advisory classifier checkout.'
+            echo '> Advisory only: existing worker conditions are unchanged in #3790 Stage 2.5.'
+            echo '> Pull requests classify with the base SHA classifier; review-only fast-pass skips its checkout.'
             echo
             echo '| Axis | Value |'
             echo '| --- | --- |'

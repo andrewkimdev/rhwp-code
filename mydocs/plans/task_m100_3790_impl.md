@@ -4,7 +4,7 @@
 - **수행계획서**: `mydocs/plans/task_m100_3790.md`
 - **브랜치**: Stage 1 `codex/issue-3790-ci-impact-shadow`, Stage 2
   `codex/issue-3790-shadow-observation`
-- **절차 상태**: Stage 2 1차 실측 완료, live frontend `unit|package`·render 표본 대기
+- **절차 상태**: Stage 2.5 trusted-base shadow 로컬 구현·집중 검증 완료, 원격 검증 전
 
 ## Stage 1 — shadow classifier
 
@@ -28,7 +28,21 @@ pull request에서는 checkout된 merge ref의 classifier가 실행되므로 Sta
 
 1차 실측 결과는 `mydocs/working/task_m100_3790_stage2.md`에 기록한다. merge 이후 live shadow는
 고유 PR 4건뿐이고 frontend `unit|package` 및 `render_required=true`의 live non-full 표본이 없으므로
-Stage 3는 활성화하지 않는다. historical replay 60건은 경로 규칙과 비용의 보조 근거로만 사용한다.
+Stage 3는 활성화하지 않는다. 네 run은 모두 완료됐고 #3740에서 rename full fallback과 기존 Rust fmt
+차단을 확인했다. historical replay 60건은 경로 규칙과 비용의 보조 근거로만 사용한다.
+
+## Stage 2.5 — trusted-base shadow
+
+1. PR에서는 `github.event.pull_request.base.sha`의 classifier만 sparse checkout한다.
+2. push·manual 실행은 해당 실행의 `github.sha`를 사용한다.
+3. PR authority를 `pr-base-trusted-shadow`로 기록하고 기존 merge-ref advisory 표본과 분리한다.
+4. checkout credential을 저장하지 않고 classifier node step에는 토큰을 전달하지 않는다.
+5. 기존 worker 조건이 shadow output을 소비하지 않는 정적 계약을 유지한다.
+6. base SHA ref, authority, review-only fast-pass와 fail-open shadow 동작을 workflow 테스트로 고정한다.
+
+이 단계의 PR CI가 통과해도 worker skip은 활성화되지 않는다. merge 뒤 trusted authority의 completed
+`classified` code run을 최소 5건 관찰하고 frontend `unit|package`와 render 표본을 확보한 뒤 Stage 3
+착수 여부를 다시 판정한다.
 
 ## Stage 3 — frontend unit/package/render 활성화
 
@@ -54,7 +68,7 @@ Stage 3는 활성화하지 않는다. historical replay 60건은 경로 규칙�
 - shard count artifact 재시도와 draft 경량화는 각각 독립 PR로 진행한다.
 - #3789가 완료되기 전에는 `src/main.rs`의 Render Diff trigger를 좁히지 않는다.
 
-## Stage 1 집중 검증
+## 집중 검증
 
 ```bash
 node --test scripts/tests/ci-impact-classifier.test.cjs
@@ -63,4 +77,5 @@ python3 -m unittest scripts/tests/test_render_diff_workflow.py
 git diff --check
 ```
 
-검증 결과는 `mydocs/working/task_m100_3790_stage1.md`에 명령과 종료 상태를 기록한다.
+Stage 1 검증 결과는 `mydocs/working/task_m100_3790_stage1.md`, Stage 2·2.5 결과는
+`mydocs/working/task_m100_3790_stage2.md`에 명령과 종료 상태를 기록한다.

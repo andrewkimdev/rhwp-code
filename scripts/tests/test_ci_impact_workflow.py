@@ -31,19 +31,46 @@ class CiImpactShadowWorkflowTests(unittest.TestCase):
                 self.assertIn(f"      {output}:", self.preflight)
                 self.assertIn(default, self.preflight)
 
-    def test_shadow_classifier_is_advisory_and_does_not_receive_checkout_credentials(self) -> None:
-        self.assertIn("Check out repository for advisory impact classifier", self.preflight)
-        self.assertIn("persist-credentials: false", self.preflight)
-        self.assertIn("sparse-checkout: scripts/ci-impact-classifier.cjs", self.preflight)
-        self.assertIn("sparse-checkout-cone-mode: false", self.preflight)
+    def test_shadow_classifier_uses_pr_base_sha_without_checkout_credentials(self) -> None:
+        step_name = "Check out trusted CI impact classifier"
+        self.assertIn(step_name, self.preflight)
+        step = self.preflight.split(f"      - name: {step_name}", maxsplit=1)[1]
+        step = step.split("\n      - name:", maxsplit=1)[0]
+        self.assertIn(
+            "ref: ${{ github.event_name == 'pull_request' "
+            "&& github.event.pull_request.base.sha || github.sha }}",
+            step,
+        )
+        self.assertIn("persist-credentials: false", step)
+        self.assertIn("sparse-checkout: scripts/ci-impact-classifier.cjs", step)
+        self.assertIn("sparse-checkout-cone-mode: false", step)
+        self.assertIn("id: checkout-impact-classifier", step)
         self.assertIn("Classify CI impact in shadow mode", self.preflight)
         self.assertIn("Advisory only: existing worker conditions are unchanged", self.preflight)
-        self.assertIn("Review-only fast-pass skips the advisory classifier checkout", self.preflight)
-        self.assertIn("pr-merge-advisory", self.preflight)
+        self.assertIn("Pull requests classify with the base SHA classifier", self.preflight)
+        self.assertIn(
+            "CLASSIFIER_CHECKOUT_OUTCOME: "
+            "${{ steps.checkout-impact-classifier.outcome }}",
+            self.preflight,
+        )
+        self.assertIn("pr-base-trusted-shadow", self.preflight)
+        self.assertNotIn("pr-merge-advisory", self.preflight)
+
+    def test_failed_classifier_checkout_cannot_claim_trusted_authority(self) -> None:
+        self.assertIn(
+            "const checkoutSucceeded = "
+            "process.env.CLASSIFIER_CHECKOUT_OUTCOME === 'success';",
+            self.preflight,
+        )
+        self.assertIn(
+            "const authority = !checkoutSucceeded\n"
+            "              ? 'unavailable-advisory'",
+            self.preflight,
+        )
 
     def test_review_only_fast_pass_does_not_pay_shadow_checkout_cost(self) -> None:
         for step_name in (
-            "Check out repository for advisory impact classifier",
+            "Check out trusted CI impact classifier",
             "Collect shadow CI impact input",
             "Classify CI impact in shadow mode",
         ):
@@ -76,7 +103,7 @@ class CiImpactShadowWorkflowTests(unittest.TestCase):
 
     def test_shadow_failures_cannot_fail_preflight(self) -> None:
         for step_name in (
-            "Check out repository for advisory impact classifier",
+            "Check out trusted CI impact classifier",
             "Collect shadow CI impact input",
             "Classify CI impact in shadow mode",
             "Summarize shadow CI impact classification",
