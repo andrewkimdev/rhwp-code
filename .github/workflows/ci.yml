@@ -67,6 +67,16 @@ jobs:
       candidate_sha: ${{ steps.detect.outputs.candidate_sha || '' }}
       frontend_required: ${{ steps.frontend-impact.outputs.frontend_required || 'true' }}
       frontend_reason: ${{ steps.frontend-impact.outputs.frontend_reason || 'frontend-detection-unavailable' }}
+      # [#3790 Stage 1] shadow output은 관찰 전용이다. 아래 worker 조건은 아직 이 값을 참조하지 않는다.
+      shadow_rust_required: ${{ steps.impact-shadow.outputs.rust_required || 'true' }}
+      shadow_frontend_mode: ${{ steps.impact-shadow.outputs.frontend_mode || 'package' }}
+      shadow_render_required: ${{ steps.impact-shadow.outputs.render_required || 'true' }}
+      shadow_native_skia_required: ${{ steps.impact-shadow.outputs.native_skia_required || 'true' }}
+      shadow_codeql_languages: ${{ steps.impact-shadow.outputs.codeql_languages || 'javascript-typescript,python,rust' }}
+      shadow_classification_status: ${{ steps.impact-shadow.outputs.classification_status || 'full' }}
+      shadow_classifier_version: ${{ steps.impact-shadow.outputs.classifier_version || 'unavailable' }}
+      shadow_reason: ${{ steps.impact-shadow.outputs.reason || 'fail-closed:shadow-unavailable' }}
+      shadow_authority: ${{ steps.collect-impact-shadow.outputs.authority || 'unavailable-advisory' }}
 
     steps:
       - name: Detect review-only fast pass
@@ -427,6 +437,156 @@ jobs:
               setResult(true, 'detection-error');
             }
 
+      # [#3790 Stage 1] PR checkout의 classifier는 아직 trusted skip 근거가 아니다.
+      # 토큰을 전달하지 않는 별도 node step에서 판정하고 summary에만 기록한다.
+      - name: Check out repository for advisory impact classifier
+        if: ${{ steps.detect.outputs.fast_pass != 'true' }}
+        continue-on-error: true
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: scripts/ci-impact-classifier.cjs
+          sparse-checkout-cone-mode: false
+
+      - name: Collect shadow CI impact input
+        id: collect-impact-shadow
+        if: ${{ steps.detect.outputs.fast_pass != 'true' }}
+        continue-on-error: true
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          retries: 3
+          script: |
+            const fs = require('node:fs');
+            const path = require('node:path');
+            const { owner, repo } = context.repo;
+            const inputPath = path.join(
+              process.env.GITHUB_WORKSPACE || process.cwd(),
+              '.ci-impact-input.json',
+            );
+            const authority = context.eventName === 'pull_request'
+              ? 'pr-merge-advisory'
+              : 'checked-out-ref-advisory';
+            core.setOutput('authority', authority);
+
+            function writeInput(input) {
+              fs.writeFileSync(inputPath, `${JSON.stringify(input)}\n`, 'utf8');
+              core.info(`shadow impact input: event=${input.eventName} files=${input.files.length}`);
+            }
+
+            function normalizedFiles(files) {
+              return files.map((file) => ({
+                filename: file.filename,
+                previous_filename: file.previous_filename || '',
+                status: file.status || 'modified',
+              }));
+            }
+
+            try {
+              if (context.eventName === 'pull_request') {
+                const files = await github.paginate(github.rest.pulls.listFiles, {
+                  owner,
+                  repo,
+                  pull_number: context.payload.pull_request.number,
+                  per_page: 100,
+                });
+                writeInput({
+                  eventName: context.eventName,
+                  files: normalizedFiles(files),
+                });
+                return;
+              }
+
+              if (context.eventName === 'push') {
+                if (context.ref.startsWith('refs/tags/')) {
+                  writeInput({
+                    eventName: context.eventName,
+                    files: [],
+                    forceFullReason: 'manual-or-tag',
+                  });
+                  return;
+                }
+
+                const before = context.payload.before || '';
+                const after = context.payload.after || context.sha;
+                if (!before || /^0+$/.test(before)) {
+                  writeInput({
+                    eventName: context.eventName,
+                    files: [],
+                    forceFullReason: 'push-zero-before',
+                  });
+                  return;
+                }
+
+                const { data: comparison } = await github.rest.repos.compareCommitsWithBasehead({
+                  owner,
+                  repo,
+                  basehead: `${before}...${after}`,
+                });
+                writeInput({
+                  eventName: context.eventName,
+                  files: normalizedFiles(comparison.files || []),
+                });
+                return;
+              }
+
+              writeInput({
+                eventName: context.eventName,
+                files: [],
+                forceFullReason: context.eventName === 'workflow_dispatch'
+                  ? 'manual-or-tag'
+                  : 'unsupported-event',
+              });
+            } catch (error) {
+              core.warning(`Shadow impact file collection failed; recording full. ${error.message}`);
+              writeInput({
+                eventName: context.eventName,
+                files: [],
+                forceFullReason: 'collection-error',
+              });
+            }
+
+      - name: Classify CI impact in shadow mode
+        id: impact-shadow
+        if: ${{ steps.detect.outputs.fast_pass != 'true' }}
+        continue-on-error: true
+        run: >-
+          node scripts/ci-impact-classifier.cjs
+          --input .ci-impact-input.json
+          --github-output "$GITHUB_OUTPUT"
+
+      - name: Summarize shadow CI impact classification
+        if: ${{ always() }}
+        continue-on-error: true
+        env:
+          SHADOW_AUTHORITY: ${{ steps.collect-impact-shadow.outputs.authority || 'unavailable-advisory' }}
+          SHADOW_RUST_REQUIRED: ${{ steps.impact-shadow.outputs.rust_required || 'true' }}
+          SHADOW_FRONTEND_MODE: ${{ steps.impact-shadow.outputs.frontend_mode || 'package' }}
+          SHADOW_RENDER_REQUIRED: ${{ steps.impact-shadow.outputs.render_required || 'true' }}
+          SHADOW_NATIVE_SKIA_REQUIRED: ${{ steps.impact-shadow.outputs.native_skia_required || 'true' }}
+          SHADOW_CODEQL_LANGUAGES: ${{ steps.impact-shadow.outputs.codeql_languages || 'javascript-typescript,python,rust' }}
+          SHADOW_STATUS: ${{ steps.impact-shadow.outputs.classification_status || 'full' }}
+          SHADOW_VERSION: ${{ steps.impact-shadow.outputs.classifier_version || 'unavailable' }}
+          SHADOW_REASON: ${{ steps.impact-shadow.outputs.reason || 'fail-closed:shadow-unavailable' }}
+        run: |
+          {
+            echo '### Shadow CI impact classification'
+            echo
+            echo '> Advisory only: existing worker conditions are unchanged in #3790 Stage 1.'
+            echo '> Review-only fast-pass skips the advisory classifier checkout.'
+            echo
+            echo '| Axis | Value |'
+            echo '| --- | --- |'
+            printf '| authority | %s |\n' "${SHADOW_AUTHORITY}"
+            printf '| rust_required | %s |\n' "${SHADOW_RUST_REQUIRED}"
+            printf '| frontend_mode | %s |\n' "${SHADOW_FRONTEND_MODE}"
+            printf '| render_required | %s |\n' "${SHADOW_RENDER_REQUIRED}"
+            printf '| native_skia_required | %s |\n' "${SHADOW_NATIVE_SKIA_REQUIRED}"
+            printf '| codeql_languages | %s |\n' "${SHADOW_CODEQL_LANGUAGES}"
+            printf '| classification_status | %s |\n' "${SHADOW_STATUS}"
+            printf '| classifier_version | %s |\n' "${SHADOW_VERSION}"
+            printf '| reason | %s |\n' "${SHADOW_REASON}"
+          } >> "${GITHUB_STEP_SUMMARY}"
+
   # [#2393] 기본 테스트 병렬화 — 테스트 바이너리를 한 번 빌드해 아카이브하고
   # 8개 샤드가 컴파일 없이 나눠 실행한다. [#3266] Native Skia와 archive는 같은
   # lint/frontend gate 뒤 병렬로 시작한다. [#3268] Lint와 Frontend도 preflight 뒤
@@ -640,6 +800,11 @@ jobs:
 
       - name: Format check
         run: cargo fmt --all -- --check
+
+      - name: Validate CI impact classifier
+        run: |
+          node --test scripts/tests/ci-impact-classifier.test.cjs
+          python3 -m unittest scripts/tests/test_ci_impact_workflow.py
 
       - name: Validate Render Diff trigger policy
         run: python3 -m unittest scripts/tests/test_render_diff_workflow.py
