@@ -791,6 +791,282 @@ def layout_candidates(tree: Mapping[str, object]) -> tuple[int, int, int, int, i
     )
 
 
+TABLE_MATERIAL_TEXT_DELTA_CHARS = 24
+TABLE_BOTTOM_NEAR_PAGE_RATIO = 0.85
+
+
+def page_text_delta_chars(
+    page_differences: Mapping[int, tuple[Counter[str], Counter[str]]],
+    page_index: int,
+) -> int | None:
+    """Return a page's PDF/SVG character delta when that comparison exists."""
+    differences = page_differences.get(page_index)
+    if differences is None:
+        return None
+    missing, extra = differences
+    return sum(missing.values()) + sum(extra.values())
+
+
+def body_table_records(
+    tree: Mapping[str, object],
+    page_index: int,
+    text_delta_chars: int | None,
+) -> list[dict[str, object]]:
+    """Collect Body-table geometry signals from one render-tree page.
+
+    The render tree has no Hancom PDF table-row ownership information.  These
+    records therefore preserve only rhwp's table identity/geometry and the
+    local PDF/SVG text-delta *signal* for a later visual comparison.
+    """
+    page_box = bbox_from_node(tree)
+    footer_tops: list[float] = []
+    tables: list[tuple[Mapping[str, object], tuple[float, float, float, float]]] = []
+
+    def walk(node: Mapping[str, object], region: str = "outside") -> None:
+        node_type = node.get("type")
+        if node_type in {"Body", "FootnoteArea", "Footer", "Header"}:
+            region = str(node_type)
+        box = bbox_from_node(node)
+        if node_type == "Footer" and box is not None:
+            footer_tops.append(box[1])
+        elif region == "Body" and node_type == "Table" and box is not None:
+            tables.append((node, box))
+        children = node.get("children")
+        if isinstance(children, list):
+            for child in children:
+                if isinstance(child, Mapping):
+                    walk(child, region)
+
+    walk(tree)
+    footer_top = min(footer_tops, default=None)
+    records: list[dict[str, object]] = []
+    for node, box in tables:
+        x, y, width, height = box
+        table_bottom = y + height
+        footer_overlap = footer_top is not None and table_bottom > footer_top + 1.0
+        outside_frame = False
+        bottom_gap: float | None = None
+        bottom_near = False
+        if page_box is not None:
+            page_x, page_y, page_width, page_height = page_box
+            page_right = page_x + page_width
+            page_bottom = page_y + page_height
+            outside_frame = (
+                x < page_x - 1.0
+                or y < page_y - 1.0
+                or x + width > page_right + 1.0
+                or table_bottom > page_bottom + 1.0
+            )
+            bottom_gap = page_bottom - table_bottom
+            bottom_near = table_bottom >= page_y + page_height * TABLE_BOTTOM_NEAR_PAGE_RATIO
+        records.append(
+            {
+                "page": page_index,
+                "pi": node.get("pi"),
+                "ci": node.get("ci"),
+                "rows": node.get("rows"),
+                "cols": node.get("cols"),
+                "bbox": box,
+                "footer_overlap": footer_overlap,
+                "outside_frame": outside_frame,
+                "bottom_gap": bottom_gap,
+                "bottom_near": bottom_near,
+                "text_delta_chars": text_delta_chars,
+            }
+        )
+    return records
+
+
+def table_identity(record: Mapping[str, object]) -> tuple[str, str] | None:
+    """Return stable source identity only when both Table coordinates exist."""
+    para_index = record.get("pi")
+    control_index = record.get("ci")
+    if para_index is None or control_index is None:
+        return None
+    return (str(para_index), str(control_index))
+
+
+def table_record_signals(record: Mapping[str, object], prefix: str) -> list[str]:
+    """Return candidate signals; none of them is a PDF row-owner verdict."""
+    signals: list[str] = []
+    if record.get("footer_overlap") is True:
+        signals.append(f"{prefix}_table_footer")
+    if record.get("outside_frame") is True:
+        signals.append(f"{prefix}_table_outside_frame")
+    delta = record.get("text_delta_chars")
+    if (
+        record.get("bottom_near") is True
+        and isinstance(delta, int)
+        and delta >= TABLE_MATERIAL_TEXT_DELTA_CHARS
+    ):
+        signals.append(f"{prefix}_bottom_near_material_text_delta")
+    return signals
+
+
+def table_fragment_candidates(
+    tree_dir: Path,
+    requested_pages: Sequence[int],
+    page_differences: Mapping[int, tuple[Counter[str], Counter[str]]],
+) -> list[dict[str, object]]:
+    """Triages adjacent Body-table fragments and local table-risk signals.
+
+    A same `(pi, ci)` table on physical pN/pN+1 establishes only that rhwp
+    fragmented one source table.  The companion PDF/SVG text delta and footer/
+    frame geometry narrow review priority; neither can assert which PDF row
+    belongs to which physical page.
+    """
+    requested = set(requested_pages)
+    page_paths: dict[int, Path] = {}
+    pattern = re.compile(r"_([0-9]+)\.json$")
+    for path in tree_dir.glob("*.json"):
+        match = pattern.search(path.name)
+        if match is not None:
+            page_paths[int(match.group(1)) - 1] = path
+
+    # The render tree is global, but a narrow compare should not deserialize a
+    # 200-page document merely to decide whether pN's table continues on pN+1.
+    # Include both neighbors so a requested pN also reports a pN-1→pN join.
+    inspected_pages = {
+        neighbor
+        for page_index in requested
+        for neighbor in (page_index - 1, page_index, page_index + 1)
+        if neighbor >= 0
+    }
+    records_by_page: dict[int, list[dict[str, object]]] = {}
+    for page_index in sorted(inspected_pages):
+        path = page_paths.get(page_index)
+        if path is None:
+            continue
+        try:
+            tree = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError, json.JSONDecodeError):
+            continue
+        if not isinstance(tree, Mapping):
+            continue
+        records_by_page[page_index] = body_table_records(
+            tree,
+            page_index,
+            page_text_delta_chars(page_differences, page_index),
+        )
+
+    candidates: list[dict[str, object]] = []
+    paired_records: set[int] = set()
+    for page_index, records in sorted(records_by_page.items()):
+        next_records = records_by_page.get(page_index + 1, [])
+        next_by_identity: dict[tuple[str, str], list[dict[str, object]]] = {}
+        for record in next_records:
+            identity = table_identity(record)
+            if identity is not None:
+                next_by_identity.setdefault(identity, []).append(record)
+        for record in records:
+            identity = table_identity(record)
+            if identity is None:
+                continue
+            for next_record in next_by_identity.get(identity, []):
+                if page_index not in requested and page_index + 1 not in requested:
+                    continue
+                paired_records.add(id(record))
+                paired_records.add(id(next_record))
+                signals = ["same_pi_ci_adjacent_fragment"]
+                signals.extend(table_record_signals(record, "page"))
+                signals.extend(table_record_signals(next_record, "next_page"))
+                candidates.append(
+                    {
+                        "page_table": record,
+                        "next_page_table": next_record,
+                        "signals": signals,
+                    }
+                )
+
+    for page_index in sorted(requested):
+        for record in records_by_page.get(page_index, []):
+            if id(record) in paired_records:
+                continue
+            signals = table_record_signals(record, "page")
+            if signals:
+                candidates.append(
+                    {
+                        "page_table": record,
+                        "next_page_table": None,
+                        "signals": signals,
+                    }
+                )
+
+    def candidate_sort_key(candidate: Mapping[str, object]) -> tuple[int, int, str, str]:
+        page_table = candidate["page_table"]
+        assert isinstance(page_table, Mapping)
+        next_page_table = candidate.get("next_page_table")
+        next_page = (
+            int(next_page_table["page"])
+            if isinstance(next_page_table, Mapping)
+            else -1
+        )
+        return (
+            int(page_table["page"]),
+            next_page,
+            str(page_table.get("pi", "")),
+            str(page_table.get("ci", "")),
+        )
+
+    return sorted(candidates, key=candidate_sort_key)
+
+
+def format_bbox(box: object) -> str:
+    if not isinstance(box, tuple) or len(box) != 4:
+        return "-"
+    return ",".join(f"{float(value):.1f}" for value in box)
+
+
+def format_number(value: object) -> str:
+    if value is None:
+        return "-"
+    if isinstance(value, float):
+        return f"{value:.1f}"
+    return str(value)
+
+
+def write_table_fragment_ledger(
+    work_dir: Path,
+    tree_dir: Path,
+    requested_pages: Sequence[int],
+    page_differences: Mapping[int, tuple[Counter[str], Counter[str]]],
+) -> None:
+    """Write bounded table-fragment review candidates for `--layout-ledger`."""
+    report_path = work_dir / "table-fragment-candidates.tsv"
+    with report_path.open("w", encoding="utf-8") as report:
+        report.write(
+            "page\tnext_page\tpi\tci\trows\tcols\tnext_rows\tnext_cols\t"
+            "bbox\tnext_bbox\tsignals\tpage_text_delta_chars\t"
+            "next_page_text_delta_chars\tpage_bottom_gap_px\t"
+            "next_page_bottom_gap_px\tnote\n"
+        )
+        for candidate in table_fragment_candidates(
+            tree_dir, requested_pages, page_differences
+        ):
+            page_table = candidate["page_table"]
+            assert isinstance(page_table, Mapping)
+            next_page_table = candidate.get("next_page_table")
+            assert next_page_table is None or isinstance(next_page_table, Mapping)
+            report.write(
+                f"{int(page_table['page']) + 1}\t"
+                f"{int(next_page_table['page']) + 1 if next_page_table is not None else '-'}\t"
+                f"{format_number(page_table.get('pi'))}\t"
+                f"{format_number(page_table.get('ci'))}\t"
+                f"{format_number(page_table.get('rows'))}\t"
+                f"{format_number(page_table.get('cols'))}\t"
+                f"{format_number(next_page_table.get('rows')) if next_page_table is not None else '-'}\t"
+                f"{format_number(next_page_table.get('cols')) if next_page_table is not None else '-'}\t"
+                f"{format_bbox(page_table.get('bbox'))}\t"
+                f"{format_bbox(next_page_table.get('bbox')) if next_page_table is not None else '-'}\t"
+                f"{'|'.join(str(signal) for signal in candidate['signals'])}\t"
+                f"{format_number(page_table.get('text_delta_chars'))}\t"
+                f"{format_number(next_page_table.get('text_delta_chars')) if next_page_table is not None else '-'}\t"
+                f"{format_number(page_table.get('bottom_gap'))}\t"
+                f"{format_number(next_page_table.get('bottom_gap')) if next_page_table is not None else '-'}\t"
+                "candidate only; does not assert PDF table row owner or fragment correctness\n"
+            )
+
+
 def tree_path_for_page(tree_dir: Path, page_index: int) -> Path | None:
     matches = sorted(tree_dir.glob(f"*_{page_index + 1:03}.json"))
     return matches[0] if matches else None
@@ -1146,6 +1422,13 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     write_text_owner_shift_ledger(work_dir, text_differences)
     write_text_owner_sequence_ledger(work_dir, text_layers)
+    if args.layout_ledger:
+        write_table_fragment_ledger(
+            work_dir,
+            tree_dir,
+            requested_pages,
+            text_differences,
+        )
     write_page_count_ledger(
         work_dir,
         reference_page_count=reference_page_count,
@@ -1179,6 +1462,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     print("page-count ledger:", work_dir / "page-count-ledger.tsv")
     if args.layout_ledger:
         print("layout ledger:", work_dir / "layout-candidates.tsv")
+        print("table fragment candidates:", work_dir / "table-fragment-candidates.tsv")
     print("run state:", work_dir / "run-state.tsv")
     return 0 if not all_missing_pages else 1
 

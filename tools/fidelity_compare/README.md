@@ -88,6 +88,10 @@ python3 tools/fidelity_compare/fidelity_compare.py 0 214 \
 - `svg/export-svg-manifest.json`: `--export-all-svg`가 보관한 rhwp SVG 매니페스트
 - `layout-candidates.tsv`: `--layout-ledger`가 기록한 body↔각주 TextLine, 표↔footer, 표/그림 page-frame 밖,
   Square/Tight/Through 그림을 3행 이상 침범한 본문 후보
+- `table-fragment-candidates.tsv`: 같은 source `(pi, ci)`의 Body `Table`이 인접 물리 쪽에 다시 나온 경우,
+  표↔footer·page frame 후보, 또는 쪽 하단 표와 24자 이상 PDF↔SVG text delta가 함께 있는 경우를 한 행에
+  묶는다. rows/cols·각 쪽 bbox·하단 여백·text delta를 남기지만 **PDF table row owner나 올바른 표 분할을
+  판정하지 않는 candidate**다.
 
 `--source`, `--reference-pdf`, `--label`을 모두 지정하면 등록 fixture 대신 임의의 HWP/HWPX와 기준 PDF를
 비교한다. 이 direct-pair 형식의 positional은 `<시작쪽> <끝쪽>`뿐이다. 기존 등록 fixture 형식
@@ -99,9 +103,10 @@ python3 tools/fidelity_compare/fidelity_compare.py 0 214 \
 각주가 기준 PDF에서는 pN+1에 있는 경우처럼 page-owner 후보를 바로 보인다.
 `text-owner-sequence-candidates.tsv`는 p52→p53처럼 다른 본문 문자와 Counter가 상쇄되는 이동도
 순서 보존 URL/citation 문자열로 보완한다. 사진 위치,
-같은 문자 수의 줄바꿈/overlap, 표 행 경계는 검출할 수 없으므로 `text-report.tsv` 상위 페이지와
-`export-svg --json`의 `overflowCellLines` 및 bbox ledger를 합친 뒤에만 pixel diff와 visual sweep을
-실행한다.
+같은 문자 수의 줄바꿈/overlap, PDF 기준 표 행 owner는 검출할 수 없다. 다만
+`table-fragment-candidates.tsv`는 같은 `(pi, ci)`의 인접 쪽 fragment와 footer/frame·하단 text-delta 신호를
+우선순위 후보로 묶는다. `text-report.tsv` 상위 페이지와 `export-svg --json`의 `overflowCellLines` 및 bbox
+ledger를 합친 뒤에만 pixel diff와 visual sweep으로 확정한다.
 
 `--export-all-svg`는 지정 범위와 관계없이 `export-svg`를 한 번 실행해 SVG cache를 채운다. 긴 문서의
 전수 text-only pass에서 페이지마다 rhwp 프로세스를 재기동하지 않기 위한 선택지다. 이후 같은 `--out-dir`에
@@ -111,13 +116,16 @@ python3 tools/fidelity_compare/fidelity_compare.py 0 214 \
 `page-count-ledger.tsv`에 render tree 전체 페이지 수를 남긴다. `--export-all-svg`를 함께 주면 SVG 전체 쪽수도
 기록한다. 선택 page SVG cache 수는 partial run과 stale cache를 구분할 수 없어서 전체 수로 가장하지 않는다.
 
-`--layout-ledger`는 `export-render-tree`를 한 번 실행해 `layout-candidates.tsv`를 만든다. `body_footnote_lines`
-는 Body `TextLine`의 하단이 `FootnoteArea` 상단보다 1px 이상 아래인 경우, `table_footer`는 Body 표의 하단이
-Footer 상단보다 1px 이상 아래인 경우다. `*_outside_frame`은 Body 표/그림이 page frame 밖에 나간 경우다.
-`square_wrap_text_overlap`은 Square/Tight/Through 그림의 물리 box를 그 폭의 절반 이상 가로지르는 Body
-`TextLine`이 3행 이상인 경우다. BehindText/InFrontOfText 그림은 의도된 overlay일 수 있어 이 후보에서 제외한다.
-stroke 반올림과 문서 고유 overlay도 후보가 될 수 있으므로, 0이 아닌 값은 곧바로 결함이 아니라 visual review 대상으로
-해석한다.
+`--layout-ledger`는 `export-render-tree`를 한 번 실행해 `layout-candidates.tsv`와
+`table-fragment-candidates.tsv`를 만든다. `body_footnote_lines`는 Body `TextLine`의 하단이
+`FootnoteArea` 상단보다 1px 이상 아래인 경우, `table_footer`는 Body 표의 하단이 Footer 상단보다 1px 이상 아래인
+경우다. `*_outside_frame`은 Body 표/그림이 page frame 밖에 나간 경우다. 표 fragment ledger는 source `(pi, ci)`가
+인접 render-tree 쪽에 연속한 것, 표/footer·frame 충돌, 또는 page 높이의 하단 15%에 걸친 표와 24자 이상
+PDF↔SVG text delta를 함께 기록한다. 이것은 rhwp 쪽의 source-table 연속성 및 위험 신호일 뿐 PDF의 행 owner나
+올바른 분할을 판정하지 않는다. `square_wrap_text_overlap`은 Square/Tight/Through 그림의 물리 box를 그 폭의 절반 이상
+가로지르는 Body `TextLine`이 3행 이상인 경우다. BehindText/InFrontOfText 그림은 의도된 overlay일 수 있어 이
+후보에서 제외한다. stroke 반올림과 문서 고유 overlay도 후보가 될 수 있으므로, 0이 아닌 값은 곧바로 결함이 아니라
+visual review 대상으로 해석한다.
 
 단계별 확장(10쪽 → 전수 → 고난도 문서)으로 돌리고, 픽셀 랭킹과 문자 멀티셋 격차를
 교차해 후보를 좁힌다. **랭킹 상위 페이지의 시트를 눈으로 감사**한 뒤 실질 결함만

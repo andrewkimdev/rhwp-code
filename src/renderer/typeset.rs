@@ -60,6 +60,20 @@ struct TableContinuationCursor {
     fragments_emitted: usize,
     /// fragment queue에서 이미 page에 등록한 표 각주 수.
     next_table_footnote: usize,
+    /// 앞 표 fragment에 번호가 찍힌 table-cell 각주의 번호 없는 tail. 다음 physical
+    /// fragment의 FootnoteArea 첫 항목으로 먼저 등록해야 source 순서가 보존된다.
+    pending_table_footnote_fragment: Option<PendingTableFootnoteFragment>,
+}
+
+/// RowBreak 표 셀 각주가 HWP 저장 vpos reset에서 물리 page를 넘을 때의 tail 정보.
+///
+/// 본문 각주와 달리 표 fragment가 먼저 확정된 뒤 footnote queue가 처리되므로, 첫
+/// fragment를 등록한 시점에는 아직 다음 page가 없다. source index와 fragment만
+/// cursor에 보존해 다음 table fragment가 끝난 뒤 같은 순서로 등록한다.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct PendingTableFootnoteFragment {
+    note_index: usize,
+    fragment: FootnoteFragment,
 }
 
 impl TableContinuationCursor {
@@ -485,14 +499,28 @@ struct TableBreakToken {
 /// 모든 각주가 새 쪽 하나에는 들어가지만 현재 잔여에는 전부 들어가지 않는 작은
 /// RowBreak 표만 이 정보를 이용해 fragment별 각주 예약을 늦춘다.
 #[derive(Debug, Clone, Copy)]
+struct TableCellFootnoteFragmentSplit {
+    prefix: FootnoteFragment,
+    prefix_height: f64,
+    suffix: FootnoteFragment,
+    suffix_height: f64,
+}
+
+/// RowBreak 표가 page boundary를 넘을 때 queue가 source order로 등록할 셀 각주.
+///
+/// `fragment_split`은 native HWP5 cell-footnote의 실제 stored vpos reset을 그대로
+/// 옮긴 경우에만 채운다. 단순 capacity 부족은 일반 각주처럼 원자적으로 유지한다.
+#[derive(Debug, Clone, Copy)]
 struct TableCellFootnote {
     number: u16,
     cell_index: usize,
     cell_para_index: usize,
     cell_control_index: usize,
+    row: usize,
     /// Renderer가 실제 줄바꿈·trailing line-spacing까지 합산한 높이. RowBreak
     /// fragment queue는 이 값을 써야 URL 각주가 본문 위로 침범하지 않는다.
     content_height: f64,
+    fragment_split: Option<TableCellFootnoteFragmentSplit>,
 }
 
 /// 표 cell 각주의 실제 렌더 높이. 일반 paginator의 빠른 저장 LineSeg 추정과 달리
@@ -1897,6 +1925,91 @@ fn native_hwp5_footnote_fragment_height(
         .iter()
         .map(|line| hwpunit_to_px(line.line_height, dpi))
         .sum()
+}
+
+/// native HWP5 RowBreak 표 셀 각주의 저장 line reset을 physical footnote fragment로
+/// 보존한다.
+///
+/// p728의 note 77처럼 셀 marker는 첫 table fragment에 있고 각주 문단의 세 번째
+/// stored line이 `vpos=0`으로 다시 시작할 수 있다. 한컴 PDF는 reset 앞 두 줄을
+/// marker page에, 뒤 두 줄을 다음 table fragment page에 둔다. queue가 note 전체를
+/// 원자적으로 넘기면 첫 page에서 note number가 사라지고 다음 page body와 각주가
+/// 겹친다. generic wrap/capacity 추측이 아니라 stored line count와 reset이 composer
+/// line count에 정확히 대응하는 경우만 인정한다.
+fn native_hwp5_table_cell_footnote_reset_fragments(
+    footnote: &Footnote,
+    dpi: f64,
+) -> Option<TableCellFootnoteFragmentSplit> {
+    let mut flat_lines = Vec::new();
+    let mut split_line = None;
+    for paragraph in &footnote.paragraphs {
+        let composed = crate::renderer::composer::compose_paragraph(paragraph);
+        // source LINE_SEG가 composer line과 일대일로 남아 있는 경우만 reset을
+        // physical owner 신호로 쓴다. 재flow/합성 line은 capacity heuristic으로
+        // 오인하지 않고 기존 원자 queue를 유지한다.
+        if composed.lines.is_empty() || composed.lines.len() != paragraph.line_segs.len() {
+            return None;
+        }
+        let base = flat_lines.len();
+        for (index, line) in composed.lines.iter().enumerate() {
+            flat_lines.push((
+                hwpunit_to_px(line.line_height, dpi),
+                hwpunit_to_px(line.line_spacing, dpi),
+            ));
+            if index == 0 {
+                continue;
+            }
+            let previous = &paragraph.line_segs[index - 1];
+            let next = &paragraph.line_segs[index];
+            if !is_synthetic_line_seg(previous)
+                && !is_synthetic_line_seg(next)
+                && previous.vertical_pos > 0
+                && next.vertical_pos == 0
+            {
+                if split_line.replace(base + index).is_some() {
+                    return None;
+                }
+            }
+        }
+    }
+    let line_count = flat_lines.len();
+    let split_line = split_line?;
+    if split_line == 0 || split_line >= line_count {
+        return None;
+    }
+
+    let prefix = FootnoteFragment {
+        start_line: 0,
+        end_line: split_line,
+        draw_separator: true,
+        draw_number: true,
+    };
+    let suffix = FootnoteFragment {
+        start_line: split_line,
+        end_line: line_count,
+        draw_separator: false,
+        draw_number: false,
+    };
+    let fragment_height = |fragment: FootnoteFragment| {
+        flat_lines[fragment.start_line..fragment.end_line]
+            .iter()
+            .enumerate()
+            .map(|(index, (line_height, line_spacing))| {
+                *line_height
+                    + if index + 1 < fragment.end_line - fragment.start_line {
+                        *line_spacing
+                    } else {
+                        0.0
+                    }
+            })
+            .sum()
+    };
+    Some(TableCellFootnoteFragmentSplit {
+        prefix_height: fragment_height(prefix),
+        suffix_height: fragment_height(suffix),
+        prefix,
+        suffix,
+    })
 }
 
 /// 실제 각주 영역과 겹치는 native HWP5 본문 문단의 저장 reset을 찾는다.
@@ -14313,14 +14426,24 @@ impl TypesetEngine {
                         let fn_height = estimate_footnote_note_height(fn_ctrl, self.dpi);
                         table_footnote_height += fn_height;
                         table_footnote_count += 1;
+                        let fragment_split = self
+                            .profile
+                            .get()
+                            .native_hwp5_layout()
+                            .then(|| {
+                                native_hwp5_table_cell_footnote_reset_fragments(fn_ctrl, self.dpi)
+                            })
+                            .flatten();
                         table_footnotes.push(TableCellFootnote {
                             number: fn_ctrl.number,
                             cell_index: cell_idx,
                             cell_para_index: cp_idx,
                             cell_control_index: cc_idx,
+                            row: cell.row as usize,
                             content_height: estimate_queued_table_footnote_height(
                                 fn_ctrl, self.dpi,
                             ),
+                            fragment_split,
                         });
                     }
                 }
@@ -18601,15 +18724,16 @@ impl TypesetEngine {
         notes: &[TableCellFootnote],
         para_idx: usize,
         ctrl_idx: usize,
+        fragment_start_row: usize,
+        fragment_end_row: usize,
         terminal_fragment: bool,
         relax_terminal_table_footnote_fit: bool,
     ) {
-        while let Some(note) = notes.get(continuation.next_table_footnote) {
-            let projected = st.projected_footnote_height(note.content_height, 1);
+        let note_fits = |st: &TypesetState, content_height: f64| {
+            let projected = st.projected_footnote_height(content_height, 1);
             // 단일단의 중간 RowBreak fragment 뒤에는 같은 page에 이어질 본문이 없다.
             // 다음 fragment가 새 page에서 시작하므로, 이 fragment의 table-cell 각주는
             // 일반 본문 후속 배치를 위한 40px safety buffer를 중복 예약하지 않는다.
-            // p728의 77번처럼 기준 PDF 하단에 실제로 들어가는 각주를 보존하는 범위다.
             let projected_margin = if projected > 0.0
                 && (terminal_fragment || st.col_count != 1)
                 && !relax_terminal_table_footnote_fit
@@ -18648,11 +18772,13 @@ impl TypesetEngine {
             } else {
                 0.0
             };
-            if (projected - reclaim).max(0.0) + projected_margin > footnote_only_capacity + 0.5
-                || st.current_height + table_footnote_overlap_guard > page_available + 0.5
-            {
-                break;
-            }
+            !((projected - reclaim).max(0.0) + projected_margin > footnote_only_capacity + 0.5
+                || st.current_height + table_footnote_overlap_guard > page_available + 0.5)
+        };
+        let add_note = |st: &mut TypesetState,
+                        note: &TableCellFootnote,
+                        fragment: Option<FootnoteFragment>,
+                        content_height: f64| {
             if let Some(page) = st.pages.last_mut() {
                 page.footnotes.push(FootnoteRef {
                     number: note.number,
@@ -18663,10 +18789,65 @@ impl TypesetEngine {
                         cell_para_index: note.cell_para_index,
                         cell_control_index: note.cell_control_index,
                     },
-                    fragment: None,
+                    fragment,
                 });
             }
-            st.add_footnote_height(note.content_height);
+            let draw_separator = fragment
+                .map(|fragment| fragment.draw_separator)
+                .unwrap_or(true);
+            st.add_footnote_fragment_height(content_height, draw_separator);
+        };
+
+        // HWP 저장 reset이 있는 table-cell 각주의 tail은 앞 fragment에서 이미 번호가
+        // 출력됐으므로, 다음 table fragment page에서 순서상 가장 먼저 등록한다. tail이
+        // 새 page의 첫 각주이고 뒤에 새 note가 이어지면 separator는 새 page에 한 번
+        // 필요하다. (p66 note 77 → p67 note 78–85)
+        if let Some(pending) = continuation.pending_table_footnote_fragment {
+            let Some(note) = notes.get(pending.note_index) else {
+                continuation.pending_table_footnote_fragment = None;
+                return;
+            };
+            let Some(split) = note.fragment_split else {
+                continuation.pending_table_footnote_fragment = None;
+                return;
+            };
+            let mut tail = pending.fragment;
+            if st.is_first_footnote_on_page && continuation.next_table_footnote < notes.len() {
+                tail.draw_separator = true;
+            }
+            if !note_fits(st, split.suffix_height) {
+                return;
+            }
+            add_note(st, note, Some(tail), split.suffix_height);
+            continuation.pending_table_footnote_fragment = None;
+        }
+
+        while let Some(note) = notes.get(continuation.next_table_footnote) {
+            if !note_fits(st, note.content_height) {
+                // p728 note 77처럼 table cell 안의 stored vpos reset이 실제 footnote
+                // page boundary를 명시하고, marker row가 지금 확정한 intermediate
+                // fragment에 있을 때만 note를 line fragment로 나눈다. 단순 capacity
+                // 부족, terminal fragment, multi-column, marker가 다른 fragment인 경우는
+                // 종전의 원자 queue를 그대로 유지한다.
+                let split = note.fragment_split.filter(|_| {
+                    !terminal_fragment
+                        && st.col_count == 1
+                        && continuation.pending_table_footnote_fragment.is_none()
+                        && note.row >= fragment_start_row
+                        && note.row < fragment_end_row
+                });
+                if let Some(split) = split.filter(|split| note_fits(st, split.prefix_height)) {
+                    add_note(st, note, Some(split.prefix), split.prefix_height);
+                    continuation.pending_table_footnote_fragment =
+                        Some(PendingTableFootnoteFragment {
+                            note_index: continuation.next_table_footnote,
+                            fragment: split.suffix,
+                        });
+                    continuation.next_table_footnote += 1;
+                }
+                break;
+            }
+            add_note(st, note, None, note.content_height);
             continuation.next_table_footnote += 1;
         }
     }
@@ -19188,14 +19369,21 @@ impl TypesetEngine {
                         table_footnotes,
                         para_idx,
                         ctrl_idx,
+                        cursor_row,
+                        end_row,
                         true,
                         relax_terminal_table_footnote_fit && is_continuation,
                     );
                     // terminal fragment에 들어가지 못한 URL 각주는 새 page의 footer
                     // lane에 먼저 예약한다. 다음 본문은 그 reservation을 보고 같은
                     // page에 fit하거나 필요할 때만 다음 page로 분할된다.
-                    while continuation.next_table_footnote < table_footnotes.len() {
-                        let before = continuation.next_table_footnote;
+                    while continuation.pending_table_footnote_fragment.is_some()
+                        || continuation.next_table_footnote < table_footnotes.len()
+                    {
+                        let before = (
+                            continuation.next_table_footnote,
+                            continuation.pending_table_footnote_fragment.is_some(),
+                        );
                         st.force_new_page();
                         self.register_queued_table_footnotes(
                             st,
@@ -19203,15 +19391,21 @@ impl TypesetEngine {
                             table_footnotes,
                             para_idx,
                             ctrl_idx,
+                            cursor_row,
+                            end_row,
                             true,
                             relax_terminal_table_footnote_fit && is_continuation,
                         );
                         st.reset_vpos_after_queued_table_footnote_page = true;
-                        debug_assert!(
-                            continuation.next_table_footnote > before,
-                            "fresh page must accept one queued table footnote"
+                        let after = (
+                            continuation.next_table_footnote,
+                            continuation.pending_table_footnote_fragment.is_some(),
                         );
-                        if continuation.next_table_footnote == before {
+                        debug_assert!(
+                            after != before,
+                            "fresh page must accept one queued table footnote or pending tail"
+                        );
+                        if after == before {
                             break;
                         }
                     }
@@ -19253,6 +19447,8 @@ impl TypesetEngine {
                     table_footnotes,
                     para_idx,
                     ctrl_idx,
+                    cursor_row,
+                    end_row,
                     false,
                     false,
                 );

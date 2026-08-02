@@ -220,6 +220,26 @@ fn rowbreak_table_cell_footnotes_keep_the_pdf_fragment_boundary() {
         "p67은 기준 PDF처럼 표 23의 남은 5–6행에서 재개해야 함: {p67}"
     );
 
+    let p66_tree = doc
+        .build_page_render_tree(PAGE_66)
+        .expect("render physical page 66");
+    let mut p66_notes = String::new();
+    footnote_text(&p66_tree.root, false, &mut p66_notes);
+    assert!(
+        p66_notes.contains("76)") && p66_notes.contains("77)"),
+        "p66은 PDF처럼 table row 1의 note 77 첫 fragment를 note 76 뒤에 보여야 함: {p66_notes}"
+    );
+
+    let mut p66_table_bottom = None;
+    let mut p66_separator_top = None;
+    table_bottom(&p66_tree.root, 728, &mut p66_table_bottom);
+    footnote_separator_top(&p66_tree.root, &mut p66_separator_top);
+    assert!(
+        p66_table_bottom.expect("p66 pi=728 table")
+            <= p66_separator_top.expect("p66 footnote separator") + 0.5,
+        "p66 table 23과 note 77 separator가 겹치면 안 됨"
+    );
+
     let tree = doc
         .build_page_render_tree(PAGE_67)
         .unwrap_or_else(|e| panic!("render physical page 67: {e}"));
@@ -231,6 +251,25 @@ fn rowbreak_table_cell_footnotes_keep_the_pdf_fragment_boundary() {
     assert!(
         footnote_bottom <= footer_top + 1.0,
         "p67 각주 실제 하단({footnote_bottom:.1}px)이 footer 시작({footer_top:.1}px)을 넘어선다"
+    );
+
+    let mut p67_notes = String::new();
+    footnote_text(&tree.root, false, &mut p67_notes);
+    assert!(
+        !p67_notes.contains("77)")
+            && p67_notes.contains("Part 482(CONDITIONS OF PARTICIPATION")
+            && p67_notes.contains("78)")
+            && p67_notes.contains("85)"),
+        "p67은 note 77의 번호 없는 tail과 78–85를 순서대로 이어야 함: {p67_notes}"
+    );
+    let mut p67_body_bottom = None;
+    let mut p67_separator_top = None;
+    paragraph_bottom(&tree.root, 736, &mut p67_body_bottom);
+    footnote_separator_top(&tree.root, &mut p67_separator_top);
+    assert!(
+        p67_body_bottom.expect("p67 pi=736 body")
+            <= p67_separator_top.expect("p67 footnote separator") + 0.5,
+        "p67 본문과 table-cell note lane이 겹치면 안 됨"
     );
 }
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 import contextlib
 import importlib.util
 import io
+import json
 import subprocess
 import sys
 import tempfile
@@ -328,6 +329,125 @@ class TextLayerComparisonTests(unittest.TestCase):
 
 
 class LayoutCandidateTests(unittest.TestCase):
+    @staticmethod
+    def body_table_tree(
+        *,
+        pi: int = 100,
+        ci: int = 0,
+        rows: int = 5,
+        cols: int = 3,
+        x: float = 80.0,
+        y: float = 700.0,
+        width: float = 560.0,
+        height: float = 180.0,
+        footer_y: float | None = None,
+    ) -> dict[str, object]:
+        children: list[dict[str, object]] = [
+            {
+                "type": "Body",
+                "bbox": {"x": 50, "y": 50, "w": 700, "h": 900},
+                "children": [
+                    {
+                        "type": "Table",
+                        "pi": pi,
+                        "ci": ci,
+                        "rows": rows,
+                        "cols": cols,
+                        "bbox": {"x": x, "y": y, "w": width, "h": height},
+                    }
+                ],
+            }
+        ]
+        if footer_y is not None:
+            children.append(
+                {
+                    "type": "Footer",
+                    "bbox": {"x": 50, "y": footer_y, "w": 700, "h": 30},
+                }
+            )
+        return {
+            "type": "Page",
+            "bbox": {"x": 0, "y": 0, "w": 800, "h": 1000},
+            "children": children,
+        }
+
+    def test_table_fragment_ledger_records_same_source_table_on_adjacent_pages(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            tree_dir = root / "render_tree"
+            tree_dir.mkdir()
+            (tree_dir / "render_tree_001.json").write_text(
+                json.dumps(self.body_table_tree(y=760.0, height=160.0)),
+                encoding="utf-8",
+            )
+            (tree_dir / "render_tree_002.json").write_text(
+                json.dumps(self.body_table_tree(y=80.0, height=130.0)),
+                encoding="utf-8",
+            )
+
+            FIDELITY.write_table_fragment_ledger(
+                root,
+                tree_dir,
+                [0],
+                {0: (Counter("a" * 30), Counter())},
+            )
+            report = (root / "table-fragment-candidates.tsv").read_text(
+                encoding="utf-8"
+            )
+
+        self.assertIn("page\tnext_page\tpi\tci\trows\tcols", report)
+        self.assertIn("1\t2\t100\t0\t5\t3\t5\t3", report)
+        self.assertIn("80.0,760.0,560.0,160.0", report)
+        self.assertIn("same_pi_ci_adjacent_fragment", report)
+        self.assertIn("page_bottom_near_material_text_delta", report)
+        self.assertIn("does not assert PDF table row owner", report)
+
+    def test_table_fragment_candidates_include_footer_and_frame_geometry_signals(self) -> None:
+        tree = self.body_table_tree(
+            x=-5.0,
+            y=870.0,
+            width=560.0,
+            height=100.0,
+            footer_y=920.0,
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            tree_dir = Path(directory)
+            (tree_dir / "render_tree_001.json").write_text(
+                json.dumps(tree), encoding="utf-8"
+            )
+            candidates = FIDELITY.table_fragment_candidates(tree_dir, [0], {})
+
+        self.assertEqual(len(candidates), 1)
+        self.assertEqual(
+            candidates[0]["signals"],
+            ["page_table_footer", "page_table_outside_frame"],
+        )
+
+    def test_bottom_near_table_requires_material_text_delta(self) -> None:
+        tree = self.body_table_tree(y=780.0, height=100.0)
+        with tempfile.TemporaryDirectory() as directory:
+            tree_dir = Path(directory)
+            (tree_dir / "render_tree_001.json").write_text(
+                json.dumps(tree), encoding="utf-8"
+            )
+            below_threshold = FIDELITY.table_fragment_candidates(
+                tree_dir,
+                [0],
+                {0: (Counter("a" * 23), Counter())},
+            )
+            material_delta = FIDELITY.table_fragment_candidates(
+                tree_dir,
+                [0],
+                {0: (Counter("a" * 24), Counter())},
+            )
+
+        self.assertEqual(below_threshold, [])
+        self.assertEqual(len(material_delta), 1)
+        self.assertEqual(
+            material_delta[0]["signals"],
+            ["page_bottom_near_material_text_delta"],
+        )
+
     def test_square_wrapped_image_crossed_by_three_body_lines_is_a_candidate(self) -> None:
         tree = {
             "type": "Page",
