@@ -439,4 +439,3 @@ $ grep -c "renderDiff" bindings/node/src/commands.ts
 #       parity.integration.test.ts 의 '선언된 json 명령마다 바인딩에 대응 함수가
 #       있다' 가 이 상태로 CI 에 올라가면 실패한다. commands.ts 에 renderDiff 를
 #       추가하고 문서 4곳을 되돌려야 한다 (README 처리기록 '남은 것' 참조).
-
