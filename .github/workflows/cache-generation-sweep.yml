@@ -57,19 +57,16 @@ jobs:
             const keep = Math.max(1, Number(process.env.KEEP_GENERATIONS) || 2);
 
             // 열린 PR 의 ref 는 보호한다 — 머지 전에 재사용된다.
-            const openPrRefs = new Set();
-            for await (const res of github.paginate.iterator(
+            const openPrs = await github.paginate(
               github.rest.pulls.list, { ...context.repo, state: 'open', per_page: 100 },
-            )) {
-              for (const pr of res.data) openPrRefs.add(`refs/pull/${pr.number}/merge`);
-            }
+            );
+            const openPrRefs = new Set(openPrs.map((pr) => `refs/pull/${pr.number}/merge`));
 
-            const caches = [];
-            for await (const res of github.paginate.iterator(
+            // paginate 는 이 엔드포인트의 `actions_caches` 를 평탄화해 배열로 준다
+            // (`res.data.actions_caches` 로 접근하면 undefined — 2026-08-02 실측).
+            const caches = await github.paginate(
               github.rest.actions.getActionsCacheList, { ...context.repo, per_page: 100 },
-            )) {
-              caches.push(...res.data.actions_caches);
-            }
+            );
 
             const before = caches.reduce((n, c) => n + c.size_in_bytes, 0);
             const gb = (b) => (b / 1024 ** 3).toFixed(2);
