@@ -288,9 +288,7 @@ fn native_hwp5_rowbreak_table_reclaims_only_the_actual_existing_footnote_boundar
     let p90 = page_text(&doc, PAGE_90);
     let p91 = page_text(&doc, PAGE_91);
     assert!(
-        p90.contains("이식대상자와")
-            && p90.contains("형제만 가능")
-            && p90.contains("친척만 가능"),
+        p90.contains("이식대상자와") && p90.contains("형제만 가능") && p90.contains("친척만 가능"),
         "p90은 PDF처럼 표 27의 relationship row에서 끝나야 함: {p90}"
     );
     assert!(
