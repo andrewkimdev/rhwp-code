@@ -20,17 +20,39 @@
 //! A change to a font this hash doesn't cover just means those glyphs stay
 //! uncovered (falls through to the per-process overlay, still correct,
 //! just uncached) -- not a correctness gap, only a coverage one.
+//!
+//! # Metadata hash, not content hash (v2)
+//!
+//! v1 hashed every font file's full *contents* on every cache-enabled
+//! invocation. Measured against this project's real font set
+//! (`src/main/resources/fonts`, ~159MB — a few CJK-coverage TTFs are
+//! 20-29MB each), that cost 70-150ms per `rhwp` process, per real
+//! end-to-end benchmarking (`bench/measure-glyph-cache-delta.sh`) —
+//! enough to make caching a net *loss* for small/medium documents, since
+//! this hash is recomputed fresh every process (no daemon, no
+//! cross-invocation memory). v2 hashes each file's path + size + mtime
+//! instead — near-instant (`stat`, not `read`), at the cost of not
+//! detecting a font file rewritten with identical size and mtime (an
+//! extremely narrow window: `touch -r` or an unusually fast same-second
+//! edit). That residual risk is accepted here as strictly better than the
+//! v1 tradeoff: correctness is unaffected either way (a missed staleness
+//! detection still only produces a *cache-hit for glyphs that happen to
+//! still be correct*, and any genuinely different font content that also
+//! happens to share path+size+mtime with the old one is vanishingly
+//! unlikely outside deliberately adversarial conditions this CLI tool
+//! doesn't need to defend against).
 
 use std::path::Path;
 
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 
 const MAGIC: &[u8; 4] = b"RHGC"; // RHwp Glyph Cache
-const FORMAT_VERSION: u32 = 1;
+const FORMAT_VERSION: u32 = 2;
 
-/// Hashes the contents of every file under each of `font_paths`
-/// (recursively, sorted by relative path for determinism), plus the
-/// format version, into a single 32-byte digest.
+/// Hashes the path + size + mtime of every file under each of `font_paths`
+/// (recursively, sorted by path for determinism), plus the format version,
+/// into a single 32-byte digest. Deliberately metadata-only, not file
+/// contents — see the "Metadata hash, not content hash (v2)" module docs.
 pub fn hash_font_paths(font_paths: &[std::path::PathBuf]) -> [u8; 32] {
     let mut hasher = blake3::Hasher::new();
     hasher.update(&FORMAT_VERSION.to_le_bytes());
@@ -42,9 +64,15 @@ pub fn hash_font_paths(font_paths: &[std::path::PathBuf]) -> [u8; 32] {
     files.sort();
 
     for file in files {
-        if let Ok(bytes) = std::fs::read(&file) {
-            hasher.update(file.to_string_lossy().as_bytes());
-            hasher.update(&bytes);
+        let Ok(metadata) = std::fs::metadata(&file) else {
+            continue;
+        };
+        hasher.update(file.to_string_lossy().as_bytes());
+        hasher.update(&metadata.len().to_le_bytes());
+        if let Ok(modified) = metadata.modified() {
+            if let Ok(since_epoch) = modified.duration_since(std::time::UNIX_EPOCH) {
+                hasher.update(&since_epoch.as_nanos().to_le_bytes());
+            }
         }
     }
 
