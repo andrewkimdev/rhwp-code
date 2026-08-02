@@ -2,7 +2,7 @@
  * 명령별 봉투 타입 — **자동 생성 파일. 손으로 고치지 마세요.**
  *
  * 재생성: `npm run gen:types` (tools/gen-types.ts)
- * 출처:   `rhwp capabilities` — version 0.8.2, `--json` 봉투 26개
+ * 출처:   `rhwp capabilities` — version 0.8.2, `--json` 봉투 31개
  *
  * `capabilities` 는 명령마다 **어떤 필드가 있는지**(`recordFields`)만 선언하고 타입은
  * 말하지 않습니다. 그래서 대부분의 필드가 `unknown` 입니다 — 짐작한 타입을 적으면 그
@@ -26,11 +26,16 @@ export const CAPABILITIES_SNAPSHOT_VERSION = '0.8.2';
 /**
  * `rhwp batch --json` 봉투.
  *
- * stdin 파일 목록을 한 프로세스에서 파일 간 병렬 처리, NDJSON 스트림 출력
+ * stdin 파일 목록을 한 프로세스에서 파일 간 병렬 처리, NDJSON 스트림 출력 (fill 축만 stdin 대신
+ * --form 서식 + --data 행 파일로 메일머지)
  */
 export interface BatchEnvelope {
   readonly error?: string;
   readonly exitClass?: unknown;
+  readonly filledCount?: unknown;
+  readonly notFound?: unknown;
+  readonly output?: string;
+  readonly row?: unknown;
   readonly schemaVersion?: string;
   readonly source?: string;
 
@@ -89,6 +94,30 @@ export interface ConvertEnvelope {
 }
 
 /**
+ * `rhwp csv-to-table --json` 봉투.
+ *
+ * CSV 로 기존 표 N 의 셀 덮어쓰기 — 표 크기 불변, 행·열 불일치는 invalid+exit 2
+ */
+export interface CsvToTableEnvelope {
+  readonly changed?: unknown;
+  readonly changedCount?: unknown;
+  readonly changedPages?: readonly number[] | null;
+  readonly colCount?: unknown;
+  readonly csv?: unknown;
+  readonly dryRun?: unknown;
+  readonly invalid?: unknown;
+  readonly output?: string;
+  readonly outputFormat?: string;
+  readonly rowCount?: unknown;
+  readonly schemaVersion?: string;
+  readonly source?: string;
+  readonly table?: unknown;
+  readonly verify?: RawVerifyReport | null;
+
+  readonly [key: string]: unknown;
+}
+
+/**
  * `rhwp digest --json` 봉투.
  *
  * 문서 요약 봉투(메타·개요·발췌·nextStep)를 한 번 호출로 출력
@@ -128,25 +157,44 @@ export interface DumpPagesEnvelope {
  * `rhwp edit --json` 봉투.
  *
  * 문서 편집 — fill-fields: 누름틀 채우기 / replace-text: 일괄 치환(--occurrence k번째만) /
- * set-cell: 표 셀 기록
+ * set-cell: 표 셀 기록 / insert-image: 도장·서명 그림 삽입 / redact: 개인정보 마스킹 /
+ * sanitize: 메타데이터 제거
  */
 export interface EditEnvelope {
+  readonly binDataId?: unknown;
+  readonly changedPages?: readonly number[] | null;
   readonly col?: unknown;
   readonly dryRun?: boolean;
   readonly filled?: unknown;
   readonly filledCount?: number;
+  readonly findingCount?: unknown;
+  readonly findings?: unknown;
+  readonly height?: unknown;
+  readonly image?: unknown;
+  readonly inPlace?: unknown;
+  readonly keepPreview?: unknown;
   readonly keepStyle?: unknown;
+  readonly kinds?: unknown;
+  readonly mask?: unknown;
   readonly newText?: unknown;
   readonly notFound?: unknown;
   readonly oldText?: unknown;
   readonly output?: string;
   readonly outputFormat?: string;
   readonly overflow?: unknown;
+  readonly page?: unknown;
+  readonly redactedCount?: unknown;
+  readonly removed?: unknown;
+  readonly removedCount?: unknown;
   readonly replacedCount?: number;
   readonly row?: unknown;
   readonly schemaVersion?: string;
   readonly source?: string;
   readonly table?: unknown;
+  readonly verify?: RawVerifyReport | null;
+  readonly width?: unknown;
+  readonly x?: unknown;
+  readonly y?: unknown;
 
   readonly [key: string]: unknown;
 }
@@ -270,6 +318,24 @@ export interface ExportPdfEnvelope {
 }
 
 /**
+ * `rhwp export-provenance-map --json` 봉투.
+ *
+ * 명령별 문서 파생(신뢰 불가) 봉투 필드 지도 — 봉투의 untrustedContent/untrustedFields 표지의
+ * 원천
+ */
+export interface ExportProvenanceMapEnvelope {
+  readonly commands?: unknown;
+  readonly envelopeFlags?: unknown;
+  readonly pathSyntax?: unknown;
+  readonly policy?: unknown;
+  readonly schemaVersion?: string;
+  readonly tool?: unknown;
+  readonly version?: unknown;
+
+  readonly [key: string]: unknown;
+}
+
+/**
  * `rhwp export-structure --json` 봉투.
  *
  * 문서 개요/조문 계층을 JSON 트리로 추출
@@ -321,10 +387,30 @@ export interface ExportTablesEnvelope {
  * 페이지별 텍스트 추출 (TXT 파일 또는 --json stdout)
  */
 export interface ExportTextEnvelope {
+  readonly omittedCount?: unknown;
   readonly pageCount?: number;
   readonly pages?: unknown;
   readonly schemaVersion?: string;
   readonly source?: string;
+  readonly truncated?: boolean;
+
+  readonly [key: string]: unknown;
+}
+
+/**
+ * `rhwp extract-data --json` 봉투.
+ *
+ * 날짜·금액·수량을 구역·문단·페이지·문자 오프셋 주소와 함께 추출
+ */
+export interface ExtractDataEnvelope {
+  readonly counts?: unknown;
+  readonly itemCount?: unknown;
+  readonly items?: unknown;
+  readonly kind?: unknown;
+  readonly schemaVersion?: string;
+  readonly source?: string;
+  readonly totalItemCount?: unknown;
+  readonly truncated?: boolean;
 
   readonly [key: string]: unknown;
 }
@@ -378,6 +464,37 @@ export interface InfoEnvelope {
   readonly source?: string;
   readonly title?: string;
   readonly version?: string;
+
+  readonly [key: string]: unknown;
+}
+
+/**
+ * `rhwp inspect --json` 봉투.
+ *
+ * 은닉 텍스트·프롬프트 주입·유니코드 기만을 조사하는 읽기 전용 보안 검사 명령군
+ */
+export interface InspectEnvelope {
+  readonly clean?: unknown;
+  readonly findingCount?: unknown;
+  readonly findings?: unknown;
+  readonly hiddenCharCount?: unknown;
+  readonly hiddenText?: unknown;
+  readonly highestConfidence?: unknown;
+  readonly includeFields?: unknown;
+  readonly includeOffPage?: unknown;
+  readonly injectionSignals?: unknown;
+  readonly kindCounts?: unknown;
+  readonly kindFilter?: unknown;
+  readonly minConfidence?: unknown;
+  readonly scanScopes?: unknown;
+  readonly scannedChars?: unknown;
+  readonly schemaVersion?: string;
+  readonly severityCounts?: unknown;
+  readonly signalCount?: unknown;
+  readonly source?: string;
+  readonly thresholdPt?: unknown;
+  readonly untrustedContent?: unknown;
+  readonly untrustedFields?: unknown;
 
   readonly [key: string]: unknown;
 }
@@ -453,11 +570,29 @@ export interface SearchEnvelope {
   readonly caseSensitive?: boolean;
   readonly matchCount?: number;
   readonly matches?: unknown;
+  readonly omittedCount?: unknown;
   readonly query?: string;
   readonly schemaVersion?: string;
   readonly source?: string;
   readonly totalMatchCount?: number;
   readonly truncated?: boolean;
+
+  readonly [key: string]: unknown;
+}
+
+/**
+ * `rhwp table-to-csv --json` 봉투.
+ *
+ * 본문 최상위 표를 병합 격자를 채운 RFC 4180 CSV 로 내보내기
+ */
+export interface TableToCsvEnvelope {
+  readonly bom?: unknown;
+  readonly output?: string;
+  readonly outputFormat?: string;
+  readonly schemaVersion?: string;
+  readonly source?: string;
+  readonly tableCount?: unknown;
+  readonly tables?: unknown;
 
   readonly [key: string]: unknown;
 }
@@ -490,6 +625,7 @@ export interface EnvelopeByCommand {
   "build-from-ingest": BuildFromIngestEnvelope;
   capabilities: CapabilitiesEnvelope;
   convert: ConvertEnvelope;
+  "csv-to-table": CsvToTableEnvelope;
   digest: DigestEnvelope;
   "dump-pages": DumpPagesEnvelope;
   edit: EditEnvelope;
@@ -500,17 +636,21 @@ export interface EnvelopeByCommand {
   "export-ir-schema": ExportIrSchemaEnvelope;
   "export-markdown": ExportMarkdownEnvelope;
   "export-pdf": ExportPdfEnvelope;
+  "export-provenance-map": ExportProvenanceMapEnvelope;
   "export-structure": ExportStructureEnvelope;
   "export-svg": ExportSvgEnvelope;
   "export-tables": ExportTablesEnvelope;
   "export-text": ExportTextEnvelope;
+  "extract-data": ExtractDataEnvelope;
   "extract-pages": ExtractPagesEnvelope;
   fields: FieldsEnvelope;
   info: InfoEnvelope;
+  inspect: InspectEnvelope;
   "ir-diff": IrDiffEnvelope;
   "render-diff": RenderDiffEnvelope;
   run: RunEnvelope;
   search: SearchEnvelope;
+  "table-to-csv": TableToCsvEnvelope;
   thumbnail: ThumbnailEnvelope;
 }
 

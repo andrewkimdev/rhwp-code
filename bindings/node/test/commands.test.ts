@@ -136,8 +136,8 @@ describe('조회 명령 — argv 모양', () => {
   });
 
   it('digest — sections·pages·maxChars 가 모두 실린다', async () => {
-    const argv = await argvOf(
-      () => rhwp.digest('a.hwp', { sections: true, pages: '0..4', maxChars: 800 }),
+    const argv = await argvOf(() =>
+      rhwp.digest('a.hwp', { sections: true, pages: '0..4', maxChars: 800 }),
     );
     expect(argv).toContain('--sections');
     expect(valueAfter(argv, '--pages')).toBe('0..4');
@@ -171,6 +171,106 @@ describe('조회 명령 — argv 모양', () => {
       '--bare',
       '-o',
       'caps.json',
+      '--json',
+    ]);
+  });
+
+  it('export-provenance-map — 문서 경로 없이 JSON 봉투를 요청한다', async () => {
+    expect(await argvOf(() => rhwp.exportProvenanceMap())).toEqual(['export-provenance-map', '--json']);
+  });
+});
+
+describe('표 교환·구조 데이터 명령 — argv 모양', () => {
+  it('table-to-csv — 표·출력·BOM 플래그를 정확히 조립한다', async () => {
+    expect(await argvOf(() => rhwp.tableToCsv('a.hwp', { table: 0, out: 'a.csv', bom: true }))).toEqual([
+      'table-to-csv',
+      'a.hwp',
+      '--table',
+      '0',
+      '-o',
+      'a.csv',
+      '--bom',
+      '--json',
+    ]);
+  });
+
+  it('csv-to-table — CSV·표·편집 공통 플래그를 정확히 조립한다', async () => {
+    expect(
+      await argvOf(() =>
+        rhwp.csvToTable('a.hwp', {
+          csv: 'a.csv',
+          table: 0,
+          out: 'b.hwp',
+          dryRun: true,
+          verify: true,
+        }),
+      ),
+    ).toEqual([
+      'csv-to-table',
+      'a.hwp',
+      '--csv',
+      'a.csv',
+      '--table',
+      '0',
+      '-o',
+      'b.hwp',
+      '--dry-run',
+      '--verify',
+      '--json',
+    ]);
+  });
+
+  it('extract-data — kind·limit는 값 플래그이고 0도 유지한다', async () => {
+    expect(await argvOf(() => rhwp.extractData('a.hwp', { kind: 'amount', limit: 0 }))).toEqual([
+      'extract-data',
+      'a.hwp',
+      '--kind',
+      'amount',
+      '--limit',
+      '0',
+      '--json',
+    ]);
+  });
+});
+
+describe('inspect — 하위 명령별 플래그 격리', () => {
+  it('hidden-text는 threshold·offpage만 붙인다', async () => {
+    expect(
+      await argvOf(() =>
+        rhwp.inspect('hidden-text', 'a.hwp', {
+          thresholdPt: 0,
+          includeOffpage: true,
+        }),
+      ),
+    ).toEqual(['inspect', 'hidden-text', 'a.hwp', '--threshold-pt', '0', '--include-offpage', '--json']);
+  });
+
+  it('injection은 confidence·fields만 붙인다', async () => {
+    expect(
+      await argvOf(() =>
+        rhwp.inspect('injection', 'a.hwp', {
+          minConfidence: 'high',
+          includeFields: true,
+        }),
+      ),
+    ).toEqual([
+      'inspect',
+      'injection',
+      'a.hwp',
+      '--min-confidence',
+      'high',
+      '--include-fields',
+      '--json',
+    ]);
+  });
+
+  it('unicode는 kind를 해당 하위 명령에만 붙인다', async () => {
+    expect(await argvOf(() => rhwp.inspect('unicode', 'a.hwp', { kind: 'bidi' }))).toEqual([
+      'inspect',
+      'unicode',
+      'a.hwp',
+      '--kind',
+      'bidi',
       '--json',
     ]);
   });
@@ -230,8 +330,8 @@ describe('산출 명령 — argv 모양', () => {
   });
 
   it('export-pdf — backend·profile·page 가 모두 실린다', async () => {
-    const argv = await argvOf(
-      () => rhwp.exportPdf('a.hwp', {
+    const argv = await argvOf(() =>
+      rhwp.exportPdf('a.hwp', {
         out: 'o.pdf',
         page: 1,
         backend: 'svg',
@@ -306,9 +406,9 @@ describe('산출 명령 — argv 모양', () => {
       'a.hwp',
       '--json',
     ]);
-    expect(await argvOf(() => rhwp.exportDoclang('a.hwp', { out: 'a.xml', assetsDir: 'assets' }))).toEqual(
-      ['export-doclang', 'a.hwp', '-o', 'a.xml', '--assets-dir', 'assets', '--json'],
-    );
+    expect(
+      await argvOf(() => rhwp.exportDoclang('a.hwp', { out: 'a.xml', assetsDir: 'assets' })),
+    ).toEqual(['export-doclang', 'a.hwp', '-o', 'a.xml', '--assets-dir', 'assets', '--json']);
   });
 
   it('thumbnail — base64·dataUri 는 값 없는 토글이다', async () => {
@@ -365,7 +465,12 @@ describe('산출 명령 — argv 모양', () => {
       '--json',
     ]);
     expect(
-      await argvOf(() => rhwp.buildFromIngest('spec.json', { out: 'new.hwpx', mediaDir: 'media' })),
+      await argvOf(() =>
+        rhwp.buildFromIngest('spec.json', {
+          out: 'new.hwpx',
+          mediaDir: 'media',
+        }),
+      ),
     ).toEqual(['build-from-ingest', 'spec.json', '--media-dir', 'media', '-o', 'new.hwpx', '--json']);
   });
 });
@@ -385,7 +490,13 @@ describe('변환 — 산출 경로는 위치 인자다', () => {
 
   it('export-hwpx — verify 플래그는 산출 경로 뒤에 붙는다', async () => {
     expect(
-      await argvOf(() => rhwp.exportHwpx('a.hwp', { out: 'b.hwpx', verify: true, verifyPages: true })),
+      await argvOf(() =>
+        rhwp.exportHwpx('a.hwp', {
+          out: 'b.hwpx',
+          verify: true,
+          verifyPages: true,
+        }),
+      ),
     ).toEqual(['export-hwpx', 'a.hwp', 'b.hwpx', '--verify', '--verify-pages', '--json']);
   });
 
@@ -397,7 +508,13 @@ describe('변환 — 산출 경로는 위치 인자다', () => {
 
   it('convert — verifyPages 도 노출한다', async () => {
     expect(
-      await argvOf(() => rhwp.convert('a.hwpx', { out: 'b.hwp', verify: true, verifyPages: true })),
+      await argvOf(() =>
+        rhwp.convert('a.hwpx', {
+          out: 'b.hwp',
+          verify: true,
+          verifyPages: true,
+        }),
+      ),
     ).toEqual(['convert', 'a.hwpx', 'b.hwp', '--verify', '--verify-pages', '--json']);
   });
 
@@ -429,11 +546,7 @@ describe('변환 — 산출 경로는 위치 인자다', () => {
 
 describe('render-diff — 라운드트립과 pair', () => {
   it('경로 하나면 자기 라운드트립', async () => {
-    expect(await argvOf(() => rhwp.renderDiff('a.hwp'))).toEqual([
-      'render-diff',
-      'a.hwp',
-      '--json',
-    ]);
+    expect(await argvOf(() => rhwp.renderDiff('a.hwp'))).toEqual(['render-diff', 'a.hwp', '--json']);
   });
 
   it('경로 둘이면 두 파일 직접 비교 — 둘 다 위치 인자다', async () => {
@@ -472,7 +585,11 @@ describe('render-diff — 라운드트립과 pair', () => {
   it('셋을 함께 주면 위치 인자 뒤, --json 앞에 순서대로', async () => {
     expect(
       await argvOf(() =>
-        rhwp.renderDiff('a.hwp', 'b.hwp', { via: 'hwpx', page: 2, maxDisp: 1.5 }),
+        rhwp.renderDiff('a.hwp', 'b.hwp', {
+          via: 'hwpx',
+          page: 2,
+          maxDisp: 1.5,
+        }),
       ),
     ).toEqual([
       'render-diff',
@@ -537,8 +654,8 @@ describe('편집 명령 — argv 모양', () => {
 
   it('fill-fields — 편집 공통 플래그', async () => {
     expect(
-      await argvOf(
-        () => rhwp.fillFields('a.hwp', { 이름: '값' }, { out: 'b.hwp', dryRun: true, verify: true }),
+      await argvOf(() =>
+        rhwp.fillFields('a.hwp', { 이름: '값' }, { out: 'b.hwp', dryRun: true, verify: true }),
       ),
     ).toEqual([
       'edit',
@@ -568,8 +685,8 @@ describe('편집 명령 — argv 모양', () => {
   });
 
   it('replace-text — occurrence 는 값, ignoreCase 는 토글', async () => {
-    const argv = await argvOf(
-      () => rhwp.replaceText('a.hwp', '□', '☑', { occurrence: 2, ignoreCase: true }),
+    const argv = await argvOf(() =>
+      rhwp.replaceText('a.hwp', '□', '☑', { occurrence: 2, ignoreCase: true }),
     );
     expect(valueAfter(argv, '--occurrence')).toBe('2');
     expect(argv).toContain('--ignore-case');
@@ -642,8 +759,8 @@ describe('batch — 목록은 인자가 아니라 stdin 이다', () => {
   });
 
   it('축별 플래그가 모두 실린다', async () => {
-    const argv = await argvOf(
-      () => rhwp.batch('convert', ['a.hwpx'], {
+    const argv = await argvOf(() =>
+      rhwp.batch('convert', ['a.hwpx'], {
         threads: 4,
         outDir: 'out',
         verify: true,
@@ -681,8 +798,11 @@ describe('batch — 목록은 인자가 아니라 stdin 이다', () => {
   });
 
   it('extraArgs 는 이름 붙은 옵션 뒤, --json 앞에 온다', async () => {
-    const argv = await argvOf(
-      () => rhwp.batch('search', ['a.hwp'], { query: 'x', extraArgs: ['--query', 'y'] }),
+    const argv = await argvOf(() =>
+      rhwp.batch('search', ['a.hwp'], {
+        query: 'x',
+        extraArgs: ['--query', 'y'],
+      }),
     );
     expect(argv).toEqual(['batch', 'search', '--query', 'x', '--query', 'y', '--json']);
     expect(argv.at(-1)).toBe('--json');
@@ -724,6 +844,12 @@ describe('옵션을 안 주면 플래그도 안 붙는다', () => {
     '--sections',
     '--pages',
     '--limit',
+    '--bom',
+    '--threshold-pt',
+    '--include-offpage',
+    '--min-confidence',
+    '--include-fields',
+    '--kind',
   ];
 
   const minimal: [string, () => Promise<unknown>][] = [
@@ -737,6 +863,13 @@ describe('옵션을 안 주면 플래그도 안 붙는다', () => {
     ['capabilities', () => rhwp.capabilities()],
     ['exportIrSchema', () => rhwp.exportIrSchema()],
     ['exportCapabilitiesSchema', () => rhwp.exportCapabilitiesSchema()],
+    ['exportProvenanceMap', () => rhwp.exportProvenanceMap()],
+    ['tableToCsv', () => rhwp.tableToCsv('a.hwp')],
+    ['csvToTable', () => rhwp.csvToTable('a.hwp', { csv: 'a.csv', table: 0 })],
+    ['extractData', () => rhwp.extractData('a.hwp')],
+    ['inspect(hidden-text)', () => rhwp.inspect('hidden-text', 'a.hwp')],
+    ['inspect(injection)', () => rhwp.inspect('injection', 'a.hwp')],
+    ['inspect(unicode)', () => rhwp.inspect('unicode', 'a.hwp')],
     ['exportSvg', () => rhwp.exportSvg('a.hwp')],
     ['exportPdf', () => rhwp.exportPdf('a.hwp')],
     ['exportMarkdown', () => rhwp.exportMarkdown('a.hwp')],
@@ -786,7 +919,13 @@ describe('실행 옵션 전달', () => {
   });
 
   it('throwOnVerdict 가 판정 명령에서 실행 계층까지 간다', async () => {
-    await argvOf(() => rhwp.exportHwpx('a.hwp', { out: 'b.hwpx', verify: true, throwOnVerdict: true }));
+    await argvOf(() =>
+      rhwp.exportHwpx('a.hwp', {
+        out: 'b.hwpx',
+        verify: true,
+        throwOnVerdict: true,
+      }),
+    );
     expect(lastOptions().throwOnVerdict).toBe(true);
 
     await argvOf(() => rhwp.convert('a.hwpx', { out: 'b.hwp', throwOnVerdict: true }));

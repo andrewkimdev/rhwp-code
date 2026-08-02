@@ -51,7 +51,9 @@ export interface EditOptions extends VerifiableOptions {
 }
 
 /** `CommandOptions` 를 프로세스 실행 옵션으로 옮긴다. */
-function toRunOptions(options: CommandOptions & { throwOnVerdict?: boolean | undefined }): RunOptions {
+function toRunOptions(
+  options: CommandOptions & { throwOnVerdict?: boolean | undefined },
+): RunOptions {
   return {
     timeoutMs: options.timeoutMs,
     cwd: options.cwd,
@@ -297,6 +299,24 @@ export async function exportCapabilitiesSchema(
   args.push('--json');
   return call(args, options);
 }
+
+export {
+  csvToTable,
+  exportProvenanceMap,
+  extractData,
+  inspect,
+  tableToCsv,
+  type CsvToTableOptions,
+  type ExtractDataKind,
+  type ExtractDataOptions,
+  type InspectHiddenTextOptions,
+  type InspectInjectionOptions,
+  type InspectOptions,
+  type InspectTarget,
+  type InspectUnicodeOptions,
+  type TableToCsvOptions,
+  type UnicodeInspectionKind,
+} from './document-analysis.js';
 
 // ── 산출 ──────────────────────────────────────────────────────────────────
 
@@ -660,13 +680,7 @@ export async function fillFields(
   data: Readonly<Record<string, unknown>>,
   options: EditOptions = {},
 ): Promise<Envelope> {
-  const args: Argument[] = [
-    'edit',
-    'fill-fields',
-    path,
-    '--data',
-    JSON.stringify(data),
-  ];
+  const args: Argument[] = ['edit', 'fill-fields', path, '--data', JSON.stringify(data)];
   editFlags(args, options);
   args.push('--json');
   return call(args, options);

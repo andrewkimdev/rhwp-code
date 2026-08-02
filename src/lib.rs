@@ -17,6 +17,7 @@ pub mod ooxml_chart;
 pub mod paint;
 pub mod parser;
 pub mod password_crypto;
+pub mod provenance;
 pub mod renderer;
 pub mod serializer;
 #[cfg(feature = "subsecond-dev")]
