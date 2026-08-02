@@ -55,6 +55,32 @@ fn footnote_and_footer(
     }
 }
 
+fn paragraph_bottom(node: &RenderNode, para_index: usize, bottom: &mut Option<f64>) {
+    if let RenderNodeType::TextLine(line) = &node.node_type {
+        if line.para_index == Some(para_index) {
+            let candidate = node.bbox.y + node.bbox.height;
+            *bottom = Some(bottom.map_or(candidate, |current| current.max(candidate)));
+        }
+    }
+    for child in &node.children {
+        paragraph_bottom(child, para_index, bottom);
+    }
+}
+
+fn footnote_separator_top(node: &RenderNode, top: &mut Option<f64>) {
+    if matches!(node.node_type, RenderNodeType::FootnoteArea) {
+        for child in &node.children {
+            if matches!(child.node_type, RenderNodeType::Line(_)) {
+                *top = Some(child.bbox.y);
+                return;
+            }
+        }
+    }
+    for child in &node.children {
+        footnote_separator_top(child, top);
+    }
+}
+
 #[test]
 fn rowbreak_table_cell_footnotes_keep_the_pdf_fragment_boundary() {
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(SAMPLE);
@@ -191,5 +217,35 @@ fn native_hwp5_rowbreak_tail_keeps_figure_51_with_its_pdf_page() {
     assert!(
         !p79.trim().is_empty(),
         "p79은 연쇄 이월 때문에 빈 표 전용 page가 되어서는 안 됨"
+    );
+}
+
+#[test]
+fn native_hwp5_two_line_footnote_continues_after_the_reset_page() {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(SAMPLE);
+    let bytes = fs::read(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+    let doc = HwpDocument::from_bytes(&bytes).expect("parse stage16 HWP evidence fixture");
+
+    let p31 = page_text(&doc, PAGE_31);
+    let p32 = page_text(&doc, PAGE_32);
+    assert!(
+        p31.contains("Aktuelle Entwicklungen") && !p31.contains("incentives"),
+        "p31은 각주 30의 첫 줄만 보유해야 함: {p31}"
+    );
+    assert!(
+        p32.contains("incentives") && !p32.contains("Aktuelle Entwicklungen"),
+        "p32는 각주 30의 연속 tail만 보유해야 함: {p32}"
+    );
+
+    let tree = doc
+        .build_page_render_tree(PAGE_31)
+        .unwrap_or_else(|e| panic!("render physical page 31: {e}"));
+    let mut body_bottom = None;
+    let mut separator_top = None;
+    paragraph_bottom(&tree.root, 421, &mut body_bottom);
+    footnote_separator_top(&tree.root, &mut separator_top);
+    assert!(
+        body_bottom.expect("p31 para 421") <= separator_top.expect("p31 footnote separator") + 0.5,
+        "p31 본문과 각주 separator가 겹치면 안 됨: body_bottom={body_bottom:?}, separator={separator_top:?}"
     );
 }

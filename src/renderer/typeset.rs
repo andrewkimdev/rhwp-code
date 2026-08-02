@@ -34,7 +34,8 @@ use crate::renderer::{
 use super::pagination::{
     estimate_footnote_note_height, footnote_between_notes_margin_px,
     footnote_separator_overhead_px, ColumnContent, EndnoteDeferral, EndnoteParaSource, EndnoteRef,
-    FootnoteRef, FootnoteSource, HeaderFooterRef, PageContent, PageItem, PaginationResult,
+    FootnoteFragment, FootnoteRef, FootnoteSource, HeaderFooterRef, PageContent, PageItem,
+    PaginationResult,
 };
 
 /// [#2085] 표 행-스캔 분할점 캐리 (값 왕복). split_end_cut 은 move.
@@ -1787,6 +1788,49 @@ fn internal_vpos_page_break_line(
         })
 }
 
+/// native HWP5의 두 줄짜리 단일 각주를 물리 페이지 경계에서 연속 fragment로 나눈다.
+///
+/// 한컴은 본문 `LINE_SEG` reset 앞의 첫 줄은 해당 page의 separator 아래에 두고,
+/// 둘째 줄만 다음 page의 bottom footnote lane에 둔다. 일반 각주는 원자적으로 유지한다.
+fn native_hwp5_two_line_footnote_fragments(
+    footnote: &Footnote,
+) -> Option<(FootnoteFragment, FootnoteFragment)> {
+    if footnote.paragraphs.len() != 1 {
+        return None;
+    }
+    let composed = crate::renderer::composer::compose_paragraph(&footnote.paragraphs[0]);
+    (composed.lines.len() == 2).then_some((
+        FootnoteFragment {
+            start_line: 0,
+            end_line: 1,
+            draw_separator: true,
+            draw_number: true,
+        },
+        FootnoteFragment {
+            start_line: 1,
+            end_line: 2,
+            draw_separator: false,
+            draw_number: false,
+        },
+    ))
+}
+
+fn native_hwp5_footnote_fragment_height(
+    footnote: &Footnote,
+    fragment: FootnoteFragment,
+    dpi: f64,
+) -> f64 {
+    let Some(paragraph) = footnote.paragraphs.first() else {
+        return 0.0;
+    };
+    let composed = crate::renderer::composer::compose_paragraph(paragraph);
+    composed.lines
+        [fragment.start_line.min(composed.lines.len())..fragment.end_line.min(composed.lines.len())]
+        .iter()
+        .map(|line| hwpunit_to_px(line.line_height, dpi))
+        .sum()
+}
+
 /// 실제 각주 영역과 겹치는 native HWP5 본문 문단의 저장 reset을 찾는다.
 ///
 /// HWP5는 본문 마지막 줄과 다음 physical page의 첫 줄을 하나의 paragraph
@@ -1798,12 +1842,18 @@ fn internal_vpos_page_break_line(
 /// 각주 본문은 stored LineSeg가 아니라 renderer와 같은 composer 결과로 재서, 긴 각주의
 /// wrap/line-spacing을 포함한다. 이미 다른 각주가 있는 page는 ownership과 누적 높이가
 /// 별도 경로이므로 이 좁은 보정의 대상이 아니다.
+#[derive(Debug, Clone, Copy)]
+struct NativeHwp5FootnoteBreak {
+    body_break_line: usize,
+    split_footnote: bool,
+}
+
 fn native_hwp5_first_footnote_overlap_break_line(
     st: &TypesetState,
     para: &Paragraph,
     line_count: usize,
     dpi: f64,
-) -> Option<usize> {
+) -> Option<NativeHwp5FootnoteBreak> {
     if !st.profile.native_hwp5_layout()
         || !st.is_first_footnote_on_page
         || st.current_footnote_height > 0.0
@@ -1825,7 +1875,13 @@ fn native_hwp5_first_footnote_overlap_break_line(
     if footnotes.len() != 1 || footnotes.len() != para.controls.len() {
         return None;
     }
+    let footnote_control_index = para
+        .controls
+        .iter()
+        .position(|control| matches!(control, Control::Footnote(_)))?;
+    let footnote_control_pos = *para.control_text_positions().get(footnote_control_index)?;
 
+    let two_line_footnote_fragment = native_hwp5_two_line_footnote_fragments(footnotes[0]);
     let mut footnote_height = st.footnote_separator_overhead;
     for (para_idx, note_para) in footnotes[0].paragraphs.iter().enumerate() {
         let composed = crate::renderer::composer::compose_paragraph(note_para);
@@ -1863,8 +1919,23 @@ fn native_hwp5_first_footnote_overlap_break_line(
                 prev.vertical_pos - page_vpos_base + prev.line_height + prev.line_spacing,
                 dpi,
             );
-            (visible_bottom <= footnote_top + 0.5 && trailing_bottom > footnote_top + 0.5)
-                .then_some(prev_idx + 1)
+            let trailing_spacing_only_overlap =
+                visible_bottom <= footnote_top + 0.5 && trailing_bottom > footnote_top + 0.5;
+            // 두 줄 각주는 첫 줄만 현재 page에 남겨야 한다. 저장 본문 줄 자체가 full-note
+            // top을 넘고(단순 trailing-spacing 침범과 구별), 각주 marker가 그 reset 직전
+            // 본문 줄 안에 있을 때만 두 번째 각주 줄을 다음 page로 보낸다. full note를
+            // 원자 배치하면 p31처럼 separator·본문이 겹친다.
+            let first_line_footnote_fragment_overlap = two_line_footnote_fragment.is_some()
+                && visible_bottom > footnote_top + 0.5
+                && trailing_bottom > footnote_top + 0.5
+                && (prev.text_start as usize..next.text_start as usize)
+                    .contains(&footnote_control_pos);
+            (trailing_spacing_only_overlap || first_line_footnote_fragment_overlap).then_some(
+                NativeHwp5FootnoteBreak {
+                    body_break_line: prev_idx + 1,
+                    split_footnote: first_line_footnote_fragment_overlap,
+                },
+            )
         })
 }
 
@@ -2355,6 +2426,11 @@ impl TypesetState {
 
     /// 각주 높이 추가
     fn add_footnote_height(&mut self, height: f64) {
+        self.add_footnote_fragment_height(height, true);
+    }
+
+    /// 각주 fragment 높이 추가. 연속 tail은 다음 page에서 separator를 반복하지 않는다.
+    fn add_footnote_fragment_height(&mut self, height: f64, draw_separator: bool) {
         // [#2097 진단] 각주 예약 시점 — 동작 불변.
         if std::env::var("RHWP_DIAG_FN").is_ok() {
             eprintln!(
@@ -2367,7 +2443,9 @@ impl TypesetState {
             );
         }
         if self.is_first_footnote_on_page {
-            self.current_footnote_height += self.footnote_separator_overhead;
+            if draw_separator {
+                self.current_footnote_height += self.footnote_separator_overhead;
+            }
             self.is_first_footnote_on_page = false;
         } else {
             self.current_footnote_height += self.footnote_between_notes_margin;
@@ -2394,12 +2472,48 @@ impl TypesetState {
         };
         let first = page.footnotes.is_empty();
         let existing_height = page.layout.footnote_area.height.max(0.0);
-        page.footnotes.push(FootnoteRef { number, source });
+        page.footnotes.push(FootnoteRef {
+            number,
+            source,
+            fragment: None,
+        });
         let added_height = content_height
             + if first {
                 self.footnote_separator_overhead
             } else {
                 self.footnote_between_notes_margin
+            };
+        page.layout
+            .update_footnote_area(existing_height + added_height);
+        true
+    }
+
+    /// 이미 완료된 page에 두 줄 native HWP5 각주의 첫 fragment를 소급 등록한다.
+    fn add_footnote_fragment_to_completed_page(
+        &mut self,
+        page_idx: usize,
+        number: u16,
+        source: FootnoteSource,
+        fragment: FootnoteFragment,
+        content_height: f64,
+    ) -> bool {
+        let Some(page) = self.pages.get_mut(page_idx) else {
+            return false;
+        };
+        let first = page.footnotes.is_empty();
+        let existing_height = page.layout.footnote_area.height.max(0.0);
+        page.footnotes.push(FootnoteRef {
+            number,
+            source,
+            fragment: Some(fragment),
+        });
+        let added_height = content_height
+            + if first && fragment.draw_separator {
+                self.footnote_separator_overhead
+            } else if !first {
+                self.footnote_between_notes_margin
+            } else {
+                0.0
             };
         page.layout
             .update_footnote_area(existing_height + added_height);
@@ -4822,7 +4936,7 @@ impl TypesetEngine {
                 }
             }
 
-            let mut native_hwp5_split_footnote_anchor = false;
+            let mut native_hwp5_footnote_break = None;
             if !has_table {
                 // --- 핵심: format → fits → place/split ---
                 let col_w = st
@@ -4833,13 +4947,12 @@ impl TypesetEngine {
                     .unwrap_or(st.layout.body_area.width);
                 let formatted =
                     self.format_paragraph(para, composed.get(para_idx), styles, Some(col_w));
-                native_hwp5_split_footnote_anchor = native_hwp5_first_footnote_overlap_break_line(
+                native_hwp5_footnote_break = native_hwp5_first_footnote_overlap_break_line(
                     &st,
                     para,
                     formatted.line_heights.len(),
                     self.dpi,
-                )
-                .is_some();
+                );
                 let is_last_in_section = para_idx + 1 == paragraphs.len();
                 // [Task #1027 Stage D] fit 직전 vpos 스냅으로 누적 drift 제거 (렌더러 정합).
                 self.vpos_snap_current_height(
@@ -5172,6 +5285,7 @@ impl TypesetEngine {
                                                             tb_para_index: tp_idx,
                                                             tb_control_index: tc_idx,
                                                         },
+                                                        fragment: None,
                                                     });
                                                     let fn_height = estimate_footnote_note_height(
                                                         fn_ctrl, self.dpi,
@@ -5343,7 +5457,10 @@ impl TypesetEngine {
                                 control_index: ctrl_idx,
                             };
                             let fn_height = estimate_footnote_note_height(fn_ctrl, self.dpi);
-                            let routed = native_hwp5_split_footnote_anchor.then(|| {
+                            let fragments = native_hwp5_footnote_break
+                                .filter(|footnote_break| footnote_break.split_footnote)
+                                .and_then(|_| native_hwp5_two_line_footnote_fragments(fn_ctrl));
+                            let routed = native_hwp5_footnote_break.map(|_| {
                                 crate::renderer::pagination::find_inline_control_target_page(
                                     &st.pages,
                                     &st.current_items,
@@ -5352,6 +5469,50 @@ impl TypesetEngine {
                                     para,
                                 )
                             });
+                            let fragment_routed_page = fragments.as_ref().and_then(|_| {
+                                routed.flatten().or_else(|| {
+                                    // reset 직전 줄 안의 marker라도 current item의 char 범위를
+                                    // 찾지 못하면 일반 라우터는 tail page를 가리킨다. 이 좁은
+                                    // HWP5 형상은 저장 reset 전 page가 첫 footnote line owner다.
+                                    st.pages.len().checked_sub(2).map(|page_idx| (page_idx, 0))
+                                })
+                            });
+                            if let Some((page_idx, _)) = fragment_routed_page {
+                                if let Some((first_fragment, continuation_fragment)) = fragments {
+                                    let first_height = native_hwp5_footnote_fragment_height(
+                                        fn_ctrl,
+                                        first_fragment,
+                                        self.dpi,
+                                    );
+                                    let continuation_height = native_hwp5_footnote_fragment_height(
+                                        fn_ctrl,
+                                        continuation_fragment,
+                                        self.dpi,
+                                    );
+                                    if st.pages.len() > page_idx + 1
+                                        && st.add_footnote_fragment_to_completed_page(
+                                            page_idx,
+                                            fn_ctrl.number,
+                                            source.clone(),
+                                            first_fragment,
+                                            first_height,
+                                        )
+                                    {
+                                        if let Some(page) = st.pages.last_mut() {
+                                            page.footnotes.push(FootnoteRef {
+                                                number: fn_ctrl.number,
+                                                source: source.clone(),
+                                                fragment: Some(continuation_fragment),
+                                            });
+                                        }
+                                        st.add_footnote_fragment_height(
+                                            continuation_height,
+                                            continuation_fragment.draw_separator,
+                                        );
+                                        continue;
+                                    }
+                                }
+                            }
                             if let Some(Some((page_idx, _))) = routed {
                                 if st.add_footnote_to_completed_page(
                                     page_idx,
@@ -5366,6 +5527,7 @@ impl TypesetEngine {
                                 page.footnotes.push(FootnoteRef {
                                     number: fn_ctrl.number,
                                     source,
+                                    fragment: None,
                                 });
                             }
                             st.add_footnote_height(fn_height);
@@ -12702,6 +12864,7 @@ impl TypesetEngine {
                 fmt.line_heights.len(),
                 self.dpi,
             )
+            .map(|footnote_break| footnote_break.body_break_line)
         })
         .or_else(|| {
             sample16_missing_lineseg_tail_break_line(
@@ -13845,6 +14008,7 @@ impl TypesetEngine {
                                             cell_para_index: cp_idx,
                                             cell_control_index: cc_idx,
                                         },
+                                        fragment: None,
                                     });
                                 }
                                 let fn_height = estimate_footnote_note_height(fn_ctrl, self.dpi);
@@ -14344,6 +14508,7 @@ impl TypesetEngine {
                                                     cell_para_index: cp_idx,
                                                     cell_control_index: cc_idx,
                                                 },
+                                                fragment: None,
                                             });
                                         }
                                         let fn_height =
@@ -17932,6 +18097,7 @@ impl TypesetEngine {
                         cell_para_index: note.cell_para_index,
                         cell_control_index: note.cell_control_index,
                     },
+                    fragment: None,
                 });
             }
             st.add_footnote_height(note.content_height);

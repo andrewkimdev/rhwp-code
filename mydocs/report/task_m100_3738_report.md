@@ -5,11 +5,11 @@ canonical: mydocs/manual/codex/docs_and_git_workflow.md
 last_verified: 2026-08-02
 ---
 
-# Task #3738 결과 보고 — Stage 1–15 그림·RowBreak·각주 reservation 보정과 전체 pagination 잔여
+# Task #3738 결과 보고 — Stage 1–16 그림·RowBreak·각주 reservation 보정과 전체 pagination 잔여
 
 - 이슈: [#3738](https://github.com/edwardkim/rhwp/issues/3738)
 - 관련 PR: [#3740](https://github.com/edwardkim/rhwp/pull/3740)
-- 상태: **Stage 8의 HWP p23 그림 21 caption, Stage 9의 HWP p66 table-footnote first fragment, Stage 11의 HWP p67 footer collision, Stage 13의 HWP p30 각주 29 page ownership과 p68 그림 49/caption 이월, Stage 14의 HWP p58 existing-footnote reset-tail, Stage 15의 HWP p76 표 24 reset-tail과 p77 그림 51 owner는 복원. HWP는 아직 221쪽, 기준 PDF는 215쪽이므로 전체 pagination 정합은 계속 조사 중.**
+- 상태: **Stage 8의 HWP p23 그림 21 caption, Stage 9의 HWP p66 table-footnote first fragment, Stage 11의 HWP p67 footer collision, Stage 13의 HWP p30 각주 29 page ownership과 p68 그림 49/caption 이월, Stage 14의 HWP p58 existing-footnote reset-tail, Stage 15의 HWP p76 표 24 reset-tail과 p77 그림 51 owner, Stage 16의 HWP p31 두 줄 각주 30 fragment는 복원. HWP는 아직 221쪽, 기준 PDF는 215쪽이므로 전체 pagination 정합은 계속 조사 중.**
 
 ## 완료한 작업
 
@@ -71,6 +71,10 @@ last_verified: 2026-08-02
     비-TAC `RowBreak` continuation row만 painted-height minimum keep과 실제 기존 각주 경계를 사용하게
     좁혀, p76에는 reset 전 세 줄을 남기고 p77에는 reset 후 tail·그림 51·caption을 각주 103·104 위에
     함께 복원했다. p78은 `3. EU`로 시작하고 p79도 표 내용을 유지한다. 출력은 222→221쪽이 됐다.
+18. Stage 16에서 HWP 문단 421의 각주 30 marker가 reset 전 본문 줄(`text_start=183..247`) 안에 있고, 두 줄 각주를
+    원자 배치하면 p31 본문과 겹침을 확인했다. 이 native HWP5 첫-각주 형상에만 line fragment를 도입해 p31에는
+    separator·번호가 있는 첫 줄, p32에는 separator·번호 없는 `„incentives”…` tail을 배치했다. p31 body bottom
+    `1006.0px`와 separator `1019.0px`가 분리되고 p31–p32 selected sweep은 2/2 완료·structural flag 0건이다.
 
 ## 미해결과 다음 회차
 
@@ -79,9 +83,9 @@ offset, 그리고 HWP p23 그림 21 caption cell 정렬은 해당 선택 페이�
 24쪽 `y=90.6px`, image `y=92.5px`, Bottom caption 3줄 `y=434.4/455.7/477.1px`이고 23쪽에는 없다.
 Stage 8 HWP 그림 21 caption 첫 줄은 PDF `495.16px` 대비 rhwp `494.7px`이다.
 
-그러나 전체 문서는 아직 **HWP 221쪽/HWPX 224쪽, 한컴 PDF 215쪽**이다. Stage 15는 p76–p79 선택 흐름만
-복원했다. 사용자 화면에서 재관측한 p31 각주/문단, p37 그림 중복, p43·p54·p66 본문 또는 표/각주 충돌,
-p83 paragraph overflow, p87·p90·p99–p100의 기준 PDF 차이는 모두 잔여다. 다음 Stage는 같은 번호가 아니라
+그러나 전체 문서는 아직 **HWP 221쪽/HWPX 224쪽, 한컴 PDF 215쪽**이다. Stage 16은 p31–p32 두 줄 각주 흐름만
+복원했다. 사용자 화면에서 재관측한 p37 그림 중복, p43·p54·p66 본문 또는 표/각주 충돌, p76–p79 UI 재확인,
+p80 표 cell 본문·URL·각주의 다층 overlap, p83 paragraph overflow, p87·p90·p99–p100의 기준 PDF 차이는 모두 잔여다. 다음 Stage는 같은 번호가 아니라
 semantic page owner를 먼저 맞춘 뒤 각 결함을 독립 원인으로 분석한다. 완료된 선택 페이지를 전체 pagination
 완료로 표현하지 않는다.
 
@@ -101,7 +105,8 @@ semantic page owner를 먼저 맞춘 뒤 각 결함을 독립 원인으로 분�
 [Stage 12 visual sweep](../working/task_m100_3738_stage12_visual_sweep.md),
 [Stage 13 visual sweep](../working/task_m100_3738_stage13_visual_sweep.md),
 [Stage 14 visual sweep](../working/task_m100_3738_stage14_visual_sweep.md),
-[Stage 15 visual sweep](../working/task_m100_3738_stage15_visual_sweep.md)에 기록했다.
+[Stage 15 visual sweep](../working/task_m100_3738_stage15_visual_sweep.md),
+[Stage 16 visual sweep](../working/task_m100_3738_stage16_visual_sweep.md)에 기록했다.
 
 현재 그림별 선택 페이지의 완료 판정과 전체 215쪽 pagination 완료 판정을 혼동하지 않는다. 전체 215쪽
 raster sweep이나 전체 integration test는 Stage 8의 좁은 caption 보정 완료 근거로 사용하지 않았다.
@@ -135,6 +140,9 @@ raster sweep이나 전체 integration test는 Stage 8의 좁은 caption 보정 �
 - `cargo fmt --check` 및 `CARGO_TARGET_DIR=target/review-planet6897-20260802 CARGO_INCREMENTAL=0 cargo build --profile release-test --bin rhwp` — passed
 - HWP p76–p78, 144 DPI visual sweep — SVG/render tree 221쪽 생성, 선택 raster 3/3 완료; 표 24 reset-tail과 그림 51/caption owner 복원
 - HWP p79, 144 DPI 단일 visual sweep — 선택 raster 1/1 완료; 단독 그림 51과 빈 표 페이지가 아님을 확인
+- `cargo fmt --check` 및 `CARGO_TARGET_DIR=target/review-planet6897-20260802 CARGO_INCREMENTAL=0 cargo test --profile release-test --test issue_3738_rowbreak_table_footnote_fragment -- --nocapture` — 6 passed
+- `CARGO_TARGET_DIR=target/review-planet6897-20260802 CARGO_INCREMENTAL=0 cargo build --profile release-test --bin rhwp` — passed
+- HWP p31–p32, 144 DPI visual sweep — SVG/render tree 221쪽 생성, 선택 raster 2/2 완료; 각주 30의 p31 first fragment·p32 continuation tail 및 p31 body/separator non-overlap 확인
 
 전체 integration test와 215쪽 전체 raster sweep은 이 회차의 완료 근거로 사용하지 않았다. 전체
 pagination 정합이 아직 남아 있으므로, 이 보고서는 선택 그림 흐름과 해당 Stage의 국소 ownership만
