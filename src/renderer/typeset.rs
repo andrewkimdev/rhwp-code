@@ -2007,6 +2007,121 @@ fn native_hwp5_first_footnote_overlap_break_line(
         })
 }
 
+/// 현재 page의 일반 Body 각주를 layout과 같은 composed line metric으로 재측정한다.
+///
+/// 일반 pagination의 `current_footnote_height`는 빠른 stored-LineSeg 추정이다. 긴 URL이나
+/// 여러 각주가 있는 HWP5 page에서는 실제 FootnoteArea보다 작을 수 있다. 그 차이를 전역 예약값으로
+/// 바꾸면 과페이지화 회귀가 생기므로, reset tail의 physical collision 판정에만 이 exact metric을 쓴다.
+/// table/text-box source 또는 이미 fragment된 각주는 각자 별도 owner 계약이 있으므로 이 좁은 경로에서
+/// 재측정하지 않는다.
+fn native_hwp5_existing_body_footnote_area_height(
+    st: &TypesetState,
+    paragraphs: &[Paragraph],
+    dpi: f64,
+) -> Option<f64> {
+    let footnotes = &st.pages.last()?.footnotes;
+    if footnotes.is_empty() || footnotes.iter().any(|footnote| footnote.fragment.is_some()) {
+        return None;
+    }
+
+    let mut total = st.footnote_separator_overhead;
+    for (footnote_idx, footnote_ref) in footnotes.iter().enumerate() {
+        let FootnoteSource::Body {
+            para_index,
+            control_index,
+        } = &footnote_ref.source
+        else {
+            return None;
+        };
+        let Control::Footnote(footnote) = paragraphs
+            .get(*para_index)
+            .and_then(|para| para.controls.get(*control_index))?
+        else {
+            return None;
+        };
+
+        for (note_para_idx, note_para) in footnote.paragraphs.iter().enumerate() {
+            let composed = compose_paragraph(note_para);
+            if composed.lines.is_empty() {
+                total += hwpunit_to_px(400, dpi);
+                continue;
+            }
+            let note_last_para = note_para_idx + 1 == footnote.paragraphs.len();
+            for (line_idx, line) in composed.lines.iter().enumerate() {
+                total += hwpunit_to_px(line.line_height, dpi);
+                if !(note_last_para && line_idx + 1 == composed.lines.len()) {
+                    total += hwpunit_to_px(line.line_spacing, dpi);
+                }
+            }
+        }
+        if footnote_idx + 1 < footnotes.len() {
+            total += st.footnote_between_notes_margin;
+        }
+    }
+    Some(total)
+}
+
+/// 이미 예약된 각주 영역을 침범하는 native HWP5 본문 reset tail을 찾는다.
+///
+/// HWP5는 한 문단의 뒤쪽 줄을 다음 physical page에 두면서 `vpos=0`으로 저장한다.
+/// 기존 각주가 있는 page에서 이 신호를 전역으로 따르면 과분할될 수 있으므로, source 좌표가
+/// 현재 flow와 맞고 reset 직전 줄은 FootnoteArea 위에 끝나며 다음 줄만 실제 각주 경계를
+/// 침범하는 경우에만 허용한다. 이 조건은 p43의 pi=512처럼 body tail이 separator/첫 각주를
+/// 덮는 경우를 고치되, 일반적인 paragraph reset은 건드리지 않는다.
+fn native_hwp5_existing_footnote_reset_overlap_break_line(
+    st: &TypesetState,
+    para: &Paragraph,
+    fmt: &FormattedParagraph,
+    paragraphs: &[Paragraph],
+    dpi: f64,
+) -> Option<usize> {
+    if !st.profile.native_hwp5_layout()
+        || st.col_count != 1
+        || st.current_footnote_height <= 0.0
+        || !para.controls.is_empty()
+        || !para_has_visible_text(para)
+        || para.line_segs.len() < fmt.line_heights.len()
+    {
+        return None;
+    }
+
+    let page_vpos_base = st.vpos_page_base.or(st.vpos_lazy_base).unwrap_or(0);
+    let actual_footnote_height =
+        native_hwp5_existing_body_footnote_area_height(st, paragraphs, dpi)?;
+    let footnote_top = (st.layout.body_area.height - actual_footnote_height).max(0.0);
+    const FLOW_SOURCE_TOLERANCE_PX: f64 = 2.0;
+    const FOOTNOTE_BOUNDARY_TOLERANCE_PX: f64 = 0.5;
+
+    para.line_segs[..fmt.line_heights.len()]
+        .windows(2)
+        .enumerate()
+        .find_map(|(prev_idx, pair)| {
+            let (prev, next) = (&pair[0], &pair[1]);
+            let next_idx = prev_idx + 1;
+            if is_synthetic_line_seg(prev)
+                || is_synthetic_line_seg(next)
+                || prev.vertical_pos <= page_vpos_base
+                || next.vertical_pos != 0
+            {
+                return None;
+            }
+
+            let source_prev_top = hwpunit_to_px(prev.vertical_pos - page_vpos_base, dpi);
+            let flow_prev_top =
+                st.current_height + fmt.spacing_before + fmt.line_advances_sum(0..prev_idx);
+            if (source_prev_top - flow_prev_top).abs() > FLOW_SOURCE_TOLERANCE_PX {
+                return None;
+            }
+
+            let flow_prev_bottom = flow_prev_top + fmt.line_heights[prev_idx];
+            let flow_next_bottom =
+                flow_prev_top + fmt.line_advance(prev_idx) + fmt.line_heights[next_idx];
+            (flow_prev_bottom <= footnote_top + FOOTNOTE_BOUNDARY_TOLERANCE_PX
+                && flow_next_bottom > footnote_top + FOOTNOTE_BOUNDARY_TOLERANCE_PX)
+                .then_some(next_idx)
+        })
+}
+
 /// native HWP5의 2행 그림+caption RowBreak 표인지 판별한다.
 ///
 /// 그림을 첫 행에, caption을 둘째 행에 저장한 표는 현재 페이지의 기존 각주 위에
@@ -13108,6 +13223,14 @@ impl TypesetEngine {
             }
         }
 
+        // native HWP5 본문은 기존 각주가 있는 page tail에서도 `vpos=0` reset으로
+        // 다음 physical page를 기록할 수 있다. 일반 reset은 과분할 위험이 있으므로,
+        // 실제 FootnoteArea 경계와 source/flow가 함께 맞을 때만 강제 경계로 쓴다.
+        let native_hwp5_existing_footnote_reset_line =
+            native_hwp5_existing_footnote_reset_overlap_break_line(
+                st, para, fmt, paragraphs, self.dpi,
+            );
+
         let forced_page_break_line = internal_vpos_page_break_line(
             para,
             fmt.line_heights.len(),
@@ -13131,36 +13254,10 @@ impl TypesetEngine {
                 st.current_height,
                 available,
             )
-        });
-        // native HWP5 본문은 기존 각주가 있는 page tail에서도 `vpos=0` reset으로
-        // 다음 physical page를 기록할 수 있다. 일반 reset은 과분할 위험이 있으므로,
-        // 현재 flow tail과 source top이 고정밀로 맞는 경우에만 아래 줄-loop의 경계로
-        // 쓴다. reset 전 줄은 실제 FootnoteArea top을 기준으로 별도 fit 검사를 한다.
-        let native_hwp5_existing_footnote_reset_line = if st.profile.native_hwp5_layout()
-            && st.col_count == 1
-            && st.current_footnote_height > 0.0
-            && para.controls.is_empty()
-            && para_has_visible_text(para)
-            && para.line_segs.len() >= fmt.line_heights.len()
-            && para.line_segs.first().is_some_and(|first| {
-                first.vertical_pos > 0
-                    && hwpunit_to_px(first.vertical_pos, self.dpi)
-                        >= st.base_available_height() * 0.7
-            }) {
-            para.line_segs[..fmt.line_heights.len()]
-                .windows(2)
-                .enumerate()
-                .find_map(|(prev_idx, pair)| {
-                    let (prev, next) = (&pair[0], &pair[1]);
-                    (!is_synthetic_line_seg(prev)
-                        && !is_synthetic_line_seg(next)
-                        && prev.vertical_pos > 0
-                        && next.vertical_pos == 0)
-                        .then_some(prev_idx + 1)
-                })
-        } else {
-            None
-        };
+        })
+        // full-fit early return보다 앞의 같은 chain에 넣어야 reset tail을 통째로
+        // 배치해 separator와 겹치는 우회가 없다.
+        .or(native_hwp5_existing_footnote_reset_line);
 
         // fits: 문단 전체가 현재 공간에 들어가는가?
         // [Task #359] fit 판정은 height_for_fit (trailing_ls 제외) 으로,
@@ -13600,9 +13697,6 @@ impl TypesetEngine {
                 if forced_page_break_line
                     .map(|break_line| li == break_line && li > cursor_line)
                     .unwrap_or(false)
-                    || native_hwp5_existing_footnote_reset_line
-                        .map(|break_line| li == break_line && li > cursor_line)
-                        .unwrap_or(false)
                 {
                     break;
                 }

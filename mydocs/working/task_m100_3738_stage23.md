@@ -76,6 +76,25 @@ evidence `916a67869`은 p127의 `column_text_flow_collapse=0`, image/TextLine ph
 4. 코드 변경은 먼저 commit하고, 그 정확한 revision에서 p43 PDF direct visual sweep 및 evidence를 별도
    document/asset으로 고정한다. 잔여가 있으면 evidence commit 뒤 다음 Stage로 다시 이월한다.
 
+## 원인 확정 — source reset과 full-fit 우회
+
+source `pi=512`에는 inline control이 없다. 문제의 각주 39–44는 앞 본문 `pi=505`(39), `pi=506`(40–42),
+`pi=507`(43), `pi=511`(44)에서 이미 p43의 Body footnote로 등록된다. `pi=512`의 stored `LINE_SEG`는
+`vpos=[44000,46000,48000,0]`, `textStart=[0,58,131,190]`이며, 마지막 `vpos=0` 줄
+`(47.7%)이었음.`이 한컴 PDF p44로 넘어가는 reset tail이다.
+
+실제 p43 body 높이는 `956.2px`, 이미 등록된 각주 39–44의 composed FootnoteArea는 `297.8px`이고 본문
+좌표의 경계는 `658.4px`다. pi=512의 앞 세 줄 bottom은 `600.0/626.7/653.3px`로 경계 안에 있지만,
+넷째 줄 top은 `666.7px`로 경계를 넘는다. 기존 `first_vpos >= body_height * 0.7` 추정 guard는 첫 줄
+`586.7px`(61.4%)를 탈락시켜 이 exact geometry를 보지 못했다.
+
+또한 exact body-footnote boundary helper가 split loop에서만 호출되면, `pi=512` 전체가 현재 공간에 든다는
+full-fit early return을 우회하지 못한다. 보정은 전역 각주 예약값을 바꾸지 않는다. native HWP5·단일 단·
+control 없는 visible 본문·Body/non-fragment 각주만 대상으로, source/flow 오차 2px 이내와 reset 직전/직후의
+실제 FootnoteArea crossing을 모두 만족할 때 얻은 break line을 기존 `forced_page_break_line` chain에 넣는다.
+따라서 full-fit과 line split이 같은 경계를 적용하며, p43에서는 1–3줄과 각주 39–44를 유지하고 4줄만 p44로
+보낸다.
+
 ## 완료 기준
 
 - p43에서 본문 glyph와 separator/각주 glyph가 겹치지 않고, 39)–44)의 physical owner가 기준 PDF와 같다.

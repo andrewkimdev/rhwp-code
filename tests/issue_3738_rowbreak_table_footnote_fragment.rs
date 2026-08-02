@@ -30,6 +30,8 @@ const PAGE_80: u32 = 79;
 const PAGE_126: u32 = 125;
 const PAGE_127: u32 = 126;
 const PAGE_37: u32 = 36;
+const PAGE_43: u32 = 42;
+const PAGE_44: u32 = 43;
 const PAGE_25: u32 = 24;
 const PAGE_154: u32 = 153;
 const PAGE_155: u32 = 154;
@@ -252,6 +254,60 @@ fn native_hwp5_footnote_reset_moves_only_the_overlapping_tail_to_the_next_page()
         p32.contains("그림 35"),
         "각주 29를 p30으로 소급한 뒤에도 그림 35는 다음 페이지에 보존돼야 함: {p32}"
     );
+}
+
+#[test]
+fn native_hwp5_existing_footnote_reset_moves_the_p43_tail_before_the_separator() {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(SAMPLE);
+    let bytes = fs::read(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+    let doc = HwpDocument::from_bytes(&bytes).expect("parse stage23 HWP evidence fixture");
+
+    let p43 = page_text(&doc, PAGE_43);
+    let p44 = page_text(&doc, PAGE_44);
+    assert!(
+        p43.contains("여성이 1273명") && !p43.contains("(47.7%)이었음."),
+        "p43은 PDF처럼 pi=512의 세 번째 줄에서 각주 전에 끝나야 함: {p43}"
+    );
+    assert!(
+        p44.contains("(47.7%)이었음.") && p44.contains("이식대상자와의 관계는 다음 표와 같음"),
+        "p44는 PDF처럼 pi=512 reset tail과 다음 본문으로 시작해야 함: {p44}"
+    );
+
+    let p43_tree = doc
+        .build_page_render_tree(PAGE_43)
+        .expect("render physical page 43");
+    let mut p43_pi512_bottom = None;
+    let mut p43_separator_top = None;
+    paragraph_bottom(&p43_tree.root, 512, &mut p43_pi512_bottom);
+    footnote_separator_top(&p43_tree.root, &mut p43_separator_top);
+    assert!(
+        p43_pi512_bottom.expect("p43 pi=512 body")
+            <= p43_separator_top.expect("p43 footnote separator") + 0.5,
+        "p43 pi=512 body tail must stay above the first footnote separator"
+    );
+    let mut p43_notes = String::new();
+    footnote_text(&p43_tree.root, false, &mut p43_notes);
+    for number in 39..=44 {
+        assert!(
+            p43_notes.contains(&format!("{number})")),
+            "p43 must retain existing footnote {number}: {p43_notes}"
+        );
+    }
+
+    let p44_tree = doc
+        .build_page_render_tree(PAGE_44)
+        .expect("render physical page 44");
+    let mut p44_pi512_bottom = None;
+    paragraph_bottom(&p44_tree.root, 512, &mut p44_pi512_bottom);
+    assert!(p44_pi512_bottom.is_some(), "p44 must own pi=512 reset tail");
+    let mut p44_notes = String::new();
+    footnote_text(&p44_tree.root, false, &mut p44_notes);
+    for number in 39..=44 {
+        assert!(
+            !p44_notes.contains(&format!("{number})")),
+            "p44 must not inherit p43 footnote {number}: {p44_notes}"
+        );
+    }
 }
 
 #[test]
