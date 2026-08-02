@@ -596,10 +596,15 @@ struct DeferredTableControl {
 /// 있고 그림+caption이 각주 영역까지 닿으면 anchor의 남은 본문 줄은 현재 쪽에 유지한
 /// 채 그림만 다음 쪽의 wrap band로 이월한다. `PageItem`을 현재 쪽에 즉시 넣으면 layout
 /// 단계에서는 그 단의 anchor 좌표밖에 모르므로 본문/각주 위에 겹친다.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 struct DeferredSquarePictureControl {
     para_index: usize,
     control_index: usize,
+    /// 그림이 다음 physical page를 소유할 때 같은 page에서 narrow line band를 써야 하는
+    /// 후속 본문 문단. 그림 PageItem만 이월하면 layout은 이 source contract를 알 수 없어
+    /// 본문을 전폭으로 그리고 Square 그림과 교차시킨다.
+    wrap_target_para_index: usize,
+    wrap_anchor: crate::renderer::pagination::WrapAnchorRef,
 }
 
 /// 호스트 문단의 spacing (표 전/후)
@@ -2751,8 +2756,16 @@ impl TypesetState {
         // Square picture만 새 physical page의 layout item 앞에 둔다. 즉시
         // `current_items`에 넣지 않아 다음 paragraph의 height/vpos fit은 기존과
         // 같게 유지하고, flush 때만 Shape로 materialize한다.
-        self.page_start_square_pictures
-            .append(&mut self.deferred_next_page_square_pictures);
+        for deferred in std::mem::take(&mut self.deferred_next_page_square_pictures) {
+            // typeset_wrap_around_paragraph는 next paragraph가 page break를 일으키기
+            // 전에 호출된다. 따라서 이 지점에서 다음 page column에 직접 anchor를
+            // 등록해야 p1356처럼 whole-narrow paragraph도 stored cs/sw를 보존한다.
+            self.current_column_wrap_anchors.insert(
+                deferred.wrap_target_para_index,
+                deferred.wrap_anchor.clone(),
+            );
+            self.page_start_square_pictures.push(deferred);
+        }
         // Task #321: 새 페이지에서는 body-wide top reserve 초기화
         self.pending_body_wide_top_reserve = 0.0;
     }
@@ -3887,7 +3900,7 @@ impl TypesetEngine {
     /// caption/side-wrap 그림을 넓게 건드린다. 따라서 다음 문단에 “vpos=0 narrow wrap
     /// 줄”이라는 저장 계약이 있고, 현재 쪽의 기존 각주를 고려하면 그림 frame 자체가 더는
     /// 들어가지 않는 native HWP5 Picture에만 적용한다.
-    fn native_hwp5_square_picture_uses_next_page_owner(
+    fn native_hwp5_square_picture_next_page_owner(
         &self,
         st: &TypesetState,
         para_idx: usize,
@@ -3895,11 +3908,11 @@ impl TypesetEngine {
         paragraphs: &[Paragraph],
         ctrl: &Control,
         styles: &ResolvedStyleSet,
-    ) -> bool {
+    ) -> Option<(usize, crate::renderer::pagination::WrapAnchorRef)> {
         use crate::model::shape::{HorzAlign, HorzRelTo, TextWrap, VertAlign, VertRelTo};
 
         let Control::Picture(picture) = ctrl else {
-            return false;
+            return None;
         };
         let common = &picture.common;
         let has_bottom_caption = picture
@@ -3922,7 +3935,7 @@ impl TypesetEngine {
             || common.horizontal_offset <= 0
             || !has_bottom_caption
         {
-            return false;
+            return None;
         }
 
         // 다음 문단의 vpos=0 narrow band는 한컴 저장 흐름에서 그림의 다음
@@ -3930,7 +3943,7 @@ impl TypesetEngine {
         // reset하는 경우(p1693)와 다음 문단이 narrow band로 곧바로 시작하는 경우
         // (p1356)를 모두 수용하되, 이 형상 없이 generic Square float을 옮기지 않는다.
         let Some(next_para) = paragraphs.get(para_idx + 1) else {
-            return false;
+            return None;
         };
         let Some((reset_idx, reset_seg)) =
             next_para.line_segs.iter().enumerate().find(|(_, seg)| {
@@ -3940,7 +3953,7 @@ impl TypesetEngine {
                     && (seg.segment_width as i32 - common.horizontal_offset as i32).abs() <= 200
             })
         else {
-            return false;
+            return None;
         };
         let has_full_width_before_reset = reset_idx > 0
             && next_para.line_segs[..reset_idx]
@@ -3967,7 +3980,7 @@ impl TypesetEngine {
             st.current_height + stored_flow_height > st.available_height() + 0.5
         };
         if !has_full_width_before_reset && !next_para_starts_on_next_page {
-            return false;
+            return None;
         }
 
         // Square는 layout cursor를 전진시키지 않지만, 이 저장 contract에서는 다음
@@ -3986,7 +3999,15 @@ impl TypesetEngine {
             .map(|caption| hwpunit_to_px(caption.spacing as i32, self.dpi))
             .unwrap_or(0.0);
         let frame_height = image_frame_height + caption_height + caption_spacing;
-        st.current_height + frame_height > st.available_height() + 0.5
+        (st.current_height + frame_height > st.available_height() + 0.5).then_some((
+            para_idx + 1,
+            crate::renderer::pagination::WrapAnchorRef {
+                anchor_para_index: para_idx,
+                anchor_cs: reset_seg.column_start,
+                anchor_sw: reset_seg.segment_width as i32,
+                anchor_image_margin_right: common.margin.right as i32,
+            },
+        ))
     }
 
     /// [Task #2094] wrap-around(어울림) zone 문단 처리 — 원본 무변경 통이동.
@@ -5443,13 +5464,17 @@ impl TypesetEngine {
                             // 현재 쪽에 남기되 그림만 다음 physical page의 narrow wrap
                             // band에 배치한다. p155 그림 64처럼 현재 PageItem에 넣으면
                             // caption이 기존 FootnoteArea와 겹친다.
-                            if self.native_hwp5_square_picture_uses_next_page_owner(
-                                &st, para_idx, para, paragraphs, ctrl, styles,
-                            ) {
+                            if let Some((wrap_target_para_index, wrap_anchor)) = self
+                                .native_hwp5_square_picture_next_page_owner(
+                                    &st, para_idx, para, paragraphs, ctrl, styles,
+                                )
+                            {
                                 st.deferred_next_page_square_pictures.push(
                                     DeferredSquarePictureControl {
                                         para_index: para_idx,
                                         control_index: ctrl_idx,
+                                        wrap_target_para_index,
+                                        wrap_anchor,
                                     },
                                 );
                                 continue;

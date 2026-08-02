@@ -8,7 +8,7 @@
 use std::fs;
 use std::path::Path;
 
-use rhwp::renderer::render_tree::{RenderNode, RenderNodeType};
+use rhwp::renderer::render_tree::{BoundingBox, RenderNode, RenderNodeType};
 use rhwp::wasm_api::HwpDocument;
 
 const SAMPLE: &str =
@@ -117,6 +117,41 @@ fn images_for_control(
     for child in &node.children {
         images_for_control(child, para_index, control_index, positions);
     }
+}
+
+fn image_boxes_for_control(
+    node: &RenderNode,
+    para_index: usize,
+    control_index: usize,
+    boxes: &mut Vec<BoundingBox>,
+) {
+    if let RenderNodeType::Image(image) = &node.node_type {
+        if image.para_index == Some(para_index) && image.control_index == Some(control_index) {
+            boxes.push(node.bbox);
+        }
+    }
+    for child in &node.children {
+        image_boxes_for_control(child, para_index, control_index, boxes);
+    }
+}
+
+fn paragraph_line_boxes(node: &RenderNode, para_index: usize, boxes: &mut Vec<BoundingBox>) {
+    if let RenderNodeType::TextLine(line) = &node.node_type {
+        if line.para_index == Some(para_index) {
+            boxes.push(node.bbox);
+        }
+    }
+    for child in &node.children {
+        paragraph_line_boxes(child, para_index, boxes);
+    }
+}
+
+fn vertically_intersects(left: BoundingBox, right: BoundingBox) -> bool {
+    left.y < right.y + right.height && right.y < left.y + left.height
+}
+
+fn does_not_overlap_horizontally(left: BoundingBox, right: BoundingBox) -> bool {
+    left.x + left.width <= right.x + 0.5 || right.x + right.width <= left.x + 0.5
 }
 
 fn images_for_table(node: &RenderNode, para_index: usize, positions: &mut Vec<(f64, f64)>) {
@@ -598,6 +633,29 @@ fn native_hwp5_square_picture_uses_the_next_page_wrap_owner() {
         "그림 64는 PDF처럼 p156 우측 Square band에 있어야 함: {:?}",
         p156_images[0]
     );
+
+    let mut p156_image_boxes = Vec::new();
+    let mut p156_pi1693_lines = Vec::new();
+    image_boxes_for_control(&p156_tree.root, 1692, 1, &mut p156_image_boxes);
+    paragraph_line_boxes(&p156_tree.root, 1693, &mut p156_pi1693_lines);
+    let image = p156_image_boxes
+        .into_iter()
+        .next()
+        .expect("p156 그림 64 bbox");
+    let overlapping_vertical_lines: Vec<_> = p156_pi1693_lines
+        .into_iter()
+        .filter(|line| vertically_intersects(*line, image))
+        .collect();
+    assert!(
+        !overlapping_vertical_lines.is_empty(),
+        "p156 pi=1693에는 그림 64와 같은 세로 band의 Square 본문이 있어야 함"
+    );
+    assert!(
+        overlapping_vertical_lines
+            .iter()
+            .all(|line| does_not_overlap_horizontally(*line, image)),
+        "p156 pi=1693 본문은 그림 64와 물리적으로 교차하면 안 됨: image={image:?}, lines={overlapping_vertical_lines:?}"
+    );
 }
 
 #[test]
@@ -644,5 +702,28 @@ fn native_hwp5_square_picture_figure_56_uses_the_same_next_page_owner_contract()
         p127_images[0].0 > 390.0,
         "그림 56은 PDF처럼 p127 우측 Square band에 있어야 함: {:?}",
         p127_images[0]
+    );
+
+    let mut p127_image_boxes = Vec::new();
+    let mut p127_pi1356_lines = Vec::new();
+    image_boxes_for_control(&p127_tree.root, 1355, 0, &mut p127_image_boxes);
+    paragraph_line_boxes(&p127_tree.root, 1356, &mut p127_pi1356_lines);
+    let image = p127_image_boxes
+        .into_iter()
+        .next()
+        .expect("p127 그림 56 bbox");
+    let overlapping_vertical_lines: Vec<_> = p127_pi1356_lines
+        .into_iter()
+        .filter(|line| vertically_intersects(*line, image))
+        .collect();
+    assert!(
+        !overlapping_vertical_lines.is_empty(),
+        "p127 pi=1356에는 그림 56과 같은 세로 band의 Square 본문이 있어야 함"
+    );
+    assert!(
+        overlapping_vertical_lines
+            .iter()
+            .all(|line| does_not_overlap_horizontally(*line, image)),
+        "p127 pi=1356 본문은 그림 56과 물리적으로 교차하면 안 됨: image={image:?}, lines={overlapping_vertical_lines:?}"
     );
 }
