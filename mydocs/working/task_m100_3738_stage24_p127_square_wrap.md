@@ -1,6 +1,6 @@
 ---
 kind: investigation
-status: active
+status: completed
 canonical: mydocs/manual/bug_hunting_playbook.md
 last_verified: 2026-08-02
 ---
@@ -45,11 +45,12 @@ hanging indent를 한 번 더 더했다. p127은 그림 시작 `x=401.92px`에 �
 명시적 page/section/column break가 next paragraph 앞에 있는 복합 source와 여러 deferred Square 그림이
 한 target을 공유하는 source는 이번 HWP fixture에 없으며, 이 contract의 일반화 전 별도 source로 검토한다.
 
-## 검증 예정
+## 검증 결과
 
-- focused source regression: 그림 56/p127 `pi=1356`, 그림 64/p156 `pi=1693` bbox non-overlap
-- Stage 9–22 regression 유지
-- 정확한 code revision에서 p126–127 및 p155–156 Hancom PDF visual sweep과
-  `fidelity_compare --layout-ledger` 재실행
+- focused source regression 13/13: 그림 56/p127 `pi=1356`, 그림 64/p156 `pi=1693` bbox non-overlap
+- Stage 9–22 regression을 유지했고, Python detector regression도 27/27 통과했다.
+- 정확한 code revision `775370b2f48339f84ee627bb058b94444c9ed933`에서 p126–127 및 p155–156
+  Hancom PDF visual sweep과 `fidelity_compare --layout-ledger`를 재실행했다.
 
-완료 근거와 PNG/JSON/hash는 코드 commit 뒤 별도의 Stage 24 visual-sweep 문서에 고정한다.
+완료 근거, PNG/JSON/hash, 자동 후보의 사람 판정은
+[Stage 24 visual sweep](task_m100_3738_stage24_p127_visual_sweep.md)에 고정한다.
