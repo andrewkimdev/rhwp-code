@@ -1,6 +1,6 @@
 ---
 kind: review
-status: ready-to-push
+status: ci-passed
 canonical: mydocs/pr/archives/pr_3778_review.md
 last_verified: 2026-08-02
 ---
@@ -13,9 +13,9 @@ last_verified: 2026-08-02
 프로세스가 stdin을 읽기 전에 정상 종료할 때 발생하는 `BrokenPipe` 레이스를 테스트 헬퍼에서만
 처리한다. 프로덕션 코드와 CLI 계약은 바꾸지 않는다.
 
-**권고: review 문서와 오늘할일 push 뒤 최신 head의 fast-pass 조건을 확인하고 merge.** 차단 결함은
-발견하지 못했다. `@enigma-jerry72`는 병합된 선행 PR이 없는 첫 기여자이며, #3771과 #3778이 첫
-기여 묶음이다. merge 뒤 실제 검증 결과와 함께 감사의 뜻을 PR에 남긴다.
+**권고: merge.** review 문서와 오늘할일을 포함한 첫 fast-pass head가 최신 CI를 통과했고, 차단
+결함은 발견하지 못했다. `@enigma-jerry72`는 병합된 선행 PR이 없는 첫 기여자이며, #3771과 #3778이
+첫 기여 묶음이다. merge 뒤 실제 검증 결과와 함께 감사의 뜻을 PR에 남긴다.
 
 ## PR metadata와 라우팅
 
@@ -25,7 +25,7 @@ last_verified: 2026-08-02
 | base / source head | `devel` / `enigma-jerry72/rhwp:fix/batch-stdin-brokenpipe-flake` |
 | contributor code head | `639d6bd921066075f2871cbdf7fd9e9a8173cc1f` |
 | 변경 규모 | +23 / -12, `tests/batch_axes_contract.rs` 1개 파일, 1 commit |
-| 문서 작성 시점 상태 | `MERGEABLE`, `CLEAN`, contributor code head CI 전체 통과 |
+| 첫 review-only head 상태 | `7f92ecc55`, `MERGEABLE`, `CLEAN`, fast-pass CI 통과 |
 | reviewer | `@edwardkim` 요청 |
 
 base route: `collaborator_external_pr.md`
@@ -37,7 +37,7 @@ loaded documents: `pr_review_workflow.md`, `pr_review/README.md`,
 `collaborator_external_pr.md`, `intake_and_review.md`, `local_validation.md`,
 `review_only_fast_pass.md`, `post_merge.md`
 
-current head: `639d6bd921066075f2871cbdf7fd9e9a8173cc1f` (문서 push 전 참고값; push 직전 재확인 필요)
+current head: `7f92ecc55ba44f4e3fcb8170cd8dc4000b89625d` (후속 문서 기록 commit 전 참고값; merge 전 재확인 필요)
 
 변경은 renderer, layout, HWP/HWPX fixture, golden, baseline을 포함하지 않는다. 따라서 시각·fixture
 증적 경로는 적용하지 않는다.
@@ -79,6 +79,12 @@ current head: `639d6bd921066075f2871cbdf7fd9e9a8173cc1f` (문서 push 전 참고
 판독한다. Markdown-only인 것이 확인되면 `GIT_LFS_SKIP_PUSH=1`로 fork source ref에 dry-run과 실제
 push를 수행한다.
 
-push 뒤 최신 head에서 CI preflight와 `Build & Test` aggregate를 재확인한다. merge 뒤에는 `devel`
-반영과 merge SHA를 확인하고, contributor PR에 CI·로컬 검증 결과와 첫 기여에 대한 감사 문구를 실제
-줄바꿈 body로 남긴다. #3778에는 close 키워드가 없으므로 별도 issue close는 수행하지 않는다.
+fork source ref의 사전 SHA 대조과 LFS 판독 뒤 `7f92ecc55`를 push했다. 해당 head의
+[CI 30742380062](https://github.com/edwardkim/rhwp/actions/runs/30742380062)에서 CI preflight와
+`Build & Test` aggregate가 success였고, heavy job은 review-only fast-pass로 정상 skipped됐다.
+이후 문서 상태를 확정하는 commit도 같은 허용 경로의 single-parent trailing commit이므로, push 뒤
+최신 head의 aggregate를 다시 확인한다.
+
+merge 뒤에는 `devel` 반영과 merge SHA를 확인하고, contributor PR에 CI·로컬 검증 결과와 첫 기여에
+대한 감사 문구를 실제 줄바꿈 body로 남긴다. #3778에는 close 키워드가 없으므로 별도 issue close는
+수행하지 않는다.
