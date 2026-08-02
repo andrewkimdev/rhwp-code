@@ -15,6 +15,7 @@
 - `CI preflight`가 PR/push 파일 목록을 별도 JSON 입력으로 만들고 classifier 결과를 `shadow_*` output과
   Job Summary에 기록하게 했다.
 - shadow checkout은 credential을 유지하지 않고, classifier 실행 step에는 GitHub token을 전달하지 않는다.
+- 기존 review-only fast-pass에서는 shadow checkout·수집·분류를 생략해 빠른 경로의 비용을 유지한다.
 - checkout·수집·classifier·summary 실패는 기존 CI를 실패시키지 않으며 출력 기본값은 모든 검증을 요구하는
   `full`이다.
 - 기존 `frontend_required`, heavy worker 조건과 `Build & Test` aggregate 판정은 변경하지 않았다.
@@ -47,7 +48,7 @@
 | 검증 | 결과 |
 | --- | --- |
 | `node --test scripts/tests/ci-impact-classifier.test.cjs` | 19 passed / 0 failed |
-| `python3 -m unittest scripts/tests/test_ci_impact_workflow.py scripts/tests/test_render_diff_workflow.py` | 5 passed |
+| `python3 -m unittest scripts/tests/test_ci_impact_workflow.py scripts/tests/test_render_diff_workflow.py` | 6 passed |
 | `actionlint .github/workflows/ci.yml` | 통과, 경고 없음 |
 | `git diff --check` | 통과 |
 

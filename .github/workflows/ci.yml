@@ -440,6 +440,7 @@ jobs:
       # [#3790 Stage 1] PR checkout의 classifier는 아직 trusted skip 근거가 아니다.
       # 토큰을 전달하지 않는 별도 node step에서 판정하고 summary에만 기록한다.
       - name: Check out repository for advisory impact classifier
+        if: ${{ steps.detect.outputs.fast_pass != 'true' }}
         continue-on-error: true
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -447,6 +448,7 @@ jobs:
 
       - name: Collect shadow CI impact input
         id: collect-impact-shadow
+        if: ${{ steps.detect.outputs.fast_pass != 'true' }}
         continue-on-error: true
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         with:
@@ -543,6 +545,7 @@ jobs:
 
       - name: Classify CI impact in shadow mode
         id: impact-shadow
+        if: ${{ steps.detect.outputs.fast_pass != 'true' }}
         continue-on-error: true
         run: >-
           node scripts/ci-impact-classifier.cjs
@@ -567,6 +570,7 @@ jobs:
             echo '### Shadow CI impact classification'
             echo
             echo '> Advisory only: existing worker conditions are unchanged in #3790 Stage 1.'
+            echo '> Review-only fast-pass skips the advisory classifier checkout.'
             echo
             echo '| Axis | Value |'
             echo '| --- | --- |'
