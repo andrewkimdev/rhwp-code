@@ -27,6 +27,7 @@ const PAGE_77: u32 = 76;
 const PAGE_78: u32 = 77;
 const PAGE_79: u32 = 78;
 const PAGE_80: u32 = 79;
+const PAGE_37: u32 = 36;
 
 fn page_text(doc: &HwpDocument, page: u32) -> String {
     doc.extract_page_text_native(page)
@@ -91,6 +92,22 @@ fn table_bottom(node: &RenderNode, para_index: usize, bottom: &mut Option<f64>) 
     }
     for child in &node.children {
         table_bottom(child, para_index, bottom);
+    }
+}
+
+fn images_for_control(
+    node: &RenderNode,
+    para_index: usize,
+    control_index: usize,
+    positions: &mut Vec<(f64, f64)>,
+) {
+    if let RenderNodeType::Image(image) = &node.node_type {
+        if image.para_index == Some(para_index) && image.control_index == Some(control_index) {
+            positions.push((node.bbox.x, node.bbox.y));
+        }
+    }
+    for child in &node.children {
+        images_for_control(child, para_index, control_index, positions);
     }
 }
 
@@ -171,6 +188,31 @@ fn native_hwp5_footnote_reset_moves_only_the_overlapping_tail_to_the_next_page()
     assert!(
         p32.contains("그림 35"),
         "각주 29를 p30으로 소급한 뒤에도 그림 35는 다음 페이지에 보존돼야 함: {p32}"
+    );
+}
+
+#[test]
+fn native_hwp5_repeated_empty_guide_lines_emit_tac_picture_once() {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(SAMPLE);
+    let bytes = fs::read(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+    let doc = HwpDocument::from_bytes(&bytes).expect("parse stage18 HWP evidence fixture");
+    let tree = doc
+        .build_page_render_tree(PAGE_37)
+        .expect("render physical page 37");
+
+    // pi=463 control 1은 그림 37이다. text-start가 같은 빈 guide 줄이 둘이지만
+    // 이 control은 하나뿐이므로 첫 줄에만 귀속되어야 한다.
+    let mut positions = Vec::new();
+    images_for_control(&tree.root, 463, 1, &mut positions);
+    assert_eq!(
+        positions.len(),
+        1,
+        "p37 그림 37은 한 번만 방출되어야 한다: {positions:?}"
+    );
+    let (x, y) = positions[0];
+    assert!(
+        x < 350.0 && y < 800.0,
+        "그림 37은 PDF처럼 좌측의 두-그림 band에 있어야 하며 페이지 하단 fallback으로 새면 안 된다: x={x:.1}, y={y:.1}"
     );
 }
 

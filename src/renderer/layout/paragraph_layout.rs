@@ -519,12 +519,19 @@ fn repeated_empty_tac_line_offset(
         .collect::<Vec<_>>();
 
     // 텍스트 없는 HWP 문단은 LINE_SEG 여러 줄이 같은 text_start 를 가질 수 있다.
-    // 이때 TAC 개수와 빈 줄 수가 정확히 맞으면 한 줄에 하나씩 순서대로 배정한다.
-    if line_tac_sequence.len() == repeated_empty_line_count {
-        line_tac_sequence
-            .get(line_ordinal)
-            .copied()
-            .map(|offset| vec![offset])
+    // TAC가 빈 줄보다 적으면 앞 줄부터 하나씩만 귀속하고, 나머지 guide 줄에는
+    // 이미 귀속한 개체를 되풀이해 그리지 않는다. TAC 수와 빈 줄 수가 정확히
+    // 같은 기존 사례도 같은 순서 배정으로 보존된다.
+    if !line_tac_sequence.is_empty() && line_tac_sequence.len() <= repeated_empty_line_count {
+        // 후보가 모자란 뒤쪽 guide 줄도 `Some(vec![])`으로 명시해야 한다. `None`을
+        // 반환하면 호출자가 기본 줄-범위 집합으로 되돌아가 같은 TAC를 재배정한다.
+        Some(
+            line_tac_sequence
+                .get(line_ordinal)
+                .copied()
+                .into_iter()
+                .collect(),
+        )
     } else {
         None
     }
