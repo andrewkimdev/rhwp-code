@@ -1,6 +1,6 @@
 ---
 kind: investigation
-status: active
+status: completed
 canonical: mydocs/manual/bug_hunting_playbook.md
 last_verified: 2026-08-02
 ---
@@ -116,3 +116,10 @@ p44–45, p58–59, p68–70, p76–80, p127. 특히 p44–45는 Stage 25 direct
 - 수정이 필요하면 regression·최소 code change·PDF visual evidence를 분리된 commits로 남긴다.
 - 수정이 불필요하면 그 이유와 false-positive/이미 해결 근거를 명시하고 다음 잔여 항목을 진행한다.
 - 다음 Stage가 생기면 위 잔여 원장을 상태 변화와 함께 전부 옮긴다.
+
+## 결과
+
+`8f84a5ecb0bfd4ee556239eaee3679946df10e02`에서 p26–27처럼 인접 쪽으로 이동한 text owner와
+PDF↔renderer total page-count drift를 candidate ledger로 자동 분류했다. p26 renderer 결함 자체는
+남아 있으므로 다음 Stage에서 별도 native HWP5 보정으로 진행한다. exact PDF visual/sweep evidence는
+[Stage 26 visual sweep](task_m100_3738_stage26_visual_sweep.md)에 고정한다.
