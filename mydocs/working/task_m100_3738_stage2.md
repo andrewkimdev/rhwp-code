@@ -26,9 +26,10 @@ Image (그림 23) bbox: x=120.9, y=-181.4, w=495.6, h=330.5
 
 ## 원인 가설
 
-`table_cell_content.rs`의 셀 내부 `Picture` 경로는 cell `LINE_SEG.vertical_pos`를 cell y에
-더해 그림을 놓고, `Picture`의 HWP5 `vertical_offset`/shape transform이 가진 page-boundary
-상쇄를 별도 판정하지 않는다.
+실제 방출 경로는 `table_layout.rs`의 `layout_horizontal_cell_paragraphs`다. 이 경로는
+`TopAndBottom + Para + flow_with_text` picture의 최종 y를 `content_top + picture.vertical_offset`
+으로 다시 정한다. 따라서 이월된 표의 page-local `content_top`에는 맞지만, picture의 HWP5
+`vertical_offset`에 남은 이전 page 기준 상쇄를 별도 판정하지 않아 음수 y가 된다.
 
 이 표의 outer host와 inner picture는 이전 physical ladder를 상쇄하는 값을 갖는다.
 
@@ -53,5 +54,25 @@ Image (그림 23) bbox: x=120.9, y=-181.4, w=495.6, h=330.5
 
 이 경우 picture의 stale negative transform/offset을 새 page body 기준으로 정규화한다. 일반
 셀 그림, 실제 음수 위치 그림, HWPX stored layout, 또는 큰 그림의 page-internal split에는 적용하지
-않는다. 수정 후 HWP p23–p24 visual sweep에서 그림 23 전체·EU 문단·표 4의 순서와 frame overflow를
-재검증하고, HWPX는 별도 잔여 결함으로 계속 보고한다.
+않는다.
+
+## Stage 2 구현 반증 — 조건이 실제 노드에 닿지 않음
+
+Stage 2의 첫 구현은 위 합성식을 셀 paragraph의 첫 `LINE_SEG`에서 읽었다. 그러나 source dump의
+실제 계층은 다음과 같다.
+
+```text
+outer paragraph pi=344: LINE_SEG vpos=52230
+  table: RowBreak, 1×1, non-TAC TopAndBottom/Para, table offset=+560
+    cell paragraph p[0]: LINE_SEG vpos=0
+      picture: TopAndBottom/Para/flow_with_text, signed offset=-52790
+```
+
+즉 `52230`은 **바깥 host**의 값이며 셀 문단의 값이 아니다. 셀 layout만 받는 첫 구현은 `0 + 560 -
+52790`을 검사해 false가 되어, p24 render tree의 Image bbox가 여전히 `y=-181.4`로 남았다. 이 구현은
+의도적으로 좁았지만 실제 구조를 잘못 연결한 것으로, 해결 근거가 아니다.
+
+이 residual은 Stage 2 결과·review PNG로 보존해 커밋한다. 다음 Stage 3 분석은 outer host anchor를
+layout_table까지 전달해 정확한 합성식을 판정할지, 또는 이미 이월이 확정된 빈 1×1 RowBreak host 안에서
+`-52790 HU` 같은 page-scale signed offset을 별도 contract로 판정할지를 새로 결정한다. HWPX는 이
+native HWP5 분기의 대상이 아니며 계속 독립 residual로 추적한다.
