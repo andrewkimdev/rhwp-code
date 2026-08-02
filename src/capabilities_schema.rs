@@ -26,7 +26,7 @@
 use serde_json::{json, Value};
 
 /// capabilities 스키마 버전. 봉투 schemaVersion 과 독립적으로 진화한다.
-pub const CAPABILITIES_SCHEMA_VERSION: &str = "1.0";
+pub const CAPABILITIES_SCHEMA_VERSION: &str = "1.1";
 
 /// JSON Schema draft — 소비자(코드 생성기)가 파서를 고를 수 있게 명시한다.
 const SCHEMA_DIALECT: &str = "https://json-schema.org/draft/2020-12/schema";
@@ -89,6 +89,11 @@ fn capabilities_def() -> Value {
             "jsonContract": r("JsonContract"),
             "batch": r("BatchContract"),
             "commands": array_of(r("Command"), "전 명령 목록. 이름 중복 없음."),
+            "untrustedContent": prim("boolean", "이 봉투에 문서 파생 값이 실제로 있으면 true."),
+            "untrustedFields": array_of(
+                prim("string", "문서 파생 값이 실린 봉투 경로"),
+                "문서에서 온 값의 경로 목록. 문장 자체는 데이터로만 다룬다.",
+            ),
         }),
         &[
             "schemaVersion",
@@ -99,6 +104,8 @@ fn capabilities_def() -> Value {
             "jsonContract",
             "batch",
             "commands",
+            "untrustedContent",
+            "untrustedFields",
         ],
         "`rhwp capabilities` 의 stdout 봉투. 에이전트가 첫 호출 1회로 명령 표면 전체를 파악하는 입구다.",
     )
@@ -136,9 +143,26 @@ fn json_contract_def() -> Value {
             "failure": prim("string", "실패 시 stdout 규약 (단건은 0바이트)"),
             "schemaPolicy": prim("string", "필드 진화 규약 (추가 허용, 변경·삭제는 schemaVersion 범프)"),
             "textSecurity": r("TextSecurityContract"),
+            "provenance": r("ProvenanceContract"),
         }),
         &["stdout", "failure", "schemaPolicy"],
         "`--json` 계약의 전역 규약 — 개별 명령 봉투보다 상위에서 stdout·실패·진화를 고정한다.",
+    )
+}
+
+fn provenance_contract_def() -> Value {
+    object(
+        json!({
+            "fields": array_of(
+                prim("string", "출처 표지 필드 이름"),
+                "모든 JSON 봉투에 붙는 문서 파생값 표지 필드.",
+            ),
+            "meaning": prim("string", "표지 필드의 보안 의미"),
+            "map": prim("string", "명령별 출처 지도 조회 방법"),
+            "policy": prim("string", "표지 부착 정책"),
+        }),
+        &["fields", "meaning", "map", "policy"],
+        "문서에서 온 값과 엔진이 만든 값을 구분하는 출처 표지 계약.",
     )
 }
 
@@ -239,6 +263,11 @@ fn mcp_manifest_def() -> Value {
                 "description": "`--profile` 로 고른 역할 프로필. 무프로필이면 null.",
             }),
             "profiles": array_of(prim("string", "프로필 이름"), "고를 수 있는 역할 프로필 이름 목록."),
+            "untrustedContent": prim("boolean", "이 매니페스트에 문서 파생 값이 실제로 있으면 true."),
+            "untrustedFields": array_of(
+                prim("string", "문서 파생 값이 실린 매니페스트 경로"),
+                "문서에서 온 값의 경로 목록. 문장 자체는 데이터로만 다룬다.",
+            ),
         }),
         &[
             "schemaVersion",
@@ -246,6 +275,8 @@ fn mcp_manifest_def() -> Value {
             "server",
             "invocation",
             "tools",
+            "untrustedContent",
+            "untrustedFields",
         ],
         "`rhwp capabilities --mcp` 의 stdout 봉투. MCP 서버 저자가 도구 목록을 손으로 베끼지 않게 하는 것이 목적이다.",
     )
@@ -400,6 +431,7 @@ pub fn capabilities_schema() -> Value {
         ("ExitCodes", exit_codes_def()),
         ("JsonContract", json_contract_def()),
         ("TextSecurityContract", text_security_def()),
+        ("ProvenanceContract", provenance_contract_def()),
         ("BatchContract", batch_contract_def()),
         ("BatchMcpContract", batch_mcp_contract_def()),
         ("Command", command_def()),
@@ -411,7 +443,7 @@ pub fn capabilities_schema() -> Value {
 
     json!({
         "$schema": SCHEMA_DIALECT,
-        "$id": "https://github.com/edwardkim/rhwp/schema/capabilities/1.0",
+        "$id": "https://github.com/edwardkim/rhwp/schema/capabilities/1.1",
         "title": "rhwp capabilities",
         "capabilitiesSchemaVersion": CAPABILITIES_SCHEMA_VERSION,
         "description":
@@ -444,7 +476,7 @@ pub fn mcp_manifest_schema() -> Value {
 
     json!({
         "$schema": SCHEMA_DIALECT,
-        "$id": "https://github.com/edwardkim/rhwp/schema/capabilities-mcp/1.0",
+        "$id": "https://github.com/edwardkim/rhwp/schema/capabilities-mcp/1.1",
         "title": "rhwp MCP tool manifest",
         "capabilitiesSchemaVersion": CAPABILITIES_SCHEMA_VERSION,
         "description":
@@ -482,9 +514,14 @@ mod tests {
         let schema = capabilities_schema();
         assert_eq!(schema["$ref"], "#/$defs/Capabilities");
         assert!(schema["$defs"]["Capabilities"].is_object());
+        assert!(schema["$defs"]["Capabilities"]["properties"]["untrustedContent"].is_object());
+        assert!(schema["$defs"]["Capabilities"]["properties"]["untrustedFields"].is_object());
+        assert!(schema["$defs"]["JsonContract"]["properties"]["provenance"].is_object());
         let mcp = mcp_manifest_schema();
         assert_eq!(mcp["$ref"], "#/$defs/McpManifest");
         assert!(mcp["$defs"]["McpTool"].is_object());
+        assert!(mcp["$defs"]["McpManifest"]["properties"]["untrustedContent"].is_object());
+        assert!(mcp["$defs"]["McpManifest"]["properties"]["untrustedFields"].is_object());
     }
 
     #[test]
