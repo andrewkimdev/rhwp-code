@@ -1676,25 +1676,53 @@ def column_frame(frame: tuple[int, int, int, int], column: int) -> tuple[int, in
     return min(right, mid + 2), top, right, bottom
 
 
+def mask_content_regions(
+    image: Image.Image,
+    rectangles: list[tuple[int, int, int, int]],
+) -> Image.Image:
+    """Return an image with known non-body regions blanked for text-flow bands.
+
+    The column-flow signal intentionally measures raster line bands because it
+    also catches text reflowed around a floating drawing.  A centered table,
+    however, contributes dense rules and cell text that are not paragraph
+    baselines.  Mask only such render-tree-owned regions for this one signal;
+    raw raster and table geometry checks remain available to the caller.
+    """
+    if not rectangles:
+        return image
+    masked = image.copy()
+    draw = ImageDraw.Draw(masked)
+    for left, top, right, bottom in rectangles:
+        if right <= left or bottom <= top:
+            continue
+        draw.rectangle((left, top, right - 1, bottom - 1), fill="white")
+    return masked
+
+
 def column_line_band_drifts(
     rhwp: Image.Image,
     pdf: Image.Image,
     rhwp_frame: tuple[int, int, int, int],
     pdf_frame: tuple[int, int, int, int],
+    *,
+    rhwp_mask_rectangles: list[tuple[int, int, int, int]] | None = None,
+    pdf_mask_rectangles: list[tuple[int, int, int, int]] | None = None,
 ) -> list[dict[str, object]]:
+    rhwp_for_flow = mask_content_regions(rhwp, rhwp_mask_rectangles or [])
+    pdf_for_flow = mask_content_regions(pdf, pdf_mask_rectangles or [])
     drifts: list[dict[str, object]] = []
     for column in (0, 1):
         rhwp_column_frame = column_frame(rhwp_frame, column)
         pdf_column_frame = column_frame(pdf_frame, column)
         rhwp_bands = row_bands(
-            rhwp,
+            rhwp_for_flow,
             frame=rhwp_column_frame,
             predicate=is_content_pixel,
             min_pixels_per_row=8,
             gap=2,
         )
         pdf_bands = row_bands(
-            pdf,
+            pdf_for_flow,
             frame=pdf_column_frame,
             predicate=is_content_pixel,
             min_pixels_per_row=8,
@@ -2269,6 +2297,79 @@ def raster_bbox_for_render_tree_bbox(
     if right <= left or bottom <= top:
         return None
     return [left, top, right - left, bottom - top]
+
+
+def render_tree_body_table_masks(
+    page_tree: dict[str, object] | None,
+    image: Image.Image,
+) -> list[tuple[int, int, int, int]]:
+    """Project Body table boxes to an image for the paragraph-flow signal.
+
+    A table's own cells/rules must not be mistaken for left/right paragraph
+    columns.  Header/footer/footnote tables are deliberately excluded because
+    the column-flow detector only reasons about the Body region.
+    """
+    if page_tree is None:
+        return []
+    masks: list[tuple[int, int, int, int]] = []
+
+    def visit(node: dict[str, object], region: str = "outside") -> None:
+        node_type = node.get("type")
+        if node_type in {"Body", "FootnoteArea", "Footer", "Header"}:
+            region = str(node_type)
+        if region == "Body" and node_type == "Table":
+            bbox = render_tree_bbox(node)
+            if bbox is not None:
+                raster = raster_bbox_for_render_tree_bbox(page_tree, bbox, image)
+                if raster is not None:
+                    left, top, width, height = raster
+                    masks.append((left, top, left + width, top + height))
+            # Child cell text belongs to this same table; do not add duplicates.
+            return
+        children = node.get("children")
+        if isinstance(children, list):
+            for child in children:
+                if isinstance(child, dict):
+                    visit(child, region)
+
+    visit(page_tree)
+    return masks
+
+
+def render_tree_body_raster_frame(
+    page_tree: dict[str, object] | None,
+    image: Image.Image,
+) -> tuple[int, int, int, int] | None:
+    """Return the Body frame in raster coordinates when the tree exposes it.
+
+    A page without an explicit paper border can contain a wide table rule.  The
+    generic raster frame finder may then mistake that rule for the page top.
+    The Body bbox is authoritative for the text-flow comparison and is still
+    optional so existing documents without it retain the generic fallback.
+    """
+    if page_tree is None:
+        return None
+
+    def visit(node: dict[str, object]) -> tuple[float, float, float, float] | None:
+        if node.get("type") == "Body":
+            return render_tree_bbox(node)
+        children = node.get("children")
+        if isinstance(children, list):
+            for child in children:
+                if isinstance(child, dict):
+                    found = visit(child)
+                    if found is not None:
+                        return found
+        return None
+
+    body_bbox = visit(page_tree)
+    if body_bbox is None:
+        return None
+    raster = raster_bbox_for_render_tree_bbox(page_tree, body_bbox, image)
+    if raster is None:
+        return None
+    left, top, width, height = raster
+    return left, top, left + width, top + height
 
 
 def ink_match_in_bbox(
@@ -3159,9 +3260,22 @@ def analyze_page(
     )
     red_drift = compare_ordered_y(rhwp_red, pdf_red)
     line_drift = compare_ordered_y(rhwp_bands, pdf_bands)
+    page_tree = load_render_tree(tree_path)
     column_line_drifts = column_line_band_drifts(rhwp, pdf, rhwp_frame, pdf_frame)
     column_line_drift_candidates = column_line_band_drift_candidates(column_line_drifts)
-    column_text_flow_collapse = column_text_flow_collapse_candidates(column_line_drifts)
+    rhwp_table_masks = render_tree_body_table_masks(page_tree, rhwp)
+    pdf_table_masks = render_tree_body_table_masks(page_tree, pdf)
+    rhwp_flow_frame = render_tree_body_raster_frame(page_tree, rhwp) or rhwp_frame
+    pdf_flow_frame = render_tree_body_raster_frame(page_tree, pdf) or pdf_frame
+    column_text_flow_drifts = column_line_band_drifts(
+        rhwp,
+        pdf,
+        rhwp_flow_frame,
+        pdf_flow_frame,
+        rhwp_mask_rectangles=rhwp_table_masks,
+        pdf_mask_rectangles=pdf_table_masks,
+    )
+    column_text_flow_collapse = column_text_flow_collapse_candidates(column_text_flow_drifts)
     large_region_drift = compare_large_ink_regions(
         large_ink_regions(rhwp, frame=rhwp_frame),
         large_ink_regions(pdf, frame=pdf_frame),
@@ -3230,7 +3344,7 @@ def analyze_page(
     line_order_overlaps = render_tree_line_order_overlap_candidates(tree_path)
     frame_tail_overflows = render_tree_frame_tail_candidates(tree_path, rhwp_frame)
     legacy_glyph_visual_candidates = render_tree_legacy_glyph_visual_candidates(
-        load_render_tree(tree_path),
+        page_tree,
         rhwp,
         pdf,
         pixel_diff_threshold=pixel_diff_threshold,
@@ -3425,6 +3539,15 @@ def analyze_page(
         "line_band_drift": line_drift,
         "column_line_band_drift": column_line_drifts,
         "column_line_band_drift_candidates": column_line_drift_candidates,
+        "column_text_flow_masked_line_band_drift": column_text_flow_drifts,
+        "column_text_flow_table_masks": {
+            "rhwp": [list(mask) for mask in rhwp_table_masks],
+            "pdf": [list(mask) for mask in pdf_table_masks],
+        },
+        "column_text_flow_body_frames": {
+            "rhwp": list(rhwp_flow_frame),
+            "pdf": list(pdf_flow_frame),
+        },
         "column_text_flow_collapse_candidates": column_text_flow_collapse,
         "large_ink_region_drift": large_region_drift,
         "endnote_shape_ui": endnote_shape_ui,

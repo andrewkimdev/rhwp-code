@@ -419,6 +419,10 @@ summary: /path/to/rhwp/output/task1274/summary.json
 - `frame`, `question`, `title`, `tail`, `eq` 후보는 우선 검토 대상이다.
 - `flowcollapse`은 본문이 그림 옆의 비정상적인 세로 열로 분해되는 회귀를 우선 올리는 강한 후보다.
   자동 불합격은 아니지만 `review`와 PDF를 즉시 대조한다.
+- `flowcollapse` 계산은 render tree의 **Body bbox**를 우선 frame으로 쓰고, Body table 영역을 양쪽
+  raster에서 제외한다. 테두리 없는 페이지의 넓은 table rule이나 cell raster 분할이 본문 line band로
+  오인되는 false positive를 막기 위한 것이며, 표 row fragment·owner가 같다는 뜻은 아니다. 표가 관련된
+  페이지는 `fidelity_compare` text ledger, table/footer/frame 후보와 3-way review를 별도로 확인한다.
 - `line`, `column`, `order` 후보는 실제 시각 차이인지 false positive인지 비교 이미지를 열어 확인한다.
 - 후보가 남아도 메인테이너 SVG/웹/한컴 시각 판정이 통과하면 blocker가 아닐 수 있다.
 
@@ -448,6 +452,8 @@ PR 리뷰/보고서에는 다음을 분리해 적는다.
 
 - PDF는 한컴 편집기 직접 시각 판정의 완전한 대체물이 아니다.
 - 폰트/anti-aliasing 차이 때문에 line/column/order 후보가 false positive로 남을 수 있다.
+- 표의 같은-page geometry·row fragment는 `flowcollapse`만으로 판정하지 않는다. 이 신호는 표 영역을
+  의도적으로 mask하므로, PDF text owner 차이와 render tree/table geometry를 함께 대조해야 한다.
 - 반대로 glyph·글자폭·PUA/제품명 convention 차이는 구조 후보가 0건이어도 실제 fidelity 결함일 수
   있다. 옛자모·PUA는 `legacy_glyph_visual_mismatch`로 우선 후보화하지만, 낮은 잉크 일치율과
   review의 반복 차이는 raw/IR/paint 경로로 분리한다.

@@ -326,6 +326,71 @@ class ColumnTextFlowCollapseCandidateTests(unittest.TestCase):
 
         self.assertEqual(SWEEP.column_text_flow_collapse_candidates(drifts), [])
 
+    def test_masks_centered_table_strokes_before_column_text_flow_comparison(self) -> None:
+        rhwp = Image.new("RGB", (200, 200), "white")
+        pdf = Image.new("RGB", (200, 200), "white")
+        rhwp_draw = ImageDraw.Draw(rhwp)
+        pdf_draw = ImageDraw.Draw(pdf)
+
+        # Same centered table: rhwp rules are disconnected bands while the PDF
+        # raster joins them.  These are not paragraph-flow baselines.
+        for y in range(20, 131, 10):
+            rhwp_draw.line((102, y, 198, y), fill="black", width=1)
+        pdf_draw.rectangle((102, 20, 198, 130), fill="black")
+        for y in (140, 160, 180):
+            rhwp_draw.line((102, y, 198, y), fill="black", width=1)
+            pdf_draw.line((102, y, 198, y), fill="black", width=1)
+
+        frame = (0, 0, 200, 200)
+        raw = SWEEP.column_line_band_drifts(rhwp, pdf, frame, frame)
+        self.assertEqual(len(SWEEP.column_text_flow_collapse_candidates(raw)), 1)
+
+        masked = SWEEP.column_line_band_drifts(
+            rhwp,
+            pdf,
+            frame,
+            frame,
+            rhwp_mask_rectangles=[(102, 20, 199, 131)],
+            pdf_mask_rectangles=[(102, 20, 199, 131)],
+        )
+        self.assertEqual(SWEEP.column_text_flow_collapse_candidates(masked), [])
+
+    def test_body_table_mask_excludes_footnote_table(self) -> None:
+        tree = {
+            "type": "Page",
+            "bbox": {"x": 0, "y": 0, "w": 100, "h": 100},
+            "children": [
+                {
+                    "type": "Body",
+                    "bbox": {"x": 0, "y": 0, "w": 100, "h": 100},
+                    "children": [
+                        {
+                            "type": "Table",
+                            "bbox": {"x": 10, "y": 20, "w": 30, "h": 40},
+                        }
+                    ],
+                },
+                {
+                    "type": "FootnoteArea",
+                    "children": [
+                        {
+                            "type": "Table",
+                            "bbox": {"x": 50, "y": 60, "w": 20, "h": 20},
+                        }
+                    ],
+                },
+            ],
+        }
+
+        self.assertEqual(
+            SWEEP.render_tree_body_table_masks(tree, Image.new("RGB", (100, 100), "white")),
+            [(8, 18, 42, 62)],
+        )
+        self.assertEqual(
+            SWEEP.render_tree_body_raster_frame(tree, Image.new("RGB", (100, 100), "white")),
+            (0, 0, 100, 100),
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
