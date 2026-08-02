@@ -27,6 +27,8 @@ const PAGE_77: u32 = 76;
 const PAGE_78: u32 = 77;
 const PAGE_79: u32 = 78;
 const PAGE_80: u32 = 79;
+const PAGE_90: u32 = 89;
+const PAGE_91: u32 = 90;
 const PAGE_126: u32 = 125;
 const PAGE_127: u32 = 126;
 const PAGE_37: u32 = 36;
@@ -270,6 +272,48 @@ fn rowbreak_table_cell_footnotes_keep_the_pdf_fragment_boundary() {
         p67_body_bottom.expect("p67 pi=736 body")
             <= p67_separator_top.expect("p67 footnote separator") + 0.5,
         "p67 본문과 table-cell note lane이 겹치면 안 됨"
+    );
+}
+
+#[test]
+fn native_hwp5_rowbreak_table_reclaims_only_the_actual_existing_footnote_boundary() {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(SAMPLE);
+    let bytes = fs::read(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+    let doc = HwpDocument::from_bytes(&bytes).expect("parse stage31 HWP evidence fixture");
+
+    // 한컴 PDF p90은 표 27의 "이식대상자와 관계" row를 note 141의 실제
+    // FootnoteArea 바로 위에 둔다. 일반 40px safety margin은 이 30.7px row를
+    // p91로 밀지만, p90의 물리 boundary 안에는 들어간다. 마지막 "기타" row는
+    // 여전히 p91에서 시작해야 한다.
+    let p90 = page_text(&doc, PAGE_90);
+    let p91 = page_text(&doc, PAGE_91);
+    assert!(
+        p90.contains("이식대상자와")
+            && p90.contains("형제만 가능")
+            && p90.contains("친척만 가능"),
+        "p90은 PDF처럼 표 27의 relationship row에서 끝나야 함: {p90}"
+    );
+    assert!(
+        !p91.contains("이식대상자와") && p91.contains("기타"),
+        "p91은 PDF처럼 표 27의 기타 row로 재개해야 함: {p91}"
+    );
+    assert_eq!(
+        doc.page_count(),
+        219,
+        "p90 표 27 row owner 보정이 전체 native page count를 바꾸면 안 됨"
+    );
+
+    let p90_tree = doc
+        .build_page_render_tree(PAGE_90)
+        .expect("render physical page 90");
+    let mut p90_table_bottom = None;
+    let mut p90_separator_top = None;
+    table_bottom(&p90_tree.root, 962, &mut p90_table_bottom);
+    footnote_separator_top(&p90_tree.root, &mut p90_separator_top);
+    assert!(
+        p90_table_bottom.expect("p90 pi=962 table")
+            <= p90_separator_top.expect("p90 note 141 separator") + 0.5,
+        "p90 표 27은 note 141 separator 위에서 끝나야 함"
     );
 }
 

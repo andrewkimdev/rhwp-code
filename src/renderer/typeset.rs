@@ -136,9 +136,9 @@ struct BlockTableContinuationPreparedState {
     host_spacing_after_only: f64,
     strict_following_plain_text_fit: bool,
     budget_para_start_height: f64,
-    /// native HWP5의 좁은 2행 그림+caption 표가 기존 FootnoteArea 앞에 모두
-    /// 들어갈 때의 첫 fragment 절대 경계. 일반 표에는 `None`으로 기존 보수
-    /// budget을 유지한다.
+    /// native HWP5 RowBreak 표가 기존 FootnoteArea 직전까지의 물리 경계를
+    /// 사용해도 되는 것으로 조판 전에 확인됐을 때의 첫 fragment 절대 경계.
+    /// 일반 표에는 `None`으로 기존 보수 budget을 유지한다.
     first_fragment_actual_footnote_boundary: Option<f64>,
     /// 고정 선언 높이보다 실측 내용이 크게 넘치는 native HWP5 RowBreak 표가 마지막
     /// continuation fragment에서 URL 각주를 붙일 때의 실제 경계 완화 여부.
@@ -17390,6 +17390,16 @@ impl TypesetEngine {
                 .get(para_idx + 1)
                 .and_then(|p| p.line_segs.iter().find(|ls| !is_synthetic_line_seg(ls)))
                 .is_some_and(|ls| ls.vertical_pos <= 500 && ls.vertical_pos < table_anchor_vpos);
+        // 저장된 다음 문단의 첫 vpos가 표 anchor보다 위로 되감기면, 이 RowBreak
+        // 표의 다음 조각은 새 physical page에서 시작한다. p90 표 27처럼 한글이
+        // 기존 각주 구분선 바로 위까지 마지막 온전한 행을 두는 계약을 좁혀
+        // 식별하는 신호다. `<=500`인 새 쪽 상단 형상보다 넓지만, 아래의 native
+        // HWP5·비-TAC·ordinary-row·기존 각주 조건과 함께만 사용한다.
+        let next_rewinds_after_table = table_anchor_vpos > 0
+            && paragraphs_all
+                .get(para_idx + 1)
+                .and_then(|p| p.line_segs.iter().find(|ls| !is_synthetic_line_seg(ls)))
+                .is_some_and(|ls| ls.vertical_pos < table_anchor_vpos);
         // [#3738 Stage 15] HWP5 RowBreak 표의 cell 내부 vpos reset은 같은 row의
         // 앞부분을 현재 쪽, reset 뒤 tail을 다음 쪽에 둔 저장 경계다. 이 구조에서
         // footnote safety margin까지 유지하면 p76 표 24의 앞 3줄이 1줄로 줄어들고
@@ -17433,6 +17443,28 @@ impl TypesetEngine {
                     <= (st.base_available_height() - total_footnote - st.current_zone_y_offset)
                         .max(0.0)
                         + 0.5;
+        // [#3738 Stage 31] 표 27처럼 일반 행으로만 이루어진 native HWP5
+        // TopAndBottom RowBreak 표는 저장된 후속 본문이 anchor보다 위로 되감길 때,
+        // 마지막 온전한 행을 기존 FootnoteArea 바로 위까지 둔다. 일반 40px safety
+        // margin은 p90의 30.7px relationship row를 p91로 과도하게 밀었다. 표 셀
+        // 각주/rowspan/중간 reset 표는 각자 별도 계약을 가지므로 제외하고, 낮은
+        // 본문 위치에서 실제 다음-쪽 되감김이 확인된 ordinary-row 형상만 첫 조각
+        // scan에 실제 footnote boundary를 준다. scan은 그 경계를 넘어 행을 자르지
+        // 않으므로 각주와의 물리 overlap을 허용하지 않는다.
+        let native_ordinary_rowbreak_rewind_uses_actual_footnote_boundary =
+            st.profile.native_hwp5_layout()
+                && !table.common.treat_as_char
+                && is_para_topbottom_float(&table.common)
+                && matches!(
+                    table.page_break,
+                    crate::model::table::TablePageBreak::RowBreak
+                )
+                && table.row_count > 1
+                && ft.table_footnotes.is_empty()
+                && st.current_footnote_height > 0.0
+                && st.current_height >= st.base_available_height() * 0.5
+                && table.cells.iter().all(|cell| cell.row_span == 1)
+                && next_rewinds_after_table;
         let mut fn_margin = if total_footnote > 0.0 {
             if next_starts_new_page
                 || internal_reset_tail_uses_actual_footnote_boundary
@@ -18712,12 +18744,14 @@ impl TypesetEngine {
             strict_following_plain_text_fit: ft.strict_following_plain_text_fit,
             budget_para_start_height,
             first_fragment_actual_footnote_boundary:
-                native_picture_caption_fits_actual_footnote_boundary.then(|| {
-                    st.base_available_height()
-                        - st.current_footnote_height
-                        - st.current_zone_y_offset
-                        - st.current_bottom_fixed_exclusion
-                }),
+                (native_picture_caption_fits_actual_footnote_boundary
+                    || native_ordinary_rowbreak_rewind_uses_actual_footnote_boundary)
+                    .then(|| {
+                        st.base_available_height()
+                            - st.current_footnote_height
+                            - st.current_zone_y_offset
+                            - st.current_bottom_fixed_exclusion
+                    }),
             // 표 25처럼 저장 table 높이 안에는 들어가지만 셀 원문은 그보다 훨씬 긴
             // HWP5 RowBreak 표는 PDF가 마지막 continuation 표와 URL 각주 사이에
             // 일반 40px safety margin을 두지 않는다. 이 예외는 셀 각주가 많은
