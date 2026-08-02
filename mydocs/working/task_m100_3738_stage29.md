@@ -1,8 +1,8 @@
 ---
 kind: investigation
-status: active
+status: completed
 canonical: mydocs/manual/bug_hunting_playbook.md
-last_verified: 2026-08-02
+last_verified: 2026-08-03
 ---
 
 # Task #3738 Stage 29 — p66–67 표 23·각주 76–85 physical flow
@@ -76,8 +76,10 @@ FootnoteArea가 겹쳤다.
 
 이때 p66에는 separator·number를 가진 prefix를, 다음 table fragment에는 source 순서를 보존한
 number 없는 tail을 등록한다. tail 뒤 새 note가 이어지는 fresh page에는 separator를 한 번 다시
-예약한다. 단순 capacity 부족·terminal fragment·HWPX·다단·marker가 다른 fragment인 경우는 기존
-원자 queue를 유지한다.
+예약한다. 현재 page에 이미 separator가 예약되었는지도 별도로 추적하므로, separator 없는 tail만
+먼저 배치된 뒤 일반 note가 이어지는 경우에도 reserve/paint contract가 갈라지지 않는다. 행 내부에서
+다시 잘린 fragment, 단순 capacity 부족·terminal fragment·HWPX·다단·marker가 다른 fragment인 경우는
+기존 원자 queue를 유지한다.
 
 동시에 `fidelity_compare --layout-ledger`는 `table-fragment-candidates.tsv`를 추가한다. 같은
 `(pi, ci)` Body table의 인접 page fragment, table/footer·frame, 또는 page 하단 table과 24자 이상
@@ -89,7 +91,7 @@ PDF↔SVG text delta를 candidate로 남긴다. PDF text layer가 표 행을 추
 | 우선 | human 쪽 | 계약 | 상태 |
 | --- | --- | --- | --- |
 | review | 42 | `question_marker_flow_drift`의 실제 body-flow 결함 여부 | 확정 전 후보 |
-| P0 | 66–67 | 표 23·각주 76–85·body/footnote separation이 PDF와 같다. | **현재 Stage** |
+| P0 | 66–67 | 표 23·각주 76–85·body/footnote separation이 PDF와 같다. | **해결 — Stage 29 evidence** |
 | P0 | 83–85 | 각주 126–136·본문 tail·84–85 page flow | 미해결 |
 | review | 87 | semantic flow | 과거 보고, 미재검증 |
 | P0 | 90 | 표 27 continuation row owner | 미해결 |
@@ -101,3 +103,18 @@ PDF↔SVG text delta를 candidate로 남긴다. PDF text layer가 표 행을 추
 
 p23–24, p25, p26–27, p30–32, p37, p43, p44–45, p52–54, p58–59, p68–70, p76–80,
 p127은 최신 evidence에서 resolved이므로 재이월하지 않는다.
+
+## 결과
+
+code commits `e9ff9fb7e31df9c9e33ba6fafbdb129bb559f524`와
+`41a5af904ed6a3c53d86a5e8afd2fd00630ad98f`는 native HWP5 p728의 저장 reset을 검증된
+table-cell footnote fragment로만 분리하고, 번호 없는 tail 뒤 일반 note의 separator 예약도
+rendered FootnoteArea와 동일하게 만든다. focused fixture는 **16/16 통과**했고, 기준 PDF direct
+대조에서 p66·p67 text owner와 layout candidate는 모두 0이다. p728의 same `(pi, ci)` 인접 table
+fragment는 candidate ledger에 남지만, PDF/SVG text delta가 0이므로 row owner 결함으로 승격하지
+않는다.
+
+PDF/SVG review PNG, source/PDF/binary provenance, 수정 전·후 ledger와 사람 판정은
+[Stage 29 visual sweep](task_m100_3738_stage29_visual_sweep.md)에 고정했다. full native render
+tree 219쪽과 기준 PDF 215쪽의 전역 page-map 차이(+4)는 이 두 physical page 해결과 별개로 다음
+Stage에 계속 이월한다.
