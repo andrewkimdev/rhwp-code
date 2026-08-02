@@ -15034,6 +15034,32 @@ impl TypesetEngine {
         {
             return false;
         }
+        // 저장 LINE_SEG가 가리키는 선언 객체 높이만으로 단일 빈 앵커 표를 lane에
+        // 예약하는 경로는, 셀 내용 측정치가 선언 크기와 같은 범위일 때만 안전하다.
+        // 1행 1열 RowBreak 표의 실측이 선언의 1.5배를 넘으면 폰트 대체 드리프트가
+        // 아니라 실제 셀 본문이 큰 경우다. 이때 선언 높이로 통째 배치하면 렌더러는
+        // 확장된 행(예: 363.8px 선언 / 1163.8px 실측)을 그려 page frame 밖으로
+        // 내보내므로, 아래 일반 block 경로가 cell-unit fragment를 만들도록 우회한다.
+        // `single_row_object_declared_fits_current`와 같은 한도를 공유해 두 특례의
+        // 판정이 엇갈리지 않게 한다.
+        let stored_single_rowbreak_declared_height_is_trustworthy = stored_single_topbottom_top
+            .is_none()
+            || table.common.treat_as_char
+            || table.row_count != 1
+            || table.col_count != 1
+            || table.cells.len() != 1
+            || !matches!(
+                table.page_break,
+                crate::model::table::TablePageBreak::RowBreak
+            )
+            || {
+                let declared_height = hwpunit_to_px(table.common.height as i32, self.dpi).max(0.0);
+                declared_height > 0.0
+                    && ft.effective_height <= declared_height * SINGLE_ROW_DECLARED_TRUST_MAX_RATIO
+            };
+        if !stored_single_rowbreak_declared_height_is_trustworthy {
+            return false;
+        }
         let raw_top = saved_page_top
             .or(stored_single_topbottom_top)
             .unwrap_or_else(|| (para_start_height + v_offset_px).max(para_start_height));
@@ -16762,8 +16788,38 @@ impl TypesetEngine {
             && ft.table_footnotes.is_empty()
             && st.current_footnote_height > 0.0
             && rowbreak_table_has_internal_saved_vpos_reset(table);
+        let host_spacing_total = ft.host_spacing.before + ft.host_spacing.after_for_fit;
+        let mut table_total = ft.effective_height + host_spacing_total;
+        // [#3738 Stage 21] 단조 저장 vpos를 가진 긴 빈-host 1×1 RowBreak 표도,
+        // 실제 FootnoteArea 직전에는 표 전체가 들어갈 수 있다. 이 경우 보수적인
+        // 40px safety margin 때문에 두 줄짜리 tail만 새 페이지에 남기면 이후의
+        // 저장 페이지 맵이 한 쪽씩 밀린다. 표 자체의 각주는 없고, native HWP5의
+        // 실제 셀 측정 전체가 safety margin을 제외한 물리 본문 경계 안에 든다는
+        // 증거가 있을 때만 margin을 풀어 통짜 배치를 허용한다. vpos reset 표의
+        // 기존 특례와는 독립된 1×1 empty-host 형상으로 한정한다.
+        let native_single_rowbreak_full_table_fits_actual_footnote_boundary =
+            st.profile.native_hwp5_layout()
+                && !table.common.treat_as_char
+                && is_para_topbottom_float(&table.common)
+                && matches!(
+                    table.page_break,
+                    crate::model::table::TablePageBreak::RowBreak
+                )
+                && !para_has_visible_text(para)
+                && table.row_count == 1
+                && table.col_count == 1
+                && table.cells.len() == 1
+                && ft.table_footnotes.is_empty()
+                && st.current_footnote_height > 0.0
+                && st.current_height + table_total
+                    <= (st.base_available_height() - total_footnote - st.current_zone_y_offset)
+                        .max(0.0)
+                        + 0.5;
         let mut fn_margin = if total_footnote > 0.0 {
-            if next_starts_new_page || internal_reset_tail_uses_actual_footnote_boundary {
+            if next_starts_new_page
+                || internal_reset_tail_uses_actual_footnote_boundary
+                || native_single_rowbreak_full_table_fits_actual_footnote_boundary
+            {
                 0.0
             } else {
                 st.footnote_safety_margin
@@ -16775,8 +16831,6 @@ impl TypesetEngine {
             (st.base_available_height() - total_footnote - fn_margin - st.current_zone_y_offset)
                 .max(0.0);
 
-        let host_spacing_total = ft.host_spacing.before + ft.host_spacing.after_for_fit;
-        let mut table_total = ft.effective_height + host_spacing_total;
         let declared_object_total = raw_table_ctrl_height_px(table, self.dpi)
             .unwrap_or_else(|| hwpunit_to_px(table.common.height as i32, self.dpi).max(0.0))
             + host_spacing_total;

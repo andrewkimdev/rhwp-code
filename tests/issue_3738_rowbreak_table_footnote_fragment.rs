@@ -29,6 +29,10 @@ const PAGE_79: u32 = 78;
 const PAGE_80: u32 = 79;
 const PAGE_37: u32 = 36;
 const PAGE_25: u32 = 24;
+const PAGE_154: u32 = 153;
+const PAGE_155: u32 = 154;
+const PAGE_157: u32 = 156;
+const PAGE_158: u32 = 157;
 
 fn page_text(doc: &HwpDocument, page: u32) -> String {
     doc.extract_page_text_native(page)
@@ -459,4 +463,84 @@ fn native_hwp5_large_rowbreak_table_keeps_its_first_fragment_before_cell_footnot
             <= p80_separator.expect("p80 footnote separator") + 0.5,
         "p80 표 25 뒤 본문과 각주 112 separator가 겹치면 안 됨: body_bottom={p80_body_bottom:?}, separator={p80_separator:?}"
     );
+}
+
+#[test]
+fn native_hwp5_empty_rowbreak_table_uses_the_actual_existing_footnote_boundary() {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(SAMPLE);
+    let bytes = fs::read(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+    let doc = HwpDocument::from_bytes(&bytes).expect("parse stage21 HWP evidence fixture");
+
+    // pi=1682는 본문 각주 210 위에 통째로 들어간다. 40px safety margin을
+    // 기계적으로 남기면 마지막 두 줄만 p155로 밀려 이후 물리 페이지가 전부 +1
+    // shift 된다. Hancom PDF처럼 p154에서 표와 각주가 함께 끝나야 한다.
+    let p154 = page_text(&doc, PAGE_154);
+    let p155 = page_text(&doc, PAGE_155);
+    assert!(
+        p154.contains("생존 기증자가 모든 위험과 이익"),
+        "p154에는 pi=1682의 마지막 셀 문단이 각주 210 위에 남아야 함: {p154}"
+    );
+    assert!(
+        p155.trim_start().starts_with("(3) 평가 절차")
+            && !p155.contains("생존 기증자가 모든 위험과 이익"),
+        "p155는 pi=1682 tail 전용 페이지가 아니라 다음 절로 시작해야 함: {p155}"
+    );
+
+    let tree = doc
+        .build_page_render_tree(PAGE_154)
+        .expect("render physical page 154");
+    let mut table = None;
+    let mut separator = None;
+    table_bottom(&tree.root, 1682, &mut table);
+    footnote_separator_top(&tree.root, &mut separator);
+    assert!(
+        table.expect("p154 pi=1682") <= separator.expect("p154 footnote separator") + 0.5,
+        "p154 pi=1682 하단과 기존 각주 separator가 겹치면 안 됨: table={table:?}, separator={separator:?}"
+    );
+
+    let p155_tree = doc
+        .build_page_render_tree(PAGE_155)
+        .expect("render physical page 155");
+    let mut stale_tail = None;
+    table_bottom(&p155_tree.root, 1682, &mut stale_tail);
+    assert!(
+        stale_tail.is_none(),
+        "p155에는 pi=1682의 tail fragment가 남으면 안 됨: {stale_tail:?}"
+    );
+}
+
+#[test]
+fn native_hwp5_oversized_single_rowbreak_table_splits_inside_the_page_frame() {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(SAMPLE);
+    let bytes = fs::read(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+    let doc = HwpDocument::from_bytes(&bytes).expect("parse stage21 HWP evidence fixture");
+
+    // pi=1723은 선언 높이 363.8px보다 셀 본문 측정 높이가 1163.8px인 1×1
+    // RowBreak 표다. 선언 높이만 예약하는 빈-anchor fast lane을 타면 p158
+    // frame 밖으로 700px 이상 새므로, p157/p158의 두 fragment로 이어져야 한다.
+    let p157 = page_text(&doc, PAGE_157);
+    let p158 = page_text(&doc, PAGE_158);
+    assert!(
+        p157.contains("<BTS Guideline>") && p157.contains("<OPTN policy>"),
+        "p157에는 표 37의 첫 fragment가 있어야 함: {p157}"
+    );
+    assert!(
+        p158.contains("<BC Canada>") && p158.contains("신체 검진은 체중"),
+        "p158에는 표 37의 continuation과 뒤 본문이 함께 있어야 함: {p158}"
+    );
+
+    for (page, label) in [(PAGE_157, "p157"), (PAGE_158, "p158")] {
+        let tree = doc
+            .build_page_render_tree(page)
+            .unwrap_or_else(|e| panic!("render physical {label}: {e}"));
+        let mut table = None;
+        let mut footnote = None;
+        let mut footer = None;
+        table_bottom(&tree.root, 1723, &mut table);
+        footnote_and_footer(&tree.root, &mut footnote, &mut footer);
+        assert!(
+            table.expect("pi=1723 fragment") <= footer.expect("page footer") + 0.5,
+            "{label} pi=1723 fragment가 footer 밖으로 넘으면 안 됨: table={table:?}, footer={footer:?}"
+        );
+    }
 }
