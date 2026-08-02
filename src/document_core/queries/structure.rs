@@ -16,7 +16,7 @@ use crate::model::style::HeadType;
 /// 분류 방식.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StructureMode {
-    /// 명시적 Outline → 강한 조문 marker → Number 순으로 증거를 선택.
+    /// 명시적 Outline → confidence를 통과한 조 제목 → Number 순으로 증거를 선택.
     Auto,
     /// IR 개요 수준(para_level)만 사용.
     Outline,
@@ -188,15 +188,78 @@ fn classify_clause(text: &str) -> Option<Heading> {
     None
 }
 
+/// 탭 뒤의 쪽번호로 끝나는 목차 행인지 판정한다.
+fn has_toc_page_number_tail(text: &str) -> bool {
+    text.trim_end().rsplit_once('\t').is_some_and(|(_, tail)| {
+        let page = tail.trim();
+        !page.is_empty() && page.chars().all(|c| c.is_ascii_digit())
+    })
+}
+
+/// 조 marker 뒤의 조사형 본문 상호참조인지 판정한다.
+fn starts_with_reference_particle(after_marker: &str) -> bool {
+    const PARTICLES: &[&str] = &[
+        "으로부터",
+        "에서는",
+        "에게서",
+        "으로",
+        "에서",
+        "에는",
+        "부터",
+        "까지",
+        "에게",
+        "한테",
+        "께서",
+        "의",
+        "에",
+        "을",
+        "를",
+        "은",
+        "는",
+        "이",
+        "가",
+        "과",
+        "와",
+        "로",
+        "도",
+        "만",
+    ];
+
+    let tail = after_marker.trim_start();
+    PARTICLES.iter().any(|particle| {
+        tail.strip_prefix(particle).is_some_and(|rest| {
+            rest.is_empty()
+                || rest
+                    .chars()
+                    .next()
+                    .is_some_and(|c| c.is_whitespace() || matches!(c, ',' | '.' | ';' | ':' | '·'))
+        })
+    })
+}
+
+/// Number와 충돌할 때 문서 전체를 clause로 전환할 만큼 강한 제목 증거인지 판정한다.
+///
+/// 편·장·절·관은 보고서 목차에도 흔하므로 Number를 뒤집는 독립 증거로 쓰지 않는다. `조` 제목만
+/// 후보로 삼되 탭+쪽번호 목차와 조사형 상호참조를 제외한다. explicit clause 분류에는 적용하지 않는다.
+fn auto_clause_heading_allowed(text: &str, heading: &Heading) -> bool {
+    if heading.kind != "조" || has_toc_page_number_tail(text) {
+        return false;
+    }
+
+    let trimmed = text.trim_start();
+    trimmed
+        .strip_prefix(&heading.marker)
+        .is_some_and(|tail| !starts_with_reference_particle(tail))
+}
+
 /// `auto` 모드의 문서 단위 분류.
 ///
-/// `HeadType::Outline`은 작성자가 지정한 개요이므로 최우선한다. `HeadType::Number`는
-/// 일반 번호 목록에도 쓰여 단독으로는 약한 증거다. 편·장·절·관·조처럼 문맥 없이도 강한
-/// 법령형 marker가 함께 있으면 clause를 선택하고, 그렇지 않을 때 Number를 outline으로 본다.
-/// 항·호·목은 일반 목록과 모양이 겹치므로 auto 선택 증거로 쓰지 않는다.
+/// `HeadType::Outline`은 작성자가 지정한 개요이므로 최우선한다. `HeadType::Number`와 충돌하면
+/// 목차·상호참조가 아닌 `조` 제목만 clause 증거로 인정한다. Number가 없으면 기존처럼 clause로
+/// 폴백하므로 편·장·절·관만 있는 explicit clause 문서의 기본 동작은 바뀌지 않는다.
 fn select_auto_mode(doc: &Document) -> StructureMode {
     let mut has_number = false;
-    let mut has_primary_clause = false;
+    let mut has_clause_article = false;
 
     for section in &doc.sections {
         for paragraph in &section.paragraphs {
@@ -212,16 +275,20 @@ fn select_auto_mode(doc: &Document) -> StructureMode {
                 }
             }
 
-            let text = super::rendering::paragraph_text_with_equations(paragraph);
-            if classify_clause(&text)
-                .is_some_and(|heading| matches!(heading.kind, "편" | "장" | "절" | "관" | "조"))
-            {
-                has_primary_clause = true;
+            // Outline은 문서 뒤쪽에도 있을 수 있어 끝까지 shape를 확인한다. 조 제목을 이미 찾았다면
+            // 나머지 문단 텍스트는 조립하지 않아 auto 2-pass의 불필요한 할당을 줄인다.
+            if !has_clause_article {
+                let text = super::rendering::paragraph_text_with_equations(paragraph);
+                if classify_clause(&text)
+                    .is_some_and(|heading| auto_clause_heading_allowed(&text, &heading))
+                {
+                    has_clause_article = true;
+                }
             }
         }
     }
 
-    if has_primary_clause {
+    if has_clause_article {
         StructureMode::Clause
     } else if has_number {
         StructureMode::Outline

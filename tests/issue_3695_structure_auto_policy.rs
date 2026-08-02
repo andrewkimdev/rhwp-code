@@ -36,13 +36,26 @@ fn sample_path(relative: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join(relative)
 }
 
-fn load_auto(relative: &str) -> StructureDoc {
+fn load_document(relative: &str) -> Document {
     let path = sample_path(relative);
     let bytes = std::fs::read(&path)
         .unwrap_or_else(|error| panic!("sample 읽기 실패 ({}): {error}", path.display()));
-    let document = rhwp::parser::parse_document(&bytes)
-        .unwrap_or_else(|error| panic!("sample 파싱 실패 ({}): {error:?}", path.display()));
+    rhwp::parser::parse_document(&bytes)
+        .unwrap_or_else(|error| panic!("sample 파싱 실패 ({}): {error:?}", path.display()))
+}
+
+fn load_auto(relative: &str) -> StructureDoc {
+    let document = load_document(relative);
     build_structure(&document, StructureMode::Auto)
+}
+
+fn contains_marker(
+    nodes: &[rhwp::document_core::queries::structure::StructureNode],
+    marker: &str,
+) -> bool {
+    nodes
+        .iter()
+        .any(|node| node.marker == marker || contains_marker(&node.children, marker))
 }
 
 #[test]
@@ -62,6 +75,19 @@ fn auto_primary_clause_marker_outweighs_ambiguous_number() {
         structure.roots[0].body,
         vec!["이 규정은 목적을 정한다.", "자동번호가 지정된 일반 문단"]
     );
+}
+
+#[test]
+fn auto_article_title_starting_with_particle_syllable_remains_clause() {
+    let document = synthetic_document(&[
+        ("제1조의무 규정", HeadType::None, 0),
+        ("자동번호 참고 목록", HeadType::Number, 0),
+    ]);
+
+    let structure = build_structure(&document, StructureMode::Auto);
+
+    assert_eq!(structure.mode, "clause");
+    assert_eq!(structure.roots[0].marker, "제1조");
 }
 
 #[test]
@@ -107,6 +133,40 @@ fn auto_single_number_only_document_remains_outline() {
 }
 
 #[test]
+fn auto_outline_cross_reference_does_not_become_clause_evidence() {
+    let document = synthetic_document(&[
+        ("1. 사업 개요", HeadType::Number, 0),
+        ("가. 추진 배경", HeadType::Number, 1),
+        ("나. 기대 효과", HeadType::Number, 1),
+        (
+            "제3조의 규정에 따라 관계기관 협의를 거쳐 시행한다.",
+            HeadType::None,
+            0,
+        ),
+    ]);
+
+    let structure = build_structure(&document, StructureMode::Auto);
+
+    assert_eq!(structure.mode, "outline");
+    assert_eq!(structure.node_count, 3);
+    assert_eq!(structure.roots[0].heading, "1. 사업 개요");
+}
+
+#[test]
+fn auto_toc_article_page_tail_does_not_become_clause_evidence() {
+    let document = synthetic_document(&[
+        ("사업 개요", HeadType::Number, 0),
+        ("제1조 목적\t12", HeadType::None, 0),
+    ]);
+
+    let structure = build_structure(&document, StructureMode::Auto);
+
+    assert_eq!(structure.mode, "outline");
+    assert_eq!(structure.node_count, 1);
+    assert_eq!(structure.roots[0].heading, "사업 개요");
+}
+
+#[test]
 fn auto_pure_clause_document_remains_clause() {
     let document = synthetic_document(&[
         ("제1조(목적)", HeadType::None, 0),
@@ -143,4 +203,34 @@ fn real_single_number_document_remains_outline() {
 
     assert_eq!(structure.mode, "outline");
     assert_eq!(structure.node_count, 1);
+}
+
+#[test]
+fn real_market_report_with_section_markers_remains_outline() {
+    let structure =
+        load_auto("samples/task2070/1130000-201900011_D0150004-1-002_2017년기준 시장구조조사.hwp");
+
+    assert_eq!(structure.mode, "outline");
+    assert_eq!(structure.node_count, 3);
+}
+
+#[test]
+fn real_clause_document_with_ambiguous_number_evidence_remains_clause() {
+    let mut document = load_document("samples/hwp3-sample16-hwp5.hwp");
+    let number_shape_id = document.doc_info.para_shapes.len() as u16;
+    document.doc_info.para_shapes.push(ParaShape {
+        head_type: HeadType::Number,
+        para_level: 0,
+        ..ParaShape::default()
+    });
+    document.sections[0].paragraphs.push(Paragraph {
+        text: "자동번호 참고 목록".to_string(),
+        para_shape_id: number_shape_id,
+        ..Paragraph::new_empty()
+    });
+
+    let structure = build_structure(&document, StructureMode::Auto);
+
+    assert_eq!(structure.mode, "clause");
+    assert!(contains_marker(&structure.roots, "제1조"));
 }
