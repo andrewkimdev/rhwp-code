@@ -68,7 +68,7 @@ continuation 표 자체는 기준 PDF의 경계를 이미 재현했지만, 셀 U
 
 - `cargo fmt --check`, `git diff --check` 통과.
 - `CARGO_TARGET_DIR=target/review-planet6897-20260802 CARGO_INCREMENTAL=0 cargo test --profile release-test --test issue_3738_rowbreak_table_footnote_fragment -- --nocapture` — **7 passed**.
-- `task1274_visual_sweep.py` 144 DPI selected sweep: `requested_pages=completed_pages=[78,79,80]`,
+- `visual_sweep.py` 144 DPI selected sweep: `requested_pages=completed_pages=[78,79,80]`,
   `missing_pages=[]`, `run_state=complete`, structural flag 0건. rhwp SVG/render tree는 문서 전체 220쪽을 생성하고,
   raster/PDF/compare/overlay/review는 세 쪽만 생성했다. pixel match는 p78 `90.71027%`, p79 `88.00550%`,
   p80 `90.41151%`이다. 폰트 raster 차이 때문에 수치만으로 합격을 선언하지 않고 review PNG와 render-tree를 함께

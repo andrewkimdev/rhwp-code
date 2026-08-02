@@ -12,7 +12,7 @@
     },
     "git_head": "775370b2f48339f84ee627bb058b94444c9ed933",
     "sweep_script": {
-      "path": "scripts/task1274_visual_sweep.py",
+      "path": "scripts/visual_sweep.py",
       "sha256": "7b1accd8181764046739dfb8ea063e5eecc6ced83c3884770255a8bb81e34cc7"
     },
     "rhwp_binary": {

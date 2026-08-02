@@ -19,7 +19,7 @@ HWP가 렌더 입력이고 한컴 PDF가 독립적인 physical-layout 기준이�
 owner 이동만 판정하며, 215쪽 전체의 완료를 주장하지 않는다.
 
 ```bash
-python3 scripts/task1274_visual_sweep.py \
+python3 scripts/visual_sweep.py \
   --key issue3738-stage22-hwp-p126-p127-p155-p156 \
   --hwp 'samples/정책연구용역사업 중간진도보고서(살아있는 간장 기증자의 의학적 선별기준 연구).hwp' \
   --pdf 'pdf/pr3740/hwp/정책연구용역사업 중간진도보고서(살아있는 간장 기증자의 의학적 선별기준 연구)-2020.pdf' \

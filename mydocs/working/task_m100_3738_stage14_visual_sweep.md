@@ -12,7 +12,7 @@ last_verified: 2026-08-02
 - 입력: `samples/정책연구용역사업 중간진도보고서(살아있는 간장 기증자의 의학적 선별기준 연구).hwp`
 - 정답지: `pdf/pr3740/hwp/정책연구용역사업 중간진도보고서(살아있는 간장 기증자의 의학적 선별기준 연구)-2020.pdf`
 - renderer: `target/review-planet6897-20260802/release-test/rhwp`
-- 방법: `scripts/task1274_visual_sweep.py --pages 58-59 --dpi 144`
+- 방법: `scripts/visual_sweep.py --pages 58-59 --dpi 144`
 
 선택한 두 페이지는 모두 완료됐고 missing page와 structural flag는 없다. SVG/render-tree 전체 산출은
 222쪽이다. 기준 PDF는 215쪽이므로 이 결과는 p58–p59 경계 회귀의 증거이며 전체 pagination 완료 증거는

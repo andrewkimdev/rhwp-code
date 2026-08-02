@@ -12,7 +12,7 @@ last_verified: 2026-08-02
 - HWP: `samples/정책연구용역사업 중간진도보고서(살아있는 간장 기증자의 의학적 선별기준 연구).hwp`
 - 동일 문서 HWPX: `samples/정책연구용역사업 중간진도보고서(살아있는 간장 기증자의 의학적 선별기준 연구).hwpx`
 - 한컴 2020 기준 PDF: `pdf/pr3740/hwp/정책연구용역사업 중간진도보고서(살아있는 간장 기증자의 의학적 선별기준 연구)-2020.pdf`
-- 명령: `python3 scripts/task1274_visual_sweep.py --key issue3738-stage18-hwp-p037 --hwp <HWP> --pdf <PDF> --pages 37 --dpi 144 --rhwp-bin target/review-planet6897-20260802/release-test/rhwp --out /private/tmp/rhwp-stage18-p037-sweep`
+- 명령: `python3 scripts/visual_sweep.py --key issue3738-stage18-hwp-p037 --hwp <HWP> --pdf <PDF> --pages 37 --dpi 144 --rhwp-bin target/review-planet6897-20260802/release-test/rhwp --out /private/tmp/rhwp-stage18-p037-sweep`
 
 선택 raster/PDF/compare/overlay/review 범위는 37쪽 하나다. SVG와 render tree는 문서 전체 220쪽을 export했으나
 `requested_pages=completed_pages=[37]`, `missing_pages=[]`, `run_state=complete`다.

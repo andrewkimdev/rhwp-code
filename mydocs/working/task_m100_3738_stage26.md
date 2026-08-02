@@ -57,7 +57,7 @@ zero-based `25 26`으로 실행했다. requested/completed는 p26–27 모두이
 
 두 쪽의 문자 Counter 교집합은 정확히 21/21(양쪽 coverage 1.000)이다. 따라서 이 경우는
 문자 소실이 아니라 **rhwp가 PDF보다 한 쪽 이르게 배치한 page-owner 이동**이며, PDF visual review와
-render-tree physical location까지 같은 결론을 낸다. `task1274_visual_sweep.py`의 p26–27 targeted
+render-tree physical location까지 같은 결론을 낸다. `visual_sweep.py`의 p26–27 targeted
 run은 `flags=[]`였으므로, line-band raster 신호만으로 이 owner 결함을 자동 승격하지 못했다.
 
 source parent는 native HWP `pi=373`(text length 223, inline Footnote control 1개)이다. 마지막 body

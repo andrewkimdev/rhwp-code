@@ -11,7 +11,7 @@ last_verified: 2026-08-02
 
 이 Stage는 p26–27 renderer 결함을 아직 해결했다고 주장하지 않는다. 목적은 사용자가 지적한
 각주 26의 한 쪽 이른 physical owner를 자동 후보화할 수 있는지, `fidelity_compare`와
-`task1274_visual_sweep.py`의 결과를 독립 PDF 기준으로 분리해 고정하는 것이다.
+`visual_sweep.py`의 결과를 독립 PDF 기준으로 분리해 고정하는 것이다.
 
 - HWP: `samples/정책연구용역사업 중간진도보고서(살아있는 간장 기증자의 의학적 선별기준 연구).hwp`
 - 같은 개인정보 제거 HWPX: `samples/정책연구용역사업 중간진도보고서(살아있는 간장 기증자의 의학적 선별기준 연구).hwpx`
@@ -58,7 +58,7 @@ p26–27을 자동 review queue로 올린다.
 ## visual sweep 교차 대조
 
 ```bash
-python3 scripts/task1274_visual_sweep.py \
+python3 scripts/visual_sweep.py \
   --key issue3738-stage26-hwp-p026-p027 \
   --hwp 'samples/정책연구용역사업 중간진도보고서(살아있는 간장 기증자의 의학적 선별기준 연구).hwp' \
   --pdf 'pdf/pr3740/hwp/정책연구용역사업 중간진도보고서(살아있는 간장 기증자의 의학적 선별기준 연구)-2020.pdf' \
@@ -83,7 +83,7 @@ physical comparison을 제공하고, page-owner gate는 새 fidelity ledger가 �
 
 ```text
 python3 -m py_compile tools/fidelity_compare/fidelity_compare.py
-python3 -m unittest scripts/tests/test_fidelity_compare.py scripts/tests/test_task1274_visual_sweep.py
+python3 -m unittest scripts/tests/test_fidelity_compare.py scripts/tests/test_visual_sweep.py
 ```
 
 **34/34 통과**했다. 새 unit regression은 p26 같은 complete reciprocal pair를 1-based p26→p27

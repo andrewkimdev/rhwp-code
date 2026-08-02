@@ -61,7 +61,7 @@ rhwp raster y=`1379–1558px`, PDF y=`1380–1559px`로 1px 이내에서 맞는�
 그러나 같은 문자·같은 page owner를 유지한 표 row geometry나 raster stroke 차이는 이 도구만으로
 확정할 수 없다. 그 경우 PDF/SVG visual sweep과 사람/PDF 대조가 필요하다.
 
-p44의 false positive는 `task1274_visual_sweep.py`가 실제 1단 문서를 종이 좌·우 half로 자른 뒤,
+p44의 false positive는 `visual_sweep.py`가 실제 1단 문서를 종이 좌·우 half로 자른 뒤,
 중앙 table 19·20의 선과 셀 text를 본문 line band로 센 데서 생겼다. rhwp right-half 53 bands와
 PDF 40 bands의 index가 표 내부에서부터 밀려, 이후 정상 본문까지 `column_text_flow_collapse`로
 오인됐다.

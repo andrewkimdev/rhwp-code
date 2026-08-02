@@ -12,7 +12,7 @@ last_verified: 2026-08-02
 - 입력: `samples/정책연구용역사업 중간진도보고서(살아있는 간장 기증자의 의학적 선별기준 연구).hwp`
 - 정답지: `pdf/pr3740/hwp/정책연구용역사업 중간진도보고서(살아있는 간장 기증자의 의학적 선별기준 연구)-2020.pdf`
 - renderer: `target/review-planet6897-20260802/release-test/rhwp`
-- 방법: `scripts/task1274_visual_sweep.py --pages 30-32,66,68-70 --dpi 144`
+- 방법: `scripts/visual_sweep.py --pages 30-32,66,68-70 --dpi 144`
 
 요청한 7쪽은 모두 rasterized 되었고 missing page는 없다. SVG와 render tree의 문서 전체 산출은 각각
 223쪽이다. 기준 PDF는 215쪽이므로, 이 선택 sweep은 해당 경계의 회귀 근거이지 전체 pagination 완료

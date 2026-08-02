@@ -17,7 +17,7 @@ PDF와 달리 좁은 세로 열로 재흐름한다. Stage 22 selected sweep도 �
 
 ## 자동 판정 계약
 
-`task1274_visual_sweep.py`는 단별 raster line-band를 이미 PDF와 대조한다. 이를 이용해 다음 세 조건을
+`visual_sweep.py`는 단별 raster line-band를 이미 PDF와 대조한다. 이를 이용해 다음 세 조건을
 같은 column에서 모두 만족할 때 `column_text_flow_collapse`를 추가한다.
 
 1. rhwp/PDF line-band 수 차이가 3 이상일 것
@@ -35,13 +35,13 @@ PDF와 달리 좁은 세로 열로 재흐름한다. Stage 22 selected sweep도 �
   `TEXT FLOW COLLAPSE` 라벨을 남긴다.
 - summary와 [visual sweep guide](../manual/verification/visual_sweep_guide.md)에
   `column_text_flow_collapse_pages`/`flowcollapse`를 추가했다.
-- `scripts/tests/test_task1274_visual_sweep.py`는 p127에서 관측된 `34 vs 37`, mean `109.4`, p90 `157.0`
+- `scripts/tests/test_visual_sweep.py`는 p127에서 관측된 `34 vs 37`, mean `109.4`, p90 `157.0`
   지표를 positive regression으로, band 수가 같은 큰 baseline shift를 negative regression으로 고정한다.
 
 실행:
 
 ```text
-python3 -m unittest scripts/tests/test_task1274_visual_sweep.py
+python3 -m unittest scripts/tests/test_visual_sweep.py
 ```
 
 결과: **14 tests passed**.
@@ -51,7 +51,7 @@ python3 -m unittest scripts/tests/test_task1274_visual_sweep.py
 수정한 detector로 Stage 22와 같은 native revision을 p127에 다시 실행했다.
 
 ```text
-python3 scripts/task1274_visual_sweep.py \
+python3 scripts/visual_sweep.py \
   --key issue3738-stage23-p127-detector \
   --hwp samples/정책연구용역사업\ 중간진도보고서\(살아있는\ 간장\ 기증자의\ 의학적\ 선별기준\ 연구\).hwp \
   --pdf pdf/pr3740/hwp/정책연구용역사업\ 중간진도보고서\(살아있는\ 간장\ 기증자의\ 의학적\ 선별기준\ 연구\)-2020.pdf \

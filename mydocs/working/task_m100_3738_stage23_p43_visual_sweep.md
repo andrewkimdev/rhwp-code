@@ -20,7 +20,7 @@ canonical 경로에 보관한다. p43의 본문·각주 collision만 완료로 �
 전체 page-map 또는 p44–45의 표 흐름은 완료로 주장하지 않는다.
 
 ```bash
-python3 scripts/task1274_visual_sweep.py \
+python3 scripts/visual_sweep.py \
   --key issue3738-stage23-hwp-p042-p045 \
   --hwp 'samples/정책연구용역사업 중간진도보고서(살아있는 간장 기증자의 의학적 선별기준 연구).hwp' \
   --pdf 'pdf/pr3740/hwp/정책연구용역사업 중간진도보고서(살아있는 간장 기증자의 의학적 선별기준 연구)-2020.pdf' \
@@ -56,7 +56,7 @@ CARGO_TARGET_DIR=target/review-p127-audit CARGO_INCREMENTAL=0 \
 0이다. p43 reset-tail collision은 focused source/render-tree regression과 visual review로 해소를 고정한다.
 반대로 이 0은 p44 table-flow의 완료 증거가 아니다.
 
-`task1274_visual_sweep.py`는 p44의 오른쪽 column에서 `column_text_flow_collapse`를 냈다. rhwp 53 line band와
+`visual_sweep.py`는 p44의 오른쪽 column에서 `column_text_flow_collapse`를 냈다. rhwp 53 line band와
 PDF 40 line band, p90 y drift `335.5px`(max `432.5px`)다. 3-way review도 표 19·20과 그 뒤 문단의 physical
 flow가 PDF와 다름을 보인다. 이것은 기존 P0 `p44–45` 항목을 재확인한 결과이며 다음 Stage의 primary로
 이월한다. p42의 `question_marker_flow_drift`는 이번 p43 보정과 독립인 review candidate로 남긴다.

@@ -40,7 +40,7 @@ p83–85, p90, p94, p106, p107–108처럼 physical page owner·표 fragment·�
 또한 기존 도구는 범위의 각 페이지에 Chrome raster와 비교 sheet까지 생성한다. 215쪽의 첫 진단에서
 그 전체 raster sheet를 만들 필요는 없다. 먼저 SVG/PDF text report와 `export-svg --json`/render-tree
 ledger를 한 번 생성하고, ranking 상위·기하 flag 페이지에 한해 low-resolution raster와 high-DPI
-`task1274_visual_sweep.py`를 실행해야 한다.
+`visual_sweep.py`를 실행해야 한다.
 
 ## 구현 전 계약
 
@@ -68,7 +68,7 @@ ledger를 한 번 생성하고, ranking 상위·기하 flag 페이지에 한해 
    inspection이 아니라 candidate ledger 생성이다.
 3. 같은 SVG cache에서 `export-svg --json`과 render-tree bbox ledger를 계산해 cell clipping/overlap/
    page-frame escape 후보를 합친다.
-4. text 또는 geometry 후보와 pixel-rank 후보의 합집합만 `task1274_visual_sweep.py --pages ...`로
+4. text 또는 geometry 후보와 pixel-rank 후보의 합집합만 `visual_sweep.py --pages ...`로
    PDF와 고해상도 review PNG를 만든다.
 5. PDF screenshot/source/render tree로 원인군을 확정한 뒤에만 focused regression과 코드 수정 단계로
    넘어간다.

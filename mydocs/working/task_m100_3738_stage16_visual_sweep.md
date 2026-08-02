@@ -16,7 +16,7 @@ last_verified: 2026-08-02
 
 ## 실행 상태
 
-`task1274_visual_sweep.py`에 `--pages 31-32`를 주어 실행했다. SVG와 render tree는 문서 전체 221쪽을 생성했으나,
+`visual_sweep.py`에 `--pages 31-32`를 주어 실행했다. SVG와 render tree는 문서 전체 221쪽을 생성했으나,
 raster/PDF/overlay/review 비교는 요청한 두 쪽만 수행했다. `requested_pages=[31,32]`, `completed_pages=[31,32]`,
 `missing_pages=[]`, `run_state=complete`다.
 

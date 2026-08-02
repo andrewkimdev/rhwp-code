@@ -63,7 +63,7 @@ regression으로 계속 보호된다. 이번 sweep에 남은 p127 `question_mark
 ## 실행과 결과
 
 ```bash
-python3 scripts/task1274_visual_sweep.py \
+python3 scripts/visual_sweep.py \
   --key issue3738-stage25-hwp-p044-p045-p127 \
   --hwp 'samples/정책연구용역사업 중간진도보고서(살아있는 간장 기증자의 의학적 선별기준 연구).hwp' \
   --pdf 'pdf/pr3740/hwp/정책연구용역사업 중간진도보고서(살아있는 간장 기증자의 의학적 선별기준 연구)-2020.pdf' \
@@ -106,12 +106,12 @@ requested=completed=`44,45`, `run_state=complete`다.
 ## focused 검증
 
 ```text
-python3 -m unittest scripts/tests/test_task1274_visual_sweep.py scripts/tests/test_fidelity_compare.py
+python3 -m unittest scripts/tests/test_visual_sweep.py scripts/tests/test_fidelity_compare.py
 ```
 
 **29/29 통과**했다. 새 synthetic regression은 (a) 표 rule이 본문 flow collapse로 오인되는 경우를
 mask 뒤 제외하고, (b) FootnoteArea table은 Body mask에 넣지 않으며, 기존 Square image positive/negative
-detector regression은 유지하는 것을 고정한다. `python3 -m py_compile scripts/task1274_visual_sweep.py`와
+detector regression은 유지하는 것을 고정한다. `python3 -m py_compile scripts/visual_sweep.py`와
 `git diff --check`도 통과했다. renderer code 변경이 아니므로 cargo/WASM build는 재실행하지 않았다.
 
 ## 장기 증적과 provenance

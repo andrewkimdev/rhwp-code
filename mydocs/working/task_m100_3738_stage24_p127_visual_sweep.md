@@ -19,7 +19,7 @@ HWP가 renderer 입력이고 한컴 PDF가 physical-layout 정답지다. HWP/HWP
 검증할 뿐, PDF 215쪽과 native HWP 219쪽의 전체 page-map 정합을 주장하지 않는다.
 
 ```bash
-python3 scripts/task1274_visual_sweep.py \
+python3 scripts/visual_sweep.py \
   --key issue3738-stage24-hwp-p126-p127-p155-p156 \
   --hwp 'samples/정책연구용역사업 중간진도보고서(살아있는 간장 기증자의 의학적 선별기준 연구).hwp' \
   --pdf 'pdf/pr3740/hwp/정책연구용역사업 중간진도보고서(살아있는 간장 기증자의 의학적 선별기준 연구)-2020.pdf' \
@@ -51,7 +51,7 @@ native HWP SVG와 render tree는 219쪽 전체로 export하고, HWP/PDF raster·
 
 ## 자동 후보와 fidelity ledger
 
-`task1274_visual_sweep.py`의 새 `column_text_flow_collapse`는 p127에서 **0건**이다. 그림 내부의 분홍
+`visual_sweep.py`의 새 `column_text_flow_collapse`는 p127에서 **0건**이다. 그림 내부의 분홍
 workflow glyph를 marker로 오인하는 기존 `question_marker_flow_drift`만 1건 남는다. 이는 image와 본문
 TextLine bbox의 physical non-overlap 및 위 3-way review를 함께 대조해 이 Stage 결함의 재발이 아닌
 false-positive 후보로 판정했다. 후보를 삭제하거나 자동 pass로 숨기지 않았다.
@@ -103,7 +103,7 @@ CARGO_TARGET_DIR=target/review-planet6897-20260802 CARGO_INCREMENTAL=0 \
 가로로 교차하지 않는 것을 직접 확인한다. 추가로 다음 Python detector test는 27/27 통과했다.
 
 ```text
-python3 -m unittest scripts/tests/test_fidelity_compare.py scripts/tests/test_task1274_visual_sweep.py
+python3 -m unittest scripts/tests/test_fidelity_compare.py scripts/tests/test_visual_sweep.py
 ```
 
 사용자가 이미 수행한 WASM build는 재실행하지 않았다.

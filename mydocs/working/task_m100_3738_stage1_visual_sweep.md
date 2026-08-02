@@ -14,7 +14,7 @@ last_verified: 2026-08-02
 두 sweep 모두 144 DPI, 선택 범위 p23–p24이며 `run_state=complete`, 선택 SVG/PDF 페이지는 2/2다.
 
 ```bash
-python3 scripts/task1274_visual_sweep.py \
+python3 scripts/visual_sweep.py \
   --key issue3738-stage1-hwp-p023-p024 \
   --hwp 'samples/정책연구용역사업 중간진도보고서(살아있는 간장 기증자의 의학적 선별기준 연구).hwp' \
   --pdf 'pdf/pr3740/hwp/정책연구용역사업 중간진도보고서(살아있는 간장 기증자의 의학적 선별기준 연구)-2020.pdf' \
