@@ -287,6 +287,7 @@ fn main() {
         Some("dump-extents") => exit_with(dump_extents(&args[2..])),
         Some("diag") => exit_with(diag_document(&args[2..])),
         Some("search") => exit_with(search_document(&args[2..])),
+        Some("inspect") => exit_with(inspect_command(&args[2..])),
         Some("extract-data") => exit_with(extract_data_command(&args[2..])),
         Some("convert") => exit_with(convert_hwp(&args[2..])),
         Some("extract-pages") => exit_with(extract_pages(&args[2..])),
@@ -335,7 +336,6 @@ fn main() {
         Some("bench") => exit_with(rhwp::diagnostics::bench::run(&args[2..])),
         Some("thumbnail") => exit_with(extract_thumbnail(&args[2..])),
         Some("fields") => exit_with(show_fields(&args[2..])),
-        Some("inspect") => exit_with(run_inspect(&args[2..])),
         Some("edit") => exit_with(run_edit(&args[2..])),
         Some("run") => exit_with(cmd_run_plan(&args[2..])),
         // [#2707] 알 수 없는 명령·명령 누락은 사용법 오류다. 표준 CLI 관례대로 stderr 로 안내하고
@@ -498,6 +498,7 @@ fn mcp_tool_definitions() -> Vec<serde_json::Value> {
                 | "hwp_search"
                 | "hwp_extract_data"
                 | "hwp_fields"
+                | "hwp_inspect_hidden_text"
                 | "hwp_inspect_injection"
                 | "hwp_fill_fields"
                 | "hwp_replace_text"
@@ -906,6 +907,34 @@ fn mcp_tool_definitions() -> Vec<serde_json::Value> {
             serde_json::json!(["fields", "{path}", "--json"]),
             &["source", "fieldCount", "fields"],
         ),
+        // [#3787 S3] 신뢰할 수 없는 문서를 LLM 에 먹이기 전에 부르는 도구.
+        // 본문 텍스트는 그대로 프롬프트가 되므로, 사람이 열어도 안 보이는 문자열이
+        // 섞여 있는지부터 판정한다.
+        tool_with_optional_args(
+            "hwp_inspect_hidden_text",
+            "문서에 사람 눈으로는 보이지 않는 텍스트가 숨어 있는지 조사한다 — 흰 배경에 흰 글씨, 0pt/극소 글자, 쪽 밖 배치. 신뢰할 수 없는 문서를 export-text 로 읽어 LLM 프롬프트에 넣기 전에 먼저 호출한다(간접 프롬프트 인젝션 선별). clean=true 면 탐지 0건이다. 문서를 수정하지 않는 읽기 전용 판정이며, 지우는 것은 편집 명령의 몫이다.",
+            path_schema(serde_json::json!({
+                "thresholdPt": { "type": "number", "minimum": 0, "description": "near_invisible 임계 pt. 실효 글자 크기가 이 값 미만이면 은닉으로 본다. 기본 1.0" },
+                "includeOffPage": { "type": "boolean", "description": "쪽 경계 완전히 밖에 놓인 문단도 보고할지. 기본 false(좌표 판정이라 오탐 여지)" }
+            })),
+            "inspect",
+            serde_json::json!(["inspect", "hidden-text", "{path}", "--json"]),
+            serde_json::json!([
+                { "when": "thresholdPt", "args": ["--threshold-pt", "{thresholdPt}"] },
+                { "when": "includeOffPage", "args": ["--include-offpage"] }
+            ]),
+            &[
+                "schemaVersion",
+                "source",
+                "thresholdPt",
+                "includeOffPage",
+                "hiddenText",
+                "hiddenCharCount",
+                "clean",
+                "untrustedContent",
+                "untrustedFields",
+            ],
+        ),
         // [#3787 S2] 다른 도구가 돌려주는 문서 텍스트는 그대로 프롬프트에 들어간다.
         // **문서를 읽기 전에** 이 도구로 그 텍스트가 에이전트에게 지시를 내리는
         // 형태인지 확인한다. 판정만 하고 문서는 한 바이트도 바뀌지 않는다.
@@ -939,6 +968,8 @@ fn mcp_tool_definitions() -> Vec<serde_json::Value> {
                 "signalCount",
                 "highestConfidence",
                 "clean",
+                "untrustedContent",
+                "untrustedFields",
             ],
         ),
         tool_with_optional_args(
@@ -1742,17 +1773,27 @@ fn capabilities_command_entries() -> Vec<serde_json::Value> {
             &["--json"],
             &["schemaVersion", "source", "fieldCount", "fields"],
         ),
-        // [#3787 S2] 문서 텍스트는 LLM 에게 그대로 넘어간다 — 그 텍스트가 에이전트에게
-        // 말을 거는 형태인지 판정해 신고한다. 읽기 전용이며 문서를 고치지 않는다.
+        // [#3787 S2/S3] 문서를 읽기만 하는 보안 검사 명령군. 두 하위 명령의 플래그와
+        // 봉투 필드는 합집합으로 광고해 capabilities 자체가 어느 축도 숨기지 않게 한다.
         cmd_json(
             "inspect",
             "query",
-            "프롬프트 주입 신호 탐지 (inspect injection) — 신뢰도·근거와 함께 신고, 문서 무변경",
+            "은닉 텍스트와 프롬프트 주입 신호를 조사하는 읽기 전용 보안 검사 명령군",
             false,
-            &["--json", "--min-confidence", "--include-fields"],
+            &[
+                "--json",
+                "--threshold-pt",
+                "--include-offpage",
+                "--min-confidence",
+                "--include-fields",
+            ],
             &[
                 "schemaVersion",
                 "source",
+                "thresholdPt",
+                "includeOffPage",
+                "hiddenText",
+                "hiddenCharCount",
                 "minConfidence",
                 "includeFields",
                 "scanScopes",
@@ -1760,6 +1801,8 @@ fn capabilities_command_entries() -> Vec<serde_json::Value> {
                 "signalCount",
                 "highestConfidence",
                 "clean",
+                "untrustedContent",
+                "untrustedFields",
             ],
         ),
         cmd(
@@ -2593,6 +2636,14 @@ fn print_help() {
     println!();
     println!("      --json                    계약 봉투 JSON을 stdout에 출력");
     println!();
+    println!("  inspect hidden-text <파일.hwp|파일.hwpx> [--json] [옵션]");
+    println!("      은닉 텍스트 조사 (읽기 전용) — 사람 눈에는 안 보이는데 텍스트 추출기가");
+    println!("      읽어 LLM 프롬프트로 흘러드는 문자열을 찾는다 (간접 프롬프트 인젝션 대비).");
+    println!("      흰 배경에 흰 글씨·0pt 글자처럼 조판 정보가 있어야만 보이는 은닉을 잡는다.");
+    println!();
+    println!("      --json                    계약 봉투 JSON을 stdout에 출력");
+    println!("      --threshold-pt <N>        near_invisible 임계 pt (기본: 1.0)");
+    println!("      --include-offpage         쪽 경계 완전히 밖에 놓인 문단도 보고 (기본: 끔)");
     println!("  inspect injection <파일.hwp|파일.hwpx> [--json] [옵션]");
     println!("      프롬프트 주입 신호 탐지 (읽기 전용, 문서를 고치지 않는다) — 문서 텍스트가");
     println!("      LLM 에이전트에게 지시를 내리는 형태인지 판정해 신뢰도·근거와 함께 신고한다");
@@ -16085,6 +16136,117 @@ fn show_fields(args: &[String]) -> i32 {
     EXIT_OK
 }
 
+/// `inspect hidden-text` — 사람 눈에 안 보이는데 추출기는 읽어 가는 텍스트를 보고한다.
+///
+/// 탐지 건수가 0이 아니어도 종료 코드는 0이다 — 1은 런타임 실패 전용이고(#2707),
+/// "위험 문서 발견"은 실패가 아니라 **정상적으로 얻어낸 판정 결과**다. 소비자는
+/// `clean` 필드로 분기한다.
+fn inspect_hidden_text(args: &[String]) -> i32 {
+    use rhwp::document_core::queries::hidden_text::HiddenTextOptions;
+
+    let mut file_path: Option<&str> = None;
+    let mut json_mode = false;
+    let mut opts = HiddenTextOptions::default();
+
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--json" => json_mode = true,
+            "--include-offpage" => opts.include_off_page = true,
+            "--threshold-pt" => {
+                i += 1;
+                match args.get(i).and_then(|v| v.parse::<f64>().ok()) {
+                    // 상한은 CharShape.base_size 의 스펙 상한(4096pt)과 같다.
+                    Some(n) if n.is_finite() && (0.0..=4096.0).contains(&n) => {
+                        opts.threshold_pt = n
+                    }
+                    _ => {
+                        eprintln!(
+                            "오류: --threshold-pt 뒤에 0 이상 4096 이하의 실수가 필요합니다."
+                        );
+                        return EXIT_USAGE;
+                    }
+                }
+            }
+            other if other.starts_with('-') => {
+                eprintln!("알 수 없는 옵션: {other}");
+                return EXIT_USAGE;
+            }
+            other => {
+                if file_path.replace(other).is_some() {
+                    eprintln!("오류: 입력 파일은 하나만 지정할 수 있습니다.");
+                    return EXIT_USAGE;
+                }
+            }
+        }
+        i += 1;
+    }
+
+    let Some(file_path) = file_path else {
+        eprintln!("사용법: rhwp inspect hidden-text <파일.hwp|파일.hwpx> [--json] [--threshold-pt <N>] [--include-offpage]");
+        return EXIT_USAGE;
+    };
+
+    let data = match fs::read(file_path) {
+        Ok(d) => d,
+        Err(e) => {
+            eprintln!("오류: 파일을 읽을 수 없습니다 - {}: {}", file_path, e);
+            return EXIT_RUNTIME;
+        }
+    };
+    let doc = match load_document(&data) {
+        Ok(d) => d,
+        Err(e) => return e.report(),
+    };
+
+    let report = doc.detect_hidden_text(&opts);
+
+    if json_mode {
+        let envelope = serde_json::json!({
+            "schemaVersion": "1.0",
+            "source": file_path,
+            "thresholdPt": opts.threshold_pt,
+            "includeOffPage": opts.include_off_page,
+            "hiddenText": report.hidden_text,
+            "hiddenCharCount": report.hidden_char_count,
+            "clean": report.clean,
+        });
+        println!("{}", provenance::marked(envelope, "inspect"));
+        return EXIT_OK;
+    }
+
+    // 기본 출력은 사람용 요약 — 기계 소비는 --json 이 담당한다.
+    if report.clean {
+        println!("은닉 텍스트 없음: {} (탐지 0건)", file_path);
+        return EXIT_OK;
+    }
+    println!(
+        "은닉 텍스트 {}건 (문자 {}개): {}",
+        report.hidden_text.len(),
+        report.hidden_char_count,
+        file_path
+    );
+    for f in &report.hidden_text {
+        let kind = match f.kind {
+            rhwp::document_core::queries::hidden_text::HiddenKind::SameAsBackground => {
+                "배경색과 같은 글자색"
+            }
+            rhwp::document_core::queries::hidden_text::HiddenKind::NearInvisible => "극소 글자",
+            rhwp::document_core::queries::hidden_text::HiddenKind::ZeroSize => "0pt 글자",
+            rhwp::document_core::queries::hidden_text::HiddenKind::OffPage => "쪽 밖 배치",
+        };
+        let page = f
+            .page
+            .map(|p| format!("{}쪽", p + 1))
+            .unwrap_or_else(|| "미배치".to_string());
+        println!(
+            "  [{}] 구역{}:문단{} ({}) {}자: {}",
+            kind, f.section, f.paragraph, page, f.char_count, f.excerpt
+        );
+    }
+    EXIT_OK
+}
+
 /// [#3787 S2] `tool_directive` 판정에 쓰는 **도구 이름 등록부**.
 ///
 /// 이름을 탐지 모듈에 하드코딩하지 않는다. 도구가 늘어도 목록이 따라오지 않으면
@@ -16109,21 +16271,26 @@ fn mcp_tool_name_registry() -> Vec<String> {
 
 /// `inspect` — 문서를 **읽기만** 하는 보안 검사 명령군.
 ///
-/// 현재 하위 명령은 `injection` 하나다. 이름을 명령군으로 연 것은 뒤이을 검사(서명·
-/// 매크로·외부 참조)가 같은 어휘 아래 붙을 자리이기 때문이다.
-fn run_inspect(args: &[String]) -> i32 {
+/// `hidden-text`는 조판 결과로 사람이 보지 못하는 문자열을, `injection`은 사람이
+/// 읽을 수 있는 본문이 에이전트에게 지시하는 패턴을 판정한다. 어느 축도 문서를 고치지
+/// 않는다.
+fn inspect_command(args: &[String]) -> i32 {
     const USAGE: &str =
-        "사용법: rhwp inspect injection <파일.hwp|파일.hwpx> [--json] [--min-confidence low|medium|high] [--include-fields]";
+        "사용법: rhwp inspect <hidden-text|injection> <파일.hwp|파일.hwpx> [각 축 옵션]";
 
     match args.first().map(|s| s.as_str()) {
+        Some("hidden-text") => inspect_hidden_text(&args[1..]),
         Some("injection") => inspect_injection(&args[1..]),
         Some(other) => {
             eprintln!("오류: 알 수 없는 inspect 하위 명령입니다 - {other}");
+            if let Some(hint) = closest_name(other, ["hidden-text", "injection"]) {
+                eprintln!("혹시 이것인가요? inspect {hint}");
+            }
             eprintln!("{USAGE}");
             EXIT_USAGE
         }
         None => {
-            eprintln!("오류: inspect 하위 명령을 지정해주세요 (injection).");
+            eprintln!("오류: inspect 하위 명령을 지정해주세요 (hidden-text|injection).");
             eprintln!("{USAGE}");
             EXIT_USAGE
         }
