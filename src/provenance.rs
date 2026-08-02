@@ -227,8 +227,24 @@ pub const MAP: &[CommandProvenance] = &[
                 "injectionSignals[].matched",
                 "queries::injection_scan::scan_text_in — 문서에서 실제 매치된 신호 조각",
             ),
+            f(
+                "findings[].excerpt",
+                "text_security::scan_deception — 유니코드 기만이 발견된 문서 문맥의 제한 발췌",
+            ),
+            f(
+                "findings[].rendered",
+                "text_security::scan_deception — 문서 문자열을 사람이 보는 표시 순서로 재현한 값",
+            ),
+            f(
+                "findings[].raw",
+                "text_security::scan_deception — 제어문자를 표기한 실제 문서 코드포인트 순서",
+            ),
+            f(
+                "findings[].hidden",
+                "text_security::scan_deception — 태그 문자로 숨겨진 문서 문자열의 복원값",
+            ),
         ],
-        note: "hiddenText/injectionSignals의 excerpt·matched만 문서 파생이며, 종류·주소·근거·집계는 엔진 판정값이다.",
+        note: "hiddenText·injectionSignals·findings의 문장·표시 문자열만 문서 파생이며, 종류·주소·근거·집계는 엔진 판정값이다.",
     },
     CommandProvenance {
         command: "edit",

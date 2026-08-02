@@ -682,6 +682,15 @@ fn capabilities_and_mcp_declare_the_command_consistently() {
                 "--include-offpage" => {
                     vec!["inspect", "hidden-text", host.to_str().unwrap(), f]
                 }
+                // 유니코드 기만 전용 flag 는 해당 축에서 실제 배선 여부를 확인한다.
+                "--kind" => vec![
+                    "inspect",
+                    "unicode",
+                    host.to_str().unwrap(),
+                    "--json",
+                    f,
+                    "all",
+                ],
                 _ => vec!["inspect", "injection", host.to_str().unwrap(), f],
             };
             let out = run(&args);

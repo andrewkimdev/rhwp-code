@@ -461,6 +461,24 @@ fn recipes() -> Vec<Recipe> {
             ndjson: false,
         },
         Recipe {
+            command: "extract-data",
+            doc: Some(main.clone()),
+            args: vec![s("extract-data"), p(&main), s("--json")],
+            stdin: None,
+            exit: 0,
+            ndjson: false,
+        },
+        // inspect 는 하위 명령군이므로, 새 유니코드 축을 실제 문서에서 실행한다.
+        // 정상 문서의 빈 findings 도 출처 표지가 유지되는지 확인할 수 있다.
+        Recipe {
+            command: "inspect",
+            doc: Some(main.clone()),
+            args: vec![s("inspect"), s("unicode"), p(&main), s("--json")],
+            stdin: None,
+            exit: 0,
+            ndjson: false,
+        },
+        Recipe {
             command: "dump-pages",
             doc: Some(main.clone()),
             args: vec![s("dump-pages"), p(&main), s("-p"), s("0"), s("--json")],

@@ -386,6 +386,19 @@ fn mcp_tool_declares_required_and_wires_every_property() {
         .expect("properties")
         .keys()
     {
+        // password 는 argv 가 아니라 stdin 축이다(cli.passwordStdin 계약).
+        // 이를 optionalArgs 로 넣으면 비밀값이 프로세스 목록에 노출될 수 있다.
+        if key == "password" {
+            assert_eq!(
+                tool["cli"]["passwordStdin"]["argument"], "password",
+                "passwordStdin 계약 누락: {tool}"
+            );
+            assert_eq!(
+                tool["cli"]["passwordStdin"]["flag"], "--password-stdin",
+                "passwordStdin 플래그 계약 누락: {tool}"
+            );
+            continue;
+        }
         assert!(
             wired.iter().any(|w| w == key),
             "{key} 가 선언만 되고 CLI 에 배선되지 않았습니다: {tool}"
