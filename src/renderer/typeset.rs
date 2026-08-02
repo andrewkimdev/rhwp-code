@@ -590,6 +590,18 @@ struct DeferredTableControl {
     para_start_height: f64,
 }
 
+/// 다음 physical page의 본문 시작에 배치할 non-TAC Square picture control.
+///
+/// 그림은 float라 본문 높이를 소비하지 않지만, native HWP5는 anchor 문단이 page tail에
+/// 있고 그림+caption이 각주 영역까지 닿으면 anchor의 남은 본문 줄은 현재 쪽에 유지한
+/// 채 그림만 다음 쪽의 wrap band로 이월한다. `PageItem`을 현재 쪽에 즉시 넣으면 layout
+/// 단계에서는 그 단의 anchor 좌표밖에 모르므로 본문/각주 위에 겹친다.
+#[derive(Debug, Clone, Copy)]
+struct DeferredSquarePictureControl {
+    para_index: usize,
+    control_index: usize,
+}
+
 /// 호스트 문단의 spacing (표 전/후)
 #[derive(Debug, Clone, Copy)]
 struct HostSpacing {
@@ -777,6 +789,14 @@ struct TypesetState {
     /// 같은 문단의 선행 RowBreak 표가 continuation 을 만들 때 후행 co-anchored 표를
     /// 후속 섹션 블록 뒤로 잠시 미루기 위한 큐.
     deferred_table_controls: Vec<DeferredTableControl>,
+    /// native HWP5 page-tail Square 그림을 다음 physical page의 시작에 넣는 큐.
+    /// 단일 컬럼·caption 보유 picture 형상으로 한정한다.
+    deferred_next_page_square_pictures: Vec<DeferredSquarePictureControl>,
+    /// 다음 physical page의 flush 시점에만 앞에 붙일 Square picture.
+    /// `current_items`에 즉시 넣으면 out-of-flow 그림이 문단 fit/vpos 상태를 바꾸어
+    /// p1356 뒤 본문을 한 쪽 더 분할한다. layout 순서에는 앞에 있어야 하지만,
+    /// typeset 흐름 항목으로는 보이면 안 된다.
+    page_start_square_pictures: Vec<DeferredSquarePictureControl>,
     /// 표 조판 중 fragment별로 각주를 등록한 source 키. caller의 기존 표 완료 뒤
     /// 일괄 등록을 건너뛰어 중복을 막는다.
     fragment_queued_table_footnotes: std::collections::HashSet<(usize, usize)>,
@@ -2343,6 +2363,8 @@ impl TypesetState {
             pending_body_wide_top_reserve: 0.0,
             visible_float_exclusions: Vec::new(),
             deferred_table_controls: Vec::new(),
+            deferred_next_page_square_pictures: Vec::new(),
+            page_start_square_pictures: Vec::new(),
             fragment_queued_table_footnotes: std::collections::HashSet::new(),
             reset_vpos_after_queued_table_footnote_page: false,
             prefilled_paras: std::collections::HashSet::new(),
@@ -2596,14 +2618,17 @@ impl TypesetState {
 
     /// 현재 항목을 ColumnContent로 만들어 마지막 페이지에 push
     fn flush_column(&mut self) {
-        if self.current_items.is_empty() && self.current_column_wrap_around_paras.is_empty() {
+        if self.current_items.is_empty()
+            && self.current_column_wrap_around_paras.is_empty()
+            && self.page_start_square_pictures.is_empty()
+        {
             return;
         }
         let col_content = ColumnContent {
             column_index: self.current_column,
             start_height: self.current_start_height,
             endnote_flow: self.current_endnote_flow,
-            items: std::mem::take(&mut self.current_items),
+            items: self.take_current_page_items(),
             zone_layout: self.current_zone_layout.clone(),
             zone_y_offset: self.current_zone_y_offset,
             wrap_around_paras: std::mem::take(&mut self.current_column_wrap_around_paras),
@@ -2619,6 +2644,21 @@ impl TypesetState {
         self.prev_body_bottom_vpos = None;
         // [#2279] flow 과소 누계도 단 단위 — 리셋.
         self.flow_underrun = 0.0;
+    }
+
+    /// deferred Square picture는 layout의 z/order상 이 column의 첫 item이어야 하지만,
+    /// typeset 중에는 height·vpos·fit에 관여하면 안 된다. 실제 column을 flush할 때만
+    /// 앞에 materialize해 두 성질을 함께 보존한다.
+    fn take_current_page_items(&mut self) -> Vec<PageItem> {
+        let mut items = std::mem::take(&mut self.page_start_square_pictures)
+            .into_iter()
+            .map(|deferred| PageItem::Shape {
+                para_index: deferred.para_index,
+                control_index: deferred.control_index,
+            })
+            .collect::<Vec<_>>();
+        items.append(&mut self.current_items);
+        items
     }
 
     /// [Task #1745] 흡수된 어울림 문단 기록 — 다쪽 분할 표는 첫 fragment column 에 소급.
@@ -2657,7 +2697,7 @@ impl TypesetState {
             column_index: self.current_column,
             start_height: self.current_start_height,
             endnote_flow: self.current_endnote_flow,
-            items: std::mem::take(&mut self.current_items),
+            items: self.take_current_page_items(),
             zone_layout: self.current_zone_layout.clone(),
             zone_y_offset: self.current_zone_y_offset,
             wrap_around_paras: std::mem::take(&mut self.current_column_wrap_around_paras),
@@ -2707,6 +2747,12 @@ impl TypesetState {
     fn push_new_page(&mut self) {
         self.pages.push(self.new_page_content(Vec::new()));
         self.reset_for_new_page();
+        // [#3738 Stage 22] current page의 본문/각주 흐름을 먼저 확정한 뒤, tail
+        // Square picture만 새 physical page의 layout item 앞에 둔다. 즉시
+        // `current_items`에 넣지 않아 다음 paragraph의 height/vpos fit은 기존과
+        // 같게 유지하고, flush 때만 Shape로 materialize한다.
+        self.page_start_square_pictures
+            .append(&mut self.deferred_next_page_square_pictures);
         // Task #321: 새 페이지에서는 body-wide top reserve 초기화
         self.pending_body_wide_top_reserve = 0.0;
     }
@@ -3832,6 +3878,115 @@ impl TypesetEngine {
                 }
             }
         }
+    }
+
+    /// Native HWP5의 page-tail Square 그림은 anchor 본문과 분리되어 다음 physical
+    /// page의 wrap band를 소유할 수 있다.
+    ///
+    /// 단순히 현재 단의 여유가 작다는 이유로 Square 그림을 이월하면, 같은 쪽에 의도된
+    /// caption/side-wrap 그림을 넓게 건드린다. 따라서 다음 문단에 “vpos=0 narrow wrap
+    /// 줄”이라는 저장 계약이 있고, 현재 쪽의 기존 각주를 고려하면 그림 frame 자체가 더는
+    /// 들어가지 않는 native HWP5 Picture에만 적용한다.
+    fn native_hwp5_square_picture_uses_next_page_owner(
+        &self,
+        st: &TypesetState,
+        para_idx: usize,
+        para: &Paragraph,
+        paragraphs: &[Paragraph],
+        ctrl: &Control,
+        styles: &ResolvedStyleSet,
+    ) -> bool {
+        use crate::model::shape::{HorzAlign, HorzRelTo, TextWrap, VertAlign, VertRelTo};
+
+        let Control::Picture(picture) = ctrl else {
+            return false;
+        };
+        let common = &picture.common;
+        let has_bottom_caption = picture
+            .caption
+            .as_ref()
+            .is_some_and(|caption| matches!(caption.direction, CaptionDirection::Bottom));
+        if !st.profile.native_hwp5_layout()
+            || st.col_count != 1
+            || st.current_items.is_empty()
+            || st.current_footnote_height <= 0.0
+            || !para_has_visible_text(para)
+            || common.treat_as_char
+            || !common.flow_with_text
+            || common.allow_overlap
+            || !matches!(common.text_wrap, TextWrap::Square)
+            || !matches!(common.vert_rel_to, VertRelTo::Para)
+            || !matches!(common.vert_align, VertAlign::Top)
+            || !matches!(common.horz_rel_to, HorzRelTo::Column)
+            || !matches!(common.horz_align, HorzAlign::Left)
+            || common.horizontal_offset <= 0
+            || !has_bottom_caption
+        {
+            return false;
+        }
+
+        // 다음 문단의 vpos=0 narrow band는 한컴 저장 흐름에서 그림의 다음
+        // physical-page owner를 직접 가리킨다. 같은 문단의 full-width lines 뒤에
+        // reset하는 경우(p1693)와 다음 문단이 narrow band로 곧바로 시작하는 경우
+        // (p1356)를 모두 수용하되, 이 형상 없이 generic Square float을 옮기지 않는다.
+        let Some(next_para) = paragraphs.get(para_idx + 1) else {
+            return false;
+        };
+        let Some((reset_idx, reset_seg)) =
+            next_para.line_segs.iter().enumerate().find(|(_, seg)| {
+                seg.vertical_pos == 0
+                    && seg.column_start == 0
+                    && seg.segment_width > 0
+                    && (seg.segment_width as i32 - common.horizontal_offset as i32).abs() <= 200
+            })
+        else {
+            return false;
+        };
+        let has_full_width_before_reset = reset_idx > 0
+            && next_para.line_segs[..reset_idx]
+                .iter()
+                .any(|seg| seg.segment_width > reset_seg.segment_width.saturating_add(1000));
+        // p1356처럼 다음 문단이 narrow band로 시작하면, 그 문단 전체의 저장 advance가
+        // 현 각주 예약 뒤에 남은 높이를 초과해야만 next physical page owner라고
+        // 확정한다. 이 guard가 없으면 단순 side-wrap 문단을 나중의 무관한 page break에
+        // 잘못 매달 수 있다.
+        let next_para_starts_on_next_page = reset_idx == 0 && {
+            let stored_flow_height = next_para
+                .line_segs
+                .iter()
+                .enumerate()
+                .map(|(idx, seg)| {
+                    let trailing_spacing = if idx + 1 < next_para.line_segs.len() {
+                        seg.line_spacing
+                    } else {
+                        0
+                    };
+                    hwpunit_to_px(seg.line_height + trailing_spacing, self.dpi)
+                })
+                .sum::<f64>();
+            st.current_height + stored_flow_height > st.available_height() + 0.5
+        };
+        if !has_full_width_before_reset && !next_para_starts_on_next_page {
+            return false;
+        }
+
+        // Square는 layout cursor를 전진시키지 않지만, 이 저장 contract에서는 다음
+        // page top의 그림+caption을 위해 현재 page tail에 적어도 그림 frame만큼의
+        // 여유가 있어야 한다. image frame만으로도 기존 각주가 있는 p155에 들어가지
+        // 않으므로 current PageItem을 만들지 않고 next-page queue로 보낸다.
+        let image_frame_height = hwpunit_to_px(
+            common.height as i32 + common.margin.top as i32 + common.margin.bottom as i32,
+            self.dpi,
+        );
+        let caption_height = crate::renderer::layout::LayoutEngine::new(self.dpi)
+            .calculate_caption_height(&picture.caption, styles);
+        let caption_spacing = picture
+            .caption
+            .as_ref()
+            .map(|caption| hwpunit_to_px(caption.spacing as i32, self.dpi))
+            .unwrap_or(0.0);
+        let frame_height = image_frame_height + caption_height + caption_spacing;
+        st.current_height + frame_height > st.available_height() + 0.5
     }
 
     /// [Task #2094] wrap-around(어울림) zone 문단 처리 — 원본 무변경 통이동.
@@ -5284,6 +5439,21 @@ impl TypesetEngine {
                 match ctrl {
                     Control::Shape(_) | Control::Picture(_) | Control::Equation(_) => {
                         if !has_table {
+                            // [#3738 Stage 22] page-tail Square picture는 anchor 본문을
+                            // 현재 쪽에 남기되 그림만 다음 physical page의 narrow wrap
+                            // band에 배치한다. p155 그림 64처럼 현재 PageItem에 넣으면
+                            // caption이 기존 FootnoteArea와 겹친다.
+                            if self.native_hwp5_square_picture_uses_next_page_owner(
+                                &st, para_idx, para, paragraphs, ctrl, styles,
+                            ) {
+                                st.deferred_next_page_square_pictures.push(
+                                    DeferredSquarePictureControl {
+                                        para_index: para_idx,
+                                        control_index: ctrl_idx,
+                                    },
+                                );
+                                continue;
+                            }
                             // [Issue #476] treat_as_char Shape 는 박스가 속한 line 이 라우팅된
                             // 페이지/단에 등록. paragraph 가 페이지 분할되면 이 시점의
                             // st.current_items 는 마지막 페이지 상태이므로, 그대로 push 하면
@@ -5603,6 +5773,13 @@ impl TypesetEngine {
             }
             // [Task #1007] variant vpos reset 감지용 prev_para_idx 갱신
             variant_prev_para_idx = Some(para_idx);
+        }
+
+        // source tail에 뒤따르는 본문이 없어 자연 page break가 일어나지 않은 경우에도,
+        // deferred Square picture는 현재 쪽 FootnoteArea에 겹치지 않고 독립한 다음 physical
+        // page를 가져야 한다. 일반 흐름을 되감지 않고 picture PageItem만 drain한다.
+        if !st.deferred_next_page_square_pictures.is_empty() {
+            st.force_new_page();
         }
 
         // [미주 배치 — Hancom EndnoteEndOfSection/EndnoteEndOfDocument]

@@ -27,10 +27,13 @@ const PAGE_77: u32 = 76;
 const PAGE_78: u32 = 77;
 const PAGE_79: u32 = 78;
 const PAGE_80: u32 = 79;
+const PAGE_126: u32 = 125;
+const PAGE_127: u32 = 126;
 const PAGE_37: u32 = 36;
 const PAGE_25: u32 = 24;
 const PAGE_154: u32 = 153;
 const PAGE_155: u32 = 154;
+const PAGE_156: u32 = 155;
 const PAGE_157: u32 = 156;
 const PAGE_158: u32 = 157;
 
@@ -543,4 +546,103 @@ fn native_hwp5_oversized_single_rowbreak_table_splits_inside_the_page_frame() {
             "{label} pi=1723 fragment가 footer 밖으로 넘으면 안 됨: table={table:?}, footer={footer:?}"
         );
     }
+}
+
+#[test]
+fn native_hwp5_square_picture_uses_the_next_page_wrap_owner() {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(SAMPLE);
+    let bytes = fs::read(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+    let doc = HwpDocument::from_bytes(&bytes).expect("parse stage22 HWP evidence fixture");
+
+    // 그림 64의 anchor(pi=1692)와 p1693의 첫 두 줄은 p155에 남는다. 그러나
+    // Square 그림+caption은 native HWP5의 다음 physical-page wrap owner(p156)에
+    // 속한다. anchor 문단에서 즉시 PageItem을 만들면 p155의 표·본문·각주 211을
+    // 덮는 회귀가 난다.
+    let p155 = page_text(&doc, PAGE_155);
+    let p156 = page_text(&doc, PAGE_156);
+    assert!(
+        p155.contains("일본 각 병원에서 일반적으로 진행되는 절차")
+            && p155.contains("구마모토대는 문진과 진찰"),
+        "p155에는 그림 anchor 본문과 p1693의 현재 쪽 두 줄이 남아야 함: {p155}"
+    );
+    assert!(
+        !p155.contains("그림 64."),
+        "p155에는 그림 64 caption이 남아 표·본문·각주를 덮으면 안 됨: {p155}"
+    );
+    assert!(
+        p156.contains("상 금주 및 금연") && p156.contains("그림 64."),
+        "p156은 p1693 narrow-wrap continuation과 그림 64 caption을 함께 가져야 함: {p156}"
+    );
+
+    let p155_tree = doc
+        .build_page_render_tree(PAGE_155)
+        .expect("render physical page 155");
+    let p156_tree = doc
+        .build_page_render_tree(PAGE_156)
+        .expect("render physical page 156");
+    let mut p155_images = Vec::new();
+    let mut p156_images = Vec::new();
+    images_for_control(&p155_tree.root, 1692, 1, &mut p155_images);
+    images_for_control(&p156_tree.root, 1692, 1, &mut p156_images);
+    assert!(
+        p155_images.is_empty(),
+        "p155 그림 64 Image가 표/각주 영역에 남으면 안 됨: {p155_images:?}"
+    );
+    assert_eq!(
+        p156_images.len(),
+        1,
+        "p156에는 그림 64 Image가 정확히 하나 있어야 함: {p156_images:?}"
+    );
+    assert!(
+        p156_images[0].0 > 400.0,
+        "그림 64는 PDF처럼 p156 우측 Square band에 있어야 함: {:?}",
+        p156_images[0]
+    );
+}
+
+#[test]
+fn native_hwp5_square_picture_figure_56_uses_the_same_next_page_owner_contract() {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(SAMPLE);
+    let bytes = fs::read(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+    let doc =
+        HwpDocument::from_bytes(&bytes).expect("parse stage22 secondary HWP evidence fixture");
+
+    // pi=1355와 p1356의 첫 vpos=0 narrow line은 그림 56에도 같은 HWP5 physical
+    // owner contract가 있음을 보여 준다. PDF p126은 anchor 본문만, p127은 오른쪽
+    // 그림 56과 좁은 본문 흐름을 가진다.
+    let p126 = page_text(&doc, PAGE_126);
+    let p127 = page_text(&doc, PAGE_127);
+    assert!(
+        p126.contains("한국의 장기이식관리센터") && !p126.contains("그림 56."),
+        "p126에는 그림 56 caption이 남아 각주 170–172를 덮으면 안 됨: {p126}"
+    );
+    assert!(
+        p127.contains("일반적으로 진행되는 절차는 오른쪽 그림") && p127.contains("그림 56."),
+        "p127은 그림 56의 Square wrap 본문과 caption을 함께 가져야 함: {p127}"
+    );
+
+    let p126_tree = doc
+        .build_page_render_tree(PAGE_126)
+        .expect("render physical page 126");
+    let p127_tree = doc
+        .build_page_render_tree(PAGE_127)
+        .expect("render physical page 127");
+    let mut p126_images = Vec::new();
+    let mut p127_images = Vec::new();
+    images_for_control(&p126_tree.root, 1355, 0, &mut p126_images);
+    images_for_control(&p127_tree.root, 1355, 0, &mut p127_images);
+    assert!(
+        p126_images.is_empty(),
+        "p126 그림 56 Image가 anchor page에 남으면 안 됨: {p126_images:?}"
+    );
+    assert_eq!(
+        p127_images.len(),
+        1,
+        "p127에는 그림 56 Image가 정확히 하나 있어야 함: {p127_images:?}"
+    );
+    assert!(
+        p127_images[0].0 > 390.0,
+        "그림 56은 PDF처럼 p127 우측 Square band에 있어야 함: {:?}",
+        p127_images[0]
+    );
 }
