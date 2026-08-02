@@ -10,6 +10,8 @@ pub mod rendering;
 // [#3283] `grep` 이 같은 매칭 규칙(find_matches)을 쓰도록 크레이트 내부 공개.
 /// 주소(구역·문단·페이지)를 가진 검색 — 조판 엔진이 있어야만 가능한 질의.
 pub mod changed_pages;
+/// 날짜·금액·수량을 주소와 함께 뽑는 추출 코어 — `grep` 과 같은 페이지 인덱스를 쓴다.
+pub mod extract_data;
 pub mod grep;
 /// [#3719 §6-11] 공개 전 개인정보 탐지 — 읽기 전용 판정(마스킹은 CLI 의 치환 경로).
 pub mod pii_scan;
