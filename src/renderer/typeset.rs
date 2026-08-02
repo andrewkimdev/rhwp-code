@@ -121,6 +121,10 @@ struct BlockTableContinuationPreparedState {
     host_spacing_after_only: f64,
     strict_following_plain_text_fit: bool,
     budget_para_start_height: f64,
+    /// native HWP5의 좁은 2행 그림+caption 표가 기존 FootnoteArea 앞에 모두
+    /// 들어갈 때의 첫 fragment 절대 경계. 일반 표에는 `None`으로 기존 보수
+    /// budget을 유지한다.
+    first_fragment_actual_footnote_boundary: Option<f64>,
 }
 
 /// [#2424] 한 continuation iteration이 caller-controlled step에 돌려주는 진행 상태.
@@ -1864,6 +1868,39 @@ fn native_hwp5_first_footnote_overlap_break_line(
         })
 }
 
+/// native HWP5의 2행 그림+caption RowBreak 표인지 판별한다.
+///
+/// 그림을 첫 행에, caption을 둘째 행에 저장한 표는 현재 페이지의 기존 각주 위에
+/// 실제로 들어가도 일반 다행 표와 같은 clean-defer gate를 타기 쉽다. 일반 요구사항
+/// 표와 rowspan 표의 이월 계약은 건드리지 않기 위해, 이 구조만 별도 near-fit 보정의
+/// 후보로 식별한다.
+fn is_two_row_picture_caption_rowbreak_table(table: &crate::model::table::Table) -> bool {
+    if table.row_count != 2
+        || table.col_count != 1
+        || table.cells.len() != 2
+        || table
+            .cells
+            .iter()
+            .any(|cell| cell.col != 0 || cell.row > 1 || cell.row_span != 1 || cell.col_span != 1)
+    {
+        return false;
+    }
+
+    let has_picture = table.cells.iter().any(|cell| {
+        cell.row == 0
+            && cell.paragraphs.iter().any(|para| {
+                para.controls
+                    .iter()
+                    .any(|control| matches!(control, Control::Picture(_)))
+            })
+    });
+    let has_caption_text = table
+        .cells
+        .iter()
+        .any(|cell| cell.row == 1 && cell.paragraphs.iter().any(para_has_visible_text));
+    has_picture && has_caption_text
+}
+
 fn sample16_missing_lineseg_tail_break_line(
     para: &Paragraph,
     line_count: usize,
@@ -2318,6 +2355,36 @@ impl TypesetState {
         }
         self.current_footnote_height += height;
         self.sync_current_page_footnote_area();
+    }
+
+    /// 이미 flush된 분할 문단의 앵커 page에 첫 native-HWP5 각주를 소급 등록한다.
+    ///
+    /// 이 경로는 `native_hwp5_first_footnote_overlap_break_line`가 현재 page의
+    /// 겹침을 피하려고 문단 tail을 다음 page로 나눈 경우에만 쓴다. 그 시점에는
+    /// `current page`가 tail page를 가리키므로, 일반 `add_footnote_height`를 쓰면
+    /// 각주 표식이 남은 anchor line과 각주 본문이 서로 다른 page로 갈라진다.
+    fn add_footnote_to_completed_page(
+        &mut self,
+        page_idx: usize,
+        number: u16,
+        source: FootnoteSource,
+        content_height: f64,
+    ) -> bool {
+        let Some(page) = self.pages.get_mut(page_idx) else {
+            return false;
+        };
+        let first = page.footnotes.is_empty();
+        let existing_height = page.layout.footnote_area.height.max(0.0);
+        page.footnotes.push(FootnoteRef { number, source });
+        let added_height = content_height
+            + if first {
+                self.footnote_separator_overhead
+            } else {
+                self.footnote_between_notes_margin
+            };
+        page.layout
+            .update_footnote_area(existing_height + added_height);
+        true
     }
 
     fn projected_footnote_height(&self, note_content_height: f64, note_count: usize) -> f64 {
@@ -4736,6 +4803,7 @@ impl TypesetEngine {
                 }
             }
 
+            let mut native_hwp5_split_footnote_anchor = false;
             if !has_table {
                 // --- 핵심: format → fits → place/split ---
                 let col_w = st
@@ -4746,6 +4814,13 @@ impl TypesetEngine {
                     .unwrap_or(st.layout.body_area.width);
                 let formatted =
                     self.format_paragraph(para, composed.get(para_idx), styles, Some(col_w));
+                native_hwp5_split_footnote_anchor = native_hwp5_first_footnote_overlap_break_line(
+                    &st,
+                    para,
+                    formatted.line_heights.len(),
+                    self.dpi,
+                )
+                .is_some();
                 let is_last_in_section = para_idx + 1 == paragraphs.len();
                 // [Task #1027 Stage D] fit 직전 vpos 스냅으로 누적 drift 제거 (렌더러 정합).
                 self.vpos_snap_current_height(
@@ -5244,16 +5319,36 @@ impl TypesetEngine {
                     }
                     Control::Footnote(fn_ctrl) => {
                         if !has_table {
+                            let source = FootnoteSource::Body {
+                                para_index: para_idx,
+                                control_index: ctrl_idx,
+                            };
+                            let fn_height = estimate_footnote_note_height(fn_ctrl, self.dpi);
+                            let routed = native_hwp5_split_footnote_anchor.then(|| {
+                                crate::renderer::pagination::find_inline_control_target_page(
+                                    &st.pages,
+                                    &st.current_items,
+                                    para_idx,
+                                    ctrl_idx,
+                                    para,
+                                )
+                            });
+                            if let Some(Some((page_idx, _))) = routed {
+                                if st.add_footnote_to_completed_page(
+                                    page_idx,
+                                    fn_ctrl.number,
+                                    source.clone(),
+                                    fn_height,
+                                ) {
+                                    continue;
+                                }
+                            }
                             if let Some(page) = st.pages.last_mut() {
                                 page.footnotes.push(FootnoteRef {
                                     number: fn_ctrl.number,
-                                    source: FootnoteSource::Body {
-                                        para_index: para_idx,
-                                        control_index: ctrl_idx,
-                                    },
+                                    source,
                                 });
                             }
-                            let fn_height = estimate_footnote_note_height(fn_ctrl, self.dpi);
                             st.add_footnote_height(fn_height);
                         }
                     }
@@ -17316,6 +17411,27 @@ impl TypesetEngine {
                 .unwrap_or(0.0)
                 .max(cut_row_h.first().copied().unwrap_or(0.0))
         };
+        // native HWP5의 이 좁은 그림+caption 형상은 일반 RowBreak table의
+        // conservative clean-defer budget보다, 실제 기존 FootnoteArea 경계가
+        // 우선한다. `table_total`은 첫 fragment의 host/row/caption fit overhead를
+        // 이미 포함하므로, 이 경계 안에 들어오는지 한 번 계산해 뒤의 두 defer
+        // gate에서 같은 계약으로 사용한다.
+        let native_picture_caption_fits_actual_footnote_boundary = st.profile.native_hwp5_layout()
+            && !table.common.treat_as_char
+            && is_para_topbottom_float(&table.common)
+            && matches!(
+                table.page_break,
+                crate::model::table::TablePageBreak::RowBreak
+            )
+            && ft.table_footnotes.is_empty()
+            && st.current_footnote_height > 0.0
+            && is_two_row_picture_caption_rowbreak_table(table)
+            && st.current_height + table_total
+                <= st.base_available_height()
+                    - st.current_footnote_height
+                    - st.current_zone_y_offset
+                    - st.current_bottom_fixed_exclusion
+                    + 0.5;
         if remaining_on_page < split_unit_h && !st.current_items.is_empty() {
             let first_row_splittable = (first_block_is_single_row || !first_block_protected)
                 && can_intra_split
@@ -17388,6 +17504,16 @@ impl TypesetEngine {
                 && row_count > 1
                 && first_block_end < row_count
                 && fits_fresh_page;
+            // native HWP5 2행 그림+caption 표는 첫 그림 행만으로 계산한 일반
+            // clean-defer budget이 기존 각주의 40px safety buffer 때문에 소폭 부족해도,
+            // 표 전체가 실제 FootnoteArea 앞에 끝날 수 있다. 이 경우까지 다음 page로
+            // 미루면 그림 49처럼 빈 page와 이후 page drift가 생긴다. 표 안 각주·span·
+            // 일반 다행 표에는 적용하지 않고, safety buffer를 빼기 전 physical boundary를
+            // 실제 table total로 다시 확인한다.
+            let native_picture_caption_fits_actual_footnote =
+                multirow_clean_defer && native_picture_caption_fits_actual_footnote_boundary;
+            let multirow_clean_defer =
+                multirow_clean_defer && !native_picture_caption_fits_actual_footnote;
             // [#2097 진단] 첫 행 이월 결정 입력 — 동작 불변.
             if std::env::var("RHWP_DIAG_SCAN").is_ok() {
                 eprintln!(
@@ -17512,7 +17638,9 @@ impl TypesetEngine {
         if row_count > 1 && preceded_by_same_para_float {
             let remaining_now =
                 (table_available - st.current_height - first_frag_overhead).max(0.0);
-            if total_rows_h + caption_base_overhead > remaining_now {
+            if total_rows_h + caption_base_overhead > remaining_now
+                && !native_picture_caption_fits_actual_footnote_boundary
+            {
                 self.prefill_before_deferred_table(
                     st,
                     para_idx,
@@ -17579,6 +17707,13 @@ impl TypesetEngine {
             host_spacing_after_only: ft.host_spacing.spacing_after_only,
             strict_following_plain_text_fit: ft.strict_following_plain_text_fit,
             budget_para_start_height,
+            first_fragment_actual_footnote_boundary:
+                native_picture_caption_fits_actual_footnote_boundary.then(|| {
+                    st.base_available_height()
+                        - st.current_footnote_height
+                        - st.current_zone_y_offset
+                        - st.current_bottom_fixed_exclusion
+                }),
         };
         let source = BlockTableContinuationSource {
             para_index: para_idx,
@@ -17710,6 +17845,8 @@ impl TypesetEngine {
             let host_spacing_after_only = prepared.host_spacing_after_only;
             let strict_following_plain_text_fit = prepared.strict_following_plain_text_fit;
             let budget_para_start_height = prepared.budget_para_start_height;
+            let first_fragment_actual_footnote_boundary =
+                prepared.first_fragment_actual_footnote_boundary;
             let cursor_row = continuation.row;
             let is_continuation = continuation.is_continuation;
             let start_cut_is_block = continuation.start_cut_is_block;
@@ -17805,6 +17942,18 @@ impl TypesetEngine {
                     - st.current_zone_y_offset
                     - st.layout.pagination_tolerance_px
                     - host_before_overhead
+                    - fragment_outer_bottom_overhead)
+                    .max(0.0)
+            } else if let Some(footnote_boundary) = first_fragment_actual_footnote_boundary {
+                // 일반 RowBreak 표의 safety budget은 첫 fragment에서 보수적으로
+                // 40px를 남긴다. 다만 조판 전에 검증한 native HWP5 그림+caption
+                // 2행 표는 표 전체가 기존 각주 경계 안에 들어가므로, 같은 정확한
+                // 경계로 row scan을 수행해 그림 행과 caption 행을 분리하지 않는다.
+                (footnote_boundary
+                    - st.current_height
+                    - caption_extra
+                    - host_before_overhead
+                    - vert_offset_overhead
                     - fragment_outer_bottom_overhead)
                     .max(0.0)
             } else if is_empty_host_column_float {
@@ -19541,6 +19690,7 @@ mod tests {
             host_spacing_after_only: 0.0,
             strict_following_plain_text_fit: false,
             budget_para_start_height: 0.0,
+            first_fragment_actual_footnote_boundary: None,
         };
         let flow_layout =
             PageLayoutInfo::from_page_def(&a4_page_def(), &ColumnDef::default(), DEFAULT_DPI);

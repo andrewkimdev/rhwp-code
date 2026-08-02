@@ -5,11 +5,11 @@ canonical: mydocs/manual/codex/docs_and_git_workflow.md
 last_verified: 2026-08-02
 ---
 
-# Task #3738 결과 보고 — Stage 1–12 그림·RowBreak·각주 reservation 보정과 전체 pagination 잔여
+# Task #3738 결과 보고 — Stage 1–13 그림·RowBreak·각주 reservation 보정과 전체 pagination 잔여
 
 - 이슈: [#3738](https://github.com/edwardkim/rhwp/issues/3738)
 - 관련 PR: [#3740](https://github.com/edwardkim/rhwp/pull/3740)
-- 상태: **Stage 8의 HWP p23 그림 21 caption, Stage 9의 HWP p66 table-footnote first fragment, Stage 11의 HWP p67 footer collision, Stage 12의 HWP p30 각주 29 reset collision은 복원. 전체 215쪽 pagination 정합은 계속 조사 중.**
+- 상태: **Stage 8의 HWP p23 그림 21 caption, Stage 9의 HWP p66 table-footnote first fragment, Stage 11의 HWP p67 footer collision, Stage 13의 HWP p30 각주 29 page ownership과 p68 그림 49/caption 이월은 복원. HWP는 아직 223쪽, 기준 PDF는 215쪽이므로 전체 pagination 정합은 계속 조사 중.**
 
 ## 완료한 작업
 
@@ -57,8 +57,13 @@ last_verified: 2026-08-02
 14. Stage 12에서 native HWP5 문단 407의 첫 각주 29와 `vpos=0` reset을 실제 composed footnote
     height로 대조했다. visible body line은 각주 위에 남되 trailing line-spacing만 각주 영역을 넘는
     경우에만 tail을 분리하도록 좁혀, p30의 두 줄/각주 overlap을 제거하고 p31의 tail·`5. 독일`,
-    p32의 그림 35 page ownership을 기준 PDF처럼 복원했다. 넓은 reset 강제 split 후보는 226쪽
-    regression을 일으켜 커밋하지 않았다.
+    p32의 그림 35 page ownership을 기준 PDF처럼 복원했다. 이 단계는 body split geometry만 고쳤고,
+    split 뒤 footnote control이 p31에 등록되는 page ownership 결함은 Stage 13에서 분리했다. 넓은 reset
+    강제 split 후보는 226쪽 regression을 일으켜 커밋하지 않았다.
+15. Stage 13에서 completed page의 inline marker를 다시 찾아 footnote 29를 p30에 등록했다. 또한 existing
+    `FootnoteArea`를 실제 물리 경계로 대조해, native HWP5의 비글자처럼 `TopAndBottom` `RowBreak` 2×1
+    picture+caption 표에만 첫 fragment near-fit을 허용했다. 그림 49와 caption은 p68으로, p69는 다음 절로,
+    p70은 caption 고아 없이 이어진다.
 
 ## 미해결과 다음 회차
 
@@ -67,11 +72,10 @@ offset, 그리고 HWP p23 그림 21 caption cell 정렬은 해당 선택 페이�
 24쪽 `y=90.6px`, image `y=92.5px`, Bottom caption 3줄 `y=434.4/455.7/477.1px`이고 23쪽에는 없다.
 Stage 8 HWP 그림 21 caption 첫 줄은 PDF `495.16px` 대비 rhwp `494.7px`이다.
 
-그러나 전체 문서는 아직 **HWP 224쪽/HWPX 224쪽, 한컴 PDF 215쪽**이다. Stage 12가 p30–p32의 각주
-reset collision을 제거했어도, p68의 그림 49·caption `RowBreak` table은 첫 행 near-fit 계산이 실제
-각주 경계보다 2.6px 보수적으로 잡혀 p69로 통째로 이월된다. PDF에서는 같은 table이 p68 하단에서
-끝난다. 다음 Stage는 이 RowBreak table 분기를 별도 분석한다. 완료된 p30–p32, p66 소유권과 p67 footer
-collision을 전체 pagination 완료로 표현하지 않는다.
+그러나 전체 문서는 아직 **HWP 223쪽/HWPX 224쪽, 한컴 PDF 215쪽**이다. Stage 13은 p30 각주 29와 p68
+그림 49의 국소 page ownership을 복원했을 뿐이다. 다음 Stage는 p58 first-footnote safety-margin 조기
+이월, p77 그림 51/caption이 p78로 밀리는 추가 빈 쪽, p83 paragraph overflow 및 사용자 UI에서 재관측한
+p66 본문·각주 충돌을 분리해 분석한다. 완료된 선택 페이지를 전체 pagination 완료로 표현하지 않는다.
 
 원본 HWP·HWPX와 각각의 기준 PDF, review PNG는 모두
 [`pdf/pr3740/README.md`](../../pdf/pr3740/README.md) 및 연결된 증적에 보관한다. 상세 페이지 비교와
@@ -86,7 +90,8 @@ collision을 전체 pagination 완료로 표현하지 않는다.
 [Stage 8 visual sweep](../working/task_m100_3738_stage8_visual_sweep.md),
 [Stage 9 visual sweep](../working/task_m100_3738_stage9_visual_sweep.md),
 [Stage 11 visual sweep](../working/task_m100_3738_stage11_visual_sweep.md),
-[Stage 12 visual sweep](../working/task_m100_3738_stage12_visual_sweep.md)에 기록했다.
+[Stage 12 visual sweep](../working/task_m100_3738_stage12_visual_sweep.md),
+[Stage 13 visual sweep](../working/task_m100_3738_stage13_visual_sweep.md)에 기록했다.
 
 현재 그림별 선택 페이지의 완료 판정과 전체 215쪽 pagination 완료 판정을 혼동하지 않는다. 전체 215쪽
 raster sweep이나 전체 integration test는 Stage 8의 좁은 caption 보정 완료 근거로 사용하지 않았다.
@@ -109,8 +114,11 @@ raster sweep이나 전체 integration test는 Stage 8의 좁은 caption 보정 �
 - `CARGO_TARGET_DIR=target/review-planet6897-20260802 CARGO_INCREMENTAL=0 cargo test --profile release-test --test issue_3738_rowbreak_table_footnote_fragment --test issue_3738_hwp_caption_cell_alignment` — 2 passed
 - HWP p66–p67, 144 DPI visual sweep — SVG/render tree 224쪽 생성, 선택 raster 2/2 완료; p67 `FootnoteArea` actual bottom과 footer top 모두 1039.3px, structural 후보 0건
 - `CARGO_TARGET_DIR=target/review-planet6897-20260802 CARGO_INCREMENTAL=0 cargo test --profile release-test --test issue_3738_rowbreak_table_footnote_fragment --test issue_3738_hwp_caption_cell_alignment` — 3 passed
-- HWP p30–p32, 144 DPI visual sweep — SVG/render tree 224쪽 생성, 선택 raster 3/3 완료; structural 후보 0건, p30 각주 29 collision 제거 및 p31–p32 본문·그림 ownership 복원
+- `CARGO_TARGET_DIR=target/review-planet6897-20260802 CARGO_INCREMENTAL=0 cargo test --profile release-test --test issue_3738_rowbreak_table_footnote_fragment -- --nocapture` — 3 passed
+- `CARGO_TARGET_DIR=target/review-planet6897-20260802 CARGO_INCREMENTAL=0 cargo test --profile release-test --test issue_3738_hwp_caption_cell_alignment` — 1 passed
+- `CARGO_TARGET_DIR=target/review-planet6897-20260802 CARGO_INCREMENTAL=0 cargo build --profile release-test --bin rhwp` — passed
+- HWP p30–p32, p66, p68–p70, 144 DPI visual sweep — SVG/render tree 223쪽 생성, 선택 raster 7/7 완료; p30 각주 29 ownership과 p68 그림 49/caption ownership 복원
 
 전체 integration test와 215쪽 전체 raster sweep은 이 회차의 완료 근거로 사용하지 않았다. 전체
-pagination 정합이 아직 남아 있으므로, 이 보고서는 선택 그림 흐름, Stage 9 p66 table-footnote
-ownership, Stage 11 p67 footer collision만 완료로 표현한다.
+pagination 정합이 아직 남아 있으므로, 이 보고서는 선택 그림 흐름과 해당 Stage의 국소 ownership만
+완료로 표현한다.

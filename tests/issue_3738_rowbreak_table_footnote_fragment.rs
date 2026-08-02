@@ -18,6 +18,8 @@ const PAGE_67: u32 = 66;
 const PAGE_30: u32 = 29;
 const PAGE_31: u32 = 30;
 const PAGE_32: u32 = 31;
+const PAGE_68: u32 = 67;
+const PAGE_69: u32 = 68;
 
 fn page_text(doc: &HwpDocument, page: u32) -> String {
     doc.extract_page_text_native(page)
@@ -98,15 +100,38 @@ fn native_hwp5_footnote_reset_moves_only_the_overlapping_tail_to_the_next_page()
     let p31 = page_text(&doc, PAGE_31);
     let p32 = page_text(&doc, PAGE_32);
     assert!(
-        p30.contains("10년 후 71.7%") && !p30.contains("문제가 나타남"),
-        "p30은 각주 29 위의 세 줄에서 끝나야 함: {p30}"
+        p30.contains("10년 후 71.7%")
+            && p30.contains("Dattani, Nikesh")
+            && !p30.contains("문제가 나타남"),
+        "p30은 각주 29와 그 위의 세 줄에서 끝나야 함: {p30}"
     );
     assert!(
-        p31.contains("문제가 나타남") && p31.contains("5. 독일"),
-        "p31은 p30의 두 줄 tail 뒤에 독일 절로 이어져야 함: {p31}"
+        p31.contains("문제가 나타남")
+            && p31.contains("5. 독일")
+            && !p31.contains("Dattani, Nikesh"),
+        "p31은 각주 29 없이 p30의 두 줄 tail 뒤에 독일 절로 이어져야 함: {p31}"
     );
     assert!(
-        p32.contains("35>와 같이 점차 감소하는 추세임") && p32.contains("그림 35"),
-        "p32는 독일 문단의 reset tail 뒤에 그림 35가 와야 함: {p32}"
+        p32.contains("그림 35"),
+        "각주 29를 p30으로 소급한 뒤에도 그림 35는 다음 페이지에 보존돼야 함: {p32}"
+    );
+}
+
+#[test]
+fn picture_caption_rowbreak_uses_the_actual_footnote_boundary_before_deferring() {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(SAMPLE);
+    let bytes = fs::read(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+    let doc = HwpDocument::from_bytes(&bytes).expect("parse stage13 HWP evidence fixture");
+
+    let p68 = page_text(&doc, PAGE_68);
+    let p69 = page_text(&doc, PAGE_69);
+    assert!(
+        p68.contains("그림 49. OPTN 생존 장기기증 원칙"),
+        "p68에는 그림 49와 caption이 각주 위에 남아야 함: {p68}"
+    );
+    assert!(
+        !p69.contains("그림 49. OPTN 생존 장기기증 원칙")
+            && p69.contains("나. 생존 장기기증 승인 절차"),
+        "p69는 그림 49 없이 다음 본문으로 시작해야 함: {p69}"
     );
 }
