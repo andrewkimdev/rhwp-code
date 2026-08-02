@@ -4314,7 +4314,7 @@ impl TypesetEngine {
             || !matches!(common.vert_align, VertAlign::Top)
             || !matches!(common.horz_rel_to, HorzRelTo::Column)
             || !matches!(common.horz_align, HorzAlign::Left)
-            || common.horizontal_offset <= 0
+            || common.horizontal_offset == 0
             || !has_bottom_caption
         {
             return None;
@@ -4324,19 +4324,13 @@ impl TypesetEngine {
         // physical-page owner를 직접 가리킨다. 같은 문단의 full-width lines 뒤에
         // reset하는 경우(p1693)와 다음 문단이 narrow band로 곧바로 시작하는 경우
         // (p1356)를 모두 수용하되, 이 형상 없이 generic Square float을 옮기지 않는다.
-        let Some(next_para) = paragraphs.get(para_idx + 1) else {
-            return None;
-        };
-        let Some((reset_idx, reset_seg)) =
-            next_para.line_segs.iter().enumerate().find(|(_, seg)| {
-                seg.vertical_pos == 0
-                    && seg.column_start == 0
-                    && seg.segment_width > 0
-                    && (seg.segment_width as i32 - common.horizontal_offset as i32).abs() <= 200
-            })
-        else {
-            return None;
-        };
+        let next_para = paragraphs.get(para_idx + 1)?;
+        let (reset_idx, reset_seg) = next_para.line_segs.iter().enumerate().find(|(_, seg)| {
+            seg.vertical_pos == 0
+                && seg.column_start == 0
+                && seg.segment_width > 0
+                && (seg.segment_width as i32 - common.horizontal_offset as i32).abs() <= 200
+        })?;
         let has_full_width_before_reset = reset_idx > 0
             && next_para.line_segs[..reset_idx]
                 .iter()
