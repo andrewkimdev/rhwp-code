@@ -5,8 +5,8 @@
 - **브랜치**: `codex/issue-3744-clause-context-confidence`
 - **수행계획서**: `mydocs/plans/task_m100_3744.md`
 - **기준 commit**: `upstream/devel` `0889974a01db3585df8ad2c1f13203e3cb9f51f8`
-- **절차 상태**: Stage 1 조사 완료, 구현 미승인
-- **다음 승인 경계**: Stage 2 red·정책 비교 착수 승인
+- **절차 상태**: Stage 2 red·정책 비교 완료, 구현 미승인
+- **다음 승인 경계**: 승인 B — 선택 정책의 Stage 3 구현 승인
 
 ## 1. 변경 경계
 
@@ -70,6 +70,16 @@
 
 선택 규칙과 기각한 대안을 Stage 2 보고서 및 수행계획서 4절에 반영한 뒤 승인 B를 받는다.
 
+### 2.4 Stage 2 선택 결과
+
+1. anchor: `N.N` 복합 번호를 body로 거부하고 현재 nearest `조|항`의 weak-`호` 상태를 만료한다.
+2. date: 유효 범위의 `YYYY. M. D.`를 suffix와 무관하게 거부한다.
+3. direct `목`: TOC tail이 없고 `margin_left=0`, `indent>=-1280`, `para_level=0`인 문단만
+   열린 `장|절` 조상 아래에서 허용한다.
+4. section reset, 거리 cap, blanket strict sequence는 편람의 정상 반복 목록 손실 때문에 구현하지 않는다.
+
+세부 실측과 잔여 trade-off는 `mydocs/working/task_m100_3744_stage2.md`가 canonical 근거다.
+
 ## 3. Stage 3 — 구현
 
 ### 3.1 context 전달
@@ -94,10 +104,14 @@ context는 `build_structure()` 내부 순회에서 갱신하고 section 전환, 
 
 ### 3.3 anchor 만료와 `목` confidence
 
-- Stage 2에서 승인된 section/거리/연속성 상태 전이만 구현한다.
-- 만료는 weak `호` 허용 evidence에만 적용하고 strong 편·장·절·관·조와 원문자 항 분류를 바꾸지 않는다.
+- marker가 `.`으로 끝나고 marker 직후 숫자가 이어지는 `N.N` 후보를 거부하고 현재 nearest
+  `조|항`의 weak-`호` 상태를 만료한다.
+- 만료는 같은 anchor 아래 후속 weak `호`에만 적용하고 새 `조|항`에서 초기화한다.
+- `)` marker 뒤 본문 숫자, 날짜 거부, 일반 body는 anchor를 만료하지 않는다.
+- strong 편·장·절·관·조와 원문자 항 분류를 바꾸지 않는다.
 - 기존 열린 `호` 아래 `목`은 보존한다.
-- `장|절` 아래 `목`은 승인된 ParaShape/계층 evidence가 있고 TOC negative가 아닐 때만 허용한다.
+- `장|절` 아래 `목`은 열린 `호`가 없고 TOC tail이 없으며 ParaShape가
+  `margin_left=0`, `indent>=-1280`, `para_level=0`일 때만 허용한다.
 - 거부 문단은 삭제하지 않고 현재 node body 또는 preamble에 그대로 보존한다.
 
 ## 4. Stage 3 focused 검증
