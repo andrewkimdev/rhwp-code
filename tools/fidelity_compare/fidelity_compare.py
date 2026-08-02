@@ -6,6 +6,7 @@ import argparse
 import base64
 import glob
 import html
+import json
 import math
 import os
 import re
@@ -304,21 +305,91 @@ def counter_summary(counter: Counter[str]) -> str:
     )
 
 
+def parse_page_index(value: str, option: str, parser: argparse.ArgumentParser) -> int:
+    try:
+        page_index = int(value)
+    except ValueError:
+        parser.error(f"{option}은 정수여야 합니다: {value}")
+    if page_index < 0:
+        parser.error(f"{option}은 0 이상이어야 합니다: {value}")
+    return page_index
+
+
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="한컴 기준 PDF와 rhwp SVG를 페이지별로 비교합니다."
     )
-    parser.add_argument("key", choices=sorted(REG), help="등록된 문서 키")
-    parser.add_argument("start_page", type=int, help="시작 쪽(0 기준)")
-    parser.add_argument("end_page", type=int, help="끝 쪽(0 기준, 포함)")
+    parser.add_argument(
+        "positionals",
+        nargs="+",
+        metavar="ARG",
+        help="등록 fixture는 <키> <시작쪽> <끝쪽>, direct pair는 <시작쪽> <끝쪽>",
+    )
+    parser.add_argument(
+        "--source",
+        type=Path,
+        help="등록 fixture 대신 직접 비교할 HWP/HWPX 입력",
+    )
+    parser.add_argument(
+        "--reference-pdf",
+        type=Path,
+        help="직접 비교할 기준 PDF (--source, --label과 함께 사용)",
+    )
+    parser.add_argument(
+        "--label",
+        help="direct pair 산출물/provenance 식별 ASCII label",
+    )
+    parser.add_argument(
+        "--reference-grade",
+        default="사용자 지정 기준 PDF (provenance는 출력 파일 참조)",
+        help="direct pair 기준 PDF의 등급/출처 설명",
+    )
     parser.add_argument(
         "--out-dir",
         type=Path,
         help="산출 디렉터리. 생략하면 output/fidelity/<키> 사용",
     )
+    parser.add_argument(
+        "--text-only",
+        action="store_true",
+        help="Chrome/PNG/sheet 없이 PDF text와 SVG text 후보 원장만 생성",
+    )
+    parser.add_argument(
+        "--export-all-svg",
+        action="store_true",
+        help="선택 범위와 관계없이 export-svg를 한 번 실행해 SVG cache 전체를 생성",
+    )
+    parser.add_argument(
+        "--layout-ledger",
+        action="store_true",
+        help="render tree를 한 번 export해 body/각주·표/footer 충돌 후보 원장을 생성",
+    )
     args = parser.parse_args(argv)
-    if args.start_page < 0 or args.end_page < args.start_page:
-        parser.error("쪽 범위는 0 이상이며 끝 쪽이 시작 쪽보다 작을 수 없습니다.")
+
+    direct_values = (args.source, args.reference_pdf, args.label)
+    is_direct = any(value is not None for value in direct_values)
+    if is_direct:
+        if not all(value is not None for value in direct_values):
+            parser.error("direct pair에는 --source, --reference-pdf, --label을 모두 지정해야 합니다.")
+        if len(args.positionals) != 2:
+            parser.error("direct pair positional은 <시작쪽> <끝쪽> 두 개여야 합니다.")
+        args.key = None
+        args.start_page = parse_page_index(args.positionals[0], "시작쪽", parser)
+        args.end_page = parse_page_index(args.positionals[1], "끝쪽", parser)
+    else:
+        if args.reference_grade != "사용자 지정 기준 PDF (provenance는 출력 파일 참조)":
+            parser.error("--reference-grade는 direct pair에서만 사용할 수 있습니다.")
+        if len(args.positionals) != 3:
+            parser.error("등록 fixture positional은 <키> <시작쪽> <끝쪽> 세 개여야 합니다.")
+        key, start_page, end_page = args.positionals
+        if key not in REG:
+            parser.error(f"등록되지 않은 문서 키: {key} (선택: {', '.join(sorted(REG))})")
+        args.key = key
+        args.start_page = parse_page_index(start_page, "시작쪽", parser)
+        args.end_page = parse_page_index(end_page, "끝쪽", parser)
+
+    if args.end_page < args.start_page:
+        parser.error("끝 쪽이 시작 쪽보다 작을 수 없습니다.")
     return args
 
 
@@ -355,6 +426,188 @@ def render_svg(rhwp: str, source: Path, svg_dir: Path, page_index: int) -> bool:
     return bool(list(svg_dir.glob(f"*_{page_index + 1:03}.svg")))
 
 
+def render_all_svg(rhwp: str, source: Path, svg_dir: Path) -> bool:
+    """한 번의 export로 전체 SVG cache를 만들고 raw manifest도 보관한다."""
+    command = [rhwp, "export-svg", str(source), "--json", "-o", str(svg_dir)]
+    font_path = os.environ.get("RHWP_FONT_PATH_DIR")
+    if font_path:
+        command.extend(["--font-path", font_path])
+    result = subprocess.run(
+        command,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+    )
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout or "출력 없음").strip()
+        print(
+            f"rhwp 전체 SVG 렌더 실패 (exit {result.returncode})\n{detail}",
+            file=sys.stderr,
+        )
+        return False
+    (svg_dir / "export-svg-manifest.json").write_text(result.stdout, encoding="utf-8")
+    return True
+
+
+def render_all_render_tree(rhwp: str, source: Path, tree_dir: Path) -> bool:
+    command = [rhwp, "export-render-tree", str(source), "-o", str(tree_dir)]
+    font_path = os.environ.get("RHWP_FONT_PATH_DIR")
+    if font_path:
+        command.extend(["--font-path", font_path])
+    result = subprocess.run(
+        command,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+    )
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout or "출력 없음").strip()
+        print(
+            f"rhwp 전체 render tree export 실패 (exit {result.returncode})\n{detail}",
+            file=sys.stderr,
+        )
+        return False
+    (tree_dir / "export-render-tree.log").write_text(result.stderr, encoding="utf-8")
+    return True
+
+
+def bbox_from_node(node: Mapping[str, object]) -> tuple[float, float, float, float] | None:
+    bbox = node.get("bbox")
+    if not isinstance(bbox, Mapping):
+        return None
+    try:
+        return (
+            float(bbox["x"]),
+            float(bbox["y"]),
+            float(bbox["w"]),
+            float(bbox["h"]),
+        )
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def layout_candidates(tree: Mapping[str, object]) -> tuple[int, int, int, int]:
+    """(body↔각주 line, table↔footer, table frame 밖, image frame 밖) 후보 수를 반환한다."""
+    page_bbox = bbox_from_node(tree)
+    if page_bbox is None:
+        return (0, 0, 0, 0)
+    _, _, page_width, page_height = page_bbox
+    footnote_tops: list[float] = []
+    footer_tops: list[float] = []
+    body_lines: list[tuple[float, float, float, float]] = []
+    body_tables: list[tuple[float, float, float, float]] = []
+    body_images: list[tuple[float, float, float, float]] = []
+
+    def walk(node: Mapping[str, object], region: str = "outside") -> None:
+        node_type = node.get("type")
+        if node_type in {"Body", "FootnoteArea", "Footer", "Header"}:
+            region = str(node_type)
+        box = bbox_from_node(node)
+        if node_type == "FootnoteArea" and box is not None:
+            footnote_tops.append(box[1])
+        elif node_type == "Footer" and box is not None:
+            footer_tops.append(box[1])
+        elif region == "Body" and box is not None:
+            if node_type == "TextLine":
+                body_lines.append(box)
+            elif node_type == "Table":
+                body_tables.append(box)
+            elif node_type == "Image":
+                body_images.append(box)
+        children = node.get("children")
+        if isinstance(children, list):
+            for child in children:
+                if isinstance(child, Mapping):
+                    walk(child, region)
+
+    walk(tree)
+    footnote_top = min(footnote_tops, default=None)
+    footer_top = min(footer_tops, default=None)
+    # 1px는 stroke/float 반올림 noise로 보고 무시한다. 이 신호는 candidate-only다.
+    body_footnote_lines = sum(
+        line[1] + line[3] > footnote_top + 1.0
+        for line in body_lines
+    ) if footnote_top is not None else 0
+    table_footer = sum(
+        table[1] + table[3] > footer_top + 1.0
+        for table in body_tables
+    ) if footer_top is not None else 0
+
+    def outside_page(box: tuple[float, float, float, float]) -> bool:
+        x, y, width, height = box
+        return x < -1.0 or y < -1.0 or x + width > page_width + 1.0 or y + height > page_height + 1.0
+
+    table_outside_frame = sum(outside_page(table) for table in body_tables)
+    image_outside_frame = sum(outside_page(image) for image in body_images)
+    return (body_footnote_lines, table_footer, table_outside_frame, image_outside_frame)
+
+
+def tree_path_for_page(tree_dir: Path, page_index: int) -> Path | None:
+    matches = sorted(tree_dir.glob(f"*_{page_index + 1:03}.json"))
+    return matches[0] if matches else None
+
+
+def write_layout_ledger(
+    work_dir: Path,
+    tree_dir: Path,
+    requested_pages: Sequence[int],
+) -> list[int]:
+    """requested page마다 geometry 후보를 기록하고 tree 누락 index를 반환한다."""
+    report_path = work_dir / "layout-candidates.tsv"
+    missing_pages: list[int] = []
+    with report_path.open("w", encoding="utf-8") as report:
+        report.write(
+            "page\tbody_footnote_lines\ttable_footer\ttable_outside_frame\t"
+            "image_outside_frame\tnote\n"
+        )
+        for page_index in requested_pages:
+            tree_path = tree_path_for_page(tree_dir, page_index)
+            if tree_path is None:
+                missing_pages.append(page_index)
+                report.write(f"{page_index + 1}\t0\t0\t0\t0\trender tree 없음\n")
+                continue
+            try:
+                tree = json.loads(tree_path.read_text(encoding="utf-8"))
+                if not isinstance(tree, Mapping):
+                    raise ValueError("root가 object가 아님")
+                candidates = layout_candidates(tree)
+            except (OSError, ValueError, json.JSONDecodeError) as error:
+                missing_pages.append(page_index)
+                report.write(f"{page_index + 1}\t0\t0\t0\t0\trender tree 읽기 실패: {error}\n")
+                continue
+            report.write(
+                f"{page_index + 1}\t{candidates[0]}\t{candidates[1]}\t"
+                f"{candidates[2]}\t{candidates[3]}\t-\n"
+            )
+    return missing_pages
+
+
+def write_run_state(
+    work_dir: Path,
+    *,
+    requested_pages: Sequence[int],
+    completed_pages: Sequence[int],
+    missing_pages: Sequence[int],
+    text_only: bool,
+) -> None:
+    def page_list(pages: Sequence[int]) -> str:
+        return ",".join(str(page + 1) for page in pages) or "-"
+
+    (work_dir / "run-state.tsv").write_text(
+        "field\tvalue\n"
+        f"mode\t{'text-only' if text_only else 'pixel-and-text'}\n"
+        f"requested_pages_1based\t{page_list(requested_pages)}\n"
+        f"completed_pages_1based\t{page_list(completed_pages)}\n"
+        f"missing_pages_1based\t{page_list(missing_pages)}\n"
+        f"run_state\t{'complete' if not missing_pages else 'incomplete'}\n",
+        encoding="utf-8",
+    )
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -362,12 +615,26 @@ def main(argv: Sequence[str] | None = None) -> int:
         sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
     args = parse_args(argv)
-    fixture = REG[args.key]
     try:
-        source = resolve(REPO, fixture.source_pattern)
-        reference_pdf = resolve(REPO, fixture.reference_pattern)
+        if args.key is None:
+            source = args.source.expanduser().resolve()
+            reference_pdf = args.reference_pdf.expanduser().resolve()
+            if not source.is_file():
+                raise FileNotFoundError(f"source 파일을 찾을 수 없습니다: {source}")
+            if not reference_pdf.is_file():
+                raise FileNotFoundError(f"reference PDF를 찾을 수 없습니다: {reference_pdf}")
+            fixture = Fixture(
+                args.label,
+                str(source),
+                str(reference_pdf),
+                args.reference_grade,
+            )
+        else:
+            fixture = REG[args.key]
+            source = resolve(REPO, fixture.source_pattern)
+            reference_pdf = resolve(REPO, fixture.reference_pattern)
         rhwp = find_rhwp()
-        chrome = find_chrome()
+        chrome = None if args.text_only else find_chrome()
     except FileNotFoundError as error:
         print(error, file=sys.stderr)
         return 2
@@ -383,48 +650,91 @@ def main(argv: Sequence[str] | None = None) -> int:
         encoding="utf-8",
     )
 
-    for page_index in range(args.start_page, args.end_page + 1):
-        render_svg(rhwp, source, svg_dir, page_index)
+    requested_pages = list(range(args.start_page, args.end_page + 1))
+    if args.export_all_svg:
+        if not render_all_svg(rhwp, source, svg_dir):
+            write_run_state(
+                work_dir,
+                requested_pages=requested_pages,
+                completed_pages=[],
+                missing_pages=requested_pages,
+                text_only=args.text_only,
+            )
+            return 1
+    else:
+        for page_index in requested_pages:
+            render_svg(rhwp, source, svg_dir, page_index)
 
+    layout_missing_pages: list[int] = []
+    if args.layout_ledger:
+        tree_dir = work_dir / "render_tree"
+        tree_dir.mkdir(parents=True, exist_ok=True)
+        if not render_all_render_tree(rhwp, source, tree_dir):
+            write_run_state(
+                work_dir,
+                requested_pages=requested_pages,
+                completed_pages=[],
+                missing_pages=requested_pages,
+                text_only=args.text_only,
+            )
+            return 1
+        layout_missing_pages = write_layout_ledger(work_dir, tree_dir, requested_pages)
+
+    pdf = None
     try:
-        import pypdfium2 as pdfium
+        if args.text_only:
+            from pypdf import PdfReader
+
+            text_pdf = PdfReader(reference_pdf)
+            reference_page_count = len(text_pdf.pages)
+
+            def reference_text_for_page(page_index: int) -> str:
+                return text_pdf.pages[page_index].extract_text() or ""
+
+        else:
+            import pypdfium2 as pdfium
+
+            pdf = pdfium.PdfDocument(reference_pdf)
+            reference_page_count = len(pdf)
+
+            def reference_text_for_page(page_index: int) -> str:
+                text_page = pdf[page_index].get_textpage()
+                try:
+                    return text_page.get_text_range()
+                finally:
+                    text_page.close()
+
     except ImportError:
+        dependency = "pypdf" if args.text_only else "pypdfium2"
         print(
-            "pypdfium2가 필요합니다: python -m pip install pypdfium2", file=sys.stderr
+            f"{dependency}가 필요합니다: python -m pip install {dependency}", file=sys.stderr
         )
         return 2
 
-    pdf = pdfium.PdfDocument(reference_pdf)
-    if args.end_page >= len(pdf):
+    if args.end_page >= reference_page_count:
         print(
-            f"요청 끝 쪽 {args.end_page}가 기준 PDF 마지막 index {len(pdf) - 1}를 넘습니다.",
+            f"요청 끝 쪽 {args.end_page}가 기준 PDF 마지막 index {reference_page_count - 1}를 넘습니다.",
             file=sys.stderr,
         )
         return 2
 
     rows: list[tuple[int, float, str]] = []
     text_rows: list[tuple[int, int, int, str, str, str]] = []
-    for page_index in range(args.start_page, args.end_page + 1):
+    completed_pages: list[int] = []
+    missing_pages: list[int] = []
+    for page_index in requested_pages:
         svg_files = list(svg_dir.glob(f"*_{page_index + 1:03}.svg"))
-        rendered_png = work_dir / f"r{page_index:03}.png"
-        reference_png = work_dir / f"g{page_index:03}.png"
-        comparison_png = work_dir / f"cmp-p{page_index:03}.png"
         if not svg_files:
-            rows.append((page_index, -1.0, "rhwp SVG 없음"))
+            if not args.text_only:
+                rows.append((page_index, -1.0, "rhwp SVG 없음"))
             text_rows.append((page_index, 0, 0, "", "", "rhwp SVG 없음"))
+            missing_pages.append(page_index)
             continue
 
-        page = pdf[page_index]
         svg_path = svg_files[0]
-        svg_ok = svg_to_png(svg_path, rendered_png, chrome)
-        pdf_to_png(page, reference_png)
 
         try:
-            text_page = page.get_textpage()
-            try:
-                reference_text = text_page.get_text_range()
-            finally:
-                text_page.close()
+            reference_text = reference_text_for_page(page_index)
             missing, extra = compare_text_layers(reference_text, svg_text(svg_path))
             text_rows.append(
                 (
@@ -439,8 +749,21 @@ def main(argv: Sequence[str] | None = None) -> int:
         except Exception as error:  # noqa: BLE001 - 선택적 텍스트 추출은 픽셀 대조를 막지 않는다.
             text_rows.append((page_index, 0, 0, "", "", f"텍스트층 추출 실패: {error}"))
 
+        if args.text_only:
+            completed_pages.append(page_index)
+            continue
+
+        rendered_png = work_dir / f"r{page_index:03}.png"
+        reference_png = work_dir / f"g{page_index:03}.png"
+        comparison_png = work_dir / f"cmp-p{page_index:03}.png"
+        assert chrome is not None
+        assert pdf is not None
+        page = pdf[page_index]
+        svg_ok = svg_to_png(svg_path, rendered_png, chrome)
+        pdf_to_png(page, reference_png)
         if not svg_ok or not (rendered_png.is_file() and reference_png.is_file()):
             rows.append((page_index, -1.0, "PNG 실패"))
+            missing_pages.append(page_index)
             continue
         score = diff_score(reference_png, rendered_png)
         note = ""
@@ -454,13 +777,19 @@ def main(argv: Sequence[str] | None = None) -> int:
         ):
             note = "비교 시트 PNG 실패"
         rows.append((page_index, score, note))
+        completed_pages.append(page_index)
 
-    rows.sort(key=lambda row: -row[1])
     report_path = work_dir / "report.tsv"
     with report_path.open("w", encoding="utf-8") as report:
         report.write("page\tdiff%\tnote\n")
-        for page_index, score, note in rows:
-            report.write(f"{page_index + 1}\t{score}\t{note}\n")
+        if args.text_only:
+            for page_index in requested_pages:
+                note = "text-only" if page_index not in missing_pages else "rhwp SVG 없음"
+                report.write(f"{page_index + 1}\tnot-run\t{note}\n")
+        else:
+            rows.sort(key=lambda row: -row[1])
+            for page_index, score, note in rows:
+                report.write(f"{page_index + 1}\t{score}\t{note}\n")
 
     text_report_path = work_dir / "text-report.tsv"
     with text_report_path.open("w", encoding="utf-8") as report:
@@ -469,17 +798,34 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         for page_index, missing_count, extra_count, missing, extra, note in text_rows:
             report.write(
-                f"{page_index + 1}\t{missing_count}\t{extra_count}\t{missing}\t{extra}\t{note}\n"
+                f"{page_index + 1}\t{missing_count}\t{extra_count}\t{missing}\t{extra}\t{note or '-'}\n"
             )
+
+    all_missing_pages = sorted(set(missing_pages + layout_missing_pages))
+    all_completed_pages = [
+        page_index for page_index in completed_pages if page_index not in all_missing_pages
+    ]
+    write_run_state(
+        work_dir,
+        requested_pages=requested_pages,
+        completed_pages=all_completed_pages,
+        missing_pages=all_missing_pages,
+        text_only=args.text_only,
+    )
 
     print(f"기준 PDF: {reference_pdf}")
     print(f"등급: {fixture.reference_grade}")
-    print(f"완료: {args.end_page - args.start_page + 1}쪽. diff 랭킹(top 8):")
-    for page_index, score, note in rows[:8]:
-        print(f"  p{page_index + 1}: {score}% {note}")
+    print(f"요청: {len(requested_pages)}쪽, 완료: {len(all_completed_pages)}쪽, 누락: {len(all_missing_pages)}쪽")
+    if not args.text_only:
+        print("diff 랭킹(top 8):")
+        for page_index, score, note in rows[:8]:
+            print(f"  p{page_index + 1}: {score}% {note}")
     print("pixel report:", report_path)
     print("text report:", text_report_path)
-    return 0
+    if args.layout_ledger:
+        print("layout ledger:", work_dir / "layout-candidates.tsv")
+    print("run state:", work_dir / "run-state.tsv")
+    return 0 if not all_missing_pages else 1
 
 
 if __name__ == "__main__":

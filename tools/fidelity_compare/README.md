@@ -15,9 +15,12 @@
 ## 요구사항
 
 ```bash
-pip install pypdfium2 pillow          # PDF 렌더 + 픽셀 diff
+pip install pypdf                     # text-only 후보 원장
+pip install pypdfium2 pillow          # PDF 렌더 + 픽셀 diff(비-text-only)
 # Chrome/Chromium 설치 필요 (SVG → PNG 캡처)
 ```
+
+`--text-only`는 `pypdf`만 필요하며 Chrome과 `pypdfium2`를 요구하지 않는다.
 
 실행 파일은 플랫폼에 맞춰 자동 탐색한다.
 
@@ -52,6 +55,16 @@ python tools/fidelity_compare/fidelity_compare.py plan 0 34
 # 저장소 밖에 산출해 worktree를 깨끗하게 유지
 python tools/fidelity_compare/fidelity_compare.py plan 0 9 \
   --out-dir /tmp/rhwp-fidelity-plan
+
+# REG에 없는 HWP/PDF 쌍: 215쪽 첫 후보 수집에는 PNG/Chrome을 생략하고 SVG를 한 번만 전수 생성
+RHWP_BIN=target/release-test/rhwp \
+python3 tools/fidelity_compare/fidelity_compare.py 0 214 \
+  --source 'samples/입력.hwp' \
+  --reference-pdf 'pdf/한컴-기준.pdf' \
+  --label issue-3738-hwp \
+  --reference-grade '한컴 2020 기준 PDF' \
+  --text-only --export-all-svg --layout-ledger \
+  --out-dir /tmp/rhwp-fidelity-issue-3738
 ```
 
 `--out-dir`은 지정한 디렉터리 자체를 산출 루트로 쓴다. 생략하면
@@ -61,6 +74,29 @@ python tools/fidelity_compare/fidelity_compare.py plan 0 9 \
 - `report.tsv`: 픽셀 diff% 랭킹
 - `text-report.tsv`: 기준 PDF 텍스트층에만 있는 문자와 SVG에만 있는 문자 수·코드포인트
 - `provenance.tsv`: 원본·기준 PDF 경로와 기준 등급
+- `run-state.tsv`: requested/completed/missing 페이지와 완료 여부. 누락이 있으면 종료 코드도 0이 아니다.
+- `svg/export-svg-manifest.json`: `--export-all-svg`가 보관한 rhwp SVG 매니페스트
+- `layout-candidates.tsv`: `--layout-ledger`가 기록한 body↔각주 TextLine, 표↔footer, 표/그림 page-frame 밖 후보
+
+`--source`, `--reference-pdf`, `--label`을 모두 지정하면 등록 fixture 대신 임의의 HWP/HWPX와 기준 PDF를
+비교한다. 이 direct-pair 형식의 positional은 `<시작쪽> <끝쪽>`뿐이다. 기존 등록 fixture 형식
+`<키> <시작쪽> <끝쪽>`은 그대로 유지된다.
+
+`--text-only`는 Chrome·PNG·비교 시트를 만들지 않는다. 기준 PDF text와 SVG `<text>`만 비교하므로
+각주/본문/caption의 페이지 owner 이동·누락 후보를 빠르게 전수 수집하는 첫 단계에 적합하다. 사진 위치,
+같은 문자 수의 줄바꿈/overlap, 표 행 경계는 검출할 수 없으므로 `text-report.tsv` 상위 페이지와
+`export-svg --json`의 `overflowCellLines` 및 bbox ledger를 합친 뒤에만 pixel diff와 visual sweep을
+실행한다.
+
+`--export-all-svg`는 지정 범위와 관계없이 `export-svg`를 한 번 실행해 SVG cache를 채운다. 긴 문서의
+전수 text-only pass에서 페이지마다 rhwp 프로세스를 재기동하지 않기 위한 선택지다. 이후 같은 `--out-dir`에
+대해 후보 범위만 pixel 비교하면 기존 SVG를 재사용한다.
+
+`--layout-ledger`는 `export-render-tree`를 한 번 실행해 `layout-candidates.tsv`를 만든다. `body_footnote_lines`
+는 Body `TextLine`의 하단이 `FootnoteArea` 상단보다 1px 이상 아래인 경우, `table_footer`는 Body 표의 하단이
+Footer 상단보다 1px 이상 아래인 경우다. `*_outside_frame`은 Body 표/그림이 page frame 밖에 나간 경우다.
+stroke 반올림과 의도된 겹침도 후보가 될 수 있으므로, 0이 아닌 값은 곧바로 결함이 아니라 visual review 대상으로
+해석한다.
 
 단계별 확장(10쪽 → 전수 → 고난도 문서)으로 돌리고, 픽셀 랭킹과 문자 멀티셋 격차를
 교차해 후보를 좁힌다. **랭킹 상위 페이지의 시트를 눈으로 감사**한 뒤 실질 결함만
