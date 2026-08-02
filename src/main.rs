@@ -9906,16 +9906,19 @@ fn extract_data_json_value(
     total_item_count: usize,
     counts: &serde_json::Value,
 ) -> serde_json::Value {
-    serde_json::json!({
-        "schemaVersion": "1.0",
-        "source": file_path,
-        "kind": kind,
-        "itemCount": items.len(),
-        "totalItemCount": total_item_count,
-        "truncated": items.len() < total_item_count,
-        "counts": counts,
-        "items": items,
-    })
+    provenance::marked(
+        serde_json::json!({
+            "schemaVersion": "1.0",
+            "source": file_path,
+            "kind": kind,
+            "itemCount": items.len(),
+            "totalItemCount": total_item_count,
+            "truncated": items.len() < total_item_count,
+            "counts": counts,
+            "items": items,
+        }),
+        "extract-data",
+    )
 }
 
 /// `extract-data` — 행정문서의 날짜·금액·수량을 **주소와 함께** 뽑는다.
