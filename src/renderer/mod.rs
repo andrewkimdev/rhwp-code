@@ -16,6 +16,8 @@ pub(crate) mod equation_tac_flow;
 pub mod float_placement;
 pub mod font_metrics_data;
 pub(crate) mod form_caption;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod glyph_cache_file;
 pub mod height_cursor;
 pub mod height_measurer;
 pub mod html;
