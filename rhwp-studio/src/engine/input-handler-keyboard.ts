@@ -335,6 +335,10 @@ const chordMapK: Record<string, string> = {
  * (새 창) 영역 영역 JS 차단 불가 영역 영역 Ctrl+M 영역 영역 변경 (PR #786 후속 정정).
  */
 const chordMapM: Record<string, string> = {
+  a: 'table:split',   // 한컴 Ctrl+N,A — Chrome 이 Ctrl+N 을 차단해 Ctrl+M 계열로 이관
+  ㅁ: 'table:split',  // 한글 IME
+  z: 'table:attach',  // 한컴 Ctrl+N,Z
+  ㅋ: 'table:attach', // 한글 IME
   n: 'insert:footnote',
   ㅜ: 'insert:footnote', // 한글 IME
   s: 'page:hide',

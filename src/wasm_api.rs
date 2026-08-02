@@ -1733,6 +1733,44 @@ impl HwpDocument {
     /// 표에 행을 삽입한다.
     ///
     /// 반환값: JSON `{"ok":true,"rowCount":<N>,"colCount":<M>}`
+    /// 표를 지정 행에서 두 개로 나눈다 (한컴 [표-표 나누기]).
+    ///
+    /// 반환값: JSON `{"ok":true,"frontRows":<N>,"backParaIdx":<P>}`
+    #[wasm_bindgen(js_name = splitTable)]
+    pub fn split_table(
+        &mut self,
+        section_idx: u32,
+        parent_para_idx: u32,
+        control_idx: u32,
+        at_row: u32,
+    ) -> Result<String, JsValue> {
+        self.split_table_native(
+            section_idx as usize,
+            parent_para_idx as usize,
+            control_idx as usize,
+            at_row as u16,
+        )
+        .map_err(|e| e.into())
+    }
+
+    /// 현재 표에 다음 표를 이어 붙인다 (한컴 [표-표 붙이기]).
+    ///
+    /// 반환값: JSON `{"ok":true,"rowCount":<N>}`
+    #[wasm_bindgen(js_name = mergeTableWithNext)]
+    pub fn merge_table_with_next(
+        &mut self,
+        section_idx: u32,
+        parent_para_idx: u32,
+        control_idx: u32,
+    ) -> Result<String, JsValue> {
+        self.merge_table_with_next_native(
+            section_idx as usize,
+            parent_para_idx as usize,
+            control_idx as usize,
+        )
+        .map_err(|e| e.into())
+    }
+
     #[wasm_bindgen(js_name = insertTableRow)]
     pub fn insert_table_row(
         &mut self,

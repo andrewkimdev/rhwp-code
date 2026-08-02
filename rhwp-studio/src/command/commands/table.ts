@@ -711,6 +711,63 @@ export const tableCommands: CommandDef[] = [
     },
   },
   {
+    id: 'table:split',
+    label: '표 나누기',
+    shortcutLabel: 'Ctrl+M,A',
+    canExecute: (ctx) => ctx.inTable,
+    execute(services) {
+      const ih = services.getInputHandler();
+      if (!ih) return;
+      const pos = ih.getCursorPosition();
+      if (pos?.parentParaIndex === undefined || pos.controlIndex === undefined || pos.cellIndex === undefined) return;
+      // 중첩 표(cellPath 깊이 2+)는 flat 인덱스가 바깥 표를 가리켜 오동작한다 —
+      // path 기반 API 가 생기기 전까지는 최상위 표에서만 허용.
+      if ((pos.cellPath?.length ?? 0) > 1) return;
+      const { sectionIndex: sec, parentParaIndex: ppi, controlIndex: ci, cellIndex } = pos;
+      safeTableOp(() => {
+        const info = services.wasm.getCellInfo(sec, ppi, ci, cellIndex);
+        if (info.row === 0) {
+          console.warn('[table:split] 첫 번째 줄에서는 표 나누기를 할 수 없습니다.');
+          return;
+        }
+        ih.executeOperation({
+          kind: 'snapshot',
+          operationType: 'splitTable',
+          operation: (wasm) => {
+            wasm.splitTable(sec, ppi, ci, info.row);
+            return ih.getCursorPosition()!;
+          },
+        });
+      }, '표 나누기');
+    },
+  },
+  {
+    id: 'table:attach',
+    label: '표 붙이기',
+    shortcutLabel: 'Ctrl+M,Z',
+    canExecute: (ctx) => ctx.inTable,
+    execute(services) {
+      const ih = services.getInputHandler();
+      if (!ih) return;
+      const pos = ih.getCursorPosition();
+      if (pos?.parentParaIndex === undefined || pos.controlIndex === undefined) return;
+      // 중첩 표(cellPath 깊이 2+)는 flat 인덱스가 바깥 표를 가리켜 오동작한다 —
+      // path 기반 API 가 생기기 전까지는 최상위 표에서만 허용.
+      if ((pos.cellPath?.length ?? 0) > 1) return;
+      const { sectionIndex: sec, parentParaIndex: ppi, controlIndex: ci } = pos;
+      safeTableOp(() => {
+        ih.executeOperation({
+          kind: 'snapshot',
+          operationType: 'mergeTableWithNext',
+          operation: (wasm) => {
+            wasm.mergeTableWithNext(sec, ppi, ci);
+            return ih.getCursorPosition()!;
+          },
+        });
+      }, '표 붙이기');
+    },
+  },
+  {
     id: 'table:delete',
     label: '표 지우기',
     canExecute: (ctx) => ctx.inTable || ctx.inTableObjectSelection,

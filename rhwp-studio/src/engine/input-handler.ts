@@ -1677,6 +1677,9 @@ export class InputHandler {
       { type: 'separator' },
       { type: 'command', commandId: 'table:cell-props', label: '표 속성...' },
       { type: 'separator' },
+      { type: 'command', commandId: 'table:split', label: '표 나누기(A)' },
+      { type: 'command', commandId: 'table:attach', label: '표 붙이기(Z)' },
+      { type: 'separator' },
       { type: 'command', commandId: 'table:delete' },
     ];
   }

@@ -1750,6 +1750,18 @@ export class WasmBridge {
     return Boolean((this.doc as any).hasTableTransposeClipboard?.());
   }
 
+  /** 표를 지정 행에서 두 개로 나눈다 (한컴 [표-표 나누기]). */
+  splitTable(sec: number, parentPara: number, controlIdx: number, atRow: number): { ok: boolean; frontRows: number; backParaIdx: number } {
+    if (!this.doc) throw new Error('문서가 로드되지 않았습니다');
+    return JSON.parse(this.doc.splitTable(sec, parentPara, controlIdx, atRow));
+  }
+
+  /** 현재 표에 다음 표를 이어 붙인다 (한컴 [표-표 붙이기]). */
+  mergeTableWithNext(sec: number, parentPara: number, controlIdx: number): { ok: boolean; rowCount: number } {
+    if (!this.doc) throw new Error('문서가 로드되지 않았습니다');
+    return JSON.parse(this.doc.mergeTableWithNext(sec, parentPara, controlIdx));
+  }
+
   insertTableRow(sec: number, parentPara: number, controlIdx: number, rowIdx: number, below: boolean): { ok: boolean; rowCount: number; colCount: number } {
     if (!this.doc) throw new Error('문서가 로드되지 않았습니다');
     return JSON.parse(this.doc.insertTableRow(sec, parentPara, controlIdx, rowIdx, below));

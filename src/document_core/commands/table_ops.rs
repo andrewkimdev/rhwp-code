@@ -195,6 +195,373 @@ impl DocumentCore {
         )))
     }
 
+    /// 표를 지정 행에서 두 개로 나눈다 (한컴 [표-표 나누기], table(dividing).htm).
+    ///
+    /// `at_row` 행부터 새 표가 시작된다. 첫 행(0)에서는 한컴과 동일하게 거부한다.
+    /// 뒤 표는 앞 표의 속성(테두리·폭·바깥 여백 등)을 상속하고, 캡션은 앞 표에
+    /// 남긴다. 두 표 사이에는 한컴처럼 빈 문단 하나를 둔다.
+    pub fn split_table_native(
+        &mut self,
+        section_idx: usize,
+        parent_para_idx: usize,
+        control_idx: usize,
+        at_row: u16,
+    ) -> Result<String, HwpError> {
+        use crate::model::control::Control;
+        use crate::model::paragraph::{CharShapeRef, LineSeg, Paragraph};
+
+        let host_para_shape_id;
+        let host_char_shape_id;
+        {
+            let para = self
+                .document
+                .sections
+                .get(section_idx)
+                .and_then(|s| s.paragraphs.get(parent_para_idx))
+                .ok_or_else(|| HwpError::RenderError("문단 인덱스 범위 초과".to_string()))?;
+            host_para_shape_id = para.para_shape_id;
+            host_char_shape_id = para
+                .char_shapes
+                .first()
+                .map(|cs| cs.char_shape_id)
+                .unwrap_or(0);
+        }
+
+        let back_table = {
+            let table = self.get_table_mut(section_idx, parent_para_idx, control_idx)?;
+            if at_row == 0 {
+                return Err(HwpError::RenderError(
+                    "첫 번째 줄에서는 표 나누기를 할 수 없습니다".to_string(),
+                ));
+            }
+            if at_row >= table.row_count {
+                return Err(HwpError::RenderError(format!(
+                    "행 인덱스 {} 범위 초과 (총 {}행)",
+                    at_row, table.row_count
+                )));
+            }
+            // 세로 병합 셀이 분할 행을 가로지르면 양쪽 어디에도 온전히 속할 수
+            // 없다 — 한컴도 이 경우 나누기를 막는다.
+            if table
+                .cells
+                .iter()
+                .any(|c| c.row < at_row && c.row + c.row_span > at_row)
+            {
+                return Err(HwpError::RenderError(
+                    "세로로 합쳐진 셀이 걸쳐 있어 이 위치에서 나눌 수 없습니다".to_string(),
+                ));
+            }
+
+            // 뒤 표: 속성 상속을 위해 통째로 복제한 뒤 행을 갈라낸다.
+            let mut back = table.clone();
+            back.cells.retain(|c| c.row >= at_row);
+            for cell in &mut back.cells {
+                cell.row -= at_row;
+            }
+            back.row_count -= at_row;
+            if back.row_sizes.len() >= at_row as usize {
+                back.row_sizes.drain(0..at_row as usize);
+            }
+            back.caption = None; // 캡션은 앞 표에 남긴다
+                                 // zone(셀 영역 서식)은 행 범위로 갈라 보존한다. 분할선을 가로지르는
+                                 // zone 은 양쪽으로 잘라 담는다 (서식 무음 소실 방지).
+            back.zones = table
+                .zones
+                .iter()
+                .filter(|z| z.end_row >= at_row)
+                .map(|z| {
+                    let mut z = z.clone();
+                    z.start_row = z.start_row.saturating_sub(at_row);
+                    z.end_row -= at_row;
+                    z
+                })
+                .collect();
+            // 복제된 instance_id 를 미할당(0)으로 되돌린다 — 같은 문서에 동일
+            // ID 표 두 개가 생기면 한컴 재열기·객체 식별이 충돌한다.
+            back.common.instance_id = 0;
+            if back.raw_ctrl_data.len() >= common_obj_offsets::INSTANCE_ID.end {
+                back.raw_ctrl_data[common_obj_offsets::INSTANCE_ID].fill(0);
+            }
+            // Alt 로 조절한 행별 폭(local resize)을 나누기가 지우면 사용자가 만든
+            // 칸 모양이 소실된다. cells 는 row-major 정렬이라 앞 표 인덱스는
+            // 불변, 뒤 표는 앞 셀 수만큼 당겨 재매핑해 보존한다.
+            let front_cell_count = table.cells.iter().filter(|c| c.row < at_row).count();
+            back.local_resize_rows = table
+                .local_resize_rows
+                .iter()
+                .filter(|r| **r >= at_row)
+                .map(|r| r - at_row)
+                .collect();
+            back.local_resize_cols = table.local_resize_cols.clone();
+            back.local_resize_cell_widths = table
+                .local_resize_cell_widths
+                .iter()
+                .filter(|(idx, _)| *idx >= front_cell_count)
+                .map(|(idx, w)| (idx - front_cell_count, *w))
+                .collect();
+            back.local_resize_cell_heights = table
+                .local_resize_cell_heights
+                .iter()
+                .filter(|(idx, _)| *idx >= front_cell_count)
+                .map(|(idx, h)| (idx - front_cell_count, *h))
+                .collect();
+            back.rebuild_grid();
+            back.update_ctrl_dimensions();
+            back.dirty = true;
+
+            // 앞 표: at_row 이후를 잘라낸다.
+            table.cells.retain(|c| c.row < at_row);
+            table.row_count = at_row;
+            table.row_sizes.truncate(at_row as usize);
+            table.zones.retain(|z| z.start_row < at_row);
+            for z in &mut table.zones {
+                if z.end_row >= at_row {
+                    z.end_row = at_row - 1;
+                }
+            }
+            // 앞 표 local resize: 뒤쪽 행 제거는 앞 셀 인덱스를 바꾸지 않으므로
+            // 앞 범위 항목만 남기면 된다.
+            table.local_resize_rows.retain(|r| *r < at_row);
+            table
+                .local_resize_cell_widths
+                .retain(|(idx, _)| *idx < front_cell_count);
+            table
+                .local_resize_cell_heights
+                .retain(|(idx, _)| *idx < front_cell_count);
+            table.rebuild_grid();
+            table.update_ctrl_dimensions();
+            table.dirty = true;
+            back
+        };
+
+        // 사이 빈 문단 + 뒤 표 host 문단 (create_table_native 의 문단 골격과 동일 계약).
+        let make_raw_header_extra = || {
+            let mut extra = vec![0u8; 10];
+            extra[0..2].copy_from_slice(&1u16.to_le_bytes());
+            extra[4..6].copy_from_slice(&1u16.to_le_bytes());
+            extra
+        };
+        let between_para = Paragraph {
+            text: String::new(),
+            char_count: 1,
+            control_mask: 0,
+            char_shapes: vec![CharShapeRef {
+                start_pos: 0,
+                char_shape_id: host_char_shape_id,
+            }],
+            line_segs: vec![LineSeg {
+                text_start: 0,
+                line_height: 1000,
+                text_height: 1000,
+                baseline_distance: 850,
+                line_spacing: 600,
+                segment_width: 0,
+                tag: LineSeg::TAG_SINGLE_SEGMENT_LINE,
+                ..Default::default()
+            }],
+            para_shape_id: host_para_shape_id,
+            style_id: 0,
+            has_para_text: false,
+            raw_header_extra: make_raw_header_extra(),
+            ..Default::default()
+        };
+        let back_para = Paragraph {
+            text: String::new(),
+            char_count: 9, // 확장 제어문자(8) + 문단끝(1)
+            control_mask: 0x0000_0800,
+            char_shapes: vec![CharShapeRef {
+                start_pos: 0,
+                char_shape_id: host_char_shape_id,
+            }],
+            line_segs: vec![LineSeg {
+                text_start: 0,
+                line_height: 1000,
+                text_height: 1000,
+                baseline_distance: 850,
+                line_spacing: 600,
+                segment_width: 0,
+                tag: LineSeg::TAG_SINGLE_SEGMENT_LINE,
+                ..Default::default()
+            }],
+            para_shape_id: host_para_shape_id,
+            style_id: 0,
+            controls: vec![Control::Table(Box::new(back_table))],
+            ctrl_data_records: vec![None],
+            has_para_text: true,
+            raw_header_extra: make_raw_header_extra(),
+            ..Default::default()
+        };
+
+        let paragraphs = &mut self.document.sections[section_idx].paragraphs;
+        paragraphs.insert(parent_para_idx + 1, between_para);
+        paragraphs.insert(parent_para_idx + 2, back_para);
+
+        self.document.sections[section_idx].raw_stream = None;
+        self.recompose_section(section_idx);
+        self.paginate_if_needed();
+
+        self.event_log.push(DocumentEvent::TableSplit {
+            section: section_idx,
+            para: parent_para_idx,
+            ctrl: control_idx,
+        });
+        Ok(super::super::helpers::json_ok_with(&format!(
+            "\"frontRows\":{},\"backParaIdx\":{}",
+            at_row,
+            parent_para_idx + 2
+        )))
+    }
+
+    /// 현재 표에 다음 표를 이어 붙인다 (한컴 [표-표 붙이기], table(attach).htm).
+    ///
+    /// 표 사이에 빈 문단만 있어야 하며, 내용(텍스트·컨트롤)이 있으면 거부한다.
+    /// 칸 수가 달라도 붙는다 — 뒤 표 행들은 자기 칸 배치를 유지한다. 폭은 두 표 중
+    /// 큰 쪽을 따른다. 뒤 표의 host 문단과 사이 빈 문단들은 제거된다.
+    pub fn merge_table_with_next_native(
+        &mut self,
+        section_idx: usize,
+        parent_para_idx: usize,
+        control_idx: usize,
+    ) -> Result<String, HwpError> {
+        use crate::model::control::Control;
+
+        // 1) 다음 표 위치 탐색 — 사이에는 빈 문단만 허용.
+        let (back_para_idx, back_ctrl_idx) = {
+            let section = self
+                .document
+                .sections
+                .get(section_idx)
+                .ok_or_else(|| HwpError::RenderError("구역 인덱스 범위 초과".to_string()))?;
+            if parent_para_idx >= section.paragraphs.len() {
+                return Err(HwpError::RenderError("문단 인덱스 범위 초과".to_string()));
+            }
+            let mut found: Option<(usize, usize)> = None;
+            for (idx, para) in section
+                .paragraphs
+                .iter()
+                .enumerate()
+                .skip(parent_para_idx + 1)
+            {
+                let table_ctrl = para
+                    .controls
+                    .iter()
+                    .position(|c| matches!(c, Control::Table(_)));
+                if let Some(ci) = table_ctrl {
+                    // host 문단에 표 외 내용이 있으면 한컴과 동일하게 거부.
+                    if !para.text.trim().is_empty() || para.controls.len() != 1 {
+                        return Err(HwpError::RenderError(
+                            "표 사이에 다른 내용이 있어 붙일 수 없습니다".to_string(),
+                        ));
+                    }
+                    if let Control::Table(back) = &para.controls[ci] {
+                        // 뒤 표 캡션은 무음 소실 대신 명시 거부 — 사용자가 캡션을
+                        // 지우고 다시 시도할 수 있게 한다.
+                        if back.caption.is_some() {
+                            return Err(HwpError::RenderError(
+                                "뒤 표에 캡션이 있어 붙일 수 없습니다. 캡션을 지운 뒤 다시 시도하세요"
+                                    .to_string(),
+                            ));
+                        }
+                    }
+                    found = Some((idx, ci));
+                    break;
+                }
+                if !para.text.trim().is_empty() || !para.controls.is_empty() {
+                    return Err(HwpError::RenderError(
+                        "표 사이에 다른 내용이 있어 붙일 수 없습니다".to_string(),
+                    ));
+                }
+            }
+            found.ok_or_else(|| HwpError::RenderError("붙일 다음 표가 없습니다".to_string()))?
+        };
+
+        // 2) 뒤 표 분리 회수.
+        let back_table = {
+            let para = &mut self.document.sections[section_idx].paragraphs[back_para_idx];
+            match para.controls.remove(back_ctrl_idx) {
+                Control::Table(t) => *t,
+                _ => unreachable!("표 컨트롤 위치 확인됨"),
+            }
+        };
+
+        // 3) 앞 표에 행 이어붙이기.
+        {
+            let table = self.get_table_mut(section_idx, parent_para_idx, control_idx)?;
+            let front_rows = table.row_count;
+            if front_rows as u32 + back_table.row_count as u32 > u16::MAX as u32 {
+                return Err(HwpError::RenderError(
+                    "붙인 표의 행 수가 최대치(65535)를 넘습니다".to_string(),
+                ));
+            }
+            let back_cell_count = back_table.cells.len();
+            let mut back_cells = back_table.cells;
+            for cell in &mut back_cells {
+                cell.row += front_rows;
+            }
+            table.cells.extend(back_cells);
+            table.row_count += back_table.row_count;
+            table.row_sizes.extend(back_table.row_sizes);
+            table.col_count = table.col_count.max(back_table.col_count);
+            table.common.width = table.common.width.max(back_table.common.width);
+            // zone 서식 보존: 뒤 표 zone 은 행 오프셋을 더해 이어 붙인다.
+            let mut back_zones = back_table.zones;
+            for z in &mut back_zones {
+                z.start_row += front_rows;
+                z.end_row += front_rows;
+            }
+            table.zones.extend(back_zones);
+            // local resize(행별 폭/높이) 보존: 뒤 표 항목은 행·셀 인덱스에
+            // 앞 표만큼 오프셋을 더해 이어 붙인다.
+            let front_cell_count = table.cells.len() - back_cell_count;
+            table
+                .local_resize_rows
+                .extend(back_table.local_resize_rows.iter().map(|r| r + front_rows));
+            for col in back_table.local_resize_cols {
+                if !table.local_resize_cols.contains(&col) {
+                    table.local_resize_cols.push(col);
+                }
+            }
+            table.local_resize_cell_widths.extend(
+                back_table
+                    .local_resize_cell_widths
+                    .iter()
+                    .map(|(idx, w)| (idx + front_cell_count, *w)),
+            );
+            table.local_resize_cell_heights.extend(
+                back_table
+                    .local_resize_cell_heights
+                    .iter()
+                    .map(|(idx, h)| (idx + front_cell_count, *h)),
+            );
+            table.rebuild_grid();
+            table.update_ctrl_dimensions();
+            table.dirty = true;
+        }
+
+        // 4) 사이 빈 문단들과 뒤 표 host 문단 제거.
+        self.document.sections[section_idx]
+            .paragraphs
+            .drain(parent_para_idx + 1..=back_para_idx);
+
+        self.document.sections[section_idx].raw_stream = None;
+        self.recompose_section(section_idx);
+        self.paginate_if_needed();
+
+        self.event_log.push(DocumentEvent::TablesMerged {
+            section: section_idx,
+            para: parent_para_idx,
+            ctrl: control_idx,
+        });
+        let row_count = {
+            let table = self.get_table_mut(section_idx, parent_para_idx, control_idx)?;
+            table.row_count
+        };
+        Ok(super::super::helpers::json_ok_with(&format!(
+            "\"rowCount\":{}",
+            row_count
+        )))
+    }
+
     /// 표 셀을 병합한다 (네이티브).
     pub fn merge_table_cells_native(
         &mut self,
