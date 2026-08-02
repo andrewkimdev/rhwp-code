@@ -291,9 +291,11 @@ rhwp export-tables 별표.hwp --json | jq '.tables[].cells[] | select(.isHeader)
   기본 출력(무봉투 pretty JSON·`-o` 저장)은 무변경. `batch export-structure` 레코드와 같은 스키마.
 - `--mode outline`: IR 개요 수준(`ParaShape.para_level`/head_type) 기반.
 - `--mode clause`: 법률 조문 텍스트 패턴(편·장·절·관·조 / 항①②③ / 호1. / 목가.) 기반.
-- `--mode auto`(기본): 명시적 `Outline` head_type을 우선하고, 없으면 편·장·절·관·조 marker가
-  있을 때 clause, 그 밖에 `Number` head_type이 있으면 outline을 선택한다. 항·호·목 모양만으로는
-  일반 번호 목록과 구분할 수 없어 auto 선택 증거로 쓰지 않는다.
+- `--mode auto`(기본): 명시적 `Outline` head_type을 최우선한다. `Number`와 조문형 텍스트가
+  충돌하면 목차 쪽번호 tail·조사형 상호참조가 아닌 `제N조` 제목만 clause 선택 증거로 인정한다.
+  편·장·절·관은 일반 보고서에도 흔해 Number를 단독으로 뒤집지 않으며, confidence를 통과한 조 제목이
+  없으면 Number 문서는 outline을 선택한다. Outline과 Number가 모두 없으면 기존처럼 clause로 폴백한다.
+  항·호·목 모양도 일반 번호 목록과 구분할 수 없어 auto 선택 증거로 쓰지 않는다.
 - JSON: `{mode, node_count, preamble, roots:[{level,kind,marker,heading,section,paragraph,body,children}]}`.
   비제목 문단은 직전 제목 노드의 `body` 에 귀속. `-o` 생략 시 stdout.
 

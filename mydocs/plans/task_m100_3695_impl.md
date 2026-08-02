@@ -5,7 +5,7 @@
 - **선행 작업**: #3693, PR #3715, merge commit `fe9749d542f46643e408c23878229c326e341363`
 - **브랜치**: `codex/issue-3695-export-structure-auto`
 - **수행계획서**: `mydocs/plans/task_m100_3695.md`
-- **절차 상태**: Stage 4 PR head 최신 `devel` 재동기화·focused 검증 완료
+- **절차 상태**: Stage 7 PR 리뷰 confidence 보정·최신 `devel` 전체 검증 완료
 - **Draft PR**: [#3749](https://github.com/edwardkim/rhwp/pull/3749)
 - **다음 승인 경계**: PR 최신 CI·리뷰와 ready/merge 판정
 - **WIP 증적**: `8343c98c6`
@@ -27,7 +27,7 @@
 3. `HeadType::Number`는 약한 outline 증거로 기록한다.
 4. 렌더링 질의와 같은 수식 포함 텍스트 조립기로 편·장·절·관·조 marker를 찾는다.
 
-## Stage 2 — effective mode 우선순위
+## Stage 2 — effective mode 우선순위 (초기 구현)
 
 1. 명시적 Outline을 가장 먼저 선택한다.
 2. Outline이 없으면 primary clause marker를 Number보다 우선한다.
@@ -71,6 +71,17 @@
 2. PR #3742 merge로 전진한 `cc3829116`을 merge하고 충돌을 양쪽 기록 보존 방식으로 해결한다.
 3. 결합 경계인 structure, #3695, #3693, CLI JSON focused 테스트와 fmt·diff·clippy를 재실행한다.
 4. Stage 4 보고와 PR 본문을 실제 검증 기준에 맞춰 갱신한 뒤 head를 push한다.
+
+## Stage 7 — PR 리뷰 confidence 보정
+
+1. Number와 충돌하는 auto selector의 clause 증거를 제목형 `조`로 좁힌다.
+2. 탭+끝자리 숫자 목차와 marker 뒤 조사형 상호참조를 `auto_clause_heading_allowed()`에서 제외한다.
+3. 실제 시장구조조사 negative, 조사형 상호참조·쪽번호 synthetic negative, 실제 협정서 기반
+   Number+조 positive를 추가한다.
+4. 조 증거를 이미 찾은 뒤에는 나머지 문단 텍스트 조립을 생략하되, 뒤쪽 explicit Outline 탐색은 유지한다.
+5. 기존 devel auto와 보정 auto를 같은 parse 결과에서 비교해 top-level·recursive corpus 영향 0건을 확인한다.
+6. `mydocs/pr/archives/pr_3749_review.md`, Stage 5 보고, 최종 보고, CLI manual, 오늘할일을 갱신한다.
+7. 최신 devel 결합 트리에서 focused·전체 release-test·fmt·diff·clippy를 순차 실행한다.
 
 ## 비적용
 
