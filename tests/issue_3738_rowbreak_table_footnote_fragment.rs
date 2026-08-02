@@ -28,6 +28,7 @@ const PAGE_78: u32 = 77;
 const PAGE_79: u32 = 78;
 const PAGE_80: u32 = 79;
 const PAGE_37: u32 = 36;
+const PAGE_25: u32 = 24;
 
 fn page_text(doc: &HwpDocument, page: u32) -> String {
     doc.extract_page_text_native(page)
@@ -108,6 +109,26 @@ fn images_for_control(
     }
     for child in &node.children {
         images_for_control(child, para_index, control_index, positions);
+    }
+}
+
+fn images_for_table(node: &RenderNode, para_index: usize, positions: &mut Vec<(f64, f64)>) {
+    if let RenderNodeType::Table(table) = &node.node_type {
+        if table.para_index == Some(para_index) {
+            fn collect_images(node: &RenderNode, positions: &mut Vec<(f64, f64)>) {
+                if matches!(node.node_type, RenderNodeType::Image(_)) {
+                    positions.push((node.bbox.x, node.bbox.y));
+                }
+                for child in &node.children {
+                    collect_images(child, positions);
+                }
+            }
+            collect_images(node, positions);
+            return;
+        }
+    }
+    for child in &node.children {
+        images_for_table(child, para_index, positions);
     }
 }
 
@@ -213,6 +234,36 @@ fn native_hwp5_repeated_empty_guide_lines_emit_tac_picture_once() {
     assert!(
         x < 350.0 && y < 800.0,
         "그림 37은 PDF처럼 좌측의 두-그림 band에 있어야 하며 페이지 하단 fallback으로 새면 안 된다: x={x:.1}, y={y:.1}"
+    );
+}
+
+#[test]
+fn native_hwp5_same_page_stale_rowbreak_picture_keeps_figure_25_visible() {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(SAMPLE);
+    let bytes = fs::read(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+    let doc = HwpDocument::from_bytes(&bytes).expect("parse stage19 HWP evidence fixture");
+    let p25 = page_text(&doc, PAGE_25);
+    assert!(
+        p25.contains("그림 25.") && p25.contains("그림 26."),
+        "p25에는 PDF처럼 그림 25와 그림 26의 caption이 함께 있어야 한다: {p25}"
+    );
+
+    let tree = doc
+        .build_page_render_tree(PAGE_25)
+        .expect("render physical page 25");
+    let mut positions = Vec::new();
+    // pi=357은 그림 25를 담은 빈 1×1 RowBreak 표다. stale -50000 HU를 그대로
+    // 적용하면 Image가 p25 위쪽 밖(y<0)으로 나가 PDF에 있는 첫 그림이 사라진다.
+    images_for_table(&tree.root, 357, &mut positions);
+    assert_eq!(
+        positions.len(),
+        1,
+        "p25 그림 25 표는 Image를 정확히 하나 방출해야 한다: {positions:?}"
+    );
+    let (x, y) = positions[0];
+    assert!(
+        x > 100.0 && y >= 240.0 && y < 360.0,
+        "그림 25는 PDF처럼 p25 표 frame 내부에 있어야 한다: x={x:.1}, y={y:.1}"
     );
 }
 

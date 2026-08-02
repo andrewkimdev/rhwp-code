@@ -13,6 +13,10 @@ use crate::model::table::{TablePageBreak, VerticalAlign};
 use crate::renderer::float_placement::signed_hwpunit;
 
 const ROWBREAK_OBJECT_BOTTOM_BLEED_TOLERANCE_PX: f64 = 64.0;
+/// [#3738 Stage 19] native HWP5가 빈 1×1 RowBreak picture table에 남기는 stale page
+/// origin은 일반적인 local offset보다 한 페이지 단위로 크다. 이 값보다 작은 음수는
+/// 일반 그림 위치일 수 있으므로 절대 보정하지 않는다.
+const ROWBREAK_STALE_PAGE_SCALE_PICTURE_OFFSET_MIN_HU: i32 = -40_000;
 
 /// [Task #548] paragraph 의 line N 에 적용되는 effective margin_left.
 /// paragraph_layout.rs 의 line_indent 산식과 동일 (단일 룰).
@@ -71,6 +75,7 @@ fn has_initial_tac_shape_host(paragraphs: &[Paragraph]) -> bool {
 /// picture offset이 의도한 일반 음수 위치인지와 page boundary 상쇄인지 구분한다.
 fn stored_layout_relocated_empty_rowbreak_picture_resets_offset(
     stored_layout: bool,
+    native_hwp5_layout: bool,
     host_stored_vpos_hu: Option<i32>,
     table: &crate::model::table::Table,
     cell: &crate::model::table::Cell,
@@ -108,9 +113,16 @@ fn stored_layout_relocated_empty_rowbreak_picture_resets_offset(
 
     let table_offset = signed_hwpunit(table.common.vertical_offset);
     let picture_offset = signed_hwpunit(picture.common.vertical_offset);
-    table_offset > 0
+    let relocated_page_ladder = table_offset > 0
         && picture_offset < 0
-        && (host_vpos as i64 + table_offset as i64 + picture_offset as i64).abs() <= 8
+        && (host_vpos as i64 + table_offset as i64 + picture_offset as i64).abs() <= 8;
+    // HWP p25 (pi=357)는 table vOffset=0인데 picture에만 stale -50000 HU가 남았다.
+    // 이는 다음 쪽 ladder가 아니라 같은 물리 쪽의 page-scale stale origin이다. HWPX
+    // stored-layout에는 이 HWP5 직렬화 서명이 없으므로 native 경로에만 한정한다.
+    let same_page_stale_hwp5_picture = native_hwp5_layout
+        && table_offset == 0
+        && picture_offset <= ROWBREAK_STALE_PAGE_SCALE_PICTURE_OFFSET_MIN_HU;
+    relocated_page_ladder || same_page_stale_hwp5_picture
 }
 
 use super::super::composer::effective_text_for_metrics;
@@ -3191,6 +3203,7 @@ impl LayoutEngine {
                                 stored_layout_relocated_empty_rowbreak_picture_resets_offset(
                                     self.profile.get().native_hwp5_layout()
                                         || self.profile.get().hwpx_stored_layout(),
+                                    self.profile.get().native_hwp5_layout(),
                                     outer_host_stored_vpos_hu,
                                     table,
                                     cell,
@@ -8323,6 +8336,7 @@ mod row_cut_tests {
         assert!(
             stored_layout_relocated_empty_rowbreak_picture_resets_offset(
                 true,
+                true,
                 Some(52_230),
                 &host,
                 &cell,
@@ -8332,6 +8346,7 @@ mod row_cut_tests {
         );
         assert!(
             !stored_layout_relocated_empty_rowbreak_picture_resets_offset(
+                true,
                 true,
                 Some(52_220),
                 &host,
@@ -8343,12 +8358,80 @@ mod row_cut_tests {
         assert!(
             !stored_layout_relocated_empty_rowbreak_picture_resets_offset(
                 false,
+                true,
                 Some(52_230),
                 &host,
                 &cell,
                 &para,
                 picture,
             )
+        );
+    }
+
+    #[test]
+    fn native_hwp5_same_page_stale_empty_rowbreak_picture_resets_offset() {
+        let mut para = empty_anchor_non_inline_picture_para(0);
+        let Control::Picture(picture) = &mut para.controls[0] else {
+            panic!("그림 컨트롤 아님");
+        };
+        picture.common.vertical_offset = (-50_000i32) as u32;
+
+        let cell = cell(0, 0, vec![para.clone()]);
+        let mut host = rowbreak_table(vec![cell.clone()]);
+        host.common = CommonObjAttr {
+            treat_as_char: false,
+            text_wrap: TextWrap::TopAndBottom,
+            vert_rel_to: VertRelTo::Para,
+            vertical_offset: 0,
+            ..Default::default()
+        };
+        let Control::Picture(picture) = &para.controls[0] else {
+            panic!("그림 컨트롤 아님");
+        };
+
+        assert!(
+            stored_layout_relocated_empty_rowbreak_picture_resets_offset(
+                true,
+                true,
+                Some(12_000),
+                &host,
+                &cell,
+                &para,
+                picture,
+            ),
+            "native HWP5의 page-scale stale picture offset은 current cell top으로 reset해야 한다"
+        );
+        assert!(
+            !stored_layout_relocated_empty_rowbreak_picture_resets_offset(
+                true,
+                false,
+                Some(12_000),
+                &host,
+                &cell,
+                &para,
+                picture,
+            ),
+            "HWPX stored-layout에 native HWP5 stale-offset 규칙이 번지면 안 된다"
+        );
+
+        let Control::Picture(picture) = &mut para.controls[0] else {
+            panic!("그림 컨트롤 아님");
+        };
+        picture.common.vertical_offset = (-39_999i32) as u32;
+        let Control::Picture(picture) = &para.controls[0] else {
+            panic!("그림 컨트롤 아님");
+        };
+        assert!(
+            !stored_layout_relocated_empty_rowbreak_picture_resets_offset(
+                true,
+                true,
+                Some(12_000),
+                &host,
+                &cell,
+                &para,
+                picture,
+            ),
+            "page-scale 기준보다 작은 일반 음수 offset은 보정하면 안 된다"
         );
     }
 
