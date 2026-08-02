@@ -7,6 +7,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from collections import Counter
 from pathlib import Path
 from unittest import mock
 
@@ -147,6 +148,79 @@ class TextLayerComparisonTests(unittest.TestCase):
             extracted = FIDELITY.svg_text(svg)
 
         self.assertEqual(extracted, "A가")
+
+    def test_adjacent_reciprocal_text_difference_is_owner_shift_candidate(self) -> None:
+        moved = Counter("각주26) footnote owner")
+
+        candidates = FIDELITY.adjacent_text_owner_shift_candidates(
+            {
+                25: (Counter(), moved),
+                26: (moved, Counter()),
+            }
+        )
+
+        self.assertEqual(len(candidates), 1)
+        self.assertEqual(candidates[0]["page"], 25)
+        self.assertEqual(candidates[0]["next_page"], 26)
+        self.assertEqual(candidates[0]["direction"], "rhwp_earlier_than_reference")
+        self.assertEqual(candidates[0]["shared_count"], sum(moved.values()))
+
+    def test_adjacent_partial_text_overlap_is_not_owner_shift_candidate(self) -> None:
+        candidates = FIDELITY.adjacent_text_owner_shift_candidates(
+            {
+                0: (Counter(), Counter("abcdefgh")),
+                1: (Counter("abcxxxxx"), Counter()),
+            }
+        )
+
+        self.assertEqual(candidates, [])
+
+    def test_owner_shift_ledger_uses_one_based_page_numbers(self) -> None:
+        moved = Counter("각주26) footnote owner")
+        with tempfile.TemporaryDirectory() as directory:
+            FIDELITY.write_text_owner_shift_ledger(
+                Path(directory),
+                {
+                    25: (Counter(), moved),
+                    26: (moved, Counter()),
+                },
+            )
+            report = (Path(directory) / "text-owner-shift-candidates.tsv").read_text(
+                encoding="utf-8"
+            )
+
+        self.assertIn("26\t27\trhwp_earlier_than_reference", report)
+
+    def test_numbered_page_count_ignores_manifest_and_non_page_files(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for name in (
+                "document_001.svg",
+                "document_002.svg",
+                "export-svg-manifest.json",
+                "document_002.copy.svg",
+            ):
+                (root / name).write_text("", encoding="utf-8")
+
+            count = FIDELITY.numbered_page_count(root, ".svg")
+
+        self.assertEqual(count, 2)
+
+    def test_page_count_ledger_keeps_partial_svg_scope_unknown(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            FIDELITY.write_page_count_ledger(
+                Path(directory),
+                reference_page_count=215,
+                full_svg_page_count=None,
+                full_render_tree_page_count=219,
+            )
+            report = (Path(directory) / "page-count-ledger.tsv").read_text(
+                encoding="utf-8"
+            )
+
+        self.assertIn("reference_pdf\t215\t0\tfull PDF", report)
+        self.assertIn("rhwp_svg\t-\t-\tnot counted", report)
+        self.assertIn("rhwp_render_tree\t219\t4\tfull render tree", report)
 
 
 class LayoutCandidateTests(unittest.TestCase):

@@ -73,6 +73,12 @@ python3 tools/fidelity_compare/fidelity_compare.py 0 214 \
 - `cmp-pNNN.png`: 기준 PDF와 rhwp 렌더의 쪽별 비교 시트
 - `report.tsv`: 픽셀 diff% 랭킹
 - `text-report.tsv`: 기준 PDF 텍스트층에만 있는 문자와 SVG에만 있는 문자 수·코드포인트
+- `text-owner-shift-candidates.tsv`: 인접한 두 쪽에서 SVG-only와 PDF-only 문자가 크게 상호 일치한
+  page-owner 이동 후보. `rhwp_earlier_than_reference`/`rhwp_later_than_reference` 방향을 기록하며,
+  PDF visual owner 대조 전에는 결함 판정이 아니다.
+- `page-count-ledger.tsv`: 기준 PDF, `--export-all-svg`의 전체 SVG, `--layout-ledger`의 전체 render tree
+  쪽수를 분리 기록한다. 페이지 수 차이는 전역 page-break 보정의 근거가 아니라 individual owner 조사 후보를
+  여는 신호다.
 - `provenance.tsv`: 원본·기준 PDF 경로와 기준 등급
 - `run-state.tsv`: requested/completed/missing 페이지와 완료 여부. 누락이 있으면 종료 코드도 0이 아니다.
 - `svg/export-svg-manifest.json`: `--export-all-svg`가 보관한 rhwp SVG 매니페스트
@@ -84,7 +90,9 @@ python3 tools/fidelity_compare/fidelity_compare.py 0 214 \
 `<키> <시작쪽> <끝쪽>`은 그대로 유지된다.
 
 `--text-only`는 Chrome·PNG·비교 시트를 만들지 않는다. 기준 PDF text와 SVG `<text>`만 비교하므로
-각주/본문/caption의 페이지 owner 이동·누락 후보를 빠르게 전수 수집하는 첫 단계에 적합하다. 사진 위치,
+각주/본문/caption의 페이지 owner 이동·누락 후보를 빠르게 전수 수집하는 첫 단계에 적합하다.
+`text-owner-shift-candidates.tsv`는 인접 쪽의 상호 text difference를 묶어, pN에 너무 이르게 나온
+각주가 기준 PDF에서는 pN+1에 있는 경우처럼 page-owner 후보를 바로 보인다. 사진 위치,
 같은 문자 수의 줄바꿈/overlap, 표 행 경계는 검출할 수 없으므로 `text-report.tsv` 상위 페이지와
 `export-svg --json`의 `overflowCellLines` 및 bbox ledger를 합친 뒤에만 pixel diff와 visual sweep을
 실행한다.
@@ -92,6 +100,10 @@ python3 tools/fidelity_compare/fidelity_compare.py 0 214 \
 `--export-all-svg`는 지정 범위와 관계없이 `export-svg`를 한 번 실행해 SVG cache를 채운다. 긴 문서의
 전수 text-only pass에서 페이지마다 rhwp 프로세스를 재기동하지 않기 위한 선택지다. 이후 같은 `--out-dir`에
 대해 후보 범위만 pixel 비교하면 기존 SVG를 재사용한다.
+
+`--layout-ledger`는 전체 render tree를 한 번 export하므로, 선택 page만 text compare하더라도
+`page-count-ledger.tsv`에 render tree 전체 페이지 수를 남긴다. `--export-all-svg`를 함께 주면 SVG 전체 쪽수도
+기록한다. 선택 page SVG cache 수는 partial run과 stale cache를 구분할 수 없어서 전체 수로 가장하지 않는다.
 
 `--layout-ledger`는 `export-render-tree`를 한 번 실행해 `layout-candidates.tsv`를 만든다. `body_footnote_lines`
 는 Body `TextLine`의 하단이 `FootnoteArea` 상단보다 1px 이상 아래인 경우, `table_footer`는 Body 표의 하단이

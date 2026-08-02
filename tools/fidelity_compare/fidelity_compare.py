@@ -295,6 +295,70 @@ def compare_text_layers(
     return reference - rendered, rendered - reference
 
 
+def adjacent_text_owner_shift_candidates(
+    page_differences: Mapping[int, tuple[Counter[str], Counter[str]]],
+) -> list[dict[str, object]]:
+    """Find large reciprocal text differences across adjacent physical pages.
+
+    A text multiset cannot prove visual layout, but an SVG-only block on pN that
+    is the same as a PDF-only block on pN+1 is a strong page-owner candidate.
+    Keep this separate from ordinary per-page text loss: the directional pairing
+    is useful for footnotes/captions that were placed one page too early or late.
+    """
+
+    candidates: list[dict[str, object]] = []
+
+    def append_candidate(
+        page_index: int,
+        direction: str,
+        source: Counter[str],
+        target: Counter[str],
+    ) -> None:
+        shared = source & target
+        shared_count = sum(shared.values())
+        source_count = sum(source.values())
+        target_count = sum(target.values())
+        if (
+            shared_count < 8
+            or source_count == 0
+            or target_count == 0
+            or shared_count / source_count < 0.75
+            or shared_count / target_count < 0.75
+        ):
+            return
+        candidates.append(
+            {
+                "page": page_index,
+                "next_page": page_index + 1,
+                "direction": direction,
+                "shared_count": shared_count,
+                "source_coverage": shared_count / source_count,
+                "target_coverage": shared_count / target_count,
+                "shared": shared,
+            }
+        )
+
+    for page_index in sorted(page_differences):
+        next_differences = page_differences.get(page_index + 1)
+        if next_differences is None:
+            continue
+        missing, extra = page_differences[page_index]
+        next_missing, next_extra = next_differences
+        append_candidate(
+            page_index,
+            "rhwp_earlier_than_reference",
+            extra,
+            next_missing,
+        )
+        append_candidate(
+            page_index,
+            "rhwp_later_than_reference",
+            missing,
+            next_extra,
+        )
+    return candidates
+
+
 def counter_summary(counter: Counter[str]) -> str:
     def label(character: str, count: int) -> str:
         escaped = character.encode("unicode_escape").decode("ascii")
@@ -618,6 +682,18 @@ def tree_path_for_page(tree_dir: Path, page_index: int) -> Path | None:
     return matches[0] if matches else None
 
 
+def numbered_page_count(directory: Path, suffix: str) -> int:
+    """Count renderer page files while ignoring manifests and auxiliary files."""
+    pattern = re.compile(rf"_([0-9]+){re.escape(suffix)}$")
+    return len(
+        {
+            int(match.group(1))
+            for path in directory.glob(f"*{suffix}")
+            if (match := pattern.search(path.name)) is not None
+        }
+    )
+
+
 def write_layout_ledger(
     work_dir: Path,
     tree_dir: Path,
@@ -651,6 +727,63 @@ def write_layout_ledger(
                 f"{candidates[2]}\t{candidates[3]}\t{candidates[4]}\t-\n"
             )
     return missing_pages
+
+
+def write_text_owner_shift_ledger(
+    work_dir: Path,
+    page_differences: Mapping[int, tuple[Counter[str], Counter[str]]],
+) -> None:
+    """Write adjacent-page text owner candidates without treating them as verdicts."""
+    report_path = work_dir / "text-owner-shift-candidates.tsv"
+    with report_path.open("w", encoding="utf-8") as report:
+        report.write(
+            "page\tnext_page\tdirection\tshared_chars\tsource_coverage\t"
+            "target_coverage\tshared_chars_detail\tnote\n"
+        )
+        for candidate in adjacent_text_owner_shift_candidates(page_differences):
+            shared = candidate["shared"]
+            assert isinstance(shared, Counter)
+            report.write(
+                f"{int(candidate['page']) + 1}\t{int(candidate['next_page']) + 1}\t"
+                f"{candidate['direction']}\t{candidate['shared_count']}\t"
+                f"{float(candidate['source_coverage']):.3f}\t"
+                f"{float(candidate['target_coverage']):.3f}\t"
+                f"{counter_summary(shared)}\tcandidate only; PDF visual owner review required\n"
+            )
+
+
+def write_page_count_ledger(
+    work_dir: Path,
+    *,
+    reference_page_count: int,
+    full_svg_page_count: int | None,
+    full_render_tree_page_count: int | None,
+) -> None:
+    """Expose global page-count drift without conflating it with run completion."""
+    report_path = work_dir / "page-count-ledger.tsv"
+
+    def cell(value: int | None) -> str:
+        return str(value) if value is not None else "-"
+
+    def delta(value: int | None) -> str:
+        return str(value - reference_page_count) if value is not None else "-"
+
+    with report_path.open("w", encoding="utf-8") as report:
+        report.write("measure\tpages\tdelta_from_reference\tscope\tnote\n")
+        report.write(
+            f"reference_pdf\t{reference_page_count}\t0\tfull PDF\tcomparison baseline\n"
+        )
+        report.write(
+            f"rhwp_svg\t{cell(full_svg_page_count)}\t{delta(full_svg_page_count)}\t"
+            f"{'full export' if full_svg_page_count is not None else 'not counted'}\t"
+            "page-count difference is a candidate, not a global-break fix\n"
+        )
+        report.write(
+            f"rhwp_render_tree\t{cell(full_render_tree_page_count)}\t"
+            f"{delta(full_render_tree_page_count)}\t"
+            f"{'full render tree' if full_render_tree_page_count is not None else 'not run'}\t"
+            "page-count difference is a candidate, not a global-break fix\n"
+        )
 
 
 def write_run_state(
@@ -785,8 +918,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         return 2
 
+    full_svg_page_count = (
+        numbered_page_count(svg_dir, ".svg") if args.export_all_svg else None
+    )
+    full_render_tree_page_count = (
+        numbered_page_count(tree_dir, ".json") if args.layout_ledger else None
+    )
+
     rows: list[tuple[int, float, str]] = []
     text_rows: list[tuple[int, int, int, str, str, str]] = []
+    text_differences: dict[int, tuple[Counter[str], Counter[str]]] = {}
     completed_pages: list[int] = []
     missing_pages: list[int] = []
     for page_index in requested_pages:
@@ -803,6 +944,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         try:
             reference_text = reference_text_for_page(page_index)
             missing, extra = compare_text_layers(reference_text, svg_text(svg_path))
+            text_differences[page_index] = (missing, extra)
             text_rows.append(
                 (
                     page_index,
@@ -868,6 +1010,14 @@ def main(argv: Sequence[str] | None = None) -> int:
                 f"{page_index + 1}\t{missing_count}\t{extra_count}\t{missing}\t{extra}\t{note or '-'}\n"
             )
 
+    write_text_owner_shift_ledger(work_dir, text_differences)
+    write_page_count_ledger(
+        work_dir,
+        reference_page_count=reference_page_count,
+        full_svg_page_count=full_svg_page_count,
+        full_render_tree_page_count=full_render_tree_page_count,
+    )
+
     all_missing_pages = sorted(set(missing_pages + layout_missing_pages))
     all_completed_pages = [
         page_index for page_index in completed_pages if page_index not in all_missing_pages
@@ -889,6 +1039,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(f"  p{page_index + 1}: {score}% {note}")
     print("pixel report:", report_path)
     print("text report:", text_report_path)
+    print("text owner-shift candidates:", work_dir / "text-owner-shift-candidates.tsv")
+    print("page-count ledger:", work_dir / "page-count-ledger.tsv")
     if args.layout_ledger:
         print("layout ledger:", work_dir / "layout-candidates.tsv")
     print("run state:", work_dir / "run-state.tsv")
