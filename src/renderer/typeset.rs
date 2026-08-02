@@ -12692,6 +12692,35 @@ impl TypesetEngine {
                 available,
             )
         });
+        // native HWP5 본문은 기존 각주가 있는 page tail에서도 `vpos=0` reset으로
+        // 다음 physical page를 기록할 수 있다. 일반 reset은 과분할 위험이 있으므로,
+        // 현재 flow tail과 source top이 고정밀로 맞는 경우에만 아래 줄-loop의 경계로
+        // 쓴다. reset 전 줄은 실제 FootnoteArea top을 기준으로 별도 fit 검사를 한다.
+        let native_hwp5_existing_footnote_reset_line = if st.profile.native_hwp5_layout()
+            && st.col_count == 1
+            && st.current_footnote_height > 0.0
+            && para.controls.is_empty()
+            && para_has_visible_text(para)
+            && para.line_segs.len() >= fmt.line_heights.len()
+            && para.line_segs.first().is_some_and(|first| {
+                first.vertical_pos > 0
+                    && hwpunit_to_px(first.vertical_pos, self.dpi)
+                        >= st.base_available_height() * 0.7
+            }) {
+            para.line_segs[..fmt.line_heights.len()]
+                .windows(2)
+                .enumerate()
+                .find_map(|(prev_idx, pair)| {
+                    let (prev, next) = (&pair[0], &pair[1]);
+                    (!is_synthetic_line_seg(prev)
+                        && !is_synthetic_line_seg(next)
+                        && prev.vertical_pos > 0
+                        && next.vertical_pos == 0)
+                        .then_some(prev_idx + 1)
+                })
+        } else {
+            None
+        };
 
         // fits: 문단 전체가 현재 공간에 들어가는가?
         // [Task #359] fit 판정은 height_for_fit (trailing_ls 제외) 으로,
@@ -13131,6 +13160,9 @@ impl TypesetEngine {
                 if forced_page_break_line
                     .map(|break_line| li == break_line && li > cursor_line)
                     .unwrap_or(false)
+                    || native_hwp5_existing_footnote_reset_line
+                        .map(|break_line| li == break_line && li > cursor_line)
+                        .unwrap_or(false)
                 {
                     break;
                 }
@@ -13193,10 +13225,53 @@ impl TypesetEngine {
                             st.base_available_height(),
                             self.dpi,
                         );
-                    if !hwp_authoritative && !saved_tail_vpos_fit {
+                    // native HWP5가 문단 중간 reset 직전의 연속 줄들을 기존 각주
+                    // 바로 위에 저장한 경우에는, 40px safety margin 때문에 그 줄을
+                    // 조기 이월하지 않는다. 일반 body height가 아니라 실제
+                    // FootnoteArea top을 넘지 않는지, 현재 flow tail과 저장 top이
+                    // 일치하는지, reset 전 범위인지까지 모두 확인한다. 표·그림·각주
+                    // control과 reset 뒤의 줄은 종전 보수 budget을 유지한다.
+                    let native_hwp5_reset_tail_fits_actual_footnote_boundary = st
+                        .profile
+                        .native_hwp5_layout()
+                        && st.col_count == 1
+                        && st.current_footnote_height > 0.0
+                        && para.controls.is_empty()
+                        && !st.current_items.is_empty()
+                        && native_hwp5_existing_footnote_reset_line
+                            .is_some_and(|break_line| cursor_line < break_line && li < break_line)
+                        && para
+                            .line_segs
+                            .get(cursor_line)
+                            .and_then(|seg| {
+                                line_seg_visible_bounds_px(
+                                    seg,
+                                    current_page_vpos_base.unwrap_or(0),
+                                    self.dpi,
+                                )
+                            })
+                            .is_some_and(|(top, _)| {
+                                top + 16.0 >= st.current_height && top <= st.current_height + 16.0
+                            })
+                        && saved_line_range_fits_body_tail(
+                            para,
+                            cursor_line,
+                            li + 1,
+                            (st.base_available_height()
+                                - st.current_footnote_height
+                                - st.current_zone_y_offset
+                                - st.current_bottom_fixed_exclusion)
+                                .max(0.0),
+                            self.dpi,
+                        );
+                    if !hwp_authoritative
+                        && !saved_tail_vpos_fit
+                        && !native_hwp5_reset_tail_fits_actual_footnote_boundary
+                    {
                         break;
                     }
-                    used_saved_tail_vpos_fit |= saved_tail_vpos_fit;
+                    used_saved_tail_vpos_fit |=
+                        saved_tail_vpos_fit || native_hwp5_reset_tail_fits_actual_footnote_boundary;
                 }
                 cumulative += fmt.line_advance(li);
                 end_line = li + 1;

@@ -20,6 +20,8 @@ const PAGE_31: u32 = 30;
 const PAGE_32: u32 = 31;
 const PAGE_68: u32 = 67;
 const PAGE_69: u32 = 68;
+const PAGE_58: u32 = 57;
+const PAGE_59: u32 = 58;
 
 fn page_text(doc: &HwpDocument, page: u32) -> String {
     doc.extract_page_text_native(page)
@@ -133,5 +135,26 @@ fn picture_caption_rowbreak_uses_the_actual_footnote_boundary_before_deferring()
         !p69.contains("그림 49. OPTN 생존 장기기증 원칙")
             && p69.contains("나. 생존 장기기증 승인 절차"),
         "p69는 그림 49 없이 다음 본문으로 시작해야 함: {p69}"
+    );
+}
+
+#[test]
+fn native_hwp5_reset_tail_uses_the_actual_existing_footnote_boundary() {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(SAMPLE);
+    let bytes = fs::read(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+    let doc = HwpDocument::from_bytes(&bytes).expect("parse stage14 HWP evidence fixture");
+
+    let p58 = page_text(&doc, PAGE_58);
+    let p59 = page_text(&doc, PAGE_59);
+    assert!(
+        p58.contains("호주 정부의 국민 건강 및 의료 연구 협의회")
+            && p58.contains("Medical Research Council")
+            && !p58.contains("독립적이며 적절한 지식과 기술"),
+        "p58은 각주 70 위에 stored reset 전 세 줄을 보유해야 함: {p58}"
+    );
+    assert!(
+        p59.contains("독립적이며 적절한 지식과 기술")
+            && !p59.contains("호주 정부의 국민 건강 및 의료 연구 협의회"),
+        "p59는 reset 뒤의 본문부터 재개해야 함: {p59}"
     );
 }
