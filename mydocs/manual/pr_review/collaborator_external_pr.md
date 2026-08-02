@@ -41,6 +41,10 @@ mydocs/orders/YYYYMMDD.md                  # 갱신이 필요한 경우
 오늘할일이 필요하면 merge 후 별도 PR로 늦게 만들지 않는다. review 문서와 함께 contributor PR head에
 포함하고, 뒤에 추가한 review-only commit은 9.3.2의 fast-pass 조건으로 판정한다.
 
+local CI 검증이 완료된 경우 review 문서와 오늘할일은 실행 결과를 과거형으로 기록한다. 아직 실행하지
+않은 GitHub Actions·작업지시자 승인·merge만 미래 조건으로 남기며, 완료 검증을 "실행할 예정"으로
+표현하지 않는다.
+
 ## 9.3 PR head push
 
 contributor 원 commit을 rewrite하지 않는다. review 문서·오늘할일·보정 code는 별도 commit으로 나누고,

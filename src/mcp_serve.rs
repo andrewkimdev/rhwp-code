@@ -435,7 +435,8 @@ fn served_tools(
             "type": "object",
             "properties": {
                 "docId": { "type": "string", "description": "hwp_open 이 돌려준 핸들" },
-                "page": { "type": "integer", "minimum": 0, "description": "0부터 시작하는 페이지 번호. 생략하면 전체" }
+                "page": { "type": "integer", "minimum": 0, "description": "0부터 시작하는 페이지 번호. 생략하면 전체" },
+                "maxChars": { "type": "integer", "minimum": 1, "description": "[#3787 S7] 본문 전체의 문자 상한. 넘으면 truncated:true 와 omittedCount(생략 문자 수)를 봉투에 남긴다. 생략하면 무제한" }
             },
             "required": ["docId"]
         }
@@ -468,14 +469,15 @@ fn served_tools(
             "properties": {
                 "docId": { "type": "string", "description": "hwp_open 이 돌려준 핸들" },
                 "query": { "type": "string", "minLength": 1, "description": "검색어" },
-                "caseSensitive": { "type": "boolean", "description": "대소문자 구분. 기본 true" }
+                "caseSensitive": { "type": "boolean", "description": "대소문자 구분. 기본 true" },
+                "maxMatches": { "type": "integer", "minimum": 1, "description": "[#3787 S7] 반환 매치 상한. 절단되면 totalMatchCount·truncated:true·omittedCount 가 총량을 알린다. 생략하면 무제한" }
             },
             "required": ["docId", "query"]
         }
     }));
     session.push(serde_json::json!({
         "name": "hwp_doc_replace_text",
-        "description": "[#3601] 핸들의 IR 에 문자열 일괄 치환을 누적한다(디스크 미기록 — hwp_doc_save 가 기록 지점). replacedCount 0 은 오류가 아니라 계수 보고다. hwp_doc_fill_fields 와 조합해 '채우고 다듬고 한 번에 저장'하는 흐름을 만든다.",
+        "description": "[#3601] 핸들의 IR 에 문자열 일괄 치환을 누적한다(디스크 미기록 — hwp_doc_save 가 기록 지점). replacedCount 0 은 오류가 아니라 계수 보고다. hwp_doc_fill_fields 와 조합해 '채우고 다듬고 한 번에 저장'하는 흐름을 만든다. [#3719] 봉투의 changedPages:[n,…]|null 은 재조판 후 0 기준 쪽 번호 — 그 쪽만 hwp_doc_render_page 로 렌더하면 눈검증이 끝난다(null 이면 확정 불가이니 전체를 보라).",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -489,7 +491,7 @@ fn served_tools(
     }));
     session.push(serde_json::json!({
         "name": "hwp_doc_set_cell",
-        "description": "[#3603] 핸들의 표 격자 좌표(hwp_doc_tables 와 동일)에 값을 기록한다 — 디스크 미기록, hwp_doc_save 가 기록 지점. 병합으로 덮인 칸은 앵커 좌표를 안내하며 실패하고, 칸 넘침은 overflow 로 보고한다(무상태 hwp_set_cell 과 동형).",
+        "description": "[#3603] 핸들의 표 격자 좌표(hwp_doc_tables 와 동일)에 값을 기록한다 — 디스크 미기록, hwp_doc_save 가 기록 지점. 병합으로 덮인 칸은 앵커 좌표를 안내하며 실패하고, 칸 넘침은 overflow 로 보고한다(무상태 hwp_set_cell 과 동형). [#3719] 봉투의 changedPages:[n,…]|null 은 재조판 후 0 기준 쪽 번호로, 분할된 표는 걸친 쪽을 전부 담는다 — 그 쪽만 hwp_doc_render_page 로 렌더하면 눈검증이 끝난다.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -505,7 +507,7 @@ fn served_tools(
     }));
     session.push(serde_json::json!({
         "name": "hwp_doc_fill_fields",
-        "description": "[#3598] hwp_open 으로 연 핸들의 IR 에 누름틀 값을 직접 채운다(디스크 미기록 — hwp_doc_save 가 유일한 기록 지점). 여러 번 호출하면 누적된다. 판정 필드(filledCount/notFound/ambiguous)는 hwp_fill_fields 와 동형이고, 반복 필드는 '이름[N]' 으로 지목한다.",
+        "description": "[#3598] hwp_open 으로 연 핸들의 IR 에 누름틀 값을 직접 채운다(디스크 미기록 — hwp_doc_save 가 유일한 기록 지점). 여러 번 호출하면 누적된다. 판정 필드(filledCount/notFound/ambiguous)는 hwp_fill_fields 와 동형이고, 반복 필드는 '이름[N]' 으로 지목한다. [#3719] 봉투의 changedPages:[n,…]|null 은 재조판 후 0 기준 쪽 번호 — 그 쪽만 hwp_doc_render_page 로 렌더하면 눈검증 루프가 세션 안에서 상수 비용으로 닫힌다(null 이면 확정 불가이니 전체를 보라).",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -774,6 +776,19 @@ fn opt_bool(args: &serde_json::Value, key: &str) -> Result<Option<bool>, String>
     }
 }
 
+/// [#3787 S7] 자원 상한(1 이상) 인자. 생략은 **무제한**이고, `0`·음수·소수·문자열은
+/// 거부한다 — `0` 을 "무제한"으로 뭉개면 "아무것도 주지 마라"는 요청이 "전부 달라"가
+/// 되어 정반대로 실행된다.
+fn opt_limit(args: &serde_json::Value, key: &str) -> Result<Option<usize>, String> {
+    match opt_u64(args, key)? {
+        None => Ok(None),
+        Some(0) => Err(format!("{key} 는 1 이상이어야 합니다 (생략하면 무제한)")),
+        Some(n) => usize::try_from(n)
+            .map(Some)
+            .map_err(|_| format!("{key} 범위 초과: {n}")),
+    }
+}
+
 /// 필수 정수. "생략"과 "형식 오류"를 서로 다른 문구로 보고한다 — 같은 문구로 뭉개면
 /// 호출자가 값이 아니라 호출 형태를 의심하며 헛수고한다.
 fn req_u64(args: &serde_json::Value, key: &str) -> Result<u64, String> {
@@ -803,6 +818,11 @@ fn session_doc_text(args: &serde_json::Value, sessions: &mut Sessions) -> serde_
         Ok(v) => v,
         Err(e) => return tool_error(e),
     };
+    // [#3787 S7] 컨텍스트 범람 방어 상한. 생략하면 무제한(종전 동작).
+    let max_chars = match opt_limit(args, "maxChars") {
+        Ok(v) => v,
+        Err(e) => return tool_error(e),
+    };
     let pages: Vec<u32> = match page_arg {
         Some(raw_page) => {
             let p = match u32::try_from(raw_page) {
@@ -816,18 +836,23 @@ fn session_doc_text(args: &serde_json::Value, sessions: &mut Sessions) -> serde_
         }
         None => (0..page_count).collect(),
     };
-    let mut page_objs = Vec::with_capacity(pages.len());
+    let mut extracted = Vec::with_capacity(pages.len());
     for p in pages {
         match doc.extract_page_text_native(p) {
-            Ok(text) => page_objs.push(serde_json::json!({ "page": p, "text": text })),
+            Ok(text) => extracted.push((p, text)),
             Err(e) => return tool_error(format!("페이지 {p} 텍스트 추출 실패: {e:?}")),
         }
     }
+    // [#3787 S7] 무상태 `export-text --json --max-chars` 와 같은 helper 를 쓴다 —
+    // 절단 어휘(truncated·omittedCount)가 두 표면에서 갈라지지 않게 한다.
+    let (page_objs, omitted_count) = crate::truncate_page_texts(&extracted, max_chars);
     tool_ok_text(
         serde_json::json!({
             "schemaVersion": "1.0",
             "docId": doc_id,
             "pageCount": page_objs.len(),
+            "truncated": omitted_count > 0,
+            "omittedCount": omitted_count,
             "pages": page_objs,
         })
         .to_string(),
@@ -951,6 +976,11 @@ fn session_search(args: &serde_json::Value, sessions: &mut Sessions) -> serde_js
         Ok(v) => v.unwrap_or(true),
         Err(e) => return tool_error(e),
     };
+    // [#3787 S7] 컨텍스트 범람 방어 상한. 생략하면 무제한(종전 동작).
+    let max_matches = match opt_limit(args, "maxMatches") {
+        Ok(v) => v,
+        Err(e) => return tool_error(e),
+    };
     let Some(sd) = sessions.docs.get_mut(doc_id) else {
         return tool_error_with_next(
             format!("열려 있지 않은 핸들: {doc_id} (hwp_open 먼저)"),
@@ -959,11 +989,32 @@ fn session_search(args: &serde_json::Value, sessions: &mut Sessions) -> serde_js
             "핸들이 없거나 만료 — hwp_open 으로 docId 를 재발급한 뒤 재시도",
         );
     };
-    let matches = sd.doc.grep(query, case_sensitive, None);
-    let total = matches.len();
-    tool_ok_text(
-        crate::search_json_value(doc_id, query, case_sensitive, &matches, total).to_string(),
-    )
+    // [#3787 S7] 총량은 전수 grep 으로 세고 **표시만** 자른다 — 무상태 `search
+    // --max-matches` 와 같은 규칙이라 totalMatchCount 가 두 표면에서 같은 뜻이다.
+    let all = sd.doc.grep(query, case_sensitive, None);
+    let total = all.len();
+    let shown: Vec<_> = match max_matches {
+        Some(n) => all.into_iter().take(n).collect(),
+        None => all,
+    };
+    tool_ok_text(crate::search_json_value(doc_id, query, case_sensitive, &shown, total).to_string())
+}
+
+/// [#3719 §6-1] 세션 편집 봉투의 `changedPages` — 무상태 판(#3712)과 **같은** 코어
+/// 질의(`DocumentCore::pages_covering_paragraphs`)를 재사용한다. 새 계산은 없다.
+///
+/// 호출 시점이 계약의 절반이다. 세션은 편집 후에도 같은 인스턴스가 살아 있어서
+/// **재조판 전에 쪽을 계산하면 편집 전 레이아웃을 보고한다**(#3704 가 조회 4종에서
+/// 고친 바로 그 스테일). 질의가 진입에서 `paginate_if_needed()` 를 부르므로 편집 →
+/// 질의 순서만 지키면 되고, 이미 조판이 맞았다면 dirty 구역이 없어 사실상 무비용이다.
+///
+/// 대상 문단이 하나라도 조판 커버리지 밖이면 부분 목록 대신 `null` — 빠뜨린 쪽이
+/// 거짓 통과를 만들기 때문이다(#3630 P3, 원칙 5).
+fn changed_pages_value(doc: &mut HwpDocument, targets: &[(usize, usize)]) -> serde_json::Value {
+    match doc.pages_covering_paragraphs(targets) {
+        Some(pages) => serde_json::json!(pages),
+        None => serde_json::Value::Null,
+    }
 }
 
 /// [#3601] 핸들의 IR 에 문자열 일괄 치환을 누적한다 — 디스크 미기록, save 가 기록 지점.
@@ -996,6 +1047,15 @@ fn session_replace_text(args: &serde_json::Value, sessions: &mut Sessions) -> se
             "핸들이 없거나 만료 — hwp_open 으로 docId 를 재발급한 뒤 재시도",
         );
     };
+    // [#3719 §6-1] 치환 **전** 매치 주소를 붙잡는다 — 문자열 치환은 문단을 새로 만들지
+    // 않아 인덱스를 밀지 않으므로, 이 주소가 치환 후에도 그대로 유효하다. 무상태
+    // `edit replace-text`(#3712)가 쓰는 근거와 같은 것이라 두 봉투가 같은 쪽을 답한다.
+    let changed_paras: Vec<(usize, usize)> = sd
+        .doc
+        .grep(find, case_sensitive, None)
+        .iter()
+        .map(|m| (m.section, m.paragraph))
+        .collect();
     let result = match sd.doc.replace_all_native(find, replace, case_sensitive) {
         Ok(r) => r,
         Err(e) => return tool_error(format!("치환 실패: {e}")),
@@ -1012,6 +1072,14 @@ fn session_replace_text(args: &serde_json::Value, sessions: &mut Sessions) -> se
     if count > 0 {
         sd.doc.repaginate_if_needed();
     }
+    // [#3719 §6-1] 눈검증 대상 쪽 — 위 재조판 **뒤**라야 편집 후 레이아웃을 보고한다.
+    // 0건 치환은 IR 이 그대로다: 볼 쪽이 없으니 빈 목록이 정확하다("전체를 보라"는
+    // null 로 내리면 무변경 호출마다 전수 렌더를 유도하게 된다).
+    let changed_pages = if count > 0 {
+        changed_pages_value(&mut sd.doc, &changed_paras)
+    } else {
+        serde_json::json!([])
+    };
     tool_ok_text(
         serde_json::json!({
             "schemaVersion": "1.0",
@@ -1019,6 +1087,7 @@ fn session_replace_text(args: &serde_json::Value, sessions: &mut Sessions) -> se
             "find": find,
             "replace": replace,
             "caseSensitive": case_sensitive,
+            "changedPages": changed_pages,
             "replacedCount": count,
         })
         .to_string(),
@@ -1136,6 +1205,10 @@ fn session_set_cell(args: &serde_json::Value, sessions: &mut Sessions) -> serde_
             // 경고 수준 — 봉투에 남기지 않고 진행 (CLI 와 동일한 관용).
         }
     }
+    // [#3719 §6-1] 눈검증 대상 쪽 — 표 호스트 문단이 걸친 쪽 **전부**(분할 표 포함).
+    // 근거 주소는 무상태 `edit set-cell`(#3712)과 같은 `resolve_table_cell` 의 호스트
+    // 문단이다. 셀 편집 코어가 이미 재조판했으므로 이 질의는 편집 후 조판을 본다.
+    let changed_pages = changed_pages_value(&mut sd.doc, &[(sec, para)]);
     tool_ok_text(
         serde_json::json!({
             "schemaVersion": "1.0",
@@ -1143,6 +1216,7 @@ fn session_set_cell(args: &serde_json::Value, sessions: &mut Sessions) -> serde_
             "table": table_no, "row": row, "col": col,
             "oldText": old_text,
             "newText": new_text,
+            "changedPages": changed_pages,
             // CLI 봉투와 같은 키 — 검정 정규화를 건너뛰었는지는 제출 서식에서 결과가
             // 달라지는 판단 재료라, 무엇이 적용됐는지 봉투만 보고 알 수 있어야 한다.
             "keepStyle": keep_style,
@@ -1175,11 +1249,19 @@ fn session_fill_fields(args: &serde_json::Value, sessions: &mut Sessions) -> ser
     let doc = &mut sd.doc;
 
     let mut name_counts: HashMap<String, usize> = HashMap::new();
+    // [#3719 §6-1] 같은 순회에서 문단 주소도 담는다 — changedPages 산출 근거를 무상태
+    // `edit fill-fields`(#3712)와 같은 출처(FieldLocation)로 맞춘다.
+    let mut name_locs: HashMap<String, Vec<(usize, usize)>> = HashMap::new();
     for fi in doc.collect_all_fields().iter() {
         if let Some(n) = fi.field.field_name() {
             *name_counts.entry(n.to_string()).or_insert(0) += 1;
+            name_locs
+                .entry(n.to_string())
+                .or_default()
+                .push((fi.location.section_index, fi.location.para_index));
         }
     }
+    let mut changed_paras: Vec<(usize, usize)> = Vec::new();
 
     let mut filled: Vec<serde_json::Value> = Vec::new();
     let mut not_found: Vec<String> = Vec::new();
@@ -1233,6 +1315,9 @@ fn session_fill_fields(args: &serde_json::Value, sessions: &mut Sessions) -> ser
                  hwp_close 후 다시 여는 것을 권장합니다"
             ));
         }
+        if let Some(loc) = name_locs.get(name).and_then(|l| l.get(*occurrence)) {
+            changed_paras.push(*loc);
+        }
         filled.push(serde_json::json!({
             "name": name, "occurrence": occurrence, "value": value_str,
         }));
@@ -1245,11 +1330,16 @@ fn session_fill_fields(args: &serde_json::Value, sessions: &mut Sessions) -> ser
     if !apply.is_empty() {
         doc.repaginate_if_needed();
     }
+    // [#3719 §6-1] 눈검증 대상 쪽 — 위 재조판 **뒤**라야 편집 후 레이아웃을 보고한다.
+    // 채운 것이 없으면 빈 목록(볼 쪽 없음)이고, 채웠는데 문단→쪽 매핑을 확정할 수
+    // 없으면 null 이다.
+    let changed_pages = changed_pages_value(doc, &changed_paras);
 
     tool_ok_text(
         serde_json::json!({
             "schemaVersion": "1.0",
             "docId": doc_id,
+            "changedPages": changed_pages,
             "filledCount": filled.len(),
             "filled": filled,
             "notFound": not_found,
