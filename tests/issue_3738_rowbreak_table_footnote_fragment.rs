@@ -22,6 +22,10 @@ const PAGE_68: u32 = 67;
 const PAGE_69: u32 = 68;
 const PAGE_58: u32 = 57;
 const PAGE_59: u32 = 58;
+const PAGE_76: u32 = 75;
+const PAGE_77: u32 = 76;
+const PAGE_78: u32 = 77;
+const PAGE_79: u32 = 78;
 
 fn page_text(doc: &HwpDocument, page: u32) -> String {
     doc.extract_page_text_native(page)
@@ -156,5 +160,36 @@ fn native_hwp5_reset_tail_uses_the_actual_existing_footnote_boundary() {
         p59.contains("독립적이며 적절한 지식과 기술")
             && !p59.contains("호주 정부의 국민 건강 및 의료 연구 협의회"),
         "p59는 reset 뒤의 본문부터 재개해야 함: {p59}"
+    );
+}
+
+#[test]
+fn native_hwp5_rowbreak_tail_keeps_figure_51_with_its_pdf_page() {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(SAMPLE);
+    let bytes = fs::read(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+    let doc = HwpDocument::from_bytes(&bytes).expect("parse stage15 HWP evidence fixture");
+
+    let p76 = page_text(&doc, PAGE_76);
+    let p77 = page_text(&doc, PAGE_77);
+    let p78 = page_text(&doc, PAGE_78);
+    let p79 = page_text(&doc, PAGE_79);
+    assert!(
+        p76.contains("생존 신장 기증자가") && p76.contains("위한 대기자 목록에 올라가거나,"),
+        "p76은 표 24 row 4 reset 앞의 세 줄을 보유해야 함: {p76}"
+    );
+    assert!(
+        p77.contains("투석을 시작하게 된 경우")
+            && !p77.contains("후 2년 내에 신장 이식을 받기")
+            && p77.contains("그림 51.")
+            && !p77.contains("3. EU"),
+        "p77은 표 24 row 4 tail 뒤에 그림 51을 각주 위에 포함해야 함: {p77}"
+    );
+    assert!(
+        p78.contains("3. EU") && !p78.contains("그림 51."),
+        "그림 51 단독 page가 제거되면 p78은 다음 본문으로 재개해야 함: {p78}"
+    );
+    assert!(
+        !p79.trim().is_empty(),
+        "p79은 연쇄 이월 때문에 빈 표 전용 page가 되어서는 안 됨"
     );
 }

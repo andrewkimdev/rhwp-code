@@ -1901,6 +1901,25 @@ fn is_two_row_picture_caption_rowbreak_table(table: &crate::model::table::Table)
     has_picture && has_caption_text
 }
 
+/// native HWP5 RowBreak 표 셀 안에 저장된 vpos reset이 있는지 판별한다.
+///
+/// 표 행 경계가 아니라 셀 내부 줄에서 `양수 vpos → 0 이하`로 되감긴 경우는 해당
+/// cell tail이 다음 물리 페이지에서 이어진다는 HWP 저장 신호다. 일반 row split과
+/// 달리 이 경계 직전에는 기존 FootnoteArea 바로 위까지 채워져야 하므로, caller가
+/// 안전 여백을 실제 각주 경계로 바꿀 수 있게 구조 신호만 제공한다.
+fn rowbreak_table_has_internal_saved_vpos_reset(table: &crate::model::table::Table) -> bool {
+    table.cells.iter().any(|cell| {
+        cell.paragraphs.iter().any(|para| {
+            para.line_segs.windows(2).any(|pair| {
+                !is_synthetic_line_seg(&pair[0])
+                    && !is_synthetic_line_seg(&pair[1])
+                    && pair[0].vertical_pos > 0
+                    && pair[1].vertical_pos <= 0
+            })
+        })
+    })
+}
+
 fn sample16_missing_lineseg_tail_break_line(
     para: &Paragraph,
     line_count: usize,
@@ -16274,14 +16293,30 @@ impl TypesetEngine {
             // 판정은 렌더러가 실제로 그리는 이 높이를 사용한다(content 24px + pad 3.8px).
             let split_total =
                 layout_engine.row_cut_content_height(table, r, row_start_cut, &res.end_cut, styles);
+            // [#3738 Stage 15] native HWP5의 RowBreak 표에 저장된 셀 내부 reset은
+            // 같은 row의 앞부분을 현재 쪽 끝에 두고 tail을 다음 쪽에서 재개하라는
+            // 물리 경계다. 이때 content-only 첫 cut은 25px orphan 경계에 몇 px
+            // 못 미칠 수 있지만, 실제로 보이는 셀 조각은 top/bottom padding까지
+            // 포함해 경계를 충족한다. content-only guard로 통째 이월하면 표 24의
+            // row 4가 p77에서 재배치되어 그림 51까지 다음 쪽으로 밀린다. native
+            // HWP5·비-TAC·RowBreak·같은 row의 stored reset·앞선 행이 이미 있는
+            // 경우로 한정해 #2439와 같은 painted-height 판정을 사용한다.
+            let native_hwp5_internal_reset_row_tail = st.profile.native_hwp5_layout()
+                && !table.common.treat_as_char
+                && mt.allows_row_break_split()
+                && r > cursor_row
+                && row_start_cut.is_empty()
+                && layout_engine.row_block_has_internal_hard_break(table, r, r + 1, styles);
+            let row_split_min_keep_uses_painted_height =
+                strict_painted_bottom_fit || native_hwp5_internal_reset_row_tail;
             // [Task #713] sliver(orphan) 회피 — 일반 표는 기존 content-only 기준을
-            // 유지한다. 패딩 포함 painted 기준은 좁은 #2439 구조 증거가 성립한
-            // strict 표에만 적용한다.
+            // 유지한다. 패딩 포함 painted 기준은 좁은 #2439 strict 표와, saved
+            // internal reset으로 page tail이 확정된 native HWP5 RowBreak에만 적용한다.
             if r > cursor_row
                 && !row_split_meets_min_top_keep(
                     res.consumed_height,
                     split_total,
-                    strict_painted_bottom_fit,
+                    row_split_min_keep_uses_painted_height,
                 )
             {
                 end_row = r;
@@ -16323,7 +16358,7 @@ impl TypesetEngine {
                         if row_split_meets_min_top_keep(
                             res2.consumed_height,
                             split_total2,
-                            strict_painted_bottom_fit,
+                            row_split_min_keep_uses_painted_height,
                         ) && cand2 <= avail_for_rows + split_row_overflow_tolerance
                         {
                             end_row = r + 1;
@@ -16347,7 +16382,7 @@ impl TypesetEngine {
                         && row_split_meets_min_top_keep(
                             res.consumed_height,
                             split_total,
-                            strict_painted_bottom_fit,
+                            row_split_min_keep_uses_painted_height,
                         )
                     {
                         if std::env::var("RHWP_DIAG_SCAN").is_ok() {
@@ -16488,8 +16523,24 @@ impl TypesetEngine {
                 .get(para_idx + 1)
                 .and_then(|p| p.line_segs.iter().find(|ls| !is_synthetic_line_seg(ls)))
                 .is_some_and(|ls| ls.vertical_pos <= 500 && ls.vertical_pos < table_anchor_vpos);
+        // [#3738 Stage 15] HWP5 RowBreak 표의 cell 내부 vpos reset은 같은 row의
+        // 앞부분을 현재 쪽, reset 뒤 tail을 다음 쪽에 둔 저장 경계다. 이 구조에서
+        // footnote safety margin까지 유지하면 p76 표 24의 앞 3줄이 1줄로 줄어들고
+        // p77에는 row 전체가 재배치되어 그림 51이 별도 page로 밀린다. native HWP5의
+        // 비-TAC TopAndBottom RowBreak 표, 기존 각주, 표 자체 각주 없음, 실제 cell
+        // reset이라는 네 축이 모두 있을 때만 실제 FootnoteArea 직전까지의 공간을 쓴다.
+        let internal_reset_tail_uses_actual_footnote_boundary = st.profile.native_hwp5_layout()
+            && !table.common.treat_as_char
+            && is_para_topbottom_float(&table.common)
+            && matches!(
+                table.page_break,
+                crate::model::table::TablePageBreak::RowBreak
+            )
+            && ft.table_footnotes.is_empty()
+            && st.current_footnote_height > 0.0
+            && rowbreak_table_has_internal_saved_vpos_reset(table);
         let mut fn_margin = if total_footnote > 0.0 {
-            if next_starts_new_page {
+            if next_starts_new_page || internal_reset_tail_uses_actual_footnote_boundary {
                 0.0
             } else {
                 st.footnote_safety_margin
