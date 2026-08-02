@@ -5342,7 +5342,7 @@ fn export_pdf(args: &[String]) -> i32 {
                         i += 2;
                     } else {
                         eprintln!("오류: --glyph-cache 뒤에 파일 경로가 필요합니다.");
-                        return;
+                        return 2;
                     }
                 }
                 // 이번 렌더에서 계산된(또는 --glyph-cache로 불러온 뒤 이번
@@ -5354,7 +5354,7 @@ fn export_pdf(args: &[String]) -> i32 {
                         i += 2;
                     } else {
                         eprintln!("오류: --dump-glyph-cache 뒤에 파일 경로가 필요합니다.");
-                        return;
+                        return 2;
                     }
                 }
                 "--fallback-serif" => {
