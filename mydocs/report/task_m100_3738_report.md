@@ -5,11 +5,11 @@ canonical: mydocs/manual/codex/docs_and_git_workflow.md
 last_verified: 2026-08-02
 ---
 
-# Task #3738 결과 보고 — Stage 1–9 그림·RowBreak 흐름 보정과 전체 pagination 잔여
+# Task #3738 결과 보고 — Stage 1–11 그림·RowBreak·각주 reservation 보정과 전체 pagination 잔여
 
 - 이슈: [#3738](https://github.com/edwardkim/rhwp/issues/3738)
 - 관련 PR: [#3740](https://github.com/edwardkim/rhwp/pull/3740)
-- 상태: **Stage 8의 HWP p23 그림 21 caption과 Stage 9의 HWP p66 table-footnote 첫 fragment는 복원. 전체 215쪽 pagination 정합은 계속 조사 중.**
+- 상태: **Stage 8의 HWP p23 그림 21 caption, Stage 9의 HWP p66 table-footnote first fragment, Stage 11의 HWP p67 footer collision은 복원. 전체 215쪽 pagination 정합은 계속 조사 중.**
 
 ## 완료한 작업
 
@@ -48,6 +48,12 @@ last_verified: 2026-08-02
     좁히고, 확정한 fragment page에 들어가는 cell footnote를 순서대로 등록했다. HWP p66은 기준 PDF처럼
     표 0–4행(Organ Donation까지)과 각주 76·77을 보유하고 p67은 Stephanie/Policy 5–6행부터 재개한다.
     전체 HWP 쪽수는 225→224가 됐다.
+12. Stage 10에서 p67 각주의 composed line spacing을 paginator까지 단순 전파한 후보는 224→226쪽으로
+    악화해 커밋하지 않고 기각 근거만 남겼다.
+13. Stage 11에서 p67 `FootnoteArea` reservation이 paint가 누적하는 trailing line-spacing을 빠뜨린
+    것을 고쳤다. renderer-side area height만 exact paint 산식에 맞춰 `y=669.5, h=369.8px`에서
+    `y=600.6, h=438.7px`으로 복원했고, actual footnote bottom은 footer top `1039.3px`에서 끝난다.
+    paginator를 건드리지 않아 224쪽을 유지했고 p66 table fragment ownership도 회귀하지 않았다.
 
 ## 미해결과 다음 회차
 
@@ -56,10 +62,10 @@ offset, 그리고 HWP p23 그림 21 caption cell 정렬은 해당 선택 페이�
 24쪽 `y=90.6px`, image `y=92.5px`, Bottom caption 3줄 `y=434.4/455.7/477.1px`이고 23쪽에는 없다.
 Stage 8 HWP 그림 21 caption 첫 줄은 PDF `495.16px` 대비 rhwp `494.7px`이다.
 
-그러나 전체 문서는 아직 **HWP 224쪽/HWPX 224쪽, 한컴 PDF 215쪽**이다. Stage 9가 첫 p728 table
-ownership을 해소했지만 p67 footnote area에는 35px `frame_overflow_pixels` 후보가 남고, 이후 page-count
-분기가 계속된다. 다음 Stage는 커밋된 Stage 9의 224쪽 결과를 기준으로 p67 footnote area와 다음 최초
-page-count 분기를 새로 분석한다. 완료된 p66 소유권을 전체 pagination 완료로 표현하지 않는다.
+그러나 전체 문서는 아직 **HWP 224쪽/HWPX 224쪽, 한컴 PDF 215쪽**이다. Stage 11이 p67의 35px
+`frame_overflow_pixels` 후보를 제거했지만 이후 page-count 분기가 계속된다. 다음 Stage는 커밋된
+Stage 11의 224쪽 결과를 기준으로 p68 이후 최초 remaining pagination 분기를 새로 분석한다. 완료된
+p66 소유권과 p67 footer collision을 전체 pagination 완료로 표현하지 않는다.
 
 원본 HWP·HWPX와 각각의 기준 PDF, review PNG는 모두
 [`pdf/pr3740/README.md`](../../pdf/pr3740/README.md) 및 연결된 증적에 보관한다. 상세 페이지 비교와
@@ -72,7 +78,8 @@ page-count 분기를 새로 분석한다. 완료된 p66 소유권을 전체 pagi
 [Stage 6 visual sweep](../working/task_m100_3738_stage6_visual_sweep.md),
 [Stage 7 visual sweep](../working/task_m100_3738_stage7_visual_sweep.md),
 [Stage 8 visual sweep](../working/task_m100_3738_stage8_visual_sweep.md),
-[Stage 9 visual sweep](../working/task_m100_3738_stage9_visual_sweep.md)에 기록했다.
+[Stage 9 visual sweep](../working/task_m100_3738_stage9_visual_sweep.md),
+[Stage 11 visual sweep](../working/task_m100_3738_stage11_visual_sweep.md)에 기록했다.
 
 현재 그림별 선택 페이지의 완료 판정과 전체 215쪽 pagination 완료 판정을 혼동하지 않는다. 전체 215쪽
 raster sweep이나 전체 integration test는 Stage 8의 좁은 caption 보정 완료 근거로 사용하지 않았다.
@@ -92,7 +99,9 @@ raster sweep이나 전체 integration test는 Stage 8의 좁은 caption 보정 �
 - HWP p23, 144 DPI visual sweep — SVG/render tree 225쪽 생성, 선택 raster 1/1 완료; 그림 21 caption 직접 좌표와 PDF의 차이 0.46px
 - `CARGO_TARGET_DIR=target/review-planet6897-20260802 CARGO_INCREMENTAL=0 cargo test --profile release-test --test issue_3738_rowbreak_table_footnote_fragment` — 1 passed
 - HWP p66–p67, 144 DPI visual sweep — SVG/render tree 224쪽 생성, 선택 raster 2/2 완료; p66의 표 0–4행/각주 76·77 ownership 복원, p67 35px frame overflow 후보는 잔여로 기록
+- `CARGO_TARGET_DIR=target/review-planet6897-20260802 CARGO_INCREMENTAL=0 cargo test --profile release-test --test issue_3738_rowbreak_table_footnote_fragment --test issue_3738_hwp_caption_cell_alignment` — 2 passed
+- HWP p66–p67, 144 DPI visual sweep — SVG/render tree 224쪽 생성, 선택 raster 2/2 완료; p67 `FootnoteArea` actual bottom과 footer top 모두 1039.3px, structural 후보 0건
 
 전체 integration test와 215쪽 전체 raster sweep은 이 회차의 완료 근거로 사용하지 않았다. 전체
-pagination 정합이 아직 남아 있으므로, 이 보고서는 Stage 8의 선택 그림 흐름과 Stage 9 p66 table-footnote
-ownership만 완료로 표현한다.
+pagination 정합이 아직 남아 있으므로, 이 보고서는 선택 그림 흐름, Stage 9 p66 table-footnote
+ownership, Stage 11 p67 footer collision만 완료로 표현한다.

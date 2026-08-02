@@ -832,15 +832,24 @@ impl LayoutEngine {
         total += border_width_to_px(shape.separator_line_width).max(0.5);
         total += hwpunit_to_px(shape.separator_below_margin_hu() as i32, self.dpi);
 
-        // 각 각주의 문단 높이 (LineSeg.line_height는 HWP에서 줄간격 이미 반영됨)
+        // 실제 `layout_footnote_area`와 같은 줄 높이 산식을 사용한다. 저장 LineSeg의
+        // line_height만 더하면 renderer가 누적하는 trailing line_spacing이 빠져 긴
+        // 각주가 예약 영역(및 footer)을 넘을 수 있다. 마지막 각주 문단의 마지막 줄은
+        // layout 경로에서도 trailing spacing을 붙이지 않는다.
         for (i, fn_ref) in footnotes.iter().enumerate() {
             let fn_paras = get_footnote_paragraphs(fn_ref, paragraphs);
-            for para in fn_paras {
-                if para.line_segs.is_empty() {
+            for (p_idx, para) in fn_paras.iter().enumerate() {
+                let composed = compose_paragraph(para);
+                if composed.lines.is_empty() {
                     total += hwpunit_to_px(400, self.dpi);
                 } else {
-                    for seg in &para.line_segs {
-                        total += hwpunit_to_px(seg.line_height, self.dpi);
+                    let is_last_para_of_note = p_idx + 1 == fn_paras.len();
+                    for (line_idx, line) in composed.lines.iter().enumerate() {
+                        total += hwpunit_to_px(line.line_height, self.dpi);
+                        let is_last_line = line_idx + 1 == composed.lines.len();
+                        if !(is_last_para_of_note && is_last_line) {
+                            total += hwpunit_to_px(line.line_spacing, self.dpi);
+                        }
                     }
                 }
             }
