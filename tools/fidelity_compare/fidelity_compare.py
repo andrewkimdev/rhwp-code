@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import difflib
 import glob
 import html
 import json
@@ -278,6 +279,12 @@ def normalized_characters(text: str) -> Counter[str]:
     return Counter(character for character in normalized if not character.isspace())
 
 
+def normalized_text_sequence(text: str) -> str:
+    """Keep normalized character order for page-owner movement candidates."""
+    normalized = unicodedata.normalize("NFC", text)
+    return "".join(character for character in normalized if not character.isspace())
+
+
 def svg_text(svg_path: Path) -> str:
     root = ET.parse(svg_path).getroot()
     parts: list[str] = []
@@ -356,6 +363,113 @@ def adjacent_text_owner_shift_candidates(
             missing,
             next_extra,
         )
+    return candidates
+
+
+def unmatched_sequence_fragments(
+    reference_text: str,
+    rendered_text: str,
+    *,
+    reference_only: bool,
+    min_chars: int = 16,
+) -> list[str]:
+    """Return substantial ordered text unique to one side of a page comparison.
+
+    Counter deltas are intentionally order-independent, but repeated ordinary
+    characters can hide a whole URL or citation that moved by one page.  This
+    helper preserves order only for candidate extraction; it does not assert
+    that a page is visually equivalent.
+    """
+    reference = normalized_text_sequence(reference_text)
+    rendered = normalized_text_sequence(rendered_text)
+    fragments: list[str] = []
+    matcher = difflib.SequenceMatcher(None, reference, rendered, autojunk=False)
+    for tag, reference_start, reference_end, rendered_start, rendered_end in matcher.get_opcodes():
+        if tag == "equal":
+            continue
+        if reference_only:
+            if tag not in {"delete", "replace"}:
+                continue
+            fragment = reference[reference_start:reference_end]
+        else:
+            if tag not in {"insert", "replace"}:
+                continue
+            fragment = rendered[rendered_start:rendered_end]
+        if len(fragment) >= min_chars:
+            fragments.append(fragment)
+
+    # A large replace can contain a shorter unmatched run.  Keep only the
+    # largest representative so the review queue remains concise.
+    selected: list[str] = []
+    for fragment in sorted(set(fragments), key=len, reverse=True):
+        if not any(fragment in kept for kept in selected):
+            selected.append(fragment)
+    return selected
+
+
+def adjacent_text_owner_sequence_candidates(
+    page_text_layers: Mapping[int, tuple[str, str]],
+) -> list[dict[str, object]]:
+    """Find ordered text that has moved exactly one physical page.
+
+    This complements the Counter-based reciprocal ledger.  A substantial
+    sequence missing from PDF pN's SVG but present only in SVG pN+1 is an
+    `rhwp_later_than_reference` candidate; the inverse is
+    `rhwp_earlier_than_reference`.  It is deliberately candidate-only because
+    PDF text extraction and identical repeated prose can still be ambiguous.
+    """
+    candidates: list[dict[str, object]] = []
+    for page_index in sorted(page_text_layers):
+        next_layers = page_text_layers.get(page_index + 1)
+        if next_layers is None:
+            continue
+        reference, rendered = page_text_layers[page_index]
+        next_reference, next_rendered = next_layers
+        # The fragments below are whitespace-normalized because SVG/PDF text
+        # layers often disagree only in a line break.  Normalize every side
+        # before both target membership checks as well; comparing a normalized
+        # URL/citation to raw next-page text silently misses that common case.
+        reference_sequence = normalized_text_sequence(reference)
+        rendered_sequence = normalized_text_sequence(rendered)
+        next_reference_sequence = normalized_text_sequence(next_reference)
+        next_rendered_sequence = normalized_text_sequence(next_rendered)
+        for fragment in unmatched_sequence_fragments(
+            reference_sequence, rendered_sequence, reference_only=True
+        ):
+            if (
+                fragment in next_rendered_sequence
+                and fragment not in next_reference_sequence
+                # SequenceMatcher can choose a non-local alignment after an
+                # intra-page reorder.  Do not label text that is still on the
+                # current rhwp page as a physical-page owner move.
+                and fragment not in rendered_sequence
+            ):
+                candidates.append(
+                    {
+                        "page": page_index,
+                        "next_page": page_index + 1,
+                        "direction": "rhwp_later_than_reference",
+                        "chars": len(fragment),
+                        "sequence": fragment,
+                    }
+                )
+        for fragment in unmatched_sequence_fragments(
+            reference_sequence, rendered_sequence, reference_only=False
+        ):
+            if (
+                fragment in next_reference_sequence
+                and fragment not in next_rendered_sequence
+                and fragment not in reference_sequence
+            ):
+                candidates.append(
+                    {
+                        "page": page_index,
+                        "next_page": page_index + 1,
+                        "direction": "rhwp_earlier_than_reference",
+                        "chars": len(fragment),
+                        "sequence": fragment,
+                    }
+                )
     return candidates
 
 
@@ -752,6 +866,23 @@ def write_text_owner_shift_ledger(
             )
 
 
+def write_text_owner_sequence_ledger(
+    work_dir: Path,
+    page_text_layers: Mapping[int, tuple[str, str]],
+) -> None:
+    """Write ordered adjacent-page owner candidates not visible to Counters."""
+    report_path = work_dir / "text-owner-sequence-candidates.tsv"
+    with report_path.open("w", encoding="utf-8") as report:
+        report.write("page\tnext_page\tdirection\tsequence_chars\tsequence\tnote\n")
+        for candidate in adjacent_text_owner_sequence_candidates(page_text_layers):
+            sequence = str(candidate["sequence"]).replace("\t", " ").replace("\n", " ")
+            report.write(
+                f"{int(candidate['page']) + 1}\t{int(candidate['next_page']) + 1}\t"
+                f"{candidate['direction']}\t{candidate['chars']}\t{sequence}\t"
+                "candidate only; PDF visual owner review required\n"
+            )
+
+
 def write_page_count_ledger(
     work_dir: Path,
     *,
@@ -928,6 +1059,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     rows: list[tuple[int, float, str]] = []
     text_rows: list[tuple[int, int, int, str, str, str]] = []
     text_differences: dict[int, tuple[Counter[str], Counter[str]]] = {}
+    text_layers: dict[int, tuple[str, str]] = {}
     completed_pages: list[int] = []
     missing_pages: list[int] = []
     for page_index in requested_pages:
@@ -943,8 +1075,10 @@ def main(argv: Sequence[str] | None = None) -> int:
 
         try:
             reference_text = reference_text_for_page(page_index)
-            missing, extra = compare_text_layers(reference_text, svg_text(svg_path))
+            rendered_text = svg_text(svg_path)
+            missing, extra = compare_text_layers(reference_text, rendered_text)
             text_differences[page_index] = (missing, extra)
+            text_layers[page_index] = (reference_text, rendered_text)
             text_rows.append(
                 (
                     page_index,
@@ -1011,6 +1145,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
 
     write_text_owner_shift_ledger(work_dir, text_differences)
+    write_text_owner_sequence_ledger(work_dir, text_layers)
     write_page_count_ledger(
         work_dir,
         reference_page_count=reference_page_count,
@@ -1040,6 +1175,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     print("pixel report:", report_path)
     print("text report:", text_report_path)
     print("text owner-shift candidates:", work_dir / "text-owner-shift-candidates.tsv")
+    print("text owner-sequence candidates:", work_dir / "text-owner-sequence-candidates.tsv")
     print("page-count ledger:", work_dir / "page-count-ledger.tsv")
     if args.layout_ledger:
         print("layout ledger:", work_dir / "layout-candidates.tsv")

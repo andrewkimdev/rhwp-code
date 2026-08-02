@@ -5928,7 +5928,10 @@ impl TypesetEngine {
                             let fragments = native_hwp5_footnote_break
                                 .filter(|footnote_break| footnote_break.split_footnote)
                                 .and_then(|_| native_hwp5_two_line_footnote_fragments(fn_ctrl));
-                            let routed = native_hwp5_footnote_break.map(|_| {
+                            // 두 줄 각주는 full-note owner route와 다른 계약이다. marker
+                            // anchor에 첫 line을 소급하고 tail current page에 두 번째 line을
+                            // 두는 기존 fallback을 보존한다(p31 note 30).
+                            let collision_routed = native_hwp5_footnote_break.map(|_| {
                                 crate::renderer::pagination::find_inline_control_target_page(
                                     &st.pages,
                                     &st.current_items,
@@ -5937,8 +5940,39 @@ impl TypesetEngine {
                                     para,
                                 )
                             });
+                            // 본문 문단이 이미 physical page로 나뉜 뒤 처리되는 Body
+                            // Footnote는, anchor page가 기존 각주를 이미 가진 경우에는 marker가
+                            // 든 PartialParagraph의 owner를 따라야 한다. 그렇지 않으면 p52의
+                            // note 60처럼 marker는 p52에 남고 각주는 tail page p53에 등록된다.
+                            // 첫 각주가 없는 page까지 일반화하면 p62 note 74처럼 기존 흐름에서
+                            // reserve하던 각주가 빠져 후속 page break를 바꾼다. native HWP5의
+                            // multi-note stored LINE_SEG ownership만 대상으로 하여 다른 profile과
+                            // first-note 흐름은 바꾸지 않는다.
+                            let multi_note_routed = if st.profile.native_hwp5_layout() {
+                                crate::renderer::pagination::find_inline_control_target_page(
+                                    &st.pages,
+                                    &st.current_items,
+                                    para_idx,
+                                    ctrl_idx,
+                                    para,
+                                )
+                                .filter(|(page_idx, _)| {
+                                    st.pages
+                                        .get(*page_idx)
+                                        .is_some_and(|page| !page.footnotes.is_empty())
+                                })
+                            } else {
+                                None
+                            };
+                            // first-footnote collision은 기존에 `Some(None)` 자체도
+                            // “현재 page에 둔다”는 결정이었다. 그 결정을 multi-note
+                            // filter로 덮으면 p30 note 29가 tail p31에 떨어진다.
+                            let routed = match collision_routed {
+                                Some(route) => route,
+                                None => multi_note_routed,
+                            };
                             let fragment_routed_page = fragments.as_ref().and_then(|_| {
-                                routed.flatten().or_else(|| {
+                                collision_routed.flatten().or_else(|| {
                                     // reset 직전 줄 안의 marker라도 current item의 char 범위를
                                     // 찾지 못하면 일반 라우터는 tail page를 가리킨다. 이 좁은
                                     // HWP5 형상은 저장 reset 전 page가 첫 footnote line owner다.
@@ -5981,7 +6015,7 @@ impl TypesetEngine {
                                     }
                                 }
                             }
-                            if let Some(Some((page_idx, _))) = routed {
+                            if let Some((page_idx, _)) = routed {
                                 if st.add_footnote_to_completed_page(
                                     page_idx,
                                     fn_ctrl.number,

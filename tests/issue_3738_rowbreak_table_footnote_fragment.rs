@@ -35,6 +35,9 @@ const PAGE_44: u32 = 43;
 const PAGE_25: u32 = 24;
 const PAGE_26: u32 = 25;
 const PAGE_27: u32 = 26;
+const PAGE_52: u32 = 51;
+const PAGE_53: u32 = 52;
+const PAGE_54: u32 = 53;
 const PAGE_154: u32 = 153;
 const PAGE_155: u32 = 154;
 const PAGE_156: u32 = 155;
@@ -360,6 +363,81 @@ fn native_hwp5_final_marker_footnote_uses_the_next_reset_page() {
         p27_notes.contains("Adam et al"),
         "p27 FootnoteArea must own note 26: {p27_notes}"
     );
+}
+
+#[test]
+fn native_hwp5_split_body_footnotes_stay_with_their_marker_page() {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(SAMPLE);
+    let bytes = fs::read(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+    let doc = HwpDocument::from_bytes(&bytes).expect("parse stage28 HWP evidence fixture");
+
+    let p52 = page_text(&doc, PAGE_52);
+    let p53 = page_text(&doc, PAGE_53);
+    let p54 = page_text(&doc, PAGE_54);
+    assert!(
+        p52.contains("60)   http://www.who.int/transplantation/publications/ConsensusStatementShort.pdf?ua=1"),
+        "p52 must retain footnote 60 with its split-body marker: {p52}"
+    );
+    assert!(
+        !p53.contains("ConsensusStatementShort.pdf?ua=1"),
+        "p53 must not inherit p52 footnote 60: {p53}"
+    );
+    assert!(
+        p53.contains("62)   Lentine, Krista L., et al. \"KDIGO clinical practice guideline"),
+        "p53 must retain footnote 62 with its split-body marker: {p53}"
+    );
+    assert!(
+        !p54.contains("KDIGO clinical practice guideline"),
+        "p54 must not inherit p53 footnote 62: {p54}"
+    );
+    assert_eq!(
+        doc.page_count(),
+        219,
+        "marker-page footnote routing must not introduce a new physical page"
+    );
+
+    let p52_tree = doc
+        .build_page_render_tree(PAGE_52)
+        .expect("render physical page 52");
+    let p53_tree = doc
+        .build_page_render_tree(PAGE_53)
+        .expect("render physical page 53");
+    let p54_tree = doc
+        .build_page_render_tree(PAGE_54)
+        .expect("render physical page 54");
+    let mut p52_notes = String::new();
+    let mut p53_notes = String::new();
+    let mut p54_notes = String::new();
+    footnote_text(&p52_tree.root, false, &mut p52_notes);
+    footnote_text(&p53_tree.root, false, &mut p53_notes);
+    footnote_text(&p54_tree.root, false, &mut p54_notes);
+    assert!(
+        p52_notes.contains("ConsensusStatementShort.pdf?ua=1"),
+        "p52 FootnoteArea must own note 60: {p52_notes}"
+    );
+    assert!(
+        p53_notes.contains("KDIGO clinical practice guideline"),
+        "p53 FootnoteArea must own note 62: {p53_notes}"
+    );
+    assert!(
+        !p54_notes.contains("KDIGO clinical practice guideline"),
+        "p54 FootnoteArea must not own note 62: {p54_notes}"
+    );
+
+    // completed page에 각주를 소급 등록하는 경로는 본문을 다시 paginate하지
+    // 않으므로, marker가 든 마지막 body line과 새 FootnoteArea separator가
+    // 실제로 겹치지 않는 것도 고정한다.
+    for (page_name, tree, para_index) in [("p52", &p52_tree, 602), ("p53", &p53_tree, 605)] {
+        let mut body_bottom = None;
+        let mut separator_top = None;
+        paragraph_bottom(&tree.root, para_index, &mut body_bottom);
+        footnote_separator_top(&tree.root, &mut separator_top);
+        assert!(
+            body_bottom.expect("split body paragraph")
+                <= separator_top.expect("footnote separator") + 0.5,
+            "{page_name} marker body must remain above its retroactive FootnoteArea"
+        );
+    }
 }
 
 #[test]

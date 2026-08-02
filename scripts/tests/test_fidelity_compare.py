@@ -175,6 +175,93 @@ class TextLayerComparisonTests(unittest.TestCase):
 
         self.assertEqual(candidates, [])
 
+    def test_adjacent_ordered_sequence_detects_counter_diluted_late_owner(self) -> None:
+        moved = "60)http://www.who.int/transplantation/ConsensusStatementShort.pdf?ua=1"
+        candidates = FIDELITY.adjacent_text_owner_sequence_candidates(
+            {
+                51: (f"p52 본문 {moved}", "p52 본문"),
+                52: ("p53 본문", f"p53 본문 {moved}"),
+            }
+        )
+
+        self.assertEqual(len(candidates), 1)
+        self.assertEqual(candidates[0]["page"], 51)
+        self.assertEqual(candidates[0]["next_page"], 52)
+        self.assertEqual(candidates[0]["direction"], "rhwp_later_than_reference")
+        self.assertEqual(candidates[0]["sequence"], moved)
+
+    def test_adjacent_ordered_sequence_normalizes_target_page_line_breaks(self) -> None:
+        moved = "60) http://www.who.int/transplantation/ConsensusStatementShort.pdf?ua=1"
+        candidates = FIDELITY.adjacent_text_owner_sequence_candidates(
+            {
+                51: (f"p52 본문 {moved}", "p52 본문"),
+                52: (
+                    "p53 본문",
+                    "p53 본문\n60)    http://www.who.int/transplantation/"
+                    "ConsensusStatementShort.pdf?ua=1",
+                ),
+            }
+        )
+
+        self.assertEqual(len(candidates), 1)
+        self.assertEqual(candidates[0]["page"], 51)
+        self.assertEqual(candidates[0]["next_page"], 52)
+        self.assertEqual(candidates[0]["direction"], "rhwp_later_than_reference")
+
+    def test_adjacent_ordered_sequence_detects_a_multistep_late_owner_chain(self) -> None:
+        moved60 = "60) https://example.test/zzzzzzzzzzzzzzzzzzzzzzzz"
+        moved62 = "62) qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq"
+        candidates = FIDELITY.adjacent_text_owner_sequence_candidates(
+            {
+                51: (f"p52 본문 {moved60}", "p52 본문"),
+                52: (f"p53 본문 {moved62}", f"p53 본문\n{moved60}"),
+                53: ("p54 본문", f"p54 본문\n{moved62}"),
+            }
+        )
+
+        self.assertEqual(
+            [(candidate["page"], candidate["next_page"], candidate["direction"])
+            for candidate in candidates],
+            [(51, 52, "rhwp_later_than_reference"), (52, 53, "rhwp_later_than_reference")],
+        )
+
+    def test_adjacent_ordered_sequence_ignores_intra_page_reorder(self) -> None:
+        moved = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+        tail = "qrstuvwxyz" * 10
+        candidates = FIDELITY.adjacent_text_owner_sequence_candidates(
+            {
+                0: (f"prefix{moved}{tail}", f"prefix{tail}{moved}"),
+                1: ("p2", f"p2{moved}"),
+            }
+        )
+
+        self.assertEqual(candidates, [])
+
+    def test_adjacent_ordered_sequence_detects_early_owner(self) -> None:
+        moved = "26)11번참고문헌내Adametal논문"
+        candidates = FIDELITY.adjacent_text_owner_sequence_candidates(
+            {
+                25: ("p26 본문", f"p26 본문 {moved}"),
+                26: (f"p27 본문 {moved}", "p27 본문"),
+            }
+        )
+
+        self.assertEqual(len(candidates), 1)
+        self.assertEqual(candidates[0]["page"], 25)
+        self.assertEqual(candidates[0]["next_page"], 26)
+        self.assertEqual(candidates[0]["direction"], "rhwp_earlier_than_reference")
+
+    def test_ordered_sequence_ignores_text_still_owned_by_next_reference_page(self) -> None:
+        moved = "동일한문장이정상적으로다음쪽에도있음"
+        candidates = FIDELITY.adjacent_text_owner_sequence_candidates(
+            {
+                0: (f"p1 {moved}", "p1"),
+                1: (f"p2 {moved}", f"p2 {moved}"),
+            }
+        )
+
+        self.assertEqual(candidates, [])
+
     def test_owner_shift_ledger_uses_one_based_page_numbers(self) -> None:
         moved = Counter("각주26) footnote owner")
         with tempfile.TemporaryDirectory() as directory:
@@ -190,6 +277,23 @@ class TextLayerComparisonTests(unittest.TestCase):
             )
 
         self.assertIn("26\t27\trhwp_earlier_than_reference", report)
+
+    def test_owner_sequence_ledger_uses_one_based_page_numbers(self) -> None:
+        moved = "60)http://www.who.int/transplantation/ConsensusStatementShort.pdf?ua=1"
+        with tempfile.TemporaryDirectory() as directory:
+            FIDELITY.write_text_owner_sequence_ledger(
+                Path(directory),
+                {
+                    51: (f"p52 {moved}", "p52"),
+                    52: ("p53", f"p53 {moved}"),
+                },
+            )
+            report = (Path(directory) / "text-owner-sequence-candidates.tsv").read_text(
+                encoding="utf-8"
+            )
+
+        self.assertIn("52\t53\trhwp_later_than_reference", report)
+        self.assertIn(moved, report)
 
     def test_numbered_page_count_ignores_manifest_and_non_page_files(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
