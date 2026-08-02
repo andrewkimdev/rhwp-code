@@ -26845,6 +26845,196 @@ fn merge_rejects_when_paragraph_between_has_content() {
 }
 
 #[test]
+fn split_table_recomputes_corrupted_row_sizes() {
+    // 파싱이 불완전한 문서는 row_sizes 가 row_count 와 어긋날 수 있다. 그 상태로
+    // 나누면 산술 분할(drain/truncate)은 어긋남을 양쪽 표로 전파해 직렬화를
+    // 깨뜨린다 — 나누기는 양쪽 row_sizes 를 실제 셀에서 재계산해야 한다.
+    use crate::model::control::Control;
+    let mut doc = HwpDocument::create_empty();
+    let created = doc.create_table_native(0, 0, 0, 4, 3).expect("표 생성");
+    let para_idx = issue_1481_json_usize(&created, "paraIdx");
+
+    for c in &mut doc.document.sections[0].paragraphs[para_idx].controls {
+        if let Control::Table(t) = c {
+            t.row_sizes = vec![1]; // 손상 재현: 4행인데 항목 1개
+        }
+    }
+
+    doc.split_table_native(0, para_idx, 0, 2)
+        .expect("표 나누기");
+
+    for &p in &table_control_paras(&doc) {
+        let t = issue_1481_table(&doc, p);
+        assert_eq!(
+            t.row_sizes.len(),
+            t.row_count as usize,
+            "row_sizes 길이는 row_count 와 일치해야 한다"
+        );
+        for r in 0..t.row_count {
+            assert_eq!(
+                t.row_sizes[r as usize] as usize,
+                t.cells.iter().filter(|c| c.row == r).count(),
+                "행 {r} 의 row_sizes 는 실제 셀 수여야 한다"
+            );
+        }
+    }
+}
+
+#[test]
+fn merge_failure_leaves_back_table_intact() {
+    // 검증이 뒤 표 제거 이후에 이뤄지면, 실패한 붙이기가 뒤 표를 문서에서
+    // 지워 버린다 — 모든 검증은 문서 변형 전에 끝나야 한다.
+    let mut doc = HwpDocument::create_empty();
+    let created = doc.create_table_native(0, 0, 0, 4, 2).expect("표 생성");
+    let para_idx = issue_1481_json_usize(&created, "paraIdx");
+    doc.split_table_native(0, para_idx, 0, 2).expect("나누기");
+    assert_eq!(table_control_paras(&doc).len(), 2);
+
+    assert!(
+        doc.merge_table_with_next_native(0, para_idx, 7).is_err(),
+        "잘못된 control_idx 는 거부되어야 한다"
+    );
+    assert_eq!(
+        table_control_paras(&doc).len(),
+        2,
+        "실패한 붙이기가 뒤 표를 지우면 안 된다"
+    );
+    let back = issue_1481_table(&doc, table_control_paras(&doc)[1]);
+    assert_eq!(back.row_count, 2, "뒤 표 내용 보존");
+}
+
+#[test]
+fn merge_rejects_corrupted_back_row_overflow_before_mutation() {
+    // 손상 문서의 뒤 표에 row=u16::MAX 셀이 있으면 `cell.row += front_rows` 가
+    // debug panic / release wraparound 를 일으킨다. row_count 합 검증만으로는
+    // 못 걸러내므로, 셀·zone 실측 최대 행 기준으로 변형 전에 거부해야 한다.
+    use crate::model::control::Control;
+    let mut doc = HwpDocument::create_empty();
+    let created = doc.create_table_native(0, 0, 0, 4, 2).expect("표 생성");
+    let para_idx = issue_1481_json_usize(&created, "paraIdx");
+    doc.split_table_native(0, para_idx, 0, 2).expect("나누기");
+    let tables = table_control_paras(&doc);
+    assert_eq!(tables.len(), 2);
+
+    for c in &mut doc.document.sections[0].paragraphs[tables[1]].controls {
+        if let Control::Table(t) = c {
+            t.cells[0].row = u16::MAX; // 손상 재현
+        }
+    }
+
+    assert!(
+        doc.merge_table_with_next_native(0, tables[0], 0).is_err(),
+        "행 오버플로를 일으킬 손상 표는 거부되어야 한다"
+    );
+    assert_eq!(
+        table_control_paras(&doc).len(),
+        2,
+        "거부된 붙이기가 뒤 표를 지우면 안 된다"
+    );
+}
+
+#[test]
+fn split_connects_new_paragraph_vpos_to_flow() {
+    // [Task #2299 계약] 새로 삽입한 문단(사이 빈 문단·뒤 표 host)의 LineSeg 가
+    // placeholder vpos(0)로 남으면, 직렬화 시 가짜 단/쪽 경계로 기록되고 이후
+    // 편집의 vpos 재계산이 이를 저장 경계로 오인해 고착시킨다.
+    let mut doc = HwpDocument::create_empty();
+    let created = doc.create_table_native(0, 0, 0, 4, 3).expect("표 생성");
+    let para_idx = issue_1481_json_usize(&created, "paraIdx");
+
+    doc.split_table_native(0, para_idx, 0, 2)
+        .expect("표 나누기");
+
+    let paras = &doc.document.sections[0].paragraphs;
+    for (label, idx) in [("사이 문단", para_idx + 1), ("뒤 표 host", para_idx + 2)] {
+        let vpos = paras[idx].line_segs.first().map(|l| l.vertical_pos);
+        assert!(
+            vpos.is_some_and(|v| v > 0),
+            "{label}(문단 {idx})의 vertical_pos 는 흐름에 연결되어야 한다 (실제 {vpos:?})"
+        );
+    }
+}
+
+#[test]
+fn split_updates_dimensions_without_raw_ctrl_data() {
+    // HWPX 파서는 표의 raw_ctrl_data 를 비워 두므로, 크기 갱신이 raw 존재에
+    // 의존하면 나뉜 두 표가 모두 원본 전체 크기(common.height)로 남는다.
+    use crate::model::control::Control;
+    let mut doc = HwpDocument::create_empty();
+    let created = doc.create_table_native(0, 0, 0, 4, 3).expect("표 생성");
+    let para_idx = issue_1481_json_usize(&created, "paraIdx");
+
+    let orig_height = issue_1481_table(&doc, para_idx).common.height;
+    for c in &mut doc.document.sections[0].paragraphs[para_idx].controls {
+        if let Control::Table(t) = c {
+            t.raw_ctrl_data = Vec::new(); // HWPX 파스 문서 재현
+        }
+    }
+
+    doc.split_table_native(0, para_idx, 0, 2)
+        .expect("표 나누기");
+
+    let tables = table_control_paras(&doc);
+    let front = issue_1481_table(&doc, tables[0]);
+    let back = issue_1481_table(&doc, tables[1]);
+    assert!(
+        front.common.height < orig_height && back.common.height < orig_height,
+        "raw_ctrl_data 가 없어도 나뉜 표의 common.height 는 재계산되어야 한다 \
+         (원본 {orig_height}, 앞 {}, 뒤 {})",
+        front.common.height,
+        back.common.height
+    );
+}
+
+#[test]
+fn split_assigns_unique_nonzero_instance_ids() {
+    // instance_id 는 저장소 계약상 고유 비-0 이어야 한다 (create_table_native 의
+    // "비-0 필수", html_table_import 의 "고유한 비-0 값"). 0 으로 두면 두 번
+    // 나눴을 때 0 짜리 표 두 개가 생겨 동일-ID 충돌이 재현된다.
+    let mut doc = HwpDocument::create_empty();
+    let created = doc.create_table_native(0, 0, 0, 6, 2).expect("표 생성");
+    let para_idx = issue_1481_json_usize(&created, "paraIdx");
+
+    doc.split_table_native(0, para_idx, 0, 4)
+        .expect("1차 나누기");
+    doc.split_table_native(0, para_idx, 0, 2)
+        .expect("2차 나누기");
+
+    fn stored_instance_id(t: &crate::model::table::Table) -> u32 {
+        use crate::model::shape::common_obj_offsets;
+        if t.raw_ctrl_data.len() >= common_obj_offsets::INSTANCE_ID.end {
+            u32::from_le_bytes(
+                t.raw_ctrl_data[common_obj_offsets::INSTANCE_ID]
+                    .try_into()
+                    .unwrap(),
+            )
+        } else {
+            t.common.instance_id
+        }
+    }
+    let ids: Vec<u32> = table_control_paras(&doc)
+        .iter()
+        .map(|&p| stored_instance_id(issue_1481_table(&doc, p)))
+        .collect();
+    assert_eq!(ids.len(), 3);
+    for id in &ids {
+        assert_ne!(*id, 0, "instance_id 는 비-0 이어야 한다: {ids:?}");
+    }
+    let unique: std::collections::HashSet<u32> = ids.iter().copied().collect();
+    assert_eq!(unique.len(), 3, "instance_id 는 서로 달라야 한다: {ids:?}");
+}
+
+#[test]
+fn split_row_index_conversion_rejects_u16_overflow() {
+    // WASM 경계의 u32 → u16 캐스팅이 묵시적 절단이면 65537 이 1 로 바뀌어
+    // 요청 밖 행에서 표가 나뉜다 — 명시적 오류여야 한다.
+    assert!(super::row_index_from_u32(65537).is_err());
+    assert!(super::row_index_from_u32(u32::MAX).is_err());
+    assert_eq!(super::row_index_from_u32(3).unwrap(), 3u16);
+    assert_eq!(super::row_index_from_u32(65535).unwrap(), u16::MAX);
+}
+
+#[test]
 fn split_table_rejects_when_vertical_merge_crosses_cut() {
     let mut doc = HwpDocument::create_empty();
     let created = doc.create_table_native(0, 0, 0, 4, 2).expect("표 생성");

@@ -808,14 +808,17 @@ impl Table {
     ///   [12..16] width, [16..20] height, [20..24] z_order,
     ///   [24..32] outer_margin (i16×4), [32..36] instance_id
     pub fn update_ctrl_dimensions(&mut self) {
-        if self.raw_ctrl_data.len() < common_obj_offsets::HEIGHT.end {
-            return;
-        }
         let total_width: HwpUnit = self.get_column_widths().iter().sum();
         let total_height: HwpUnit = self.get_row_heights().iter().sum();
         // (1) serialize source — raw_ctrl_data bytes (HWP 직렬화 시 사용).
-        self.raw_ctrl_data[common_obj_offsets::WIDTH].copy_from_slice(&total_width.to_le_bytes());
-        self.raw_ctrl_data[common_obj_offsets::HEIGHT].copy_from_slice(&total_height.to_le_bytes());
+        // HWPX 파스 문서처럼 raw 가 없으면 건너뛴다 — 그 경우 직렬화기가
+        // self.common 에서 합성하므로 (2)만으로 충분하다.
+        if self.raw_ctrl_data.len() >= common_obj_offsets::HEIGHT.end {
+            self.raw_ctrl_data[common_obj_offsets::WIDTH]
+                .copy_from_slice(&total_width.to_le_bytes());
+            self.raw_ctrl_data[common_obj_offsets::HEIGHT]
+                .copy_from_slice(&total_height.to_le_bytes());
+        }
         // (2) [Task #1151 v6] paragraph_layout cache — self.common.width/height.
         // v3 helper (calc_sibling_topandbottom_table_reserved_hu) 가 self.common.height 사용.
         // dual maintenance 가 필수 — 한쪽만 갱신 시 stale 결함.
@@ -939,7 +942,7 @@ impl Table {
     }
 
     /// row_sizes를 행별 실제 셀 개수로 재계산한다.
-    fn rebuild_row_sizes(&mut self) {
+    pub(crate) fn rebuild_row_sizes(&mut self) {
         self.row_sizes = (0..self.row_count)
             .map(|r| self.cells.iter().filter(|c| c.row == r).count() as i16)
             .collect();

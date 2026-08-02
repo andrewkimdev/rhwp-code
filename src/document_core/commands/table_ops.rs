@@ -259,12 +259,14 @@ impl DocumentCore {
                 cell.row -= at_row;
             }
             back.row_count -= at_row;
-            if back.row_sizes.len() >= at_row as usize {
-                back.row_sizes.drain(0..at_row as usize);
-            }
-            back.caption = None; // 캡션은 앞 표에 남긴다
-                                 // zone(셀 영역 서식)은 행 범위로 갈라 보존한다. 분할선을 가로지르는
-                                 // zone 은 양쪽으로 잘라 담는다 (서식 무음 소실 방지).
+            // row_sizes(행별 셀 수)는 산술 분할 대신 셀에서 재계산한다 — 파싱이
+            // 불완전해 row_sizes 가 row_count 와 어긋난 문서에서도 직렬화가 깨지지
+            // 않게 한다.
+            back.rebuild_row_sizes();
+            // 캡션은 앞 표에 남긴다.
+            back.caption = None;
+            // zone(셀 영역 서식)은 행 범위로 갈라 보존한다. 분할선을 가로지르는
+            // zone 은 양쪽으로 잘라 담는다 (서식 무음 소실 방지).
             back.zones = table
                 .zones
                 .iter()
@@ -276,11 +278,33 @@ impl DocumentCore {
                     z
                 })
                 .collect();
-            // 복제된 instance_id 를 미할당(0)으로 되돌린다 — 같은 문서에 동일
-            // ID 표 두 개가 생기면 한컴 재열기·객체 식별이 충돌한다.
-            back.common.instance_id = 0;
+            // 복제된 뒤 표에 고유 비-0 instance_id 를 새로 배정한다 — 같은 문서에
+            // 동일 ID 표 두 개가 생기면 한컴 재열기·객체 식별이 충돌하고, 0 은
+            // 저장소 계약(create_table_native "비-0 필수") 위반이다. 원본 ID 에
+            // 분할 인자를 섞은 해시라 연쇄 분할에서도 서로 달라진다.
+            let orig_id = if table.raw_ctrl_data.len() >= common_obj_offsets::INSTANCE_ID.end {
+                u32::from_le_bytes(
+                    table.raw_ctrl_data[common_obj_offsets::INSTANCE_ID]
+                        .try_into()
+                        .unwrap(),
+                )
+            } else {
+                table.common.instance_id
+            };
+            let back_id = {
+                let mut h = orig_id
+                    .wrapping_mul(0x9e37_79b1)
+                    .wrapping_add(at_row as u32)
+                    .wrapping_add((back.row_count as u32).wrapping_mul(0x1000));
+                if h == 0 {
+                    h = 0x7c15_4b69;
+                }
+                h
+            };
+            back.common.instance_id = back_id;
             if back.raw_ctrl_data.len() >= common_obj_offsets::INSTANCE_ID.end {
-                back.raw_ctrl_data[common_obj_offsets::INSTANCE_ID].fill(0);
+                back.raw_ctrl_data[common_obj_offsets::INSTANCE_ID]
+                    .copy_from_slice(&back_id.to_le_bytes());
             }
             // Alt 로 조절한 행별 폭(local resize)을 나누기가 지우면 사용자가 만든
             // 칸 모양이 소실된다. cells 는 row-major 정렬이라 앞 표 인덱스는
@@ -312,7 +336,7 @@ impl DocumentCore {
             // 앞 표: at_row 이후를 잘라낸다.
             table.cells.retain(|c| c.row < at_row);
             table.row_count = at_row;
-            table.row_sizes.truncate(at_row as usize);
+            table.rebuild_row_sizes();
             table.zones.retain(|z| z.start_row < at_row);
             for z in &mut table.zones {
                 if z.end_row >= at_row {
@@ -341,7 +365,7 @@ impl DocumentCore {
             extra[4..6].copy_from_slice(&1u16.to_le_bytes());
             extra
         };
-        let between_para = Paragraph {
+        let make_skeleton_para = || Paragraph {
             text: String::new(),
             char_count: 1,
             control_mask: 0,
@@ -365,36 +389,39 @@ impl DocumentCore {
             raw_header_extra: make_raw_header_extra(),
             ..Default::default()
         };
+        let between_para = make_skeleton_para();
         let back_para = Paragraph {
-            text: String::new(),
             char_count: 9, // 확장 제어문자(8) + 문단끝(1)
             control_mask: 0x0000_0800,
-            char_shapes: vec![CharShapeRef {
-                start_pos: 0,
-                char_shape_id: host_char_shape_id,
-            }],
-            line_segs: vec![LineSeg {
-                text_start: 0,
-                line_height: 1000,
-                text_height: 1000,
-                baseline_distance: 850,
-                line_spacing: 600,
-                segment_width: 0,
-                tag: LineSeg::TAG_SINGLE_SEGMENT_LINE,
-                ..Default::default()
-            }],
-            para_shape_id: host_para_shape_id,
-            style_id: 0,
             controls: vec![Control::Table(Box::new(back_table))],
             ctrl_data_records: vec![None],
             has_para_text: true,
-            raw_header_extra: make_raw_header_extra(),
-            ..Default::default()
+            ..make_skeleton_para()
         };
 
         let paragraphs = &mut self.document.sections[section_idx].paragraphs;
         paragraphs.insert(parent_para_idx + 1, between_para);
         paragraphs.insert(parent_para_idx + 2, back_para);
+
+        // [Task #2299] 신규 문단(사이 빈 문단·뒤 표 host)의 placeholder vpos 를
+        // 흐름에 연결한다 — 방치하면 vertical_pos=0 이 저장 단/쪽 리셋으로
+        // 오인·고착된다. 앞 표 host 는 높이가 줄었으므로 함께 reflow 한다.
+        // (create_table_native 의 동일 계약 블록 참조)
+        let fresh_end =
+            (parent_para_idx + 3).min(self.document.sections[section_idx].paragraphs.len());
+        for i in parent_para_idx..fresh_end {
+            self.reflow_paragraph(section_idx, i);
+        }
+        let doc_hwp3_layout = self.document.layout_profile().hwp3_layout();
+        crate::renderer::composer::recalculate_section_vpos(
+            &mut self.document.sections[section_idx].paragraphs,
+            parent_para_idx,
+            Some(parent_para_idx + 1..fresh_end),
+            None,
+            &self.styles,
+            self.dpi,
+            doc_hwp3_layout,
+        );
 
         self.document.sections[section_idx].raw_stream = None;
         self.recompose_section(section_idx);
@@ -426,7 +453,7 @@ impl DocumentCore {
         use crate::model::control::Control;
 
         // 1) 다음 표 위치 탐색 — 사이에는 빈 문단만 허용.
-        let (back_para_idx, back_ctrl_idx) = {
+        let (back_para_idx, back_ctrl_idx, back_rows, back_max_row) = {
             let section = self
                 .document
                 .sections
@@ -435,7 +462,7 @@ impl DocumentCore {
             if parent_para_idx >= section.paragraphs.len() {
                 return Err(HwpError::RenderError("문단 인덱스 범위 초과".to_string()));
             }
-            let mut found: Option<(usize, usize)> = None;
+            let mut found: Option<(usize, usize, u16, u16)> = None;
             for (idx, para) in section
                 .paragraphs
                 .iter()
@@ -453,17 +480,30 @@ impl DocumentCore {
                             "표 사이에 다른 내용이 있어 붙일 수 없습니다".to_string(),
                         ));
                     }
-                    if let Control::Table(back) = &para.controls[ci] {
-                        // 뒤 표 캡션은 무음 소실 대신 명시 거부 — 사용자가 캡션을
-                        // 지우고 다시 시도할 수 있게 한다.
-                        if back.caption.is_some() {
-                            return Err(HwpError::RenderError(
-                                "뒤 표에 캡션이 있어 붙일 수 없습니다. 캡션을 지운 뒤 다시 시도하세요"
-                                    .to_string(),
-                            ));
-                        }
+                    let Control::Table(back) = &para.controls[ci] else {
+                        unreachable!("표 컨트롤 위치 확인됨")
+                    };
+                    // 뒤 표 캡션은 무음 소실 대신 명시 거부 — 사용자가 캡션을
+                    // 지우고 다시 시도할 수 있게 한다.
+                    if back.caption.is_some() {
+                        return Err(HwpError::RenderError(
+                            "뒤 표에 캡션이 있어 붙일 수 없습니다. 캡션을 지운 뒤 다시 시도하세요"
+                                .to_string(),
+                        ));
                     }
-                    found = Some((idx, ci));
+                    // row_count 뿐 아니라 셀·zone·행별 폭이 실제로 참조하는 최대
+                    // 행도 함께 잰다 — 손상 문서는 row_count 범위 밖 행을 가질 수
+                    // 있고, 그대로 오프셋을 더하면 u16 오버플로가 난다.
+                    let max_row = back
+                        .cells
+                        .iter()
+                        .map(|c| c.row)
+                        .chain(back.zones.iter().map(|z| z.start_row.max(z.end_row)))
+                        .chain(back.local_resize_rows.iter().copied())
+                        .max()
+                        .unwrap_or(0)
+                        .max(back.row_count.saturating_sub(1));
+                    found = Some((idx, ci, back.row_count, max_row));
                     break;
                 }
                 if !para.text.trim().is_empty() || !para.controls.is_empty() {
@@ -475,7 +515,20 @@ impl DocumentCore {
             found.ok_or_else(|| HwpError::RenderError("붙일 다음 표가 없습니다".to_string()))?
         };
 
-        // 2) 뒤 표 분리 회수.
+        // 2) 남은 검증을 문서 변형 전에 끝낸다 — 여기서 실패하면 문서는 그대로다.
+        //    (뒤 표를 먼저 remove 하면 실패 경로에서 뒤 표가 소실된다.)
+        let front_rows = self
+            .get_table_mut(section_idx, parent_para_idx, control_idx)?
+            .row_count;
+        if front_rows as u32 + back_rows as u32 > u16::MAX as u32
+            || front_rows as u32 + back_max_row as u32 > u16::MAX as u32
+        {
+            return Err(HwpError::RenderError(
+                "붙인 표의 행 수가 최대치(65535)를 넘습니다".to_string(),
+            ));
+        }
+
+        // 3) 뒤 표 분리 회수.
         let back_table = {
             let para = &mut self.document.sections[section_idx].paragraphs[back_para_idx];
             match para.controls.remove(back_ctrl_idx) {
@@ -484,15 +537,10 @@ impl DocumentCore {
             }
         };
 
-        // 3) 앞 표에 행 이어붙이기.
+        // 4) 앞 표에 행 이어붙이기. (이 조회는 2)에서 이미 성공한 재차용이라
+        //    실패하지 않는다 — borrow 를 좁히기 위한 재조회일 뿐이다.)
         {
             let table = self.get_table_mut(section_idx, parent_para_idx, control_idx)?;
-            let front_rows = table.row_count;
-            if front_rows as u32 + back_table.row_count as u32 > u16::MAX as u32 {
-                return Err(HwpError::RenderError(
-                    "붙인 표의 행 수가 최대치(65535)를 넘습니다".to_string(),
-                ));
-            }
             let back_cell_count = back_table.cells.len();
             let mut back_cells = back_table.cells;
             for cell in &mut back_cells {
@@ -500,9 +548,11 @@ impl DocumentCore {
             }
             table.cells.extend(back_cells);
             table.row_count += back_table.row_count;
-            table.row_sizes.extend(back_table.row_sizes);
+            // row_sizes(행별 셀 수)는 이어붙인 셀에서 재계산한다 — 어느 쪽이든
+            // row_sizes 가 어긋나 있던 문서에서도 결과가 자기 일관된다.
+            table.rebuild_row_sizes();
             table.col_count = table.col_count.max(back_table.col_count);
-            table.common.width = table.common.width.max(back_table.common.width);
+            // 폭은 아래 update_ctrl_dimensions() 가 병합된 칸 폭에서 재계산한다.
             // zone 서식 보존: 뒤 표 zone 은 행 오프셋을 더해 이어 붙인다.
             let mut back_zones = back_table.zones;
             for z in &mut back_zones {
@@ -538,10 +588,28 @@ impl DocumentCore {
             table.dirty = true;
         }
 
-        // 4) 사이 빈 문단들과 뒤 표 host 문단 제거.
+        // 5) 사이 빈 문단들과 뒤 표 host 문단 제거.
         self.document.sections[section_idx]
             .paragraphs
             .drain(parent_para_idx + 1..=back_para_idx);
+
+        // [Task #2299] host 표 높이가 늘고 뒤 문단들이 당겨졌으므로 저장 vpos 를
+        // 재계산한다 — 방치하면 stale vpos 가 그대로 직렬화된다.
+        // (delete_table_control_native 의 동일 계약 블록 참조)
+        let stored_end_for_reset = crate::renderer::composer::paragraph_flow_end(
+            &self.document.sections[section_idx].paragraphs[parent_para_idx],
+        );
+        self.reflow_paragraph(section_idx, parent_para_idx);
+        let doc_hwp3_layout = self.document.layout_profile().hwp3_layout();
+        crate::renderer::composer::recalculate_section_vpos(
+            &mut self.document.sections[section_idx].paragraphs,
+            parent_para_idx,
+            None,
+            stored_end_for_reset,
+            &self.styles,
+            self.dpi,
+            doc_hwp3_layout,
+        );
 
         self.document.sections[section_idx].raw_stream = None;
         self.recompose_section(section_idx);
@@ -552,13 +620,9 @@ impl DocumentCore {
             para: parent_para_idx,
             ctrl: control_idx,
         });
-        let row_count = {
-            let table = self.get_table_mut(section_idx, parent_para_idx, control_idx)?;
-            table.row_count
-        };
         Ok(super::super::helpers::json_ok_with(&format!(
             "\"rowCount\":{}",
-            row_count
+            front_rows + back_rows
         )))
     }
 

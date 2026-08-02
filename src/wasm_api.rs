@@ -48,6 +48,13 @@ impl From<HwpError> for JsValue {
     }
 }
 
+/// WASM 경계의 u32 행 인덱스를 u16 으로 변환한다. 묵시적 `as u16` 절단은
+/// 65537 을 1 로 바꿔 요청 밖 행에서 표를 조작하게 되므로 명시적으로 거부한다.
+fn row_index_from_u32(v: u32) -> Result<u16, HwpError> {
+    u16::try_from(v)
+        .map_err(|_| HwpError::RenderError(format!("행 인덱스 {} 가 최대치(65535)를 넘습니다", v)))
+}
+
 fn deferred_pagination_result_json(result: DeferredPaginationStepResult) -> String {
     let status = match result.state {
         DeferredPaginationJobState::None => "none",
@@ -1730,9 +1737,6 @@ impl HwpDocument {
         .map_err(|e| e.into())
     }
 
-    /// 표에 행을 삽입한다.
-    ///
-    /// 반환값: JSON `{"ok":true,"rowCount":<N>,"colCount":<M>}`
     /// 표를 지정 행에서 두 개로 나눈다 (한컴 [표-표 나누기]).
     ///
     /// 반환값: JSON `{"ok":true,"frontRows":<N>,"backParaIdx":<P>}`
@@ -1744,11 +1748,12 @@ impl HwpDocument {
         control_idx: u32,
         at_row: u32,
     ) -> Result<String, JsValue> {
+        let at_row = row_index_from_u32(at_row)?;
         self.split_table_native(
             section_idx as usize,
             parent_para_idx as usize,
             control_idx as usize,
-            at_row as u16,
+            at_row,
         )
         .map_err(|e| e.into())
     }
@@ -1771,6 +1776,9 @@ impl HwpDocument {
         .map_err(|e| e.into())
     }
 
+    /// 표에 행을 삽입한다.
+    ///
+    /// 반환값: JSON `{"ok":true,"rowCount":<N>,"colCount":<M>}`
     #[wasm_bindgen(js_name = insertTableRow)]
     pub fn insert_table_row(
         &mut self,
