@@ -76,7 +76,8 @@ python3 tools/fidelity_compare/fidelity_compare.py 0 214 \
 - `provenance.tsv`: 원본·기준 PDF 경로와 기준 등급
 - `run-state.tsv`: requested/completed/missing 페이지와 완료 여부. 누락이 있으면 종료 코드도 0이 아니다.
 - `svg/export-svg-manifest.json`: `--export-all-svg`가 보관한 rhwp SVG 매니페스트
-- `layout-candidates.tsv`: `--layout-ledger`가 기록한 body↔각주 TextLine, 표↔footer, 표/그림 page-frame 밖 후보
+- `layout-candidates.tsv`: `--layout-ledger`가 기록한 body↔각주 TextLine, 표↔footer, 표/그림 page-frame 밖,
+  Square/Tight/Through 그림을 3행 이상 침범한 본문 후보
 
 `--source`, `--reference-pdf`, `--label`을 모두 지정하면 등록 fixture 대신 임의의 HWP/HWPX와 기준 PDF를
 비교한다. 이 direct-pair 형식의 positional은 `<시작쪽> <끝쪽>`뿐이다. 기존 등록 fixture 형식
@@ -95,7 +96,9 @@ python3 tools/fidelity_compare/fidelity_compare.py 0 214 \
 `--layout-ledger`는 `export-render-tree`를 한 번 실행해 `layout-candidates.tsv`를 만든다. `body_footnote_lines`
 는 Body `TextLine`의 하단이 `FootnoteArea` 상단보다 1px 이상 아래인 경우, `table_footer`는 Body 표의 하단이
 Footer 상단보다 1px 이상 아래인 경우다. `*_outside_frame`은 Body 표/그림이 page frame 밖에 나간 경우다.
-stroke 반올림과 의도된 겹침도 후보가 될 수 있으므로, 0이 아닌 값은 곧바로 결함이 아니라 visual review 대상으로
+`square_wrap_text_overlap`은 Square/Tight/Through 그림의 물리 box를 그 폭의 절반 이상 가로지르는 Body
+`TextLine`이 3행 이상인 경우다. BehindText/InFrontOfText 그림은 의도된 overlay일 수 있어 이 후보에서 제외한다.
+stroke 반올림과 문서 고유 overlay도 후보가 될 수 있으므로, 0이 아닌 값은 곧바로 결함이 아니라 visual review 대상으로
 해석한다.
 
 단계별 확장(10쪽 → 전수 → 고난도 문서)으로 돌리고, 픽셀 랭킹과 문자 멀티셋 격차를

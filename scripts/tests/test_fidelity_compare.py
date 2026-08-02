@@ -149,6 +149,81 @@ class TextLayerComparisonTests(unittest.TestCase):
         self.assertEqual(extracted, "A가")
 
 
+class LayoutCandidateTests(unittest.TestCase):
+    def test_square_wrapped_image_crossed_by_three_body_lines_is_a_candidate(self) -> None:
+        tree = {
+            "type": "Page",
+            "bbox": {"x": 0, "y": 0, "w": 800, "h": 1100},
+            "children": [
+                {
+                    "type": "Body",
+                    "bbox": {"x": 50, "y": 50, "w": 700, "h": 900},
+                    "children": [
+                        {
+                            "type": "Image",
+                            "pi": 1355,
+                            "ci": 0,
+                            "textWrap": "Square",
+                            "bbox": {"x": 400, "y": 120, "w": 220, "h": 260},
+                        },
+                        {
+                            "type": "TextLine",
+                            "bbox": {"x": 100, "y": 150, "w": 560, "h": 16},
+                        },
+                        {
+                            "type": "TextLine",
+                            "bbox": {"x": 100, "y": 180, "w": 560, "h": 16},
+                        },
+                        {
+                            "type": "TextLine",
+                            "bbox": {"x": 100, "y": 210, "w": 560, "h": 16},
+                        },
+                    ],
+                }
+            ],
+        }
+
+        candidates = FIDELITY.square_wrap_text_overlap_candidates(tree)
+
+        self.assertEqual(len(candidates), 1)
+        self.assertEqual(candidates[0]["pi"], 1355)
+        self.assertEqual(candidates[0]["overlap_line_count"], 3)
+        self.assertEqual(FIDELITY.layout_candidates(tree)[4], 1)
+
+    def test_in_front_image_is_not_a_square_wrap_overlap_candidate(self) -> None:
+        tree = {
+            "type": "Page",
+            "bbox": {"x": 0, "y": 0, "w": 800, "h": 1100},
+            "children": [
+                {
+                    "type": "Body",
+                    "bbox": {"x": 50, "y": 50, "w": 700, "h": 900},
+                    "children": [
+                        {
+                            "type": "Image",
+                            "textWrap": "InFrontOfText",
+                            "bbox": {"x": 400, "y": 120, "w": 220, "h": 260},
+                        },
+                        {
+                            "type": "TextLine",
+                            "bbox": {"x": 100, "y": 150, "w": 560, "h": 16},
+                        },
+                        {
+                            "type": "TextLine",
+                            "bbox": {"x": 100, "y": 180, "w": 560, "h": 16},
+                        },
+                        {
+                            "type": "TextLine",
+                            "bbox": {"x": 100, "y": 210, "w": 560, "h": 16},
+                        },
+                    ],
+                }
+            ],
+        }
+
+        self.assertEqual(FIDELITY.square_wrap_text_overlap_candidates(tree), [])
+
+
 class RegistryAndArgumentsTests(unittest.TestCase):
     def test_recognized_reference_patterns_use_pdf_directory_and_version_suffix(
         self,

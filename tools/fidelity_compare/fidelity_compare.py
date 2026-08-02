@@ -490,11 +490,71 @@ def bbox_from_node(node: Mapping[str, object]) -> tuple[float, float, float, flo
         return None
 
 
-def layout_candidates(tree: Mapping[str, object]) -> tuple[int, int, int, int]:
-    """(body↔각주 line, table↔footer, table frame 밖, image frame 밖) 후보 수를 반환한다."""
+def square_wrap_text_overlap_candidates(
+    tree: Mapping[str, object],
+) -> list[dict[str, object]]:
+    """Find Body text crossing a flow-wrapped image's physical box.
+
+    Square/Tight/Through images reserve a text-flow band.  Three or more Body
+    lines crossing at least half of a substantial image width is therefore a
+    strong layout candidate, unlike BehindText/InFrontOfText which may overlap
+    intentionally.  The render-tree JSON exposes the source wrap mode so this
+    low-cost ledger works without PDF raster dependencies.
+    """
+    body_lines: list[tuple[float, float, float, float]] = []
+    images: list[tuple[tuple[float, float, float, float], object, object, str]] = []
+
+    def walk(node: Mapping[str, object], region: str = "outside") -> None:
+        node_type = node.get("type")
+        if node_type in {"Body", "FootnoteArea", "Footer", "Header"}:
+            region = str(node_type)
+        box = bbox_from_node(node)
+        if region == "Body" and box is not None:
+            if node_type == "TextLine":
+                body_lines.append(box)
+            elif node_type == "Image":
+                text_wrap = node.get("textWrap")
+                if text_wrap in {"Square", "Tight", "Through"}:
+                    images.append((box, node.get("pi"), node.get("ci"), str(text_wrap)))
+        children = node.get("children")
+        if isinstance(children, list):
+            for child in children:
+                if isinstance(child, Mapping):
+                    walk(child, region)
+
+    walk(tree)
+    candidates: list[dict[str, object]] = []
+    for image, para_index, control_index, text_wrap in images:
+        ix, iy, iw, ih = image
+        if iw < 80.0 or ih < 80.0:
+            continue
+        overlap_lines: list[tuple[float, float, float, float]] = []
+        for line in body_lines:
+            lx, ly, lw, lh = line
+            overlap_x = min(ix + iw, lx + lw) - max(ix, lx)
+            overlap_y = min(iy + ih, ly + lh) - max(iy, ly)
+            if overlap_x >= iw * 0.5 and overlap_y >= min(5.0, lh * 0.5):
+                overlap_lines.append(line)
+        if len(overlap_lines) >= 3:
+            candidates.append(
+                {
+                    "pi": para_index,
+                    "ci": control_index,
+                    "text_wrap": text_wrap,
+                    "overlap_line_count": len(overlap_lines),
+                    "image_bbox": [round(value, 1) for value in image],
+                    "first_line_bbox": [round(value, 1) for value in overlap_lines[0]],
+                    "last_line_bbox": [round(value, 1) for value in overlap_lines[-1]],
+                }
+            )
+    return candidates
+
+
+def layout_candidates(tree: Mapping[str, object]) -> tuple[int, int, int, int, int]:
+    """(body↔각주, table↔footer, table/frame, image/frame, square-wrap/text) 후보 수."""
     page_bbox = bbox_from_node(tree)
     if page_bbox is None:
-        return (0, 0, 0, 0)
+        return (0, 0, 0, 0, 0)
     _, _, page_width, page_height = page_bbox
     footnote_tops: list[float] = []
     footer_tops: list[float] = []
@@ -543,7 +603,14 @@ def layout_candidates(tree: Mapping[str, object]) -> tuple[int, int, int, int]:
 
     table_outside_frame = sum(outside_page(table) for table in body_tables)
     image_outside_frame = sum(outside_page(image) for image in body_images)
-    return (body_footnote_lines, table_footer, table_outside_frame, image_outside_frame)
+    square_wrap_text_overlap = len(square_wrap_text_overlap_candidates(tree))
+    return (
+        body_footnote_lines,
+        table_footer,
+        table_outside_frame,
+        image_outside_frame,
+        square_wrap_text_overlap,
+    )
 
 
 def tree_path_for_page(tree_dir: Path, page_index: int) -> Path | None:
@@ -562,13 +629,13 @@ def write_layout_ledger(
     with report_path.open("w", encoding="utf-8") as report:
         report.write(
             "page\tbody_footnote_lines\ttable_footer\ttable_outside_frame\t"
-            "image_outside_frame\tnote\n"
+            "image_outside_frame\tsquare_wrap_text_overlap\tnote\n"
         )
         for page_index in requested_pages:
             tree_path = tree_path_for_page(tree_dir, page_index)
             if tree_path is None:
                 missing_pages.append(page_index)
-                report.write(f"{page_index + 1}\t0\t0\t0\t0\trender tree 없음\n")
+                report.write(f"{page_index + 1}\t0\t0\t0\t0\t0\trender tree 없음\n")
                 continue
             try:
                 tree = json.loads(tree_path.read_text(encoding="utf-8"))
@@ -577,11 +644,11 @@ def write_layout_ledger(
                 candidates = layout_candidates(tree)
             except (OSError, ValueError, json.JSONDecodeError) as error:
                 missing_pages.append(page_index)
-                report.write(f"{page_index + 1}\t0\t0\t0\t0\trender tree 읽기 실패: {error}\n")
+                report.write(f"{page_index + 1}\t0\t0\t0\t0\t0\trender tree 읽기 실패: {error}\n")
                 continue
             report.write(
                 f"{page_index + 1}\t{candidates[0]}\t{candidates[1]}\t"
-                f"{candidates[2]}\t{candidates[3]}\t-\n"
+                f"{candidates[2]}\t{candidates[3]}\t{candidates[4]}\t-\n"
             )
     return missing_pages
 

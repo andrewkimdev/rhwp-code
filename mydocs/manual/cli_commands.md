@@ -742,8 +742,9 @@ HWP 문서를 HWPX(ZIP+XML)로 변환 저장. `convert`(배포용 해제)와 별
 - 더 넓은 시각 정합은 `tools/roundtrip_fidelity_harness.py` 또는 `render-diff`로 별도 대조한다.
   단, 한컴 기준 PDF가 있는 대형 문서는 `tools/fidelity_compare/fidelity_compare.py`의 direct pair
   `--source <HWP/HWPX> --reference-pdf <PDF> --label <ASCII>`를 사용한다. 먼저
-  `--text-only --export-all-svg --layout-ledger`로 PDF text↔SVG text 및 render-tree 기하 후보를
-  전수 수집하고, 후보 페이지만 pixel compare/visual sweep으로 확정한다. `render-diff`는 rhwp
+  `--text-only --export-all-svg --layout-ledger`로 PDF text↔SVG text 및 render-tree 기하 후보(본문/각주,
+  표/footer, frame, Square/Tight/Through 그림을 3행 이상 침범한 본문)를 전수 수집하고, 후보 페이지만
+  pixel compare/visual sweep으로 확정한다. `render-diff`는 rhwp
   자기 roundtrip 비교이므로 한컴 PDF 기준 fidelity 후보를 대신하지 않는다.
 
 ### `export-hml <입력.hml> -o <출력.hml>`
