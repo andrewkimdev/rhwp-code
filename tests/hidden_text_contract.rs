@@ -266,6 +266,15 @@ fn white_text_on_white_page_is_detected() {
     let path = synth_hml("white", &[("TextColor", "16777215")], Some(INJECTION));
     let v = inspect_json(&path, &[]);
     assert_eq!(v["clean"], false, "{v}");
+    assert_eq!(
+        v["untrustedContent"], true,
+        "은닉 문자열 발췌는 문서 파생값입니다: {v}"
+    );
+    assert_eq!(
+        v["untrustedFields"],
+        serde_json::json!(["hiddenText[].excerpt"]),
+        "{v}"
+    );
     assert!(
         kinds(&v).iter().any(|k| k == "same_as_background"),
         "same_as_background 가 없습니다: {v}"
