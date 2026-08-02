@@ -9,7 +9,7 @@
 //! MS Word/OOXML의 cantSplit/tblHeader를 참고.
 
 use crate::model::control::Control;
-use crate::model::footnote::FootnoteShape;
+use crate::model::footnote::{Footnote, FootnoteShape};
 use crate::model::header_footer::HeaderFooterApply;
 use crate::model::page::{ColumnDef, ColumnType, PageDef};
 use crate::model::paragraph::{ColumnBreakType, LineSeg, Paragraph};
@@ -1780,6 +1780,87 @@ fn internal_vpos_page_break_line(
             } else {
                 None
             }
+        })
+}
+
+/// 실제 각주 영역과 겹치는 native HWP5 본문 문단의 저장 reset을 찾는다.
+///
+/// HWP5는 본문 마지막 줄과 다음 physical page의 첫 줄을 하나의 paragraph
+/// `LINE_SEG`에 넣고, 뒤쪽 줄의 `vpos=0`으로 경계를 표시할 수 있다. 보통 reset을
+/// 전역으로 따르는 것은 과분할을 일으킨다. 다만 현재 페이지의 **첫** 각주가 이 문단에
+/// 있고, reset 직전 줄의 trailing line-spacing이 실제 각주 영역을 침범할 때는 그
+/// 경계를 무시하면 renderer가 뒤쪽 줄을 각주 위에 계속 쌓는다.
+///
+/// 각주 본문은 stored LineSeg가 아니라 renderer와 같은 composer 결과로 재서, 긴 각주의
+/// wrap/line-spacing을 포함한다. 이미 다른 각주가 있는 page는 ownership과 누적 높이가
+/// 별도 경로이므로 이 좁은 보정의 대상이 아니다.
+fn native_hwp5_first_footnote_overlap_break_line(
+    st: &TypesetState,
+    para: &Paragraph,
+    line_count: usize,
+    dpi: f64,
+) -> Option<usize> {
+    if !st.profile.native_hwp5_layout()
+        || !st.is_first_footnote_on_page
+        || st.current_footnote_height > 0.0
+        || line_count < 2
+        || para.line_segs.len() < line_count
+        || !para_has_visible_text(para)
+    {
+        return None;
+    }
+
+    let footnotes: Vec<&Footnote> = para
+        .controls
+        .iter()
+        .filter_map(|control| match control {
+            Control::Footnote(footnote) => Some(footnote.as_ref()),
+            _ => None,
+        })
+        .collect();
+    if footnotes.len() != 1 || footnotes.len() != para.controls.len() {
+        return None;
+    }
+
+    let mut footnote_height = st.footnote_separator_overhead;
+    for (para_idx, note_para) in footnotes[0].paragraphs.iter().enumerate() {
+        let composed = crate::renderer::composer::compose_paragraph(note_para);
+        if composed.lines.is_empty() {
+            footnote_height += hwpunit_to_px(400, dpi);
+            continue;
+        }
+        let note_last_para = para_idx + 1 == footnotes[0].paragraphs.len();
+        for (line_idx, line) in composed.lines.iter().enumerate() {
+            footnote_height += hwpunit_to_px(line.line_height, dpi);
+            if !(note_last_para && line_idx + 1 == composed.lines.len()) {
+                footnote_height += hwpunit_to_px(line.line_spacing, dpi);
+            }
+        }
+    }
+
+    let footnote_top = st.layout.body_area.height - footnote_height;
+    let page_vpos_base = st.vpos_page_base.or(st.vpos_lazy_base).unwrap_or(0);
+    para.line_segs[..line_count]
+        .windows(2)
+        .enumerate()
+        .find_map(|(prev_idx, pair)| {
+            let (prev, next) = (&pair[0], &pair[1]);
+            if is_synthetic_line_seg(prev)
+                || is_synthetic_line_seg(next)
+                || prev.vertical_pos <= page_vpos_base
+                || next.vertical_pos != 0
+            {
+                return None;
+            }
+
+            let visible_bottom =
+                hwpunit_to_px(prev.vertical_pos - page_vpos_base + prev.line_height, dpi);
+            let trailing_bottom = hwpunit_to_px(
+                prev.vertical_pos - page_vpos_base + prev.line_height + prev.line_spacing,
+                dpi,
+            );
+            (visible_bottom <= footnote_top + 0.5 && trailing_bottom > footnote_top + 0.5)
+                .then_some(prev_idx + 1)
         })
 }
 
@@ -12500,6 +12581,14 @@ impl TypesetEngine {
             self.dpi,
             st.profile.hwp3_native_layout(),
         )
+        .or_else(|| {
+            native_hwp5_first_footnote_overlap_break_line(
+                st,
+                para,
+                fmt.line_heights.len(),
+                self.dpi,
+            )
+        })
         .or_else(|| {
             sample16_missing_lineseg_tail_break_line(
                 para,

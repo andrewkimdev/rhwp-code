@@ -15,6 +15,9 @@ const SAMPLE: &str =
     "samples/정책연구용역사업 중간진도보고서(살아있는 간장 기증자의 의학적 선별기준 연구).hwp";
 const PAGE_66: u32 = 65;
 const PAGE_67: u32 = 66;
+const PAGE_30: u32 = 29;
+const PAGE_31: u32 = 30;
+const PAGE_32: u32 = 31;
 
 fn page_text(doc: &HwpDocument, page: u32) -> String {
     doc.extract_page_text_native(page)
@@ -82,5 +85,28 @@ fn rowbreak_table_cell_footnotes_keep_the_pdf_fragment_boundary() {
     assert!(
         footnote_bottom <= footer_top + 1.0,
         "p67 각주 실제 하단({footnote_bottom:.1}px)이 footer 시작({footer_top:.1}px)을 넘어선다"
+    );
+}
+
+#[test]
+fn native_hwp5_footnote_reset_moves_only_the_overlapping_tail_to_the_next_page() {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(SAMPLE);
+    let bytes = fs::read(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+    let doc = HwpDocument::from_bytes(&bytes).expect("parse stage12 HWP evidence fixture");
+
+    let p30 = page_text(&doc, PAGE_30);
+    let p31 = page_text(&doc, PAGE_31);
+    let p32 = page_text(&doc, PAGE_32);
+    assert!(
+        p30.contains("10년 후 71.7%") && !p30.contains("문제가 나타남"),
+        "p30은 각주 29 위의 세 줄에서 끝나야 함: {p30}"
+    );
+    assert!(
+        p31.contains("문제가 나타남") && p31.contains("5. 독일"),
+        "p31은 p30의 두 줄 tail 뒤에 독일 절로 이어져야 함: {p31}"
+    );
+    assert!(
+        p32.contains("35>와 같이 점차 감소하는 추세임") && p32.contains("그림 35"),
+        "p32는 독일 문단의 reset tail 뒤에 그림 35가 와야 함: {p32}"
     );
 }
