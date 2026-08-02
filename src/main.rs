@@ -5333,6 +5333,30 @@ fn export_pdf(args: &[String]) -> i32 {
                         return 2;
                     }
                 }
+                // (docs/RHWP_GLYPH_OUTLINE_CACHE_PLAN.md) 미리 계산된 glyph
+                // outline 캐시를 조회 — 파일이 없거나 --font-path 폰트 집합과
+                // 어긋나면(해시 불일치) 경고 후 오늘과 동일하게 매번 새로 계산한다.
+                "--glyph-cache" => {
+                    if i + 1 < args.len() {
+                        pdf_options.glyph_cache_path = Some(std::path::PathBuf::from(&args[i + 1]));
+                        i += 2;
+                    } else {
+                        eprintln!("오류: --glyph-cache 뒤에 파일 경로가 필요합니다.");
+                        return;
+                    }
+                }
+                // 이번 렌더에서 계산된(또는 --glyph-cache로 불러온 뒤 이번
+                // 렌더로 보강된) glyph outline을 이 경로에 기록한다.
+                "--dump-glyph-cache" => {
+                    if i + 1 < args.len() {
+                        pdf_options.dump_glyph_cache_path =
+                            Some(std::path::PathBuf::from(&args[i + 1]));
+                        i += 2;
+                    } else {
+                        eprintln!("오류: --dump-glyph-cache 뒤에 파일 경로가 필요합니다.");
+                        return;
+                    }
+                }
                 "--fallback-serif" => {
                     compatibility_only_options.push("--fallback-serif");
                     if i + 1 < args.len() {
@@ -5610,6 +5634,8 @@ fn print_export_pdf_usage() {
     );
     eprintln!("      --raster-dpi <DPI>    direct backend fallback raster DPI (기본값: 144)");
     eprintln!("      --font-path <경로>   폰트 파일 탐색 경로 (여러 번 지정 가능)");
+    eprintln!("      --glyph-cache <파일>       미리 계산된 glyph outline 캐시 조회");
+    eprintln!("      --dump-glyph-cache <파일>  이번 렌더의 glyph outline을 캐시 파일로 기록");
     eprintln!("      --fallback-serif <명>");
     eprintln!("      --fallback-sans <명>");
     eprintln!("      --fallback-mono <명>");

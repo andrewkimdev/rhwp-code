@@ -206,3 +206,9 @@ codegen-units = 16
 # 비는 시점에 재판단한다. 그때까지 이 패치를 유지·관리한다.
 [patch.crates-io]
 svg2pdf = { git = "https://github.com/edwardkim/svg2pdf", branch = "determinism-0.13" }
+
+# docs/RHWP_GLYPH_OUTLINE_CACHE_PLAN.md (hwpx-template-engine repo) — glyph-outline
+# disk cache. Forked from linebender/resvg @ v0.45.1 (crates/usvg/src/text/flatten.rs
+# only). Patches every usvg 0.45.x dependency in the graph, including svg2pdf's own
+# transitive one above, so both resolve to the same patched crate instance.
+usvg = { git = "https://github.com/andrewkimdev/resvg.git", branch = "patch/v0.45.1-glyph-outline-cache" }

@@ -424,6 +424,19 @@ pub struct PdfExportOptions {
     /// 164 MB → 69 MB 로 떨어진다. 대신 **PDF 의 텍스트 선택·검색 기능을 잃는다**
     /// (시각적 출력은 동일). 기본값은 종전 동작인 `true` 다.
     pub embed_text: bool,
+    /// (docs/RHWP_GLYPH_OUTLINE_CACHE_PLAN.md) 미리 계산된 glyph outline
+    /// 캐시 파일 경로. 지정하면 `usvg::Tree::from_str`의 glyph flatten 단계가
+    /// 매 glyph occurrence 마다 `ttf_parser::Face::parse` + `outline_glyph`를
+    /// 다시 계산하는 대신 이 캐시를 먼저 조회한다. 파일이 없거나, 캐시가
+    /// `--font-path` 폰트 집합과 어긋나면(해시 불일치) 경고만 출력하고 오늘과
+    /// 동일하게 매번 새로 계산한다 — 순수 가속 기능이며 새로운 하드 의존성이
+    /// 아니다.
+    pub glyph_cache_path: Option<std::path::PathBuf>,
+    /// (docs/RHWP_GLYPH_OUTLINE_CACHE_PLAN.md) 이번 렌더에서 계산된(또는
+    /// `glyph_cache_path`에서 불러온 뒤 이번 렌더로 보강된) glyph outline을
+    /// 이 경로에 기록한다 — 캐시 파일을 새로 만들거나 갱신하는 용도.
+    /// `glyph_cache_path`와 함께 지정하면 기존 캐시를 기반으로 누적한다.
+    pub dump_glyph_cache_path: Option<std::path::PathBuf>,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -436,6 +449,8 @@ impl Default for PdfExportOptions {
             equation_font: None,
             font_paths: Vec::new(),
             embed_text: true,
+            glyph_cache_path: None,
+            dump_glyph_cache_path: None,
         }
     }
 }
@@ -909,6 +924,29 @@ pub fn svgs_to_pdf_with_options(
     let mut options = usvg::Options::default();
     options.fontdb = std::sync::Arc::new(fontdb);
 
+    // (docs/RHWP_GLYPH_OUTLINE_CACHE_PLAN.md) A cache is only constructed if
+    // either flag is present -- the common case (neither flag set) takes
+    // the exact same `glyph_outline_cache: None` path as before this patch.
+    // `--dump-glyph-cache` continues accumulating on top of whatever
+    // `--glyph-cache` loaded (or starts empty if that load failed/was
+    // absent), so `export-pdf --glyph-cache X --dump-glyph-cache X` is a
+    // valid "top up an existing cache" invocation.
+    let glyph_cache: Option<std::sync::Arc<usvg::GlyphOutlineCache>> =
+        if export_options.glyph_cache_path.is_some()
+            || export_options.dump_glyph_cache_path.is_some()
+        {
+            let loaded = export_options
+                .glyph_cache_path
+                .as_deref()
+                .and_then(|path| super::glyph_cache_file::load(path, &export_options.font_paths));
+            Some(std::sync::Arc::new(
+                loaded.unwrap_or_else(usvg::GlyphOutlineCache::empty),
+            ))
+        } else {
+            None
+        };
+    options.glyph_outline_cache = glyph_cache.clone();
+
     let mut alloc = Ref::new(1);
     let catalog_ref = alloc.bump();
     let page_tree_ref = alloc.bump();
@@ -988,6 +1026,22 @@ pub fn svgs_to_pdf_with_options(
     let info_ref = alloc.bump();
     pdf.document_info(info_ref)
         .producer(pdf_writer::TextStr("rhwp"));
+
+    if let Some(dump_path) = &export_options.dump_glyph_cache_path {
+        // `glyph_cache` is always `Some` here: it's constructed unconditionally
+        // whenever `dump_glyph_cache_path` is set (see above).
+        let cache = glyph_cache
+            .as_deref()
+            .expect("dump_glyph_cache_path implies glyph_cache was constructed");
+        if let Err(e) = super::glyph_cache_file::write(dump_path, cache, &export_options.font_paths)
+        {
+            eprintln!(
+                "WARN: glyph cache '{}' 기록 실패 - {}",
+                dump_path.display(),
+                e
+            );
+        }
+    }
 
     // [#3824] 텍스트 표면만 표준 코드포인트로 맞춘다 — 렌더 결정은 불변.
     let mut bytes = pdf.finish();
@@ -1175,6 +1229,8 @@ endbfchar <DB80DEB1>";
             equation_font: Some("STIX Two Math".to_string()),
             font_paths: Vec::new(),
             embed_text: true,
+            glyph_cache_path: None,
+            dump_glyph_cache_path: None,
         };
         let svg = format!(
             r#"<svg><text font-family="휴먼명조">가</text><text font-family="HCI Poppy">A</text><text {}>x</text></svg>"#,
