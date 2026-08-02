@@ -674,6 +674,14 @@ fn capabilities_and_mcp_declare_the_command_consistently() {
                     f,
                     "medium",
                 ],
+                // `inspect` 는 하위 명령군이다. capabilities 는 두 축의 합집합을
+                // 광고하므로 은닉 텍스트 전용 flag 는 그 축으로 실제 배선 여부를 확인한다.
+                "--threshold-pt" => {
+                    vec!["inspect", "hidden-text", host.to_str().unwrap(), f, "1.0"]
+                }
+                "--include-offpage" => {
+                    vec!["inspect", "hidden-text", host.to_str().unwrap(), f]
+                }
                 _ => vec!["inspect", "injection", host.to_str().unwrap(), f],
             };
             let out = run(&args);
