@@ -2,8 +2,9 @@
 
 - **이슈**: [#3790](https://github.com/edwardkim/rhwp/issues/3790)
 - **수행계획서**: `mydocs/plans/task_m100_3790.md`
-- **브랜치**: `codex/issue-3790-ci-impact-shadow`
-- **절차 상태**: Stage 1 구현·focused 검증 완료
+- **브랜치**: Stage 1 `codex/issue-3790-ci-impact-shadow`, Stage 2
+  `codex/issue-3790-shadow-observation`
+- **절차 상태**: Stage 2 1차 실측 완료, live frontend `unit|package`·render 표본 대기
 
 ## Stage 1 — shadow classifier
 
@@ -24,6 +25,10 @@ pull request에서는 checkout된 merge ref의 classifier가 실행되므로 Sta
 2. 분류 실패, API 경계, rename, mixed 변경의 full fallback을 확인한다.
 3. 실제 worker duration과 예상 절감 runner-minute를 기록한다.
 4. false negative가 있으면 규칙과 fixture를 먼저 보정하고 활성화를 연기한다.
+
+1차 실측 결과는 `mydocs/working/task_m100_3790_stage2.md`에 기록한다. merge 이후 live shadow는
+고유 PR 4건뿐이고 frontend `unit|package` 및 `render_required=true`의 live non-full 표본이 없으므로
+Stage 3는 활성화하지 않는다. historical replay 60건은 경로 규칙과 비용의 보조 근거로만 사용한다.
 
 ## Stage 3 — frontend unit/package/render 활성화
 
