@@ -14457,10 +14457,12 @@ impl TypesetEngine {
         // 단독 empty-host TopAndBottom 표는 다음 문단의 저장 vpos까지 증가할 때만
         // raw vpos를 물리 page anchor로 해석한다. 다음 vpos가 되감기는 p14 그림 8
         // 같은 page-boundary 형상은 이전 anchor가 남아 있을 수 있으므로 기존 flow를
-        // 보존한다. (p15 그림 11은 다음 본문이 계속 증가하는 진짜 같은-page anchor.)
+        // 보존한다. native HWP5와 원본 HWPX가 모두 이 저장 형상을 제공한다. HWPX를
+        // 일반 block fit으로 보내면 각주 안전 여유 수 px 때문에 실제로는 들어가는
+        // 그림 11이 다음 쪽으로 이월된다 (#3738).
         let stored_single_topbottom_top = (is_topbottom_para_float
             && topbottom_float_count == 1
-            && st.profile.native_hwp5_layout())
+            && (st.profile.native_hwp5_layout() || st.profile.hwpx_stored_layout()))
         .then(|| {
             let current = para
                 .line_segs
