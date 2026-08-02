@@ -18,7 +18,8 @@ M18 1호 릴리스 (#3762). 로드맵 #3608 의 외부 바인딩 3계열 중 첫
   `mcp-serve` stdio 클라이언트로 `hwp_doc_*` 를 그대로 노출한다.
 - **3층 계획 API** — `Plan` 빌더와 `PlanResult`.
   `check()` 는 디스크 무변경 검사, `run()` 은 원자 실행.
-- **IR 스키마 소비** — `ir_schema()` / `IrSchema` / `TypeDef` / `FieldDef`.
+- **JSON Schema 소비** — `ir_schema()` 및 `capabilities_schema()` / `IrSchema` /
+  `TypeDef` / `FieldDef`. M19 명령 표면 스키마도 같은 소비 계층으로 노출한다.
 - **모델 생성기** — `tools/gen_models.py` 가 스키마에서 dataclass 를 만든다.
   `--check` 로 최신 여부를 CI 에서 검사한다.
 - **예외 체계** — exit 코드를 파이썬 예외로 옮기되, **판정 실패(3/4)는 예외가

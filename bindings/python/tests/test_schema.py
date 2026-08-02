@@ -87,6 +87,31 @@ def test_version_and_dialect_are_exposed(schema: IrSchema) -> None:
     assert schema.dialect == "https://json-schema.org/draft/2020-12/schema"
 
 
+def test_capabilities_schema_version_and_root_are_exposed() -> None:
+    """IR 외의 명령 표면 스키마도 같은 소비 계층으로 읽는다."""
+    schema = IrSchema(
+        {
+            "schemaVersion": "1.0",
+            "capabilitiesSchemaVersion": "1.0",
+            "schema": {
+                "$schema": "https://json-schema.org/draft/2020-12/schema",
+                "$ref": "#/$defs/Capabilities",
+                "$defs": {
+                    "Capabilities": {
+                        "type": "object",
+                        "description": "명령 표면",
+                        "properties": {},
+                        "required": [],
+                        "additionalProperties": True,
+                    }
+                },
+            },
+        }
+    )
+    assert schema.version == "1.0"
+    assert schema.root.name == "Capabilities"
+
+
 def test_root_resolves_to_document(schema: IrSchema) -> None:
     root = schema.root
     assert isinstance(root, TypeDef)
@@ -217,3 +242,18 @@ def test_real_schema_generates_valid_type_hints(wired_binary: object) -> None:
             assert hint and not hint.startswith("List[]"), (
                 f"{type_def.name}.{field.name} 의 타입 힌트가 이상하다: {hint}"
             )
+
+
+@pytest.mark.integration
+def test_real_capabilities_schema_is_consumable(wired_binary: object) -> None:
+    """M19 명령 표면 스키마가 공개 Python API로 온전히 노출돼야 한다."""
+    import rhwp
+
+    schema = rhwp.capabilities_schema()
+    envelope = rhwp.capabilities_schema_envelope()
+    assert schema.version, "명령 표면 스키마 버전이 없다"
+    assert schema.root.name == "Capabilities"
+    assert len(schema) >= 2, f"정의가 너무 적다: {len(schema)}"
+    assert schema.dangling_references() == [], "끊어진 참조가 있다"
+    assert envelope.capabilities_schema_version == schema.version
+    assert "schema" in envelope

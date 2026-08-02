@@ -10,7 +10,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any, List, Optional
 
 #: 이 모델이 생성된 IR 스키마 버전.
 IR_SCHEMA_VERSION = "1.0"

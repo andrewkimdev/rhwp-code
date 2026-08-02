@@ -42,7 +42,7 @@ HEADER = '''"""IR 타입 모델 — **자동 생성 파일. 손으로 고치지 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any, List, Optional
 
 #: 이 모델이 생성된 IR 스키마 버전.
 IR_SCHEMA_VERSION = "{version}"

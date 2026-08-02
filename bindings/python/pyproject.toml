@@ -30,7 +30,9 @@ classifiers = [
 dependencies = []
 
 [project.optional-dependencies]
-dev = ["pytest>=7.0", "mypy>=1.0", "ruff>=0.1"]
+# Python 3.8 지원을 검증할 수 있는 마지막 mypy 계열과, 이 코드베이스가 검증한
+# ruff 규칙 집합을 고정한다. 상한이 없으면 개발 도구의 정책 변경이 제품 CI를 바꾼다.
+dev = ["pytest>=7.0", "mypy>=1.0,<1.11", "ruff>=0.1,<0.12"]
 
 [project.urls]
 Homepage = "https://github.com/edwardkim/rhwp"

@@ -7,7 +7,6 @@
 from __future__ import annotations
 
 import dataclasses
-import importlib
 import inspect
 from typing import Any, get_type_hints
 

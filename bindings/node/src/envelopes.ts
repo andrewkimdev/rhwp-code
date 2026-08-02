@@ -2,7 +2,7 @@
  * 명령별 봉투 타입 — **자동 생성 파일. 손으로 고치지 마세요.**
  *
  * 재생성: `npm run gen:types` (tools/gen-types.ts)
- * 출처:   `rhwp capabilities` — version 0.8.2, `--json` 봉투 24개
+ * 출처:   `rhwp capabilities` — version 0.8.2, `--json` 봉투 26개
  *
  * `capabilities` 는 명령마다 **어떤 필드가 있는지**(`recordFields`)만 선언하고 타입은
  * 말하지 않습니다. 그래서 대부분의 필드가 `unknown` 입니다 — 짐작한 타입을 적으면 그
@@ -219,6 +219,21 @@ export interface ExportHwpxEnvelope {
 }
 
 /**
+ * `rhwp export-ir-schema --json` 봉투.
+ *
+ * 공개 IR 의 JSON Schema 산출 — 외부 바인딩 코드 생성의 단일 출처 (#3762)
+ */
+export interface ExportIrSchemaEnvelope {
+  readonly definitionCount?: unknown;
+  readonly dialect?: unknown;
+  readonly irSchemaVersion?: unknown;
+  readonly schema?: unknown;
+  readonly schemaVersion?: string;
+
+  readonly [key: string]: unknown;
+}
+
+/**
  * `rhwp export-markdown --json` 봉투.
  *
  * 페이지별 텍스트를 Markdown으로 추출 (--json 매니페스트)
@@ -384,6 +399,34 @@ export interface IrDiffEnvelope {
 }
 
 /**
+ * `rhwp render-diff --json` 봉투.
+ *
+ * 왕복/두 파일 렌더 기하 차이 검증 — --json 회귀 검출은 exit 3 (--batch 는 NDJSON)
+ */
+export interface RenderDiffEnvelope {
+  readonly hardStructPages?: unknown;
+  readonly maxDisp?: unknown;
+  readonly mode?: unknown;
+  readonly overPages?: unknown;
+  readonly pageCountA?: unknown;
+  readonly pageCountB?: unknown;
+  readonly pageCountMismatch?: unknown;
+  readonly pageFilter?: unknown;
+  readonly pages?: unknown;
+  readonly regression?: unknown;
+  readonly schemaVersion?: string;
+  readonly sourceA?: unknown;
+  readonly sourceB?: unknown;
+  readonly status?: unknown;
+  readonly structPages?: unknown;
+  readonly threshold?: unknown;
+  readonly via?: unknown;
+  readonly worstPage?: unknown;
+
+  readonly [key: string]: unknown;
+}
+
+/**
  * `rhwp run --json` 봉투.
  *
  * 선언적 편집 계획 실행 — 정적 선검증·원자 실행·저널 (#3703)
@@ -454,6 +497,7 @@ export interface EnvelopeByCommand {
   "export-doclang": ExportDoclangEnvelope;
   "export-hml": ExportHmlEnvelope;
   "export-hwpx": ExportHwpxEnvelope;
+  "export-ir-schema": ExportIrSchemaEnvelope;
   "export-markdown": ExportMarkdownEnvelope;
   "export-pdf": ExportPdfEnvelope;
   "export-structure": ExportStructureEnvelope;
@@ -464,6 +508,7 @@ export interface EnvelopeByCommand {
   fields: FieldsEnvelope;
   info: InfoEnvelope;
   "ir-diff": IrDiffEnvelope;
+  "render-diff": RenderDiffEnvelope;
   run: RunEnvelope;
   search: SearchEnvelope;
   thumbnail: ThumbnailEnvelope;

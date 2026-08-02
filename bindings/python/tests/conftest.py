@@ -18,7 +18,6 @@ import pytest
 # src 레이아웃 — 설치 없이 테스트할 수 있게 경로를 추가한다.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-import rhwp  # noqa: E402
 from rhwp import _binary  # noqa: E402
 
 #: 저장소 루트 (bindings/python/tests → 3단계 위).

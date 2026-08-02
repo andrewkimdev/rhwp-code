@@ -93,7 +93,15 @@ from .errors import (
 )
 from .models import Envelope, VerifyReport
 from .plan import Plan, PlanResult, run_plan
-from .schema import IrSchema, TypeDef, FieldDef, ir_schema, ir_schema_envelope
+from .schema import (
+    FieldDef,
+    IrSchema,
+    TypeDef,
+    capabilities_schema,
+    capabilities_schema_envelope,
+    ir_schema,
+    ir_schema_envelope,
+)
 from .session import Document, Session, open
 
 __version__ = "0.1.0"
@@ -144,9 +152,11 @@ __all__ = [
     "Plan",
     "PlanResult",
     "run_plan",
-    # IR 스키마
+    # JSON Schema
     "ir_schema",
     "ir_schema_envelope",
+    "capabilities_schema",
+    "capabilities_schema_envelope",
     "IrSchema",
     "TypeDef",
     "FieldDef",

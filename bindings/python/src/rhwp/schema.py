@@ -1,4 +1,4 @@
-"""IR 스키마 소비 — `export-ir-schema` 를 읽어 타입 정보를 노출한다.
+"""JSON Schema 소비 — IR·명령 표면의 타입 정보를 노출한다.
 
 바인딩이 IR 모양을 **하드코딩하지 않는** 이유가 여기 있다. rhwp 가 IR 에 필드를
 더하면 스키마가 먼저 알려주고, 코드 생성기(`tools/gen_models.py`)가 그걸 읽어
@@ -12,7 +12,15 @@ from typing import Any, Dict, Iterator, List, Mapping, Optional, Tuple
 from ._process import DEFAULT_TIMEOUT, run_json
 from .models import Envelope
 
-__all__ = ["ir_schema", "ir_schema_envelope", "IrSchema", "TypeDef", "FieldDef"]
+__all__ = [
+    "capabilities_schema",
+    "capabilities_schema_envelope",
+    "ir_schema",
+    "ir_schema_envelope",
+    "IrSchema",
+    "TypeDef",
+    "FieldDef",
+]
 
 
 class FieldDef:
@@ -142,7 +150,7 @@ class TypeDef:
 
 
 class IrSchema:
-    """`export-ir-schema` 결과를 순회 가능한 형태로."""
+    """`export-ir-schema` 또는 `export-capabilities-schema` 결과를 순회 가능한 형태로."""
 
     def __init__(self, envelope: Mapping[str, Any]) -> None:
         self._envelope = dict(envelope)
@@ -155,12 +163,15 @@ class IrSchema:
 
     @property
     def version(self) -> str:
-        """IR 스키마 버전 — 봉투 schemaVersion 과 별개다."""
-        return str(
+        """IR 또는 명령 표면 스키마 버전 — 봉투 schemaVersion 과 별개다."""
+        value = (
             self._envelope.get("irSchemaVersion")
+            or self._envelope.get("capabilitiesSchemaVersion")
             or self._body.get("irSchemaVersion")
+            or self._body.get("capabilitiesSchemaVersion")
             or "unknown"
         )
+        return value if isinstance(value, str) else "unknown"
 
     @property
     def dialect(self) -> str:
@@ -229,6 +240,16 @@ def ir_schema(*, timeout: Optional[float] = DEFAULT_TIMEOUT) -> IrSchema:
     return IrSchema(envelope)
 
 
+def capabilities_schema(*, timeout: Optional[float] = DEFAULT_TIMEOUT) -> IrSchema:
+    """rhwp 명령 표면의 JSON Schema 를 읽어 온다.
+
+    문서를 입력으로 받지 않는다. ``capabilities`` 가 명령·플래그·봉투를 설명한다면,
+    이 스키마는 그 설명을 기계적으로 소비할 수 있는 모양을 제공한다.
+    """
+    envelope = run_json(["export-capabilities-schema"], timeout=timeout)
+    return IrSchema(envelope)
+
+
 def _ref_name(spec: Any) -> Optional[str]:
     """``{"$ref": "#/$defs/X"}`` 에서 ``X`` 를 꺼낸다."""
     if not isinstance(spec, Mapping):
@@ -254,3 +275,8 @@ def _scalar_hint(spec: Any) -> str:
 def ir_schema_envelope(*, timeout: Optional[float] = DEFAULT_TIMEOUT) -> Envelope:
     """봉투를 그대로 돌려준다 (definitionCount 등 메타 포함)."""
     return Envelope(run_json(["export-ir-schema"], timeout=timeout))
+
+
+def capabilities_schema_envelope(*, timeout: Optional[float] = DEFAULT_TIMEOUT) -> Envelope:
+    """명령 표면 스키마 봉투를 그대로 돌려준다 (MCP 스키마 메타 포함)."""
+    return Envelope(run_json(["export-capabilities-schema"], timeout=timeout))

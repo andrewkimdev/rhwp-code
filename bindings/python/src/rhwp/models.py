@@ -103,7 +103,8 @@ class Envelope(Mapping[str, Any]):
     @property
     def schema_version(self) -> Optional[str]:
         """봉투 스키마 버전. 없으면 ``None`` (모든 봉투가 갖지만 방어적으로)."""
-        return self._raw.get("schemaVersion")
+        value = self._raw.get("schemaVersion")
+        return value if isinstance(value, str) else None
 
     @property
     def verify(self) -> Optional["VerifyReport"]:
@@ -153,7 +154,8 @@ class VerifyReport(Envelope):
     @property
     def reparse_error(self) -> Optional[str]:
         """저장본을 다시 읽지 못했을 때의 사유. 정상이면 ``None``."""
-        return self._raw.get("reparseError")
+        value = self._raw.get("reparseError")
+        return value if isinstance(value, str) else None
 
     def __bool__(self) -> bool:
         """``if result.verify:`` 가 "통과했나"로 읽히도록."""

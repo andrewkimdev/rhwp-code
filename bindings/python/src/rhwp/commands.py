@@ -13,7 +13,6 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Union
 
-from ._naming import camel_keys
 from ._process import DEFAULT_TIMEOUT, run_json, run_ndjson
 from .models import Envelope
 

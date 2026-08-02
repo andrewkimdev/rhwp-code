@@ -270,13 +270,22 @@ else:
 `export-ir-schema` 를 읽어 온다. 문서를 입력으로 받지 않는다 — 스키마는 **타입의
 자기서술**이지 특정 문서의 속성이 아니다.
 
+### `rhwp.capabilities_schema(*, timeout=...) -> IrSchema`
+
+`export-capabilities-schema` 를 읽어 온다. 명령·플래그·MCP 매니페스트를 설명하는
+JSON Schema라서 외부 도구가 rhwp 명령 표면을 생성·검증할 때 쓴다. 문서를 입력으로
+받지 않는다.
+
+`rhwp.ir_schema_envelope()` 및 `rhwp.capabilities_schema_envelope()`은 각각의 원문
+봉투와 `definitionCount` 같은 메타를 그대로 받는 경우에 사용한다.
+
 ### `class IrSchema`
 
 | 멤버 | 설명 |
 |---|---|
-| `version` | IR 스키마 버전(봉투 `schemaVersion` 과 별개) |
+| `version` | IR 또는 명령 표면 스키마 버전(봉투 `schemaVersion` 과 별개) |
 | `dialect` | JSON Schema 방언 URI |
-| `root` | 루트 타입(`Document`) |
+| `root` | 루트 타입(`Document` 또는 `Capabilities`) |
 | `names()` | 정의 이름 목록 |
 | `dangling_references()` | 끊어진 `$ref` 를 (참조한 곳, 없는 이름) 으로 |
 | `raw` | 원문 스키마 본문 |

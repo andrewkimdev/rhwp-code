@@ -33,7 +33,6 @@
  *
  * @packageDocumentation
  */
-
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, relative, resolve } from 'node:path';
 import process from 'node:process';
@@ -43,7 +42,6 @@ import { ENV_VAR } from '../src/binary.js';
 import { BinaryNotFoundError, UsageError } from '../src/errors.js';
 import { propertyKey, toCamel } from '../src/naming.js';
 import { runJson } from '../src/process.js';
-
 // ── 출력 규약 ─────────────────────────────────────────────────────────────
 
 /** 들여쓰기 한 단계. */
