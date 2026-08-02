@@ -2493,6 +2493,7 @@ impl LayoutEngine {
                             None,
                             None,
                             None,
+                            None,
                             false,
                             is_header,
                         );
@@ -3377,6 +3378,7 @@ impl LayoutEngine {
                                         None,
                                         0.0,
                                         0.0,
+                                        None,
                                         None,
                                         None,
                                         None,
@@ -6972,6 +6974,7 @@ impl LayoutEngine {
                     tbl_inline_x,
                     None,
                     Some(para_y_for_table),
+                    None,
                     false,
                     false,
                 );
@@ -7150,6 +7153,17 @@ impl LayoutEngine {
                 };
                 let allow_para_top_bleed =
                     is_current_visible_para_float && signed_hwpunit(t.common.vertical_offset) < 0;
+                let outer_host_stored_vpos_hu = if self.profile.get().native_hwp5_layout() {
+                    para.line_segs
+                        .iter()
+                        .find(|seg| {
+                            seg.tag & crate::model::paragraph::LineSeg::TAG_IMPLEMENTATION_PROPERTY
+                                == 0
+                        })
+                        .map(|seg| seg.vertical_pos)
+                } else {
+                    None
+                };
                 let table_visual_end = if tac_already_rendered_inline {
                     table_y_start + table_visual_height
                 } else {
@@ -7173,6 +7187,7 @@ impl LayoutEngine {
                         tbl_inline_x,
                         None,
                         Some(para_y_for_table + visible_outer_top_px),
+                        outer_host_stored_vpos_hu,
                         allow_para_top_bleed,
                         false,
                     )
@@ -7917,6 +7932,7 @@ impl LayoutEngine {
                                 0.0,
                                 0.0,
                                 inline_x,
+                                None,
                                 None,
                                 None,
                                 false,
@@ -9554,6 +9570,7 @@ impl LayoutEngine {
                         None,
                         0.0,
                         0.0,
+                        None,
                         None,
                         None,
                         None,

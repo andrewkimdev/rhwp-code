@@ -1865,6 +1865,7 @@ impl LayoutEngine {
                     Some(inline_x + om_left),
                     None,
                     table_para_y,
+                    None,
                     false,
                     false,
                 );
@@ -1917,6 +1918,7 @@ impl LayoutEngine {
                 Some(inline_x + om_left),
                 None,
                 table_para_y,
+                None,
                 false,
                 false,
             );
@@ -5286,6 +5288,7 @@ impl LayoutEngine {
                                     0.0,
                                     0.0,
                                     Some(x + tac_table_om.0),
+                                    None,
                                     None,
                                     None,
                                     false,
