@@ -488,6 +488,76 @@ class LayoutCandidateTests(unittest.TestCase):
         self.assertEqual(candidates[0]["overlap_line_count"], 3)
         self.assertEqual(FIDELITY.layout_candidates(tree)[4], 1)
 
+    def test_square_wrap_ignores_empty_full_width_guide_lines(self) -> None:
+        tree = {
+            "type": "Page",
+            "bbox": {"x": 0, "y": 0, "w": 800, "h": 1100},
+            "children": [
+                {
+                    "type": "Body",
+                    "bbox": {"x": 50, "y": 50, "w": 700, "h": 900},
+                    "children": [
+                        {
+                            "type": "Image",
+                            "textWrap": "Square",
+                            "bbox": {"x": 400, "y": 120, "w": 220, "h": 260},
+                        },
+                        *[
+                            {
+                                "type": "TextLine",
+                                "bbox": {"x": 100, "y": y, "w": 560, "h": 16},
+                                "children": [{"type": "TextRun", "text": ""}],
+                            }
+                            for y in (150, 180, 210)
+                        ],
+                    ],
+                }
+            ],
+        }
+
+        self.assertEqual(FIDELITY.square_wrap_text_overlap_candidates(tree), [])
+
+    def test_square_wrap_keeps_marker_line_with_empty_text_run(self) -> None:
+        tree = {
+            "type": "Page",
+            "bbox": {"x": 0, "y": 0, "w": 800, "h": 1100},
+            "children": [
+                {
+                    "type": "Body",
+                    "bbox": {"x": 50, "y": 50, "w": 700, "h": 900},
+                    "children": [
+                        {
+                            "type": "Image",
+                            "pi": 1,
+                            "ci": 0,
+                            "textWrap": "Square",
+                            "bbox": {"x": 300, "y": 200, "w": 200, "h": 200},
+                        },
+                        *[
+                            {
+                                "type": "TextLine",
+                                "bbox": {"x": 100, "y": y, "w": 500, "h": 16},
+                                "children": (
+                                    [
+                                        {"type": "TextRun", "text": ""},
+                                        {"type": "FnMarker"},
+                                    ]
+                                    if y == 300
+                                    else [{"type": "TextRun", "text": "본문"}]
+                                ),
+                            }
+                            for y in (230, 300, 360)
+                        ],
+                    ],
+                }
+            ],
+        }
+
+        candidates = FIDELITY.square_wrap_text_overlap_candidates(tree)
+
+        self.assertEqual(len(candidates), 1)
+        self.assertEqual(candidates[0]["overlap_line_count"], 3)
+
     def test_in_front_image_is_not_a_square_wrap_overlap_candidate(self) -> None:
         tree = {
             "type": "Page",

@@ -668,6 +668,46 @@ def bbox_from_node(node: Mapping[str, object]) -> tuple[float, float, float, flo
         return None
 
 
+def text_line_has_visible_paint(node: Mapping[str, object]) -> bool:
+    """Keep blank render-tree guide lines out of wrap-overlap candidates.
+
+    Some HWP5 Square-wrap paragraphs retain zero-height/empty guide lines with
+    a full-column `TextLine` bbox. They are layout aids, not painted Body text,
+    so counting them would inflate a candidate. Older/minimal trees without
+    children retain the conservative legacy behavior because their paint detail
+    is unavailable.
+    """
+    children = node.get("children")
+    if not isinstance(children, list) or not children:
+        return True
+
+    found_text_run = False
+    visible = False
+
+    def walk(child: Mapping[str, object]) -> None:
+        nonlocal found_text_run, visible
+        node_type = child.get("type")
+        if node_type in {"Equation", "FnMarker"}:
+            visible = True
+        elif node_type == "TextRun":
+            found_text_run = True
+            display = child.get("displayText")
+            source = child.get("text")
+            text = display if isinstance(display, str) else source
+            if isinstance(text, str) and text.replace("\U000f081c", "").strip():
+                visible = True
+        nested = child.get("children")
+        if isinstance(nested, list):
+            for grandchild in nested:
+                if isinstance(grandchild, Mapping):
+                    walk(grandchild)
+
+    for child in children:
+        if isinstance(child, Mapping):
+            walk(child)
+    return visible or not found_text_run
+
+
 def square_wrap_text_overlap_candidates(
     tree: Mapping[str, object],
 ) -> list[dict[str, object]]:
@@ -689,7 +729,8 @@ def square_wrap_text_overlap_candidates(
         box = bbox_from_node(node)
         if region == "Body" and box is not None:
             if node_type == "TextLine":
-                body_lines.append(box)
+                if text_line_has_visible_paint(node):
+                    body_lines.append(box)
             elif node_type == "Image":
                 text_wrap = node.get("textWrap")
                 if text_wrap in {"Square", "Tight", "Through"}:

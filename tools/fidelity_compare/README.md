@@ -127,6 +127,12 @@ PDF↔SVG text delta를 함께 기록한다. 이것은 rhwp 쪽의 source-table 
 후보에서 제외한다. stroke 반올림과 문서 고유 overlay도 후보가 될 수 있으므로, 0이 아닌 값은 곧바로 결함이 아니라
 visual review 대상으로 해석한다.
 
+`scripts/visual_sweep.py`는 자신의 render tree 분석에서 이 Square/Tight/Through 후보 함수를
+재사용해 `square_wrap_text_overlap` flag와 annotation을 남긴다. 따라서 sweep의 `flagged=0`이 이 특정
+기하 후보를 덮어쓰지는 않는다. 다만 text owner, table fragment, page-count는 sweep이 재계산하지 않으므로
+실물 PDF 대조에서는 이 도구의 전체 ledger를 먼저 보존한다. bridge에 필요한 render tree가 없거나
+손상되면 sweep은 후보 0으로 fail-open하지 않고 run을 실패시킨다.
+
 단계별 확장(10쪽 → 전수 → 고난도 문서)으로 돌리고, 픽셀 랭킹과 문자 멀티셋 격차를
 교차해 후보를 좁힌다. **랭킹 상위 페이지의 시트를 눈으로 감사**한 뒤 실질 결함만
 이슈로 승격한다. 문자 멀티셋도 후보 검출용이다. PDF 텍스트층에 없는 path 글리프,

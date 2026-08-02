@@ -1,8 +1,8 @@
 ---
 kind: investigation
-status: active
+status: completed
 canonical: mydocs/manual/bug_hunting_playbook.md
-last_verified: 2026-08-02
+last_verified: 2026-08-03
 ---
 
 # Task #3738 Stage 23 fidelity detector — Square 그림·본문 교차의 전수 후보화
@@ -38,6 +38,13 @@ last_verified: 2026-08-02
 - Python positive: Square 이미지와 3개 Body line의 교차를 1 candidate로 판정
 - Python negative: `InFrontOfText` 이미지의 같은 기하는 후보로 판정하지 않음
 
-다음 evidence 단계 전까지 이 문서는 `active`다. p127 renderer 자체의 narrow wrap anchor 복원은
-`task_m100_3738_stage23.md`의 별도 code stage로 진행하며, 이 detector는 그 전후의 빠른 전수 triage를
-제공한다.
+## 결과
+
+p127 수정 전 보존 ledger는 `square_wrap_text_overlap=1`이고, current exact binary에서는 0이다.
+따라서 detector 자체는 p127과 같은 same-page Square-wrap 물리 교차를 구분할 수 있다. 다만 당시
+visual sweep이 이 ledger를 소비하지 않아 sweep 단독의 `flagged=0`이 false clean처럼 보일 수 있었다.
+
+[Stage 31 fidelity bridge](task_m100_3738_stage31_fidelity_bridge.md)는 sweep이 이 canonical 함수를
+직접 재사용하도록 연결하고, 누락·손상 render tree는 candidate 0이 아니라 run failure로 처리하게 했다.
+그 전수 preflight에서는 p156 그림 64가 별도 `Square` 후보로 다시 포착됐으며, 이는 해결 표기가 아닌
+후속 PDF review/code Stage의 P0 후보로 이월했다.
