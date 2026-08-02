@@ -1,6 +1,6 @@
 ---
 kind: investigation
-status: active
+status: completed
 canonical: mydocs/manual/bug_hunting_playbook.md
 last_verified: 2026-08-02
 ---
@@ -108,3 +108,10 @@ ledger, render tree table/footer/frame 후보 및 PDF 3-way review에서 별도 
 - p44 table stroke가 `column_text_flow_collapse` false positive를 만들지 않는다.
 - p127의 Square 그림/text physical-overlap positive regression은 유지한다.
 - 결과 visual evidence를 별도 문서와 asset으로 고정하고, 위 이월 원장은 다음 Stage에도 누락 없이 옮긴다.
+
+## 결과
+
+code commit `982e50dbf0142c5ce97ccd71650fb76ee447c47c`은 Body bbox를 flow-frame으로 사용하고
+Body table raster만 column-text-flow 계산에서 mask했다. p44–45의 source/PDF owner 재판정, direct
+`fidelity_compare` ledger, 선택 visual sweep과 p127 무회귀 근거는
+[Stage 25 visual sweep](task_m100_3738_stage25_visual_sweep.md)에 고정한다.
