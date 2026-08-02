@@ -77,8 +77,9 @@ python3 tools/fidelity_compare/fidelity_compare.py 0 214 \
   page-owner 이동 후보. `rhwp_earlier_than_reference`/`rhwp_later_than_reference` 방향을 기록하며,
   PDF visual owner 대조 전에는 결함 판정이 아니다.
 - `text-owner-sequence-candidates.tsv`: 문자 Counter가 다른 본문/각주와 상쇄해 놓칠 수 있는 경우를
-  보완한다. 한 쪽에서 사라진 16자 이상 **순서 보존** 문자열이 바로 다음 rhwp/PDF 쪽에만 있으면
-  같은 owner 방향 후보로 기록한다. URL·citation·긴 각주 이동에는 강하지만, 최종 layout 판정은 아니다.
+  보완한다. NFC·공백 정규화 뒤 한 쪽에서 사라진 16자 이상 **순서 보존** 문자열이 바로 다음 rhwp/PDF
+  쪽에만 있으면 같은 owner 방향 후보로 기록한다. URL·citation·긴 각주 이동에는 강하지만, 최종 layout
+  판정은 아니다.
 - `page-count-ledger.tsv`: 기준 PDF, `--export-all-svg`의 전체 SVG, `--layout-ledger`의 전체 render tree
   쪽수를 분리 기록한다. 페이지 수 차이는 전역 page-break 보정의 근거가 아니라 individual owner 조사 후보를
   여는 신호다.

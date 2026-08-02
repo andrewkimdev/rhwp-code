@@ -1,6 +1,6 @@
 ---
 kind: investigation
-status: active
+status: completed
 canonical: mydocs/manual/bug_hunting_playbook.md
 last_verified: 2026-08-02
 ---
@@ -65,13 +65,26 @@ candidate로 잡는다.
 `text-owner-sequence-candidates.tsv`는 후보 전용이다. NFC/공백 정규화, multiline target과 chain,
 same-page reorder false positive를 unit test로 고정했고, 이 신호만으로 visual fidelity를 확정하지 않는다.
 
+## 결과
+
+코드 commit `543c5b3988512945c1273368a25a1edfd97d15c3`는 first-footnote collision route를 보존한 채,
+native HWP5의 completed multi-note marker page에만 note 60/62를 소급 등록한다. fixture regression은
+16/16, fidelity comparator unit test는 25/25 통과했다.
+
+새 binary의 p52–54 direct `fidelity_compare --text-only --layout-ledger`는 세 쪽 모두
+`reference_only=0`, `svg_only=0`, Counter owner shift 0건, ordered owner sequence 0건,
+`body_footnote_lines=0`을 기록했다. selected visual sweep도 p52–54 모두 complete, flag 0건이다.
+PDF review PNG를 직접 확인해 p52 note 60, p53 note 62, p54 후속 각주·본문이 원래 physical owner와
+같음을 확인했다. 전역 page count는 native 219 / PDF 215로 기존 `+4` candidate가 남아 있으며 이
+Stage에서 해결됐다고 주장하지 않는다. 상세 증적은
+[Stage 28 visual sweep](task_m100_3738_stage28_visual_sweep.md)에 고정했다.
+
 ## 이월 원장
 
 | 우선 | human 쪽 | 계약 | 상태 |
 | --- | --- | --- | --- |
 | review | 42 | `question_marker_flow_drift`의 실제 body-flow 결함 여부 | 확정 전 후보 |
-| P0 | 52–53 | 각주 58–62와 본문 tail owner/내용이 PDF와 같다. | **이 Stage에서 분석** |
-| P0 | 54 | 본문·각주 가독성 separation과 owner | 미해결 |
+| P0 | 52–54 | 각주 58–62와 본문 tail owner/내용·separation이 PDF와 같다. | **해결** |
 | P0 | 66–67 | 표 23·각주 76–85·body/footnote separation | 미해결 |
 | P0 | 83–85 | 각주 126–136·본문 tail·84–85 page flow | 미해결 |
 | review | 87 | semantic flow | 과거 보고, 미재검증 |
@@ -83,4 +96,5 @@ same-page reorder false positive를 unit test로 고정했고, 이 신호만으�
 | P1 | 전체 | PDF 215 ↔ native HWP 219 page-map | 미해결, individual P0 뒤 분석 |
 
 p23–24, p25, p26–27, p30–32, p37, p43, p44–45, p58–59, p68–70, p76–80, p127은 최신
-evidence에서 resolved이므로 재이월하지 않는다.
+evidence에서 resolved이므로 재이월하지 않는다. 다음 Stage는 p52–54도 재이월하지 않고, 표 23/각주
+76–85가 시작되는 p66–67부터 위의 나머지 원장을 전부 옮긴다.
