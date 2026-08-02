@@ -1,6 +1,6 @@
 ---
 kind: investigation
-status: active
+status: completed
 canonical: mydocs/manual/bug_hunting_playbook.md
 last_verified: 2026-08-02
 ---
@@ -76,3 +76,15 @@ HWP source/control, render tree, existing focused test fixture를 다시 대조�
 
 p23–24, p25, p30–32, p37, p43, p44–45, p58–59, p68–70, p76–80, p127은 최신 evidence에서
 resolved이므로 재이월하지 않는다. 다음 Stage가 필요하면 위 잔여 항목 전부를 상태와 함께 옮긴다.
+
+## 결과
+
+코드 commit `c893d9889bca37f688e9195e8a02e7aa5ca951fb`는 본문을 되감지 않고 각주 registration만
+다음 physical page로 넘겼다. focused fixture 15/15가 통과했고, 새 binary의 p26–27 direct
+`fidelity_compare --text-only --layout-ledger`는 `reference_only=0`, `svg_only=0`, adjacent owner
+shift 0건, `body_footnote_lines=0`을 기록했다.
+
+한컴 2020 PDF와 direct review PNG도 p26의 marker/body와 p27의 footnote 26 physical owner가
+같음을 확인했다. `task1274`의 p27 `endnote_separator_gap_drift` 1건은 PDF raster의 116개 수평
+candidate 중 무관한 선을 선택한 review-only 오탐이다. 이 Stage의 자세한 visual/PDF 증적과
+한계 판정은 [Stage 27 visual sweep](task_m100_3738_stage27_visual_sweep.md)에 고정했다.
