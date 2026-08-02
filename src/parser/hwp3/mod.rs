@@ -4701,10 +4701,7 @@ mod tests {
     #[test]
     fn read_hwp3_margin_scaled_preserves_large_negative_values_without_overflow_panic() {
         let large_negative: [u8; 2] = (-9000i16).to_le_bytes();
-        assert_eq!(
-            read_hwp3_margin_scaled(&large_negative),
-            (-36000i32) as i16
-        );
+        assert_eq!(read_hwp3_margin_scaled(&large_negative), (-36000i32) as i16);
         assert_eq!(read_hwp3_margin_scaled(&(-100i16).to_le_bytes()), -400);
         assert_eq!(read_hwp3_margin_scaled(&200i16.to_le_bytes()), 800);
         assert_eq!(read_hwp3_margin_scaled(&0i16.to_le_bytes()), 0);
