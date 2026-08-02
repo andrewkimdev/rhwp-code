@@ -302,12 +302,24 @@ struct Recipe {
 ///
 /// 여기 넣어도 되는 것은 "문서를 입력으로 받지 않아 문서 오라클을 만들 수 없는"
 /// 명령뿐이다. 사유 없는 허용목록은 가드를 무력화하므로 사유를 강제한다.
-const SWEEP_EXEMPT: &[(&str, &str)] = &[(
-    "build-from-ingest",
-    "입력이 문서가 아니라 호출자가 만든 ingest JSON 이라 '문서에서 온 문자열' 오라클을 \
-     만들 수 없다. 봉투는 경로·바이트·문항/문단 개수뿐임을 지도가 선언하고, \
-     tests/issue_3358_ingest_unknown_fields.rs 가 그 봉투를 따로 고정한다.",
-)];
+const SWEEP_EXEMPT: &[(&str, &str)] = &[
+    (
+        "build-from-ingest",
+        "입력이 문서가 아니라 호출자가 만든 ingest JSON 이라 '문서에서 온 문자열' 오라클을 \
+         만들 수 없다. 봉투는 경로·바이트·문항/문단 개수뿐임을 지도가 선언하고, \
+         tests/issue_3358_ingest_unknown_fields.rs 가 그 봉투를 따로 고정한다.",
+    ),
+    (
+        "export-ir-schema",
+        "문서를 입력으로 받지 않는 IR 타입 스키마다. --bare가 아닌 모드도 특정 문서가 아닌 \
+         스키마 봉투를 낸다.",
+    ),
+    (
+        "export-capabilities-schema",
+        "문서를 입력으로 받지 않는 capabilities 타입 스키마다. --bare가 아닌 모드도 특정 \
+         문서가 아닌 스키마 봉투를 낸다.",
+    ),
+];
 
 fn s(v: &str) -> String {
     v.to_string()
@@ -341,6 +353,32 @@ fn recipes() -> Vec<Recipe> {
         .first()
         .cloned()
         .expect("샘플에서 토큰을 얻지 못했습니다");
+
+    // csv-to-table 은 호출자 CSV와 문서 표를 함께 받는다. 문서에서 뽑은 같은 CSV를
+    // 다시 넣으면 변경 전 셀 텍스트가 봉투에 없을 수는 있지만, JSON 표지가 항상
+    // 붙는지와 지도 경로가 이 명령을 덮는지는 실제 호출로 검증할 수 있다.
+    let table_csv_path = PathBuf::from(out("provenance-table.csv"));
+    let table_seed_args = vec![
+        s("table-to-csv"),
+        p(&table),
+        s("--table"),
+        s("0"),
+        s("--json"),
+    ];
+    let table_seed = run(&table_seed_args);
+    assert_eq!(
+        table_seed.status.code(),
+        Some(0),
+        "CSV 기준선을 만들지 못했습니다:\n{}",
+        describe(&table_seed_args, &table_seed)
+    );
+    let table_seed_json: Value =
+        serde_json::from_slice(&table_seed.stdout).expect("table-to-csv 기준선 stdout JSON");
+    let table_csv = table_seed_json["tables"][0]["csv"]
+        .as_str()
+        .expect("table-to-csv 기준선 CSV")
+        .to_string();
+    std::fs::write(&table_csv_path, table_csv).expect("CSV 기준선 쓰기");
 
     vec![
         Recipe {
@@ -379,6 +417,37 @@ fn recipes() -> Vec<Recipe> {
             command: "export-tables",
             doc: Some(main.clone()),
             args: vec![s("export-tables"), p(&main), s("--json")],
+            stdin: None,
+            exit: 0,
+            ndjson: false,
+        },
+        Recipe {
+            command: "table-to-csv",
+            doc: Some(table.clone()),
+            args: vec![
+                s("table-to-csv"),
+                p(&table),
+                s("--table"),
+                s("0"),
+                s("--json"),
+            ],
+            stdin: None,
+            exit: 0,
+            ndjson: false,
+        },
+        Recipe {
+            command: "csv-to-table",
+            doc: Some(table.clone()),
+            args: vec![
+                s("csv-to-table"),
+                p(&table),
+                s("--csv"),
+                p(&table_csv_path),
+                s("--table"),
+                s("0"),
+                s("--dry-run"),
+                s("--json"),
+            ],
             stdin: None,
             exit: 0,
             ndjson: false,
@@ -566,6 +635,14 @@ fn recipes() -> Vec<Recipe> {
             command: "ir-diff",
             doc: Some(main.clone()),
             args: vec![s("ir-diff"), p(&main), p(&main), s("--json")],
+            stdin: None,
+            exit: 0,
+            ndjson: false,
+        },
+        Recipe {
+            command: "render-diff",
+            doc: Some(main.clone()),
+            args: vec![s("render-diff"), p(&main), s("--json")],
             stdin: None,
             exit: 0,
             ndjson: false,

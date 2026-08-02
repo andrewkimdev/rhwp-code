@@ -7,7 +7,7 @@ use std::process;
 mod agent_profiles;
 mod atomic_file;
 mod mcp_serve;
-mod provenance;
+use rhwp::provenance;
 
 /// [#2707] CLI 종료 코드 계약 — 성공.
 const EXIT_OK: i32 = 0;
@@ -4519,7 +4519,7 @@ fn export_tables(args: &[String]) -> i32 {
     }
 
     if json_mode {
-        println!("{envelope}");
+        println!("{}", provenance::marked(envelope, "export-tables"));
         return EXIT_OK;
     }
 
@@ -4702,7 +4702,7 @@ fn table_to_csv(args: &[String]) -> i32 {
             envelope["output"] = serde_json::Value::String(p);
             envelope["outputFormat"] = serde_json::Value::String("csv".to_string());
         }
-        println!("{envelope}");
+        println!("{}", provenance::marked(envelope, "table-to-csv"));
         return EXIT_OK;
     }
 
@@ -4956,7 +4956,7 @@ fn csv_to_table(args: &[String]) -> i32 {
                 "dryRun": dry_run,
                 "changedPages": serde_json::Value::Null,
             });
-            println!("{envelope}");
+            println!("{}", provenance::marked(envelope, "csv-to-table"));
         } else {
             for item in &invalid {
                 eprintln!(
@@ -5102,7 +5102,7 @@ fn csv_to_table(args: &[String]) -> i32 {
             envelope["outputFormat"] = serde_json::Value::String(out_format.label().to_string());
             envelope["verify"] = verify_report.clone();
         }
-        println!("{envelope}");
+        println!("{}", provenance::marked(envelope, "csv-to-table"));
         if verify_failed {
             process::exit(3);
         }

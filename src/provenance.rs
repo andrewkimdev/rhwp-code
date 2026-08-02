@@ -175,6 +175,22 @@ pub const MAP: &[CommandProvenance] = &[
         note: "격자 주소(row/col/rowSpan/colSpan)와 개수는 엔진값이다.",
     },
     CommandProvenance {
+        command: "table-to-csv",
+        untrusted: &[f(
+            "tables[].csv",
+            "queries::table_csv::grid_to_csv — 문서 표 셀의 텍스트를 RFC 4180 CSV로 직렬화",
+        )],
+        note: "표 주소·격자 크기·BOM·산출 경로는 엔진 또는 호출자 값이고, CSV 본문만 문서 파생이다.",
+    },
+    CommandProvenance {
+        command: "csv-to-table",
+        untrusted: &[f(
+            "changed[].oldText",
+            "resolve_table_cell — CSV를 적용하기 전 표 앵커 셀에 있던 문서 텍스트",
+        )],
+        note: "csv·newText는 호출자가 준 입력이고, 변경 전 셀 값(oldText)만 문서에서 왔다.",
+    },
+    CommandProvenance {
         command: "dump-pages",
         untrusted: &[f(
             "pages[].columns[].items[].textPreview",
@@ -213,6 +229,11 @@ pub const MAP: &[CommandProvenance] = &[
              차이 라인은 본문 전체가 키가 되어 문서 문자열이 섞일 수 있다(ir_diff 의 diff())",
         )],
         note: "보수적으로 선언한다 — 과소 선언은 위험한 방향이고 과대 선언은 안전한 방향이다.",
+    },
+    CommandProvenance {
+        command: "render-diff",
+        untrusted: NONE,
+        note: "기하 차이 봉투는 경로·노드 유형·좌표·집계값만 싣는다. 본문 텍스트와 이미지 바이트는 싣지 않는다.",
     },
     CommandProvenance {
         command: "thumbnail",
@@ -301,6 +322,16 @@ pub const MAP: &[CommandProvenance] = &[
         command: "capabilities",
         untrusted: NONE,
         note: "문서를 열지 않는다 — 전부 바이너리 자신의 선언이다.",
+    },
+    CommandProvenance {
+        command: "export-ir-schema",
+        untrusted: NONE,
+        note: "문서를 열지 않는다 — 공개 IR 타입의 자기서술(JSON Schema)이다.",
+    },
+    CommandProvenance {
+        command: "export-capabilities-schema",
+        untrusted: NONE,
+        note: "문서를 열지 않는다 — capabilities 타입의 자기서술(JSON Schema)이다.",
     },
     CommandProvenance {
         command: "export-provenance-map",

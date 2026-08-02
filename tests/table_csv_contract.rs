@@ -178,6 +178,15 @@ fn table_to_csv_json_envelope_contract() {
         assert!(t["colCount"].is_u64(), "{t}");
         assert!(t["csv"].is_string(), "{t}");
     }
+    assert_eq!(
+        v["untrustedContent"], true,
+        "CSV 본문은 문서 파생값입니다: {v}"
+    );
+    assert_eq!(
+        v["untrustedFields"],
+        serde_json::json!(["tables[].csv"]),
+        "{v}"
+    );
 }
 
 #[test]
@@ -460,7 +469,19 @@ fn value_written_by_csv_is_readable_back() {
     let (index, _, cols) = pick_merged_top_level_table();
     let mut records = read_csv(&csv_of(index));
     let marker = "표값-2026";
-    records[0][0] = marker.to_string();
+    let (target_row, target_col) = records
+        .iter()
+        .enumerate()
+        .flat_map(|(row, record)| {
+            record
+                .iter()
+                .enumerate()
+                .map(move |(col, value)| (row, col, value))
+        })
+        .find(|(_, _, value)| !value.is_empty())
+        .map(|(row, col, _)| (row, col))
+        .expect("문서 표에 비어 있지 않은 앵커 셀이 있어야 합니다");
+    records[target_row][target_col] = marker.to_string();
     let body = write_csv(&records);
     let csv_file = temp_path("write.csv");
     std::fs::write(&csv_file, &body).expect("CSV 쓰기");
@@ -489,6 +510,16 @@ fn value_written_by_csv_is_readable_back() {
     let v = parse_stdout_json(&args, &output);
     assert_eq!(v["changedCount"].as_u64(), Some(1), "{v}");
     assert_eq!(v["changed"][0]["newText"], marker, "{v}");
+    assert!(v["changed"][0]["oldText"].is_string(), "{v}");
+    assert_eq!(
+        v["untrustedContent"], true,
+        "변경 전 셀 값은 문서 파생값입니다: {v}"
+    );
+    assert_eq!(
+        v["untrustedFields"],
+        serde_json::json!(["changed[].oldText"]),
+        "{v}"
+    );
 
     // 저장본을 다시 CSV 로 뽑아 값이 실제로 문서에 들어갔는지 본다.
     let back = run(&[
@@ -501,7 +532,10 @@ fn value_written_by_csv_is_readable_back() {
     assert_eq!(back.status.code(), Some(0));
     let bv: serde_json::Value = serde_json::from_slice(&back.stdout).expect("봉투");
     let round = read_csv(bv["tables"][0]["csv"].as_str().expect("csv"));
-    assert_eq!(round[0][0], marker, "되읽은 값이 다릅니다");
+    assert_eq!(
+        round[target_row][target_col], marker,
+        "되읽은 값이 다릅니다"
+    );
     assert_eq!(round[0].len(), cols as usize, "열 수가 달라졌습니다");
     let _ = std::fs::remove_file(&out);
     let _ = std::fs::remove_file(&csv_file);
