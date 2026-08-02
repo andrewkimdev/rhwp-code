@@ -15,7 +15,7 @@
    기록하게 한다.
 5. workflow 계약 테스트에서 shadow output이 기존 worker 조건에 사용되지 않음을 확인한다.
 
-pull request에서는 checkout된 PR 코드의 classifier가 실행되므로 Stage 1 결과는 advisory다. 실제 skip을
+pull request에서는 checkout된 merge ref의 classifier가 실행되므로 Stage 1 결과는 advisory다. 실제 skip을
 활성화하는 PR은 base SHA의 classifier를 사용하거나 동등한 trusted execution 경계를 먼저 구현해야 한다.
 
 ## Stage 2 — shadow 실측
@@ -27,21 +27,25 @@ pull request에서는 checkout된 PR 코드의 classifier가 실행되므로 Sta
 
 ## Stage 3 — frontend unit/package/render 활성화
 
-1. Studio unit worker와 package worker를 분리하거나 기존 worker 내부 gate를 명확히 나눈다.
-2. Canvas는 `render_required`에만 연결한다.
-3. aggregate는 필요한 worker `success`, 불필요 worker `skipped`만 허용한다.
-4. #3785/#3656은 unit, #3670은 package, #3672는 unit+render 경로를 실측한다.
+1. `unit`은 Studio 전체 `src`의 `tsc --noEmit`과 전체 Studio unit test를 실행한다.
+2. `package`는 `unit` 계약에 Vite·extension·package build를 추가한다.
+3. Render Diff의 Canvas visual diff와 CanvasKit readiness가 실제로 소비하는 경로를 각각 도출한다.
+   영향축을 분리하지 않으면 두 gate 의존성의 보수적 합집합만 `render_required`에 연결한다.
+4. `canvaskit` 파일명 heuristic처럼 피시험 코드와 테스트를 다르게 분류하는 규칙을 제거하고 계약
+   fixture로 고정한다.
+5. aggregate는 필요한 worker `success`, 불필요 worker `skipped`만 허용한다.
+6. #3785/#3656은 unit, #3670은 package, #3672는 unit+render 경로를 실측한다.
 
 ## Stage 4 — Rust·Native Skia 조건화
 
 1. Rust 비영향 PR에서 lint/archive/shard를 생략한다.
 2. Rust 변경 중 render 비영향 경로는 Native Skia를 생략한다.
 3. Rust formatter·passthrough invalidation·IR baseline 회귀가 필요한 경로는 기존 전체 검증을 유지한다.
-4. 결과를 #3684에 공유할 코멘트 초안으로 정리하되, 사용자 승인 전에는 게시하지 않는다.
+4. #3684를 완료한 #3810의 정리 후 cache 기준선 4.73GB와 조건화 이후 총량을 대조한다.
 
 ## Stage 5 이후
 
-- #3684 cache 기준선 확정 뒤 CodeQL 언어별 matrix를 활성화한다.
+- #3810의 4.73GB cache 기준선 회귀 여부를 확인하며 CodeQL 언어별 matrix를 활성화한다.
 - shard count artifact 재시도와 draft 경량화는 각각 독립 PR로 진행한다.
 - #3789가 완료되기 전에는 `src/main.rs`의 Render Diff trigger를 좁히지 않는다.
 

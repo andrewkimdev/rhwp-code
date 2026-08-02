@@ -34,10 +34,12 @@ class CiImpactShadowWorkflowTests(unittest.TestCase):
     def test_shadow_classifier_is_advisory_and_does_not_receive_checkout_credentials(self) -> None:
         self.assertIn("Check out repository for advisory impact classifier", self.preflight)
         self.assertIn("persist-credentials: false", self.preflight)
+        self.assertIn("sparse-checkout: scripts/ci-impact-classifier.cjs", self.preflight)
+        self.assertIn("sparse-checkout-cone-mode: false", self.preflight)
         self.assertIn("Classify CI impact in shadow mode", self.preflight)
         self.assertIn("Advisory only: existing worker conditions are unchanged", self.preflight)
         self.assertIn("Review-only fast-pass skips the advisory classifier checkout", self.preflight)
-        self.assertIn("pr-head-advisory", self.preflight)
+        self.assertIn("pr-merge-advisory", self.preflight)
 
     def test_review_only_fast_pass_does_not_pay_shadow_checkout_cost(self) -> None:
         for step_name in (
@@ -55,6 +57,13 @@ class CiImpactShadowWorkflowTests(unittest.TestCase):
 
     def test_existing_worker_conditions_do_not_consume_shadow_outputs(self) -> None:
         self.assertNotIn("shadow_", self.workers)
+        for reference in (
+            "needs.preflight.outputs.shadow_",
+            "needs.preflight.outputs['shadow_",
+            'needs.preflight.outputs["shadow_',
+        ):
+            with self.subTest(reference=reference):
+                self.assertNotIn(reference, self.workflow)
         self.assertIn(
             "needs.preflight.outputs.frontend_required == 'true'",
             self.workers,

@@ -445,6 +445,8 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          sparse-checkout: scripts/ci-impact-classifier.cjs
+          sparse-checkout-cone-mode: false
 
       - name: Collect shadow CI impact input
         id: collect-impact-shadow
@@ -462,7 +464,7 @@ jobs:
               '.ci-impact-input.json',
             );
             const authority = context.eventName === 'pull_request'
-              ? 'pr-head-advisory'
+              ? 'pr-merge-advisory'
               : 'checked-out-ref-advisory';
             core.setOutput('authority', authority);
 

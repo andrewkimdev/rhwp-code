@@ -105,6 +105,7 @@ for (const [filename, expectedReason] of [
   ['src/main.rs', 'fail-closed:main-render-boundary'],
   ['src/wasm_api.rs', 'fail-closed:wasm-contract'],
   ['scripts/ci-impact-classifier.cjs', 'fail-closed:classifier-contract'],
+  ['web/new-entry.ts', 'fail-closed:unclassified-path'],
   ['unclassified/new-format.schema', 'fail-closed:unclassified-path'],
 ]) {
   test(`${filename} is fail-closed`, () => {

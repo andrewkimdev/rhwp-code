@@ -36,7 +36,6 @@ const FRONTEND_PACKAGE_PREFIXES = [
   'rhwp-shared/',
   'npm/editor/',
   'typescript/',
-  'web/',
 ];
 
 function fullResult(reason) {
