@@ -10,6 +10,7 @@ use crate::model::control::Control;
 use crate::model::document::{Document, Section};
 use crate::model::page::ColumnDef;
 use crate::model::paragraph::{ColumnBreakType, Paragraph};
+use crate::model::style::Alignment;
 use crate::paint::{
     resolve_embedded_font_face_index, EmbeddedFontFace, LayerBuilder, LayerOutputOptions,
     PageLayerTree, RenderProfile,
@@ -19,19 +20,234 @@ use crate::renderer::composer::{compose_paragraph, compose_section, ComposedPara
 use crate::renderer::height_measurer::{HeightMeasurer, MeasuredSection, MeasuredTable};
 use crate::renderer::html::HtmlRenderer;
 use crate::renderer::layer_renderer::LayerRenderer;
-use crate::renderer::layout::LayoutEngine;
+use crate::renderer::layout::{
+    estimate_text_width, resolved_to_text_style, CellContext, LayoutEngine,
+};
 use crate::renderer::page_layout::PageLayoutInfo;
 use crate::renderer::pagination::{MasterPageRef, PageContent, PaginationResult, Paginator};
-use crate::renderer::render_tree::PageRenderTree;
+use crate::renderer::render_tree::{
+    BoundingBox, FieldMarkerType, PageRenderTree, RenderNode, RenderNodeType, TextRunNode,
+};
 use crate::renderer::style_resolver::resolve_styles;
 use crate::renderer::svg::SvgRenderer;
 use crate::renderer::svg_layer::SvgLayerRenderer;
 use crate::renderer::typeset::TypesetEngine;
+use crate::renderer::TextStyle;
 use std::cell::RefCell;
 use std::fmt::Write as _;
 
 const MAX_EMBEDDED_FONT_BYTES: usize = 32 * 1024 * 1024;
 const MAX_EMBEDDED_FONT_BYTES_PER_PAGE: usize = 64 * 1024 * 1024;
+const FOCUSED_PAGE_REPAINT_PAD: f64 = 3.0;
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct FocusedPageTreePatch {
+    pub(crate) page_index: u32,
+    pub(crate) dirty_rect: BoundingBox,
+}
+
+fn focused_partial_repaint_alignment_is_safe(
+    alignment: Alignment,
+    is_last_line: bool,
+    has_line_break: bool,
+) -> bool {
+    alignment == Alignment::Left
+        || (alignment == Alignment::Justify && is_last_line && !has_line_break)
+}
+
+/// 고정 dirty rect 밖으로 잉크/장식이 나가거나 cached run spacing을 재계산해야 하는
+/// 스타일은 부분 repaint에서 제외한다. 이 경로는 plain horizontal text 전용이다.
+fn focused_partial_repaint_style_is_safe(style: &TextStyle) -> bool {
+    style.right_tab_block_width_override.is_none()
+        && style.tab_leaders.is_empty()
+        && style.inline_tabs.is_empty()
+        && style.extra_word_spacing.abs() <= 0.001
+        && style.extra_char_spacing.abs() <= 0.001
+        && style.extra_dash_advance.abs() <= 0.001
+        && style.letter_spacing >= -0.01
+        && style.outline_type == 0
+        && style.shadow_type == 0
+        && !style.emboss
+        && !style.engrave
+        && !style.superscript
+        && !style.subscript
+        && style.emphasis_dot == 0
+        && matches!(style.underline, crate::model::style::UnderlineType::None)
+        && !style.strikethrough
+}
+
+/// [#3137 Stage 4] stable tail edit가 재사용할 수 있는 캐시된 마지막 TextLine 정보.
+///
+/// 페이지/셀 원점과 줄 bbox는 Stage 3의 same-line signature가 보존한다. 여기서는
+/// 기존 line의 plain TextRun 자식만 교체하고 표/페이지 구조는 그대로 둔다.
+#[derive(Clone)]
+struct CachedFocusedTailLine {
+    page_index: usize,
+    line_node_id: u32,
+    line_bbox: BoundingBox,
+    run_x: f64,
+    run_y: f64,
+    run_height: f64,
+    baseline: f64,
+    column_x: f64,
+    layout_style: TextStyle,
+    cell_context: CellContext,
+}
+
+fn focused_flat_cell_context_matches(
+    context: &CellContext,
+    parent_para_idx: usize,
+    control_idx: usize,
+    cell_idx: usize,
+    cell_para_idx: usize,
+) -> bool {
+    if context.parent_para_index != parent_para_idx || context.path.len() != 1 {
+        return false;
+    }
+    let entry = &context.path[0];
+    entry.control_index == control_idx
+        && entry.cell_index == cell_idx
+        && entry.cell_para_index == cell_para_idx
+        && entry.text_direction == 0
+}
+
+#[allow(clippy::too_many_arguments)]
+fn collect_cached_focused_tail_lines(
+    node: &RenderNode,
+    page_index: usize,
+    section_idx: usize,
+    parent_para_idx: usize,
+    control_idx: usize,
+    cell_idx: usize,
+    cell_para_idx: usize,
+    line_index: usize,
+    line_start: usize,
+    old_text_len: usize,
+    output: &mut Vec<CachedFocusedTailLine>,
+) {
+    if let RenderNodeType::TextLine(line) = &node.node_type {
+        let line_identity_matches = line.section_index == Some(section_idx)
+            && line.para_index == Some(cell_para_idx)
+            && line.line_index == Some(line_index as u32);
+        if line_identity_matches && !node.children.is_empty() {
+            let mut expected_char_start = line_start;
+            let mut expected_x: Option<f64> = None;
+            let mut first_run: Option<(&RenderNode, &TextRunNode)> = None;
+            let mut valid = true;
+
+            for (index, child) in node.children.iter().enumerate() {
+                let RenderNodeType::TextRun(run) = &child.node_type else {
+                    valid = false;
+                    break;
+                };
+                let context_matches = run.cell_context.as_ref().is_some_and(|context| {
+                    focused_flat_cell_context_matches(
+                        context,
+                        parent_para_idx,
+                        control_idx,
+                        cell_idx,
+                        cell_para_idx,
+                    )
+                });
+                if !context_matches
+                    || run.section_index != Some(section_idx)
+                    || run.para_index != Some(cell_para_idx)
+                    || run.char_start != Some(expected_char_start)
+                    || run.display_text.is_some()
+                    || run.char_overlap.is_some()
+                    || run.field_marker != FieldMarkerType::None
+                    || run.is_line_break_end
+                    || run.is_vertical
+                    || run.rotation.abs() > 0.001
+                    || !focused_partial_repaint_style_is_safe(&run.style)
+                    || !child.visible
+                    || child.editor_only
+                    || child.layer.is_some()
+                    || !child.children.is_empty()
+                {
+                    valid = false;
+                    break;
+                }
+                if index + 1 == node.children.len() {
+                    if !run.is_para_end {
+                        valid = false;
+                        break;
+                    }
+                } else if run.is_para_end {
+                    valid = false;
+                    break;
+                }
+                if let Some(x) = expected_x {
+                    if (child.bbox.x - x).abs() > 0.051 {
+                        valid = false;
+                        break;
+                    }
+                }
+                expected_x = Some(child.bbox.x + child.bbox.width);
+                expected_char_start += run.text.chars().count();
+                first_run.get_or_insert((child, run));
+            }
+
+            if valid && expected_char_start == old_text_len {
+                if let Some((child, run)) = first_run {
+                    let column_x = child.bbox.x - run.style.line_x_offset;
+                    if child.bbox.x.is_finite()
+                        && child.bbox.y.is_finite()
+                        && child.bbox.height.is_finite()
+                        && run.baseline.is_finite()
+                        && column_x.is_finite()
+                        && run.style.available_width.is_finite()
+                        && run.style.available_width > 0.0
+                    {
+                        output.push(CachedFocusedTailLine {
+                            page_index,
+                            line_node_id: node.id,
+                            line_bbox: node.bbox,
+                            run_x: child.bbox.x,
+                            run_y: child.bbox.y,
+                            run_height: child.bbox.height,
+                            baseline: run.baseline,
+                            column_x,
+                            layout_style: run.style.clone(),
+                            cell_context: run
+                                .cell_context
+                                .clone()
+                                .expect("검증된 focused cell context"),
+                        });
+                    }
+                }
+            }
+        }
+    }
+
+    for child in &node.children {
+        collect_cached_focused_tail_lines(
+            child,
+            page_index,
+            section_idx,
+            parent_para_idx,
+            control_idx,
+            cell_idx,
+            cell_para_idx,
+            line_index,
+            line_start,
+            old_text_len,
+            output,
+        );
+    }
+}
+
+fn find_render_node_mut(node: &mut RenderNode, node_id: u32) -> Option<&mut RenderNode> {
+    if node.id == node_id {
+        return Some(node);
+    }
+    for child in &mut node.children {
+        if let Some(found) = find_render_node_mut(child, node_id) {
+            return Some(found);
+        }
+    }
+    None
+}
 
 /// 문단 본문과 수식 script를 컨트롤 문자 위치에 직접 합친다.
 ///
@@ -5530,6 +5746,248 @@ impl DocumentCore {
         }
     }
 
+    /// [#3137 Stage 4] same-line인 셀 문단 꼬리 편집을 캐시된 TextLine에 반영한다.
+    ///
+    /// 이 경로는 새 page tree를 만들지 않는다. 기존 캐시에 대상 마지막 줄이 정확히
+    /// 하나 있고, 편집 후 문단도 컨트롤/번호/배경 없는 가로 plain text이며 자연 폭이
+    /// 셀 너비 안에 있는 경우에만 TextRun 자식을 재생성한다. 하나라도 다르면 caller가
+    /// 기존 `invalidate_page_tree_cache_from(0)`으로 폴백한다.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn try_patch_cached_focused_cell_tail_line(
+        &self,
+        section_idx: usize,
+        parent_para_idx: usize,
+        control_idx: usize,
+        cell_idx: usize,
+        cell_para_idx: usize,
+        line_index: usize,
+        line_start: usize,
+        old_text_len: usize,
+        new_text_len: usize,
+    ) -> Option<FocusedPageTreePatch> {
+        // partial Canvas replay는 일반 화면 text만 대상으로 한다. 편집 표식/디버그
+        // overlay는 bbox 밖에 별도 glyph를 그릴 수 있으므로 기존 full repaint를 유지한다.
+        if self.show_paragraph_marks || self.show_control_codes || self.debug_overlay {
+            return None;
+        }
+        let valid_table_cell = self
+            .document
+            .sections
+            .get(section_idx)
+            .and_then(|section| section.paragraphs.get(parent_para_idx))
+            .and_then(|paragraph| paragraph.controls.get(control_idx))
+            .and_then(|control| match control {
+                Control::Table(table) if cell_idx != super::super::TABLE_CAPTION_CELL_SENTINEL => {
+                    table.cells.get(cell_idx)
+                }
+                _ => None,
+            })
+            .and_then(|cell| cell.paragraphs.get(cell_para_idx))
+            .is_some();
+        if !valid_table_cell {
+            return None;
+        }
+        let paragraph = self.get_cell_paragraph_ref(
+            section_idx,
+            parent_para_idx,
+            control_idx,
+            cell_idx,
+            cell_para_idx,
+        )?;
+        if paragraph.text.chars().count() != new_text_len
+            || paragraph.text.encode_utf16().count() != new_text_len
+            || !paragraph.controls.is_empty()
+            || !paragraph.range_tags.is_empty()
+            || !paragraph.field_ranges.is_empty()
+            || !paragraph.orphan_field_ends.is_empty()
+            || !paragraph.tab_extended.is_empty()
+            || paragraph
+                .text
+                .chars()
+                .any(|character| matches!(character, '\r' | '\n' | '\t'))
+        {
+            return None;
+        }
+
+        let composed = compose_paragraph(paragraph);
+        if composed.numbering_text.is_some()
+            || !composed.inline_controls.is_empty()
+            || !composed.tac_controls.is_empty()
+            || !composed.footnote_positions.is_empty()
+            || !composed.tab_extended.is_empty()
+            || composed.lines.len() != paragraph.line_segs.len()
+            || line_index + 1 != composed.lines.len()
+        {
+            return None;
+        }
+        let line = composed.lines.get(line_index)?;
+        if line.char_start != line_start || line.has_line_break || line.runs.is_empty() {
+            return None;
+        }
+        let alignment = self
+            .styles
+            .para_styles
+            .get(paragraph.para_shape_id as usize)
+            .map(|style| style.alignment)
+            .unwrap_or(Alignment::Left);
+        if !focused_partial_repaint_alignment_is_safe(
+            alignment,
+            line_index + 1 == composed.lines.len(),
+            line.has_line_break,
+        ) {
+            return None;
+        }
+
+        let mut candidates = Vec::new();
+        {
+            let cache = self.page_tree_cache.borrow();
+            for (page_index, tree) in cache.iter().enumerate() {
+                let Some(tree) = tree else {
+                    continue;
+                };
+                collect_cached_focused_tail_lines(
+                    &tree.root,
+                    page_index,
+                    section_idx,
+                    parent_para_idx,
+                    control_idx,
+                    cell_idx,
+                    cell_para_idx,
+                    line_index,
+                    line_start,
+                    old_text_len,
+                    &mut candidates,
+                );
+            }
+        }
+        if candidates.len() != 1 {
+            return None;
+        }
+        let template = candidates.pop().expect("길이 1을 확인한 focused line");
+        if !template.line_bbox.x.is_finite()
+            || !template.line_bbox.y.is_finite()
+            || !template.line_bbox.width.is_finite()
+            || !template.line_bbox.height.is_finite()
+            || template.line_bbox.width <= 0.0
+            || template.line_bbox.height <= 0.0
+        {
+            return None;
+        }
+
+        let mut char_start = line_start;
+        let mut x = template.run_x;
+        let mut prepared = Vec::with_capacity(line.runs.len());
+        for (run_index, run) in line.runs.iter().enumerate() {
+            let char_style = self.styles.char_styles.get(run.char_style_id as usize)?;
+            let run_border_fill_id = char_style.border_fill_id;
+            let run_has_background = run_border_fill_id > 0
+                && self
+                    .styles
+                    .border_styles
+                    .get((run_border_fill_id as usize).saturating_sub(1))
+                    .is_some_and(|border| border.fill_color.is_some());
+            if run.display_text.is_some()
+                || run.char_overlap.is_some()
+                || run.footnote_marker.is_some()
+                || !(run.lang_index <= 3 || run.lang_index == 5)
+                || run_has_background
+            {
+                return None;
+            }
+
+            let mut style = resolved_to_text_style(&self.styles, run.char_style_id, run.lang_index);
+            if !focused_partial_repaint_style_is_safe(&style) {
+                return None;
+            }
+            style.default_tab_width = template.layout_style.default_tab_width;
+            style.tab_stops = template.layout_style.tab_stops.clone();
+            style.auto_tab_right = template.layout_style.auto_tab_right;
+            style.available_width = template.layout_style.available_width;
+            style.text_start_offset = template.layout_style.text_start_offset;
+            style.line_x_offset = x - template.column_x;
+            style.right_tab_block_width_override = None;
+            style.tab_leaders.clear();
+            style.inline_tabs.clear();
+            style.extra_word_spacing = 0.0;
+            style.extra_char_spacing = 0.0;
+            style.extra_dash_advance = 0.0;
+
+            let width = estimate_text_width(&run.text, &style);
+            if !width.is_finite() || width < 0.0 {
+                return None;
+            }
+            let run_len = run.text.chars().count();
+            let is_last_run = run_index + 1 == line.runs.len();
+            prepared.push((
+                TextRunNode {
+                    text: run.text.clone(),
+                    style,
+                    char_shape_id: Some(run.char_style_id),
+                    para_shape_id: Some(composed.para_style_id),
+                    section_index: Some(section_idx),
+                    para_index: Some(cell_para_idx),
+                    char_start: Some(char_start),
+                    cell_context: Some(template.cell_context.clone()),
+                    is_para_end: is_last_run,
+                    is_line_break_end: false,
+                    rotation: 0.0,
+                    is_vertical: false,
+                    char_overlap: None,
+                    border_fill_id: run_border_fill_id,
+                    baseline: template.baseline,
+                    field_marker: FieldMarkerType::None,
+                    display_text: None,
+                },
+                BoundingBox::new(x, template.run_y, width, template.run_height),
+            ));
+            char_start += run_len;
+            x += width;
+        }
+        if char_start != new_text_len
+            || x - template.run_x > template.layout_style.available_width + 0.051
+        {
+            return None;
+        }
+
+        {
+            let mut cache = self.page_tree_cache.borrow_mut();
+            let tree = cache.get_mut(template.page_index)?.as_mut()?;
+            let mut replacement_nodes = Vec::with_capacity(prepared.len());
+            for (run, bbox) in prepared {
+                let node_id = tree.next_id();
+                replacement_nodes.push(RenderNode::new(
+                    node_id,
+                    RenderNodeType::TextRun(run),
+                    bbox,
+                ));
+            }
+            let line_node = find_render_node_mut(&mut tree.root, template.line_node_id)?;
+            if !matches!(line_node.node_type, RenderNodeType::TextLine(_)) {
+                return None;
+            }
+            line_node.children = replacement_nodes;
+            line_node.invalidate();
+            tree.root.invalidate();
+        }
+
+        if let Some(variants) = self
+            .layer_tree_json_cache
+            .borrow_mut()
+            .get_mut(template.page_index)
+        {
+            variants.clear();
+        }
+        Some(FocusedPageTreePatch {
+            page_index: template.page_index as u32,
+            dirty_rect: BoundingBox::new(
+                template.line_bbox.x - FOCUSED_PAGE_REPAINT_PAD,
+                template.line_bbox.y - FOCUSED_PAGE_REPAINT_PAD,
+                template.line_bbox.width + FOCUSED_PAGE_REPAINT_PAD * 2.0,
+                template.line_bbox.height + FOCUSED_PAGE_REPAINT_PAD * 2.0,
+            ),
+        })
+    }
+
     /// 페이지 렌더 트리 캐시 전체 무효화.
     pub(crate) fn invalidate_page_tree_cache(&self) {
         self.page_tree_cache.borrow_mut().clear();
@@ -6592,6 +7050,147 @@ mod tests {
     use super::*;
     use crate::model::bin_data::BinDataContent;
     use crate::renderer::render_tree::RenderNodeType;
+
+    #[test]
+    fn issue3137_focused_partial_repaint_rejects_unsafe_justify_and_extra_spacing() {
+        assert!(focused_partial_repaint_alignment_is_safe(
+            Alignment::Left,
+            false,
+            false
+        ));
+        assert!(focused_partial_repaint_alignment_is_safe(
+            Alignment::Justify,
+            true,
+            false
+        ));
+        assert!(!focused_partial_repaint_alignment_is_safe(
+            Alignment::Justify,
+            false,
+            false
+        ));
+        assert!(!focused_partial_repaint_alignment_is_safe(
+            Alignment::Justify,
+            true,
+            true
+        ));
+
+        let plain = TextStyle::default();
+        assert!(focused_partial_repaint_style_is_safe(&plain));
+
+        for (label, style) in [
+            (
+                "word spacing",
+                TextStyle {
+                    extra_word_spacing: 1.0,
+                    ..plain.clone()
+                },
+            ),
+            (
+                "character spacing",
+                TextStyle {
+                    extra_char_spacing: 1.0,
+                    ..plain.clone()
+                },
+            ),
+            (
+                "dash advance",
+                TextStyle {
+                    extra_dash_advance: 1.0,
+                    ..plain.clone()
+                },
+            ),
+            (
+                "negative letter spacing",
+                TextStyle {
+                    letter_spacing: -0.02,
+                    ..plain.clone()
+                },
+            ),
+        ] {
+            assert!(
+                !focused_partial_repaint_style_is_safe(&style),
+                "{label} must use full repaint"
+            );
+        }
+    }
+
+    #[test]
+    fn issue3137_focused_partial_repaint_rejects_extended_ink_styles() {
+        let plain = TextStyle::default();
+        let styled = [
+            (
+                "outline",
+                TextStyle {
+                    outline_type: 1,
+                    ..plain.clone()
+                },
+            ),
+            (
+                "shadow",
+                TextStyle {
+                    shadow_type: 1,
+                    shadow_offset_x: 8.0,
+                    ..plain.clone()
+                },
+            ),
+            (
+                "emboss",
+                TextStyle {
+                    emboss: true,
+                    ..plain.clone()
+                },
+            ),
+            (
+                "engrave",
+                TextStyle {
+                    engrave: true,
+                    ..plain.clone()
+                },
+            ),
+            (
+                "emphasis",
+                TextStyle {
+                    emphasis_dot: 1,
+                    ..plain.clone()
+                },
+            ),
+            (
+                "underline",
+                TextStyle {
+                    underline: crate::model::style::UnderlineType::Bottom,
+                    ..plain.clone()
+                },
+            ),
+            (
+                "strike",
+                TextStyle {
+                    strikethrough: true,
+                    ..plain.clone()
+                },
+            ),
+            (
+                "superscript",
+                TextStyle {
+                    superscript: true,
+                    ..plain.clone()
+                },
+            ),
+            (
+                "subscript",
+                TextStyle {
+                    subscript: true,
+                    ..plain.clone()
+                },
+            ),
+        ];
+
+        for (label, style) in styled {
+            assert!(
+                !focused_partial_repaint_style_is_safe(&style),
+                "{label} must use full repaint"
+            );
+        }
+    }
 
     #[test]
     fn markdown_table_paragraph_preserves_equation_script() {

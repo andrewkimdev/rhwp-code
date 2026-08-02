@@ -741,9 +741,44 @@ export class CanvasView {
       typeof payload === 'object' && payload !== null && 'reason' in payload
         ? (payload as { reason?: unknown }).reason
         : undefined;
+    const focusedPagePatch =
+      typeof payload === 'object' && payload !== null && 'focusedPagePatch' in payload
+        ? (payload as { focusedPagePatch?: unknown }).focusedPagePatch
+        : undefined;
+    const validFocusedPagePatch = (() => {
+      if (!focusedPagePatch || typeof focusedPagePatch !== 'object') return undefined;
+      const candidate = focusedPagePatch as {
+        pageIndex?: unknown;
+        x?: unknown;
+        y?: unknown;
+        width?: unknown;
+        height?: unknown;
+      };
+      const numbers = [candidate.x, candidate.y, candidate.width, candidate.height];
+      if (
+        !Number.isSafeInteger(candidate.pageIndex)
+        || candidate.pageIndex !== pageIndex
+        || !numbers.every((value) => typeof value === 'number' && Number.isFinite(value))
+        || (candidate.width as number) <= 0
+        || (candidate.height as number) <= 0
+      ) {
+        return undefined;
+      }
+      return {
+        pageIndex: candidate.pageIndex as number,
+        x: candidate.x as number,
+        y: candidate.y as number,
+        width: candidate.width as number,
+        height: candidate.height as number,
+      };
+    })();
     const renderContext: PageRenderContext =
       reason === 'text-edit'
-        ? { reason: 'text-edit', allowStaticOverlayReuse: true }
+        ? {
+            reason: 'text-edit',
+            allowStaticOverlayReuse: true,
+            ...(validFocusedPagePatch ? { focusedPagePatch: validFocusedPagePatch } : {}),
+          }
         : { reason: 'unknown', allowStaticOverlayReuse: false };
 
     if (!Number.isInteger(pageIndex) || pageIndex < 0) {
