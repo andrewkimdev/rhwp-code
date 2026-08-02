@@ -82,6 +82,23 @@ rewrite하거나 push하지 않았다.
   - `hidden_text_contract`: 24 passed
 - `cargo fmt --check`, `git diff --check`를 통과했다.
 
+### Node binding CI 실패 보정 (2026-08-03)
+
+GitHub Actions의 `생성 타입 최신 검사`와 `통합 (rhwp 빌드)` 실패를 로컬에서 재현해
+수정했다.
+
+- 원인: capabilities가 26개에서 31개 봉투로 늘었지만 `bindings/node/src/envelopes.ts`가
+  생성되지 않았고, `export-provenance-map`, `table-to-csv`, `csv-to-table`,
+  `extract-data`, `inspect`의 1층 Node 래퍼가 빠져 parity 계약이 깨졌다.
+- 보정: 다섯 래퍼와 하위 `inspect` 명령별 타입/argv 단위 테스트를 추가하고,
+  `gen:types`로 31개 봉투를 재생성했다. 필수 `--table`은 선택 플래그 공통 검사에서
+  제외해 기존 `setCell`과 CSV 편집의 올바른 호출을 보존했다.
+- 로컬 결과: `gen:check`, `typecheck`, `vitest run`(17 files, 439 tests), `npm run build`,
+  `npm pack --dry-run --json`, `git diff --check`를 통과했다.
+- 별도 원인: `Cancel stale PR runs`가 종료 직전 run을 force-cancel해 GitHub API 409으로
+  실패했다. 409이면 대상 run을 재조회하고 `completed`일 때만 정상 경과로 처리하도록
+  고쳤으며, workflow YAML Prettier 검사와 GitHub Script JavaScript 구문 검사를 통과했다.
+
 ### 시각·fixture 판정
 
 시각 증적 경로는 적용하지 않았다. 이 통합에는 `src/renderer`, typeset, pagination,
@@ -99,6 +116,8 @@ LFS 사전 판독에서도 새 LFS object 또는 변경 경로가 없었다.
   flag를 실제 하위 명령으로 라우팅해 허위 사용법 오류가 나지 않도록 했다.
 - MCP password는 의도적으로 argv에 넣지 않는다. `passwordStdin` 계약을 검증해
   프로세스 목록 노출을 막는다.
+- stale run 취소의 409은 대상이 이미 완료됐음을 재조회로 확인한 경우에만 무시한다.
+  active run을 성공으로 기록하지 않으므로 최신 head 보호 경계는 유지된다.
 
 **현재 권고: merge 보류.** 최신 PR head의 CI가 모두 통과하고, merge 직전 mergeability 및
 source PR head 변동을 다시 확인한 뒤 작업지시자 승인 범위에서 merge를 판단한다.
