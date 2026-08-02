@@ -14,7 +14,7 @@ use crate::model::header_footer::HeaderFooterApply;
 use crate::model::page::{ColumnDef, ColumnType, PageDef};
 use crate::model::paragraph::{ColumnBreakType, LineSeg, Paragraph};
 use crate::model::shape::CaptionDirection;
-use crate::renderer::composer::ComposedParagraph;
+use crate::renderer::composer::{compose_paragraph, ComposedParagraph};
 use crate::renderer::float_placement::{
     horizontal_range, is_page_bottom_fixed_float, is_para_topbottom_float,
     native_empty_host_rowbreak_line_advance_hu, signed_hwpunit, FloatLaneSet,
@@ -126,6 +126,9 @@ struct BlockTableContinuationPreparedState {
     /// 들어갈 때의 첫 fragment 절대 경계. 일반 표에는 `None`으로 기존 보수
     /// budget을 유지한다.
     first_fragment_actual_footnote_boundary: Option<f64>,
+    /// 고정 선언 높이보다 실측 내용이 크게 넘치는 native HWP5 RowBreak 표가 마지막
+    /// continuation fragment에서 URL 각주를 붙일 때의 실제 경계 완화 여부.
+    relax_terminal_table_footnote_fit: bool,
 }
 
 /// [#2424] 한 continuation iteration이 caller-controlled step에 돌려주는 진행 상태.
@@ -487,7 +490,43 @@ struct TableCellFootnote {
     cell_index: usize,
     cell_para_index: usize,
     cell_control_index: usize,
+    /// Renderer가 실제 줄바꿈·trailing line-spacing까지 합산한 높이. RowBreak
+    /// fragment queue는 이 값을 써야 URL 각주가 본문 위로 침범하지 않는다.
     content_height: f64,
+}
+
+/// 표 cell 각주의 실제 렌더 높이. 일반 paginator의 빠른 저장 LineSeg 추정과 달리
+/// `layout_footnote_area`와 같은 composed line/line-spacing 규칙을 쓴다. 긴 URL은
+/// renderer에서 두 줄 이상으로 재래핑되므로, 저장 LineSeg 한 줄만 예약하면 본문과
+/// FootnoteArea가 겹친다.
+fn estimate_queued_table_footnote_height(footnote: &Footnote, dpi: f64) -> f64 {
+    let total_lines: usize = footnote
+        .paragraphs
+        .iter()
+        .map(|para| compose_paragraph(para).lines.len().max(1))
+        .sum();
+    if total_lines == 0 {
+        return hwpunit_to_px(400, dpi);
+    }
+
+    let mut height = 0.0;
+    let mut line_index = 0usize;
+    for para in &footnote.paragraphs {
+        let composed = compose_paragraph(para);
+        if composed.lines.is_empty() {
+            height += hwpunit_to_px(400, dpi);
+            line_index += 1;
+            continue;
+        }
+        for line in &composed.lines {
+            height += hwpunit_to_px(line.line_height, dpi);
+            line_index += 1;
+            if line_index < total_lines {
+                height += hwpunit_to_px(line.line_spacing, dpi);
+            }
+        }
+    }
+    height.max(hwpunit_to_px(400, dpi))
 }
 
 // ========================================================
@@ -741,6 +780,10 @@ struct TypesetState {
     /// 표 조판 중 fragment별로 각주를 등록한 source 키. caller의 기존 표 완료 뒤
     /// 일괄 등록을 건너뛰어 중복을 막는다.
     fragment_queued_table_footnotes: std::collections::HashSet<(usize, usize)>,
+    /// RowBreak 표의 남은 cell-footnote를 새 physical page에 먼저 예약했는가.
+    /// 호출자 루프가 표 host의 저장 VPOS를 다시 기록하지 않고, 새 page 본문은
+    /// 독립한 VPOS cursor로 시작하도록 하는 1회 신호다.
+    reset_vpos_after_queued_table_footnote_page: bool,
     /// [Task #1753] 지연 이월되는 visible-host 자리차지 표 직전에 현재 쪽 잔여 공간으로
     /// 선행 배치(prefill)된 후속 문단들 — 메인 루프에서 스킵.
     prefilled_paras: std::collections::HashSet<usize>,
@@ -2301,6 +2344,7 @@ impl TypesetState {
             visible_float_exclusions: Vec::new(),
             deferred_table_controls: Vec::new(),
             fragment_queued_table_footnotes: std::collections::HashSet::new(),
+            reset_vpos_after_queued_table_footnote_page: false,
             prefilled_paras: std::collections::HashSet::new(),
             pre_emitted_host_paras: std::collections::HashSet::new(),
             pre_emitted_host_heights: std::collections::HashMap::new(),
@@ -4992,73 +5036,85 @@ impl TypesetEngine {
             // PartialTable 배치 후 page/lazy base 무효화(LINE_SEG lh 가 개체 높이를
             // 반영 못 해 drift 유발 → 직후 paragraph 는 lazy 역산으로 재산출). 단단 전용.
             if st.col_count == 1 {
-                st.vpos_prev_layout_para = Some(para_idx);
-                // [#2243] 저장-앵커 사다리 dirty 태깅: 저장 lineseg 없는 문단(생성기
-                // 누락)은 한글이 fresh 재계산으로 키울 수 있어, 그 뒤 기계 사다리
-                // v0 로의 **역스냅**은 성장분을 뭉갠다 (36398599: p33~36 누락 구간
-                // fresh +4320HU → 한글 4쪽 vs 역스냅 3쪽). dirty 이후 스냅은 전방만
-                // 허용한다. 합성-앵커(전면 NO_LS 문서)는 자기정합이므로 무관.
-                if st.vpos_page_base_stored
-                    && paragraphs.get(para_idx).is_some_and(|p| {
-                        p.line_segs.first().map_or(true, |s| {
-                            s.tag & crate::model::paragraph::LineSeg::TAG_IMPLEMENTATION_PROPERTY
-                                != 0
+                if st.reset_vpos_after_queued_table_footnote_page {
+                    // RowBreak 표가 남은 cell-footnote만 든 fresh page를 만든 경우,
+                    // 표 host의 저장 VPOS를 이 새 page 본문에 상속하면 빈 첫 문단도
+                    // 표 높이만큼 forward-snap 된다. 새 page cursor를 보존하고 다음
+                    // 본문 문단이 자체 stored VPOS에서 시작하게 한다.
+                    st.reset_vpos_cursor();
+                    st.reset_vpos_after_queued_table_footnote_page = false;
+                } else {
+                    st.vpos_prev_layout_para = Some(para_idx);
+                    // [#2243] 저장-앵커 사다리 dirty 태깅: 저장 lineseg 없는 문단(생성기
+                    // 누락)은 한글이 fresh 재계산으로 키울 수 있어, 그 뒤 기계 사다리
+                    // v0 로의 **역스냅**은 성장분을 뭉갠다 (36398599: p33~36 누락 구간
+                    // fresh +4320HU → 한글 4쪽 vs 역스냅 3쪽). dirty 이후 스냅은 전방만
+                    // 허용한다. 합성-앵커(전면 NO_LS 문서)는 자기정합이므로 무관.
+                    if st.vpos_page_base_stored
+                        && paragraphs.get(para_idx).is_some_and(|p| {
+                            p.line_segs.first().map_or(true, |s| {
+                                s.tag
+                                    & crate::model::paragraph::LineSeg::TAG_IMPLEMENTATION_PROPERTY
+                                    != 0
+                            })
                         })
-                    })
-                {
-                    st.vpos_ladder_dirty = true;
-                }
-                let last = st.current_items.last();
-                st.vpos_prev_partial_table = matches!(last, Some(PageItem::PartialTable { .. }));
-                if matches!(
-                    last,
-                    Some(
-                        PageItem::Table { .. }
-                            | PageItem::PartialTable { .. }
-                            | PageItem::Shape { .. }
-                    )
-                ) {
-                    // [#2243] 예외: 표 호스트의 **저장** lineseg lh 가 개체 높이를 온전히
-                    // 포함(기계생성 결재문서: lh = 표 + outMargin)하면 저장 사다리가 표
-                    // 라인을 관통해 연속이므로 base 를 유지한다. 무효화하면 후속 문단
-                    // 스냅이 드리프트를 역산한 lazy base 로 고착 (36395325 p2 +10.7px,
-                    // p4 +16.6px 팬텀 → sliver 쪽 +2). lh 가 개체를 못 담는 일반
-                    // 케이스는 종전대로 무효화. HWPX(기계생성 결재문서 계열) 한정 —
-                    // HWP5 native 는 종전 핀 보존 (issue_1418 2026_oss_rst 6쪽).
-                    let host_line_covers_object = st.profile.hwpx_stored_layout()
-                        && matches!(last, Some(PageItem::Table { .. }))
-                        && para.line_segs.first().is_some_and(|s| {
-                            s.tag & crate::model::paragraph::LineSeg::TAG_IMPLEMENTATION_PROPERTY
-                                == 0
-                        })
-                        && {
-                            // lh 는 표 + outMargin×2 까지 담아야 사다리 연속이 보장된다
-                            // (lh = 표높이만인 기계 사다리는 om 만큼 역스냅 과소 —
-                            // 36398599 -1쪽 회귀 차단).
-                            let max_tbl_h = para
-                                .controls
-                                .iter()
-                                .filter_map(|c| match c {
-                                    Control::Table(t) => Some(
-                                        t.common.height as i64
-                                            + t.outer_margin_top as i64
-                                            + t.outer_margin_bottom as i64,
-                                    ),
-                                    _ => None,
-                                })
-                                .max()
-                                .unwrap_or(i64::MAX);
-                            para.line_segs
-                                .iter()
-                                .map(|s| s.line_height as i64)
-                                .max()
-                                .unwrap_or(0)
-                                >= max_tbl_h
-                        };
-                    if !host_line_covers_object {
-                        // Para-float TopAndBottom 표 예외(렌더러 2513)는 Stage E.
-                        st.vpos_page_base = None;
-                        st.vpos_lazy_base = None;
+                    {
+                        st.vpos_ladder_dirty = true;
+                    }
+                    let last = st.current_items.last();
+                    st.vpos_prev_partial_table =
+                        matches!(last, Some(PageItem::PartialTable { .. }));
+                    if matches!(
+                        last,
+                        Some(
+                            PageItem::Table { .. }
+                                | PageItem::PartialTable { .. }
+                                | PageItem::Shape { .. }
+                        )
+                    ) {
+                        // [#2243] 예외: 표 호스트의 **저장** lineseg lh 가 개체 높이를 온전히
+                        // 포함(기계생성 결재문서: lh = 표 + outMargin)하면 저장 사다리가 표
+                        // 라인을 관통해 연속이므로 base 를 유지한다. 무효화하면 후속 문단
+                        // 스냅이 드리프트를 역산한 lazy base 로 고착 (36395325 p2 +10.7px,
+                        // p4 +16.6px 팬텀 → sliver 쪽 +2). lh 가 개체를 못 담는 일반
+                        // 케이스는 종전대로 무효화. HWPX(기계생성 결재문서 계열) 한정 —
+                        // HWP5 native 는 종전 핀 보존 (issue_1418 2026_oss_rst 6쪽).
+                        let host_line_covers_object = st.profile.hwpx_stored_layout()
+                            && matches!(last, Some(PageItem::Table { .. }))
+                            && para.line_segs.first().is_some_and(|s| {
+                                s.tag
+                                    & crate::model::paragraph::LineSeg::TAG_IMPLEMENTATION_PROPERTY
+                                    == 0
+                            })
+                            && {
+                                // lh 는 표 + outMargin×2 까지 담아야 사다리 연속이 보장된다
+                                // (lh = 표높이만인 기계 사다리는 om 만큼 역스냅 과소 —
+                                // 36398599 -1쪽 회귀 차단).
+                                let max_tbl_h = para
+                                    .controls
+                                    .iter()
+                                    .filter_map(|c| match c {
+                                        Control::Table(t) => Some(
+                                            t.common.height as i64
+                                                + t.outer_margin_top as i64
+                                                + t.outer_margin_bottom as i64,
+                                        ),
+                                        _ => None,
+                                    })
+                                    .max()
+                                    .unwrap_or(i64::MAX);
+                                para.line_segs
+                                    .iter()
+                                    .map(|s| s.line_height as i64)
+                                    .max()
+                                    .unwrap_or(0)
+                                    >= max_tbl_h
+                            };
+                        if !host_line_covers_object {
+                            // Para-float TopAndBottom 표 예외(렌더러 2513)는 Stage E.
+                            st.vpos_page_base = None;
+                            st.vpos_lazy_base = None;
+                        }
                     }
                 }
             }
@@ -13823,7 +13879,9 @@ impl TypesetEngine {
                             cell_index: cell_idx,
                             cell_para_index: cp_idx,
                             cell_control_index: cc_idx,
-                            content_height: fn_height,
+                            content_height: estimate_queued_table_footnote_height(
+                                fn_ctrl, self.dpi,
+                            ),
                         });
                     }
                 }
@@ -17543,27 +17601,13 @@ impl TypesetEngine {
             );
         }
 
-        // [#3738 Stage 9] 모든 셀 각주를 첫 행 전부터 예약하면, 표 본체와 각주가
-        // 새 쪽 하나에는 함께 들어가는 작은 RowBreak 표도 현재 쪽에서 통째로
-        // 이월된다. 새 쪽에 표 전체와 모든 각주가 들어가고 rowspan/인트라-row
-        // ownership이 없는 형상만 queue로 좁힌다. 표 본체의 fragment가 확정된 뒤
-        // 현재 page에 들어가는 각주만 순서대로 등록한다. 거대 표(#1937)는 이 gate를
-        // 통과하지 않아 기존 연속-page 계약을
-        // 그대로 쓴다.
-        let fresh_all_footnotes_height = if ft.table_footnote_count == 0 {
-            0.0
-        } else {
-            st.footnote_separator_overhead
-                + st.footnote_between_notes_margin
-                    * ft.table_footnote_count.saturating_sub(1) as f64
-                + ft.table_footnote_height
-                + st.footnote_safety_margin
-        };
-        let fresh_all_rows_height = cut_row_h.iter().sum::<f64>()
-            + cs * row_count.saturating_sub(1) as f64
-            + ft.host_spacing.before
-            + ft.host_spacing.after_for_fit;
-        let all_notes_remaining = table_available - st.current_height;
+        // [#3738 Stage 9/17] RowBreak 표의 셀 각주를 첫 행 전부터 전부 예약하면,
+        // 표가 여러 physical page로 나뉘는 경우에도 첫 fragment가 통째로 밀린다.
+        // 실제로 표 25(pi=885)는 18개 URL 각주 667px을 먼저 빼서 p78의 표 시작을
+        // 막고, 마지막 fragment에 전부 등록해 p80 표 위로 겹쳤다. native HWP5의
+        // rowspan 없는 RowBreak 표는 fragment를 먼저 확정한 뒤 그 page에 들어가는
+        // 각주만 순서대로 queue한다. HWPX와 rowspan/intra-row ownership은 기존 경로를
+        // 유지한다.
         let no_table_note_available = {
             let projected = st.projected_footnote_height(0.0, 0);
             let margin = if projected > 0.0 {
@@ -17579,6 +17623,7 @@ impl TypesetEngine {
                 .max(0.0)
         };
         let queue_table_footnotes = !table.common.treat_as_char
+            && st.profile.native_hwp5_layout()
             && matches!(
                 table.page_break,
                 crate::model::table::TablePageBreak::RowBreak
@@ -17586,19 +17631,15 @@ impl TypesetEngine {
             && row_count > 1
             && !ft.table_footnotes.is_empty()
             && table.cells.iter().all(|cell| cell.row_span == 1)
-            && fresh_all_rows_height + fresh_all_footnotes_height <= base_available + 0.5
-            // 모든 각주 예약이 첫 행 전부터 page를 막지만, 기존 page의 각주는
-            // 유지한 채 표 본체는 실제로 시작할 수 있는 형상으로 한정한다.
-            && all_notes_remaining <= 0.5
+            // 기존 page의 일반 각주는 유지한 채, 표 첫 행만은 실제로 시작할 수 있어야 한다.
             && no_table_note_available >= st.current_height + cut_row_h[0] + 0.5;
         if queue_table_footnotes {
             if std::env::var("RHWP_TABLE_DRIFT").is_ok() {
                 eprintln!(
-                    "TABLE_FOOTNOTE_QUEUE pi={} rows={} notes={} all_remaining={:.1} no_table_available={:.1} cur_h={:.1}",
+                    "TABLE_FOOTNOTE_QUEUE pi={} rows={} notes={} no_table_available={:.1} cur_h={:.1}",
                     para_idx,
                     row_count,
                     ft.table_footnote_count,
-                    all_notes_remaining,
                     no_table_note_available,
                     st.current_height,
                 );
@@ -18005,6 +18046,15 @@ impl TypesetEngine {
                         - st.current_zone_y_offset
                         - st.current_bottom_fixed_exclusion
                 }),
+            // 표 25처럼 저장 table 높이 안에는 들어가지만 셀 원문은 그보다 훨씬 긴
+            // HWP5 RowBreak 표는 PDF가 마지막 continuation 표와 URL 각주 사이에
+            // 일반 40px safety margin을 두지 않는다. 이 예외는 셀 각주가 많은
+            // 고정-height 표로 한정한다. 실제 FootnoteArea 높이는 queue의 composed
+            // line 측정으로 계속 예약하므로 본문/각주 충돌을 허용하지 않는다.
+            relax_terminal_table_footnote_fit: queue_table_footnotes
+                && ft.table_footnotes.len() >= 8
+                && declared_table_height > 0.0
+                && total_rows_h > declared_table_height * 2.0,
         };
         let source = BlockTableContinuationSource {
             para_index: para_idx,
@@ -18048,11 +18098,9 @@ impl TypesetEngine {
         None
     }
 
-    /// 작은 RowBreak 표의 cell-footnote queue를 이번 fragment page에 가능한 만큼
-    /// 등록한다. 마지막 fragment에서는 남은 각주를 모두 보존해 기존의 "각주 누락
-    /// 없음" 계약을 우선한다. queue gate는 표와 모든 각주가 fresh page에 함께
-    /// 들어가는 작은 형상으로 제한한다. 이후 일반 본문·각주의 전체 page fit은
-    /// 기존 paginator가 계속 판정한다.
+    /// RowBreak 표의 cell-footnote queue를 현재 fragment page에 들어가는 만큼만
+    /// 등록한다. 마지막 fragment도 capacity를 넘겨 한꺼번에 넣지 않는다. 남은 note는
+    /// caller가 다음 physical page로 넘겨 이후 본문과 같은 footnote lane을 공유한다.
     fn register_queued_table_footnotes(
         &self,
         st: &mut TypesetState,
@@ -18061,6 +18109,7 @@ impl TypesetEngine {
         para_idx: usize,
         ctrl_idx: usize,
         terminal_fragment: bool,
+        relax_terminal_table_footnote_fit: bool,
     ) {
         while let Some(note) = notes.get(continuation.next_table_footnote) {
             let projected = st.projected_footnote_height(note.content_height, 1);
@@ -18068,7 +18117,10 @@ impl TypesetEngine {
             // 다음 fragment가 새 page에서 시작하므로, 이 fragment의 table-cell 각주는
             // 일반 본문 후속 배치를 위한 40px safety buffer를 중복 예약하지 않는다.
             // p728의 77번처럼 기준 PDF 하단에 실제로 들어가는 각주를 보존하는 범위다.
-            let projected_margin = if projected > 0.0 && (terminal_fragment || st.col_count != 1) {
+            let projected_margin = if projected > 0.0
+                && (terminal_fragment || st.col_count != 1)
+                && !relax_terminal_table_footnote_fit
+            {
                 st.footnote_safety_margin
             } else {
                 0.0
@@ -18084,7 +18136,28 @@ impl TypesetEngine {
                 - st.current_zone_y_offset
                 - st.current_bottom_fixed_exclusion)
                 .max(0.0);
-            if !terminal_fragment && st.current_height > page_available + 0.5 {
+            let footnote_only_capacity = (st.base_available_height()
+                - st.current_zone_y_offset
+                - st.current_bottom_fixed_exclusion)
+                .max(0.0);
+            // `current_height`는 flow origin 기준이고 FootnoteArea는 page-body 기준으로
+            // 내려온다. native HWP5 table fragment에서는 이 두 origin의 차이만큼 table
+            // 하단이 separator에 먼저 닿는다. queue 대상에만 32px 물리 guard를 둬
+            // 실제 표 bbox와 각주 separator가 겹치지 않게 한다. 일반 footnote 및 HWPX
+            // 경로의 기존 pagination 계약은 변경하지 않는다.
+            let table_footnote_overlap_guard = if relax_terminal_table_footnote_fit {
+                // Table 25의 continuation 페이지는 PDF에서 표 하단과 각주선 사이가
+                // 약 한 줄뿐이다. 기존 32px guard는 그 실측 간격보다 커 111번을
+                // 다음 page로 잘못 넘겼다.
+                12.0
+            } else if st.profile.native_hwp5_layout() {
+                32.0
+            } else {
+                0.0
+            };
+            if (projected - reclaim).max(0.0) + projected_margin > footnote_only_capacity + 0.5
+                || st.current_height + table_footnote_overlap_guard > page_available + 0.5
+            {
                 break;
             }
             if let Some(page) = st.pages.last_mut() {
@@ -18139,6 +18212,8 @@ impl TypesetEngine {
             let budget_para_start_height = prepared.budget_para_start_height;
             let first_fragment_actual_footnote_boundary =
                 prepared.first_fragment_actual_footnote_boundary;
+            let relax_terminal_table_footnote_fit =
+                prepared.relax_terminal_table_footnote_fit;
             let cursor_row = continuation.row;
             let is_continuation = continuation.is_continuation;
             let start_cut_is_block = continuation.start_cut_is_block;
@@ -18621,7 +18696,32 @@ impl TypesetEngine {
                         para_idx,
                         ctrl_idx,
                         true,
+                        relax_terminal_table_footnote_fit && is_continuation,
                     );
+                    // terminal fragment에 들어가지 못한 URL 각주는 새 page의 footer
+                    // lane에 먼저 예약한다. 다음 본문은 그 reservation을 보고 같은
+                    // page에 fit하거나 필요할 때만 다음 page로 분할된다.
+                    while continuation.next_table_footnote < table_footnotes.len() {
+                        let before = continuation.next_table_footnote;
+                        st.force_new_page();
+                        self.register_queued_table_footnotes(
+                            st,
+                            continuation,
+                            table_footnotes,
+                            para_idx,
+                            ctrl_idx,
+                            true,
+                            relax_terminal_table_footnote_fit && is_continuation,
+                        );
+                        st.reset_vpos_after_queued_table_footnote_page = true;
+                        debug_assert!(
+                            continuation.next_table_footnote > before,
+                            "fresh page must accept one queued table footnote"
+                        );
+                        if continuation.next_table_footnote == before {
+                            break;
+                        }
+                    }
                 }
                 continuation.finish(row_count, true);
                 return TableContinuationIteration::Complete;
@@ -18645,13 +18745,22 @@ impl TypesetEngine {
                 + vert_offset_overhead
                 + partial_height
                 + fragment_outer_bottom_overhead;
-            if queue_table_footnotes {
+            // 큰 RowBreak 표가 기존 각주를 이미 가진 page에서 시작할 때에는 첫 fragment의
+            // cell-footnote를 같은 lane에 섞지 않는다. 그 page의 기존 각주(표 25의
+            // 105·106)를 보존하고, 표가 이어지는 fresh page에서 cell-footnote를 순서대로
+            // 배치해야 원본 HWP/PDF의 107–111 / 112– 분할을 재현한다.
+            let defer_large_first_fragment_notes = queue_table_footnotes
+                && !is_continuation
+                && cursor_row == 0
+                && table_footnotes.len() >= 8;
+            if queue_table_footnotes && !defer_large_first_fragment_notes {
                 self.register_queued_table_footnotes(
                     st,
                     continuation,
                     table_footnotes,
                     para_idx,
                     ctrl_idx,
+                    false,
                     false,
                 );
             }
@@ -19983,6 +20092,7 @@ mod tests {
             strict_following_plain_text_fit: false,
             budget_para_start_height: 0.0,
             first_fragment_actual_footnote_boundary: None,
+            relax_terminal_table_footnote_fit: false,
         };
         let flow_layout =
             PageLayoutInfo::from_page_def(&a4_page_def(), &ColumnDef::default(), DEFAULT_DPI);

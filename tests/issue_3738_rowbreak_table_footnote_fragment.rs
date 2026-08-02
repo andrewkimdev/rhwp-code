@@ -26,6 +26,7 @@ const PAGE_76: u32 = 75;
 const PAGE_77: u32 = 76;
 const PAGE_78: u32 = 77;
 const PAGE_79: u32 = 78;
+const PAGE_80: u32 = 79;
 
 fn page_text(doc: &HwpDocument, page: u32) -> String {
     doc.extract_page_text_native(page)
@@ -78,6 +79,30 @@ fn footnote_separator_top(node: &RenderNode, top: &mut Option<f64>) {
     }
     for child in &node.children {
         footnote_separator_top(child, top);
+    }
+}
+
+fn table_bottom(node: &RenderNode, para_index: usize, bottom: &mut Option<f64>) {
+    if let RenderNodeType::Table(table) = &node.node_type {
+        if table.para_index == Some(para_index) {
+            let candidate = node.bbox.y + node.bbox.height;
+            *bottom = Some(bottom.map_or(candidate, |current| current.max(candidate)));
+        }
+    }
+    for child in &node.children {
+        table_bottom(child, para_index, bottom);
+    }
+}
+
+fn footnote_text(node: &RenderNode, in_footnote: bool, text: &mut String) {
+    let in_footnote = in_footnote || matches!(node.node_type, RenderNodeType::FootnoteArea);
+    if in_footnote {
+        if let RenderNodeType::TextRun(run) = &node.node_type {
+            text.push_str(&run.text);
+        }
+    }
+    for child in &node.children {
+        footnote_text(child, in_footnote, text);
     }
 }
 
@@ -247,5 +272,98 @@ fn native_hwp5_two_line_footnote_continues_after_the_reset_page() {
     assert!(
         body_bottom.expect("p31 para 421") <= separator_top.expect("p31 footnote separator") + 0.5,
         "p31 본문과 각주 separator가 겹치면 안 됨: body_bottom={body_bottom:?}, separator={separator_top:?}"
+    );
+}
+
+#[test]
+fn native_hwp5_large_rowbreak_table_keeps_its_first_fragment_before_cell_footnotes() {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(SAMPLE);
+    let bytes = fs::read(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+    let doc = HwpDocument::from_bytes(&bytes).expect("parse stage17 HWP evidence fixture");
+
+    let p78 = page_text(&doc, PAGE_78);
+    let p79 = page_text(&doc, PAGE_79);
+    let p80 = page_text(&doc, PAGE_80);
+    assert!(
+        p78.contains("Convention") && p78.contains("Directive"),
+        "p78은 표 25의 Convention·Directive first fragment를 보유해야 함: {p78}"
+    );
+    assert!(
+        p79.contains("Recommendation") && p79.contains("CM/Res(2017)1"),
+        "p79는 표 25의 Resolution/Recommendation continuation을 보유해야 함: {p79}"
+    );
+    assert!(
+        p80.contains("유럽의회(European Parliament)") && !p80.contains("시행법은"),
+        "p80은 표 25 continuation이 아니라 PDF처럼 본문으로 재개해야 함: {p80}"
+    );
+
+    // 표 25의 URL 각주는 source-cell 순서가 아니라 실제 물리 fragment page별로
+    // 분할된다. p78의 기존 105·106, p79의 107–111, p80의 112–124 경계를
+    // 고정해 한 fragment에 과예약해 다음 본문을 밀어내는 회귀를 막는다.
+    let p78_tree = doc
+        .build_page_render_tree(PAGE_78)
+        .expect("render physical page 78");
+    let p79_tree = doc
+        .build_page_render_tree(PAGE_79)
+        .expect("render physical page 79");
+    let p80_tree = doc
+        .build_page_render_tree(PAGE_80)
+        .expect("render physical page 80");
+    let mut p78_notes = String::new();
+    let mut p79_notes = String::new();
+    let mut p80_notes = String::new();
+    footnote_text(&p78_tree.root, false, &mut p78_notes);
+    footnote_text(&p79_tree.root, false, &mut p79_notes);
+    footnote_text(&p80_tree.root, false, &mut p80_notes);
+    for number in [105, 106] {
+        assert!(
+            p78_notes.contains(&format!("{number})")),
+            "p78 각주 {number} 누락: {p78_notes}"
+        );
+    }
+    assert!(
+        !p78_notes.contains("107)"),
+        "p78에는 표 cell 각주 107이 앞당겨지면 안 됨: {p78_notes}"
+    );
+    for number in 107..=111 {
+        assert!(
+            p79_notes.contains(&format!("{number})")),
+            "p79 각주 {number} 누락: {p79_notes}"
+        );
+    }
+    assert!(
+        !p79_notes.contains("112)"),
+        "p79에는 각주 112가 앞당겨지면 안 됨: {p79_notes}"
+    );
+    for number in 112..=124 {
+        assert!(
+            p80_notes.contains(&format!("{number})")),
+            "p80 각주 {number} 누락: {p80_notes}"
+        );
+    }
+
+    for (page, tree) in [(78, &p78_tree), (79, &p79_tree)] {
+        let mut table = None;
+        let mut separator = None;
+        table_bottom(&tree.root, 885, &mut table);
+        footnote_separator_top(&tree.root, &mut separator);
+        assert!(
+            table.expect("표 25") <= separator.expect("표 25 각주 separator") + 0.5,
+            "p{page} 표 25 하단과 각주 separator가 겹치면 안 됨: table_bottom={table:?}, separator={separator:?}"
+        );
+    }
+    assert!(
+        p80.contains("유럽평의회는 2007년 5월 30일")
+            && p80.contains("2007년 커뮤니케이션에 대한 대응으로"),
+        "p80의 두 후속 본문이 각주 112–124 예약 때문에 p81로 밀리면 안 됨: {p80}"
+    );
+    let mut p80_body_bottom = None;
+    let mut p80_separator = None;
+    paragraph_bottom(&p80_tree.root, 889, &mut p80_body_bottom);
+    footnote_separator_top(&p80_tree.root, &mut p80_separator);
+    assert!(
+        p80_body_bottom.expect("p80 para 889")
+            <= p80_separator.expect("p80 footnote separator") + 0.5,
+        "p80 표 25 뒤 본문과 각주 112 separator가 겹치면 안 됨: body_bottom={p80_body_bottom:?}, separator={p80_separator:?}"
     );
 }
