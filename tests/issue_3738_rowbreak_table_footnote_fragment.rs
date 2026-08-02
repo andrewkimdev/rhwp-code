@@ -33,6 +33,8 @@ const PAGE_37: u32 = 36;
 const PAGE_43: u32 = 42;
 const PAGE_44: u32 = 43;
 const PAGE_25: u32 = 24;
+const PAGE_26: u32 = 25;
+const PAGE_27: u32 = 26;
 const PAGE_154: u32 = 153;
 const PAGE_155: u32 = 154;
 const PAGE_156: u32 = 155;
@@ -308,6 +310,56 @@ fn native_hwp5_existing_footnote_reset_moves_the_p43_tail_before_the_separator()
             "p44 must not inherit p43 footnote {number}: {p44_notes}"
         );
     }
+}
+
+#[test]
+fn native_hwp5_final_marker_footnote_uses_the_next_reset_page() {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(SAMPLE);
+    let bytes = fs::read(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+    let doc = HwpDocument::from_bytes(&bytes).expect("parse stage27 HWP evidence fixture");
+
+    let p26 = page_text(&doc, PAGE_26);
+    let p27 = page_text(&doc, PAGE_27);
+    assert!(
+        p26.contains("북부와 서부 지역이 동부 및 지중해 지역보다 더 빈번하게 수행됨.26)"),
+        "p26 must retain the body tail and marker 26): {p26}"
+    );
+    assert!(
+        !p26.contains("11번 참고문헌 내 Adam et al 논문"),
+        "p26 must not own footnote 26 after its final marker: {p26}"
+    );
+    assert!(
+        p27.contains("26)   11번 참고문헌 내 Adam et al 논문"),
+        "p27 must own the complete footnote 26 before its following body: {p27}"
+    );
+    assert!(
+        p27.contains("1991년부터 2013년까지의 ELTR 자료"),
+        "p27 must retain its existing body restart after footnote 26: {p27}"
+    );
+    assert_eq!(
+        doc.page_count(),
+        219,
+        "p26 footnote owner must not change total page count"
+    );
+
+    let p26_tree = doc
+        .build_page_render_tree(PAGE_26)
+        .expect("render physical page 26");
+    let p27_tree = doc
+        .build_page_render_tree(PAGE_27)
+        .expect("render physical page 27");
+    let mut p26_notes = String::new();
+    let mut p27_notes = String::new();
+    footnote_text(&p26_tree.root, false, &mut p26_notes);
+    footnote_text(&p27_tree.root, false, &mut p27_notes);
+    assert!(
+        !p26_notes.contains("Adam et al"),
+        "p26 FootnoteArea must be empty of note 26: {p26_notes}"
+    );
+    assert!(
+        p27_notes.contains("Adam et al"),
+        "p27 FootnoteArea must own note 26: {p27_notes}"
+    );
 }
 
 #[test]

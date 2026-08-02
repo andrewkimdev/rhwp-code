@@ -2007,6 +2007,98 @@ fn native_hwp5_first_footnote_overlap_break_line(
         })
 }
 
+/// native HWP5에서 문단 마지막 marker의 단일 각주가 다음 paragraph의 저장 reset을
+/// 소유하는 매우 좁은 형상을 판정한다.
+///
+/// 보통 inline Footnote는 marker가 놓인 현재 physical page에 등록한다. 그러나 이
+/// 형상에서는 본문 marker가 현재 page의 마지막 줄에 남고, **다음** paragraph가
+/// `vpos=0`으로 새 page를 시작한다. 각주를 현재 page에 뒤늦게 예약하면 이미 배치한
+/// 본문 하단이 FootnoteArea를 침범한다. 본문을 되감지 않고 note registration만
+/// 다음 page로 넘겨 한컴의 physical owner를 보존한다.
+///
+/// 같은 paragraph 안 reset, 두 줄 각주 fragment, 기존 각주가 있는 page의 tail은
+/// 각각 기존 보정 경로가 담당한다. 따라서 아래 조건을 모두 만족하는 경우에만 쓴다.
+fn native_hwp5_final_marker_footnote_uses_next_reset_page(
+    st: &TypesetState,
+    para_idx: usize,
+    para: &Paragraph,
+    paragraphs: &[Paragraph],
+    ctrl_idx: usize,
+    footnote: &Footnote,
+    footnote_height: f64,
+) -> bool {
+    if !st.profile.native_hwp5_layout()
+        || st.col_count != 1
+        || !st.is_first_footnote_on_page
+        || st.current_footnote_height > 0.0
+        || para.controls.len() != 1
+        || !matches!(para.controls.get(ctrl_idx), Some(Control::Footnote(_)))
+        || !para_has_visible_text(para)
+        || footnote.paragraphs.len() != 1
+        || crate::renderer::composer::compose_paragraph(&footnote.paragraphs[0])
+            .lines
+            .len()
+            != 1
+        || !matches!(
+            st.current_items.last(),
+            Some(PageItem::FullParagraph { para_index }) if *para_index == para_idx
+        )
+    {
+        return false;
+    }
+
+    let control_pos = match para.control_text_positions().get(ctrl_idx) {
+        Some(position) => *position,
+        None => return false,
+    };
+    let last_visible_line = match para
+        .line_segs
+        .iter()
+        .rposition(|line| !is_synthetic_line_seg(line))
+    {
+        Some(index) => index,
+        None => return false,
+    };
+    let marker_line =
+        match para.line_segs.iter().rposition(|line| {
+            !is_synthetic_line_seg(line) && line.text_start as usize <= control_pos
+        }) {
+            Some(index) => index,
+            None => return false,
+        };
+    if marker_line != last_visible_line {
+        return false;
+    }
+
+    let Some(next_para) = paragraphs.get(para_idx + 1) else {
+        return false;
+    };
+    if !para_has_visible_text(next_para)
+        || !matches!(next_para.column_type, ColumnBreakType::None)
+        || !next_para
+            .line_segs
+            .iter()
+            .find(|line| !is_synthetic_line_seg(line))
+            .is_some_and(|line| line.vertical_pos == 0)
+    {
+        return false;
+    }
+
+    // 현재 page에는 아직 각주가 없으므로 projected height는 이 첫 note 하나의
+    // separator/margin을 포함한다. 실제 footer band 회수 규칙도 함께 적용해야
+    // p26처럼 "예약 뒤에만" 생기는 collision만 판별한다.
+    let projected_footnote_height = st.projected_footnote_height(footnote_height, 1);
+    let projected_reclaim = st.footer_band_reclaim_for_height(projected_footnote_height);
+    let projected_available = (st.base_available_height()
+        - (projected_footnote_height - projected_reclaim).max(0.0)
+        - st.footnote_safety_margin
+        - st.current_zone_y_offset
+        - st.current_bottom_fixed_exclusion)
+        .max(0.0);
+
+    st.current_height > projected_available + 0.5
+}
+
 /// 현재 page의 일반 Body 각주를 layout과 같은 composed line metric으로 재측정한다.
 ///
 /// 일반 pagination의 `current_footnote_height`는 빠른 stored-LineSeg 추정이다. 긴 URL이나
@@ -2594,11 +2686,17 @@ impl TypesetState {
 
     /// [#2559] 각주가 사용할 수 있는 빈 꼬리말 밴드 높이.
     fn footer_band_reclaim(&self) -> f64 {
+        self.footer_band_reclaim_for_height(self.current_footnote_height)
+    }
+
+    /// 예약 전 first-footnote collision을 계산할 때도 현재 page와 동일한 footer
+    /// band 회수 계약을 적용한다.
+    fn footer_band_reclaim_for_height(&self, footnote_height: f64) -> f64 {
         // [#2668 실험 토글] 밴드 회수를 끄고 A/B 하기 위한 진단 스위치. 동작 기본값 불변.
         if std::env::var("RHWP_FB_OFF").is_ok() {
             return 0.0;
         }
-        if self.section_has_no_footer && self.current_footnote_height > 0.0 {
+        if self.section_has_no_footer && footnote_height > 0.0 {
             self.layout.footer_area.height.max(0.0)
         } else {
             0.0
@@ -5823,6 +5921,10 @@ impl TypesetEngine {
                                 control_index: ctrl_idx,
                             };
                             let fn_height = estimate_footnote_note_height(fn_ctrl, self.dpi);
+                            let move_to_next_reset_page =
+                                native_hwp5_final_marker_footnote_uses_next_reset_page(
+                                    &st, para_idx, para, paragraphs, ctrl_idx, fn_ctrl, fn_height,
+                                );
                             let fragments = native_hwp5_footnote_break
                                 .filter(|footnote_break| footnote_break.split_footnote)
                                 .and_then(|_| native_hwp5_two_line_footnote_fragments(fn_ctrl));
@@ -5888,6 +5990,13 @@ impl TypesetEngine {
                                 ) {
                                     continue;
                                 }
+                            }
+                            if move_to_next_reset_page {
+                                // marker/body는 방금 확정한 current page에 그대로 두고,
+                                // 다음 paragraph의 stored vpos reset이 시작하는 fresh page에
+                                // 이 단일 각주만 등록한다. p31 two-line fragment와 p43의
+                                // existing-note reset은 helper guard 밖이므로 영향이 없다.
+                                st.force_new_page();
                             }
                             if let Some(page) = st.pages.last_mut() {
                                 page.footnotes.push(FootnoteRef {
