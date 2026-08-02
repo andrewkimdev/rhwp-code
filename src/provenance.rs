@@ -148,6 +148,20 @@ pub const MAP: &[CommandProvenance] = &[
         note: "query 는 호출자가 준 값이고 주소(section/paragraph/page/charOffset)는 엔진값이다.",
     },
     CommandProvenance {
+        command: "extract-data",
+        untrusted: &[
+            f(
+                "items[].raw",
+                "queries::extract_data::collect_into — 문서 문단·표 셀·글상자에서 인식한 원문 표기",
+            ),
+            f(
+                "items[].unit",
+                "queries::extract_data::collect_into — 문서 원문 표기에서 인식한 수량 단위",
+            ),
+        ],
+        note: "normalized·currency·주소·집계는 인식 엔진이 만든 값이고, raw·unit만 문서 파생이다.",
+    },
+    CommandProvenance {
         command: "fields",
         untrusted: &[
             f("fields[].name", "누름틀 필드 이름 — 문서가 정한다"),
@@ -197,6 +211,24 @@ pub const MAP: &[CommandProvenance] = &[
             "para_text_preview — 문단 텍스트 앞부분 미리보기 (queries::rendering)",
         )],
         note: "조판 진단 봉투라 나머지는 전부 기하·인덱스 값이다.",
+    },
+    CommandProvenance {
+        command: "inspect",
+        untrusted: &[
+            f(
+                "hiddenText[].excerpt",
+                "queries::hidden_text::detect_hidden_text — 조판상 은닉으로 판정한 문서 문자열의 제한 발췌",
+            ),
+            f(
+                "injectionSignals[].excerpt",
+                "queries::injection_scan::make_excerpt — 주입 신호가 발견된 문서 문맥의 제한 발췌",
+            ),
+            f(
+                "injectionSignals[].matched",
+                "queries::injection_scan::scan_text_in — 문서에서 실제 매치된 신호 조각",
+            ),
+        ],
+        note: "hiddenText/injectionSignals의 excerpt·matched만 문서 파생이며, 종류·주소·근거·집계는 엔진 판정값이다.",
     },
     CommandProvenance {
         command: "edit",
