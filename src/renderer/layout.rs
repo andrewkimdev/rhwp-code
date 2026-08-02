@@ -605,6 +605,7 @@ struct TableControlVars {
     tac_table_y_before: f64,
     is_tac: bool,
     is_current_empty_para_float: bool,
+    is_current_empty_square_sibling_float: bool,
     is_current_visible_para_float: bool,
     is_first_empty_para_float_control: bool,
     para_index: usize,
@@ -729,6 +730,137 @@ fn para_is_empty_topbottom_table_anchor(para: &Paragraph) -> bool {
             .controls
             .iter()
             .any(|ctrl| matches!(ctrl, Control::Table(t) if is_para_topbottom_float(&t.common)))
+}
+
+/// 빈 host 문단에 Para-relative Square 표 두 개가 함께 저장된 경우는 세로 block
+/// 두 개가 아니라 동일한 HWP 페이지 좌표의 가로 lane이다. 이 형상은 HWP5의
+/// `LINE_SEG`가 두 표의 공통 상단을 보존하므로, 일반 Square 본문-wrap과 분리한다.
+fn para_is_empty_square_sibling_table_anchor(para: &Paragraph) -> bool {
+    !para_has_visible_text(para)
+        && para
+            .controls
+            .iter()
+            .filter(|ctrl| {
+                matches!(ctrl,
+                    Control::Table(table)
+                        if !table.common.treat_as_char
+                            && matches!(table.common.text_wrap, TextWrap::Square)
+                            && matches!(table.common.vert_rel_to, VertRelTo::Para)
+                )
+            })
+            .take(2)
+            .count()
+            >= 2
+}
+
+/// sibling Square 표의 저장 anchor를 SVG 페이지 좌표로 변환한다. 이 HWP5 형상은
+/// page base를 빼는 상대 ladder가 아니라 raw `vertical_pos`가 물리 페이지 위치다.
+fn empty_square_sibling_table_saved_top(
+    para: &Paragraph,
+    col_area: &LayoutRect,
+    dpi: f64,
+) -> Option<f64> {
+    if !para_is_empty_square_sibling_table_anchor(para) {
+        return None;
+    }
+    let seg = para
+        .line_segs
+        .iter()
+        .find(|seg| seg.tag & crate::model::paragraph::LineSeg::TAG_IMPLEMENTATION_PROPERTY == 0)?;
+    let top = col_area.y + hwpunit_to_px(seg.vertical_pos, dpi);
+    (top >= col_area.y && top <= col_area.y + col_area.height).then_some(top)
+}
+
+/// 단독 empty-host TopAndBottom 표가 native HWP의 raw page vpos와 선언 높이로
+/// 현재 본문 안에 완전히 들어가는 경우의 paint anchor. 이 조건은 table을 일반
+/// block으로 누적해 그림만 다음 쪽으로 보내는 것을 막되, 실제로 이월되어야 할
+/// 단독 float에는 적용되지 않는다.
+fn native_empty_single_topbottom_table_saved_top(
+    native_hwp5_layout: bool,
+    para: &Paragraph,
+    next_para: Option<&Paragraph>,
+    table: &crate::model::table::Table,
+    col_area: &LayoutRect,
+    dpi: f64,
+) -> Option<f64> {
+    if !native_hwp5_layout
+        || para_has_visible_text(para)
+        || !is_para_topbottom_float(&table.common)
+        || para
+            .controls
+            .iter()
+            .filter(|control| matches!(control, Control::Table(_)))
+            .count()
+            != 1
+    {
+        return None;
+    }
+    let seg = para
+        .line_segs
+        .iter()
+        .find(|seg| seg.tag & crate::model::paragraph::LineSeg::TAG_IMPLEMENTATION_PROPERTY == 0)?;
+    let next_seg = next_para?
+        .line_segs
+        .iter()
+        .find(|seg| seg.tag & crate::model::paragraph::LineSeg::TAG_IMPLEMENTATION_PROPERTY == 0)?;
+    // vpos가 다음 문단에서 되감기면 이 표는 다음 물리 페이지의 첫 anchor일 수 있다.
+    // raw vpos를 현재 페이지 좌표로 강제하면 p14의 그림 8처럼 상단 그림이 하단에
+    // 떨어져 본문·각주와 충돌한다.
+    if next_seg.vertical_pos <= seg.vertical_pos {
+        return None;
+    }
+    let top = col_area.y + hwpunit_to_px(seg.vertical_pos, dpi);
+    let bottom = top + hwpunit_to_px(table.common.height as i32, dpi);
+    (top >= col_area.y + col_area.height * 0.5 && bottom <= col_area.y + col_area.height + 0.5)
+        .then_some(top)
+}
+
+/// HWP5의 본문 포함 TopAndBottom 표 중, 여러 저장 줄 뒤에 그림 표가 이어지는
+/// 형상은 `vertical_offset`이 첫 줄이 아니라 host 본문 끝을 기준으로 한다. 이를
+/// para 시작점에만 더하면 그림이 아직 그려지는 본문 위에 놓인다 (1351000 p13).
+/// 단일 표·3개 이상 저장 줄·양수 offset으로 한정해 제목 한 줄과 표가 공존하는
+/// 기존 visible-float 계약에는 영향을 주지 않는다.
+fn native_multiline_visible_float_table_top(
+    native_hwp5_layout: bool,
+    para: &Paragraph,
+    table: &crate::model::table::Table,
+    para_y: f64,
+    dpi: f64,
+) -> Option<f64> {
+    if !native_hwp5_layout
+        || !is_para_topbottom_float(&table.common)
+        || !para_has_visible_text(para)
+        || signed_hwpunit(table.common.vertical_offset) <= 0
+        || para
+            .controls
+            .iter()
+            .filter(|control| matches!(control, Control::Table(_)))
+            .count()
+            != 1
+    {
+        return None;
+    }
+    let stored: Vec<_> = para
+        .line_segs
+        .iter()
+        .filter(|seg| seg.tag & crate::model::paragraph::LineSeg::TAG_IMPLEMENTATION_PROPERTY == 0)
+        .collect();
+    if stored.len() < 3 {
+        return None;
+    }
+    let first = stored.first()?;
+    let last = stored.last()?;
+    let host_height_hu = last
+        .vertical_pos
+        .saturating_sub(first.vertical_pos)
+        .saturating_add(last.line_height)
+        .max(0);
+    Some(
+        para_y
+            + hwpunit_to_px(host_height_hu, dpi)
+            + hwpunit_to_px(signed_hwpunit(table.common.vertical_offset), dpi)
+            + hwpunit_to_px(table.outer_margin_top as i32, dpi),
+    )
 }
 
 fn inline_equation_count(para: &Paragraph) -> usize {
@@ -4949,6 +5081,87 @@ impl LayoutEngine {
                 // ≤8px 백워드 클램프를 모두 캡슐화 (Stage A/B 함수 결합). 렌더러·페이지네이터 공유.
                 y_offset = hcursor.vpos_adjust(y_offset, item_para, paragraphs, styles);
             } // !shape_jumped
+              // Empty Square sibling 표 직전의 본문은 같은 물리 페이지의 raw LINE_SEG
+              // 좌표를 따른다. 일반 cursor가 앞선 표의 측정 높이만큼 늦어지면 본문이
+              // 다음 pair(표 2/그림 9) 위에 그려진다. 다음 항목이 정확히 이 pair이고,
+              // 저장 위치에서 현재 줄 조각 전체가 pair 상단 전에 끝나는 경우에만
+              // backward snap을 허용한다.
+            let next_square_sibling_top = col_content
+                .items
+                .iter()
+                .skip(item_ordinal + 1)
+                // HWP5에서는 각주가 붙은 heading/bullet과 그 다음 본문 문단 뒤에
+                // sibling pair가 이어질 수 있다. 그 두 문단까지 같은 raw-vpos run으로
+                // 보되, 더 먼 내용까지 끌어오지 않도록 look-ahead를 두 item으로 한정한다.
+                .take(2)
+                .find_map(|next| match next {
+                    PageItem::Table { para_index, .. }
+                        if paragraphs
+                            .get(*para_index)
+                            .is_some_and(para_is_empty_square_sibling_table_anchor) =>
+                    {
+                        paragraphs.get(*para_index).and_then(|next_para| {
+                            empty_square_sibling_table_saved_top(next_para, &col_area, self.dpi)
+                        })
+                    }
+                    _ => None,
+                });
+            if self.profile.get().native_hwp5_layout()
+                && item_is_paragraph
+                && next_square_sibling_top.is_some()
+                && paragraphs.get(item_para).is_some_and(para_has_visible_text)
+            {
+                let (start_line, end_line) = match item {
+                    PageItem::FullParagraph { .. } => composed
+                        .get(item_para)
+                        .map(|comp| (0, comp.lines.len()))
+                        .unwrap_or((0, 0)),
+                    PageItem::PartialParagraph {
+                        start_line,
+                        end_line,
+                        ..
+                    } => (*start_line, *end_line),
+                    _ => (0, 0),
+                };
+                let stored_top = paragraphs
+                    .get(item_para)
+                    .and_then(|para| {
+                        para.line_segs.iter().find(|seg| {
+                            seg.tag & crate::model::paragraph::LineSeg::TAG_IMPLEMENTATION_PROPERTY
+                                == 0
+                        })
+                    })
+                    .map(|seg| col_area.y + hwpunit_to_px(seg.vertical_pos, self.dpi));
+                let visual_height = composed
+                    .get(item_para)
+                    .map(|comp| {
+                        let end = end_line.min(comp.lines.len());
+                        (start_line.min(end)..end)
+                            .map(|line_idx| {
+                                let line = &comp.lines[line_idx];
+                                hwpunit_to_px(line.line_height, self.dpi)
+                                    + if line_idx + 1 < end {
+                                        hwpunit_to_px(line.line_spacing, self.dpi)
+                                    } else {
+                                        0.0
+                                    }
+                            })
+                            .sum::<f64>()
+                    })
+                    .unwrap_or(0.0);
+                if let (Some(square_top), Some(stored_top)) = (next_square_sibling_top, stored_top)
+                {
+                    if stored_top + visual_height <= square_top - 0.5 && stored_top + 0.5 < y_offset
+                    {
+                        y_offset = stored_top;
+                        // 이 특수 page-relative snap 뒤에는 기존 상대 ladder를 다음
+                        // table에 재사용하지 않는다. pair 자체는 lane의 raw 좌표가 단일
+                        // 진실원천이고, 후속 쪽에서 새 base가 잡힌다.
+                        hcursor.vpos_page_base = None;
+                        hcursor.vpos_lazy_base = None;
+                    }
+                }
+            }
             let current_title_tail_backtracked =
                 current_is_endnote_question_title && y_offset < y_before_vpos - 32.0;
             let current_large_gap_title_compacted_by_cursor = current_is_endnote_question_title
@@ -6401,6 +6614,7 @@ impl LayoutEngine {
             tac_table_y_before,
             is_tac,
             is_current_empty_para_float,
+            is_current_empty_square_sibling_float,
             is_current_visible_para_float,
             is_first_empty_para_float_control,
             para_index,
@@ -6694,11 +6908,34 @@ impl LayoutEngine {
                     )
                     .map(|_| hwpunit_to_px(t.outer_margin_top as i32, self.dpi))
                     .unwrap_or(0.0);
-                    let raw_top = empty_host_float_raw_top(
-                        para_y_for_table,
-                        v_offset_px,
-                        fragment_outer_top_px,
-                    );
+                    let raw_top = if is_current_empty_square_sibling_float {
+                        // 이 pair는 같은 저장 LINE_SEG의 page-relative 좌표를 공유한다.
+                        // 현재 흐름 y를 쓰면 첫 표 아래에 둘째 표를 수직으로 쌓아
+                        // 본문·각주를 침범한다.
+                        empty_square_sibling_table_saved_top(para, col_area, self.dpi)
+                            .unwrap_or_else(|| {
+                                empty_host_float_raw_top(
+                                    para_y_for_table,
+                                    v_offset_px,
+                                    fragment_outer_top_px,
+                                )
+                            })
+                    } else if let Some(stored_top) = native_empty_single_topbottom_table_saved_top(
+                        self.profile.get().native_hwp5_layout(),
+                        para,
+                        paragraphs.get(para_index + 1),
+                        t,
+                        col_area,
+                        self.dpi,
+                    ) {
+                        stored_top
+                    } else {
+                        empty_host_float_raw_top(
+                            para_y_for_table,
+                            v_offset_px,
+                            fragment_outer_top_px,
+                        )
+                    };
                     let lane_top = para_float_lanes
                         .entry(para_index)
                         .or_default()
@@ -6777,6 +7014,16 @@ impl LayoutEngine {
                     abs_y
                 } else if let Some((_, iy)) = inline_pos {
                     iy
+                } else if let Some(stored_host_bottom_top) =
+                    native_multiline_visible_float_table_top(
+                        self.profile.get().native_hwp5_layout(),
+                        para,
+                        t,
+                        para_y_for_table,
+                        self.dpi,
+                    )
+                {
+                    stored_host_bottom_top
                 } else if is_current_visible_para_float {
                     let v_off = hwpunit_to_px(signed_hwpunit(t.common.vertical_offset), self.dpi);
                     if self.profile.get().hwpx_stored_layout() && v_off <= 0.0 {
@@ -7231,6 +7478,9 @@ impl LayoutEngine {
             .and_then(|p| p.controls.get(control_index))
             .map(|c| matches!(c, Control::Table(t) if t.common.treat_as_char))
             .unwrap_or(false);
+        let is_current_empty_square_sibling_float = paragraphs
+            .get(para_index)
+            .is_some_and(para_is_empty_square_sibling_table_anchor);
         if let Some(existing_y) = para_start_y.get(&para_index) {
             if is_current_tac && y_offset > *existing_y + 1.0 {
                 para_start_y.insert(para_index, y_offset);
@@ -7245,7 +7495,7 @@ impl LayoutEngine {
                 .get(control_index)
                 .map(|c| matches!(c, Control::Table(t) if t.common.treat_as_char))
                 .unwrap_or(false);
-            let is_current_empty_para_float = para
+            let is_current_empty_topbottom_float = para
                 .controls
                 .get(control_index)
                 .map(|c| {
@@ -7256,6 +7506,11 @@ impl LayoutEngine {
                     )
                 })
                 .unwrap_or(false);
+            // Empty Para-relative Square sibling 표도 같은 높이를 공유하는 부동 lane이지만,
+            // 일반 TopAndBottom empty anchor와는 저장 좌표 해석이 다르다. 아래 lane
+            // 경로에는 함께 넣고 raw top/flow bottom에서만 별도로 처리한다.
+            let is_current_empty_para_float =
+                is_current_empty_topbottom_float || is_current_empty_square_sibling_float;
             let is_current_visible_para_float = para
                 .controls
                 .get(control_index)
@@ -7273,7 +7528,10 @@ impl LayoutEngine {
                     matches!(
                         c,
                         Control::Table(t)
-                            if is_para_topbottom_float(&t.common)
+                            if (is_para_topbottom_float(&t.common)
+                                || (!t.common.treat_as_char
+                                    && matches!(t.common.text_wrap, TextWrap::Square)
+                                    && matches!(t.common.vert_rel_to, VertRelTo::Para)))
                                 && !para_has_visible_text(para)
                     )
                 }) == Some(control_index);
@@ -7389,6 +7647,7 @@ impl LayoutEngine {
                     tac_table_y_before,
                     is_tac,
                     is_current_empty_para_float,
+                    is_current_empty_square_sibling_float,
                     is_current_visible_para_float,
                     is_first_empty_para_float_control,
                     para_index,
@@ -7498,6 +7757,11 @@ impl LayoutEngine {
                     let stored_rowbreak_host_tail = hwpunit_to_px(line_advance, self.dpi)
                         + hwpunit_to_px(table.outer_margin_bottom as i32, self.dpi);
                     lanes.max_bottom() + stored_rowbreak_host_tail
+                } else if is_current_empty_square_sibling_float {
+                    // 두 Square 표는 x lane이 겹치지 않으면 같은 raw top을 사용한다.
+                    // 첫 표의 전역 cursor를 둘째 표의 base로 더하지 않아야 가로 pair가
+                    // 다시 세로로 누적되지 않는다.
+                    lanes.max_bottom()
                 } else if is_current_empty_para_float {
                     // Empty-anchor TopAndBottom tables can encode a visual
                     // vertical offset separately from the flow height measured

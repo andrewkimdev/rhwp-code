@@ -13942,6 +13942,7 @@ impl TypesetEngine {
                         table,
                         &ft,
                         composed,
+                        next_para,
                         styles,
                         para_start_height,
                         &mut para_float_lanes,
@@ -14351,20 +14352,50 @@ impl TypesetEngine {
         table: &crate::model::table::Table,
         ft: &FormattedTable,
         composed: Option<&ComposedParagraph>,
+        next_para: Option<&Paragraph>,
         styles: &ResolvedStyleSet,
         para_start_height: f64,
         lanes: &mut FloatLaneSet,
     ) -> bool {
-        if !is_para_topbottom_float(&table.common) || para_has_visible_text(para) {
+        use crate::model::shape::{TextWrap, VertRelTo};
+
+        let is_topbottom_para_float = is_para_topbottom_float(&table.common);
+        // 한컴 native HWP는 빈 host paragraph에 나란히 놓인 복수 어울림(Square) 표를
+        // 본문 block의 세로 합으로 소비하지 않는다. 저장 LINE_SEG의 vpos가 두 표의
+        // 공통 anchor를 가리키고, 표는 가로 lane을 나눠 같은 페이지에 떠 있다
+        // (1351000 pi=260: 표 2개가 p14의 표 2/그림 9로 함께 배치). 일반 block
+        // 경로는 300px + 287px을 차례로 더해 p15를 하나 더 만들었다.
+        let is_square_sibling_float = !table.common.treat_as_char
+            && matches!(table.common.text_wrap, TextWrap::Square)
+            && matches!(table.common.vert_rel_to, VertRelTo::Para);
+        if !(is_topbottom_para_float || is_square_sibling_float) || para_has_visible_text(para) {
             return false;
         }
-        let para_float_count = para
+        let topbottom_float_count = para
             .controls
             .iter()
-            .filter(|ctrl| matches!(ctrl, Control::Table(t) if is_para_topbottom_float(&t.common)))
+            .filter(|ctrl| {
+                matches!(ctrl,
+                    Control::Table(t)
+                        if is_para_topbottom_float(&t.common)
+                )
+            })
             .take(2)
             .count();
-        if para_float_count < 2 {
+        let square_sibling_count = para
+            .controls
+            .iter()
+            .filter(|ctrl| {
+                matches!(ctrl,
+                    Control::Table(t)
+                        if !t.common.treat_as_char
+                            && matches!(t.common.text_wrap, TextWrap::Square)
+                            && matches!(t.common.vert_rel_to, VertRelTo::Para)
+                )
+            })
+            .take(2)
+            .count();
+        if is_square_sibling_float && square_sibling_count < 2 {
             return false;
         }
 
@@ -14398,12 +14429,6 @@ impl TypesetEngine {
             .with_host_margins(effective_margin, margin_right);
         let (x_start, x_end) = horizontal_range(&table.common, width_px, placement_ctx, self.dpi);
 
-        let v_offset_px = hwpunit_to_px(signed_hwpunit(table.common.vertical_offset), self.dpi);
-        let raw_top = (para_start_height + v_offset_px).max(para_start_height);
-        let reserved_height = ft.effective_height + ft.host_spacing.after_for_fit;
-        let lane_top = lanes.pushed_top(x_start, x_end, raw_top);
-        let lane_bottom = lane_top + reserved_height;
-
         let total_footnote =
             st.projected_footnote_height(ft.table_footnote_height, ft.table_footnote_count);
         let fn_margin = if total_footnote > 0.0 {
@@ -14414,6 +14439,68 @@ impl TypesetEngine {
         let available =
             (st.base_available_height() - total_footnote - fn_margin - st.current_zone_y_offset)
                 .max(0.0);
+
+        let v_offset_px = hwpunit_to_px(signed_hwpunit(table.common.vertical_offset), self.dpi);
+        // Square sibling 표는 HWP 페이지 좌표계의 저장 vpos를 공유한다. 이 값을 현재
+        // 흐름 cursor에 맞춰 page base만큼 빼면 p14의 두 표가 본문 하단으로 밀리고,
+        // 렌더 단계의 절대 lane과도 달라진다. 현재 쪽 본문 안에 드는 저장값만 그대로
+        // 쓰고, synthetic/no-page vpos는 기존 para_start 기준으로 폴백한다.
+        let saved_page_top = is_square_sibling_float
+            .then(|| {
+                para.line_segs
+                    .iter()
+                    .find(|seg| !is_synthetic_line_seg(seg))
+                    .map(|seg| hwpunit_to_px(seg.vertical_pos, self.dpi))
+                    .filter(|top| *top >= 0.0 && *top <= available)
+            })
+            .flatten();
+        // 단독 empty-host TopAndBottom 표는 다음 문단의 저장 vpos까지 증가할 때만
+        // raw vpos를 물리 page anchor로 해석한다. 다음 vpos가 되감기는 p14 그림 8
+        // 같은 page-boundary 형상은 이전 anchor가 남아 있을 수 있으므로 기존 flow를
+        // 보존한다. (p15 그림 11은 다음 본문이 계속 증가하는 진짜 같은-page anchor.)
+        let stored_single_topbottom_top = (is_topbottom_para_float
+            && topbottom_float_count == 1
+            && st.profile.native_hwp5_layout())
+        .then(|| {
+            let current = para
+                .line_segs
+                .iter()
+                .find(|seg| !is_synthetic_line_seg(seg))?;
+            let next = next_para?
+                .line_segs
+                .iter()
+                .find(|seg| !is_synthetic_line_seg(seg))?;
+            let top = hwpunit_to_px(current.vertical_pos, self.dpi);
+            let bottom = top + hwpunit_to_px(table.common.height as i32, self.dpi);
+            // page-top의 빈 host 표는 일반 flow가 이미 새 쪽 상단을 복원한다. 그것까지
+            // raw anchor로 우회하면 이전 문단의 partial tail과 결합해 표·본문 순서가
+            // 뒤집힌다(1351000 p23). 일반 flow가 놓치고 표를 다음 쪽에 고립시키는 것은
+            // 본문 하단 절반의 anchor뿐이다.
+            (next.vertical_pos > current.vertical_pos
+                && top >= available * 0.5
+                && bottom <= available + 0.5)
+                .then_some(top)
+        })
+        .flatten();
+        if is_topbottom_para_float
+            && topbottom_float_count < 2
+            && stored_single_topbottom_top.is_none()
+        {
+            return false;
+        }
+        let raw_top = saved_page_top
+            .or(stored_single_topbottom_top)
+            .unwrap_or_else(|| (para_start_height + v_offset_px).max(para_start_height));
+        // Square float의 native HWP LINE_SEG는 도형 선언 높이를 anchor와 함께 보존한다.
+        // 셀 내용 재측정/host trailing spacing은 block flow에서만 쓰며, lane 예약에 더하면
+        // p14처럼 실제로 들어가는 pair를 1~수십 px 초과로 오판한다.
+        let reserved_height = if is_square_sibling_float || stored_single_topbottom_top.is_some() {
+            hwpunit_to_px(table.common.height as i32, self.dpi).max(0.0)
+        } else {
+            ft.effective_height + ft.host_spacing.after_for_fit
+        };
+        let lane_top = lanes.pushed_top(x_start, x_end, raw_top);
+        let lane_bottom = lane_top + reserved_height;
 
         if lane_bottom > available + 0.5 {
             return false;
@@ -17019,8 +17106,46 @@ impl TypesetEngine {
             // 를 가질 때 (line_count == 1 → is_row_splittable=false 라 의도 분할 불가)
             // 한컴은 page 경계에서 셀 빈 영역을 자르고 다음 페이지로 연속 렌더한다.
             // can_intra_split 이고 첫 행이 가용 공간보다 큰 force-split 케이스로 분기.
-            let first_row_force_splittable =
-                !first_block_protected && can_intra_split && remaining_on_page > 0.0;
+            // 빈 host의 단일 RowBreak 그림 표는 셀 안 그림의 실제 높이가 표 선언 높이보다
+            // 커도, 다음 문단의 저장 vpos가 되감기면 새 물리 페이지에서 시작한다. 이를
+            // 일반 1×1 force-split으로 처리하면 남은 공간에 표 상자만 두고 그림을 위로
+            // 끌어올린다(정책연구용역 보고서 그림 23: PDF p24 → rhwp p23). 한 페이지에
+            // 통째로 들어가는 native HWP 그림 표에만 적용해, 실제로 페이지보다 큰 1×1
+            // 표의 셀 내부 분할 계약은 보존한다.
+            let rewound_empty_figure_float_should_defer = st.profile.native_hwp5_layout()
+                && !table.common.treat_as_char
+                && is_para_topbottom_float(&table.common)
+                && matches!(
+                    table.page_break,
+                    crate::model::table::TablePageBreak::RowBreak
+                )
+                && !para_has_visible_text(para)
+                && table.row_count == 1
+                && table.col_count == 1
+                && table.cells.len() == 1
+                && table.cells.iter().any(|cell| {
+                    cell.paragraphs.iter().any(|cell_para| {
+                        cell_para
+                            .controls
+                            .iter()
+                            .any(|control| matches!(control, Control::Picture(_)))
+                    })
+                })
+                && para
+                    .line_segs
+                    .iter()
+                    .find(|seg| !is_synthetic_line_seg(seg))
+                    .zip(paragraphs_all.get(para_idx + 1).and_then(|next| {
+                        next.line_segs
+                            .iter()
+                            .find(|seg| !is_synthetic_line_seg(seg))
+                    }))
+                    .is_some_and(|(current, next)| next.vertical_pos < current.vertical_pos)
+                && table_total <= (base_available - first_frag_overhead).max(0.0);
+            let first_row_force_splittable = !first_block_protected
+                && can_intra_split
+                && remaining_on_page > 0.0
+                && !rewound_empty_figure_float_should_defer;
             let min_content = if first_row_splittable {
                 mt.min_first_line_height_for_row(0, 0.0) + mt.max_padding_for_row(0)
             } else if first_row_force_splittable {
