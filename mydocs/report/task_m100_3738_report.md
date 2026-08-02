@@ -5,11 +5,11 @@ canonical: mydocs/manual/codex/docs_and_git_workflow.md
 last_verified: 2026-08-02
 ---
 
-# Task #3738 결과 보고 — Stage 1–8 그림 흐름 보정과 전체 pagination 잔여
+# Task #3738 결과 보고 — Stage 1–9 그림·RowBreak 흐름 보정과 전체 pagination 잔여
 
 - 이슈: [#3738](https://github.com/edwardkim/rhwp/issues/3738)
 - 관련 PR: [#3740](https://github.com/edwardkim/rhwp/pull/3740)
-- 상태: **Stage 8의 HWP p23 그림 21 caption 정렬은 복원. 전체 215쪽 pagination 정합은 계속 조사 중.**
+- 상태: **Stage 8의 HWP p23 그림 21 caption과 Stage 9의 HWP p66 table-footnote 첫 fragment는 복원. 전체 215쪽 pagination 정합은 계속 조사 중.**
 
 ## 완료한 작업
 
@@ -43,6 +43,11 @@ last_verified: 2026-08-02
     본체와 하나의 시각 블록으로 Center/Bottom 정렬하되, Top caption·일반 picture·pagination은 바꾸지
     않았다. 그림 21 caption 첫 줄은 `544.7px → 494.7px`으로 이동했고 한컴 PDF의 `495.16px`와
     0.46px 차이다.
+11. Stage 9에서 HWP p728 7×2 `RowBreak` 표의 모든 table-cell footnote `294.0px`를 fragment 전부터
+    선예약해 p66 표 전체가 이월되던 흐름을 고쳤다. 작은 non-rowspan RowBreak 표만 fragment queue로
+    좁히고, 확정한 fragment page에 들어가는 cell footnote를 순서대로 등록했다. HWP p66은 기준 PDF처럼
+    표 0–4행(Organ Donation까지)과 각주 76·77을 보유하고 p67은 Stephanie/Policy 5–6행부터 재개한다.
+    전체 HWP 쪽수는 225→224가 됐다.
 
 ## 미해결과 다음 회차
 
@@ -51,11 +56,10 @@ offset, 그리고 HWP p23 그림 21 caption cell 정렬은 해당 선택 페이�
 24쪽 `y=90.6px`, image `y=92.5px`, Bottom caption 3줄 `y=434.4/455.7/477.1px`이고 23쪽에는 없다.
 Stage 8 HWP 그림 21 caption 첫 줄은 PDF `495.16px` 대비 rhwp `494.7px`이다.
 
-그러나 전체 문서는 아직 **HWP 225쪽/HWPX 224쪽, 한컴 PDF 215쪽**이다. 첫 물리 흐름 분기는 p66–68의
-p728 7×2 `RowBreak` 표다. rhwp TypesetEngine은 모든 table-cell footnote `294.0px`를 첫 fragment 전에
-예약해 첫 행조차 p66에 넣지 못하고, 완료 뒤 각주를 전부 최종 fragment page에 등록한다. 다음 Stage는
-fragment row 범위별 각주 예약과 ownership을 함께 고쳐 이 첫 분기를 해소한다. 이는 전체 예약만 우회해
-각주와 본문을 겹치게 하는 방식으로 대체하지 않는다.
+그러나 전체 문서는 아직 **HWP 224쪽/HWPX 224쪽, 한컴 PDF 215쪽**이다. Stage 9가 첫 p728 table
+ownership을 해소했지만 p67 footnote area에는 35px `frame_overflow_pixels` 후보가 남고, 이후 page-count
+분기가 계속된다. 다음 Stage는 커밋된 Stage 9의 224쪽 결과를 기준으로 p67 footnote area와 다음 최초
+page-count 분기를 새로 분석한다. 완료된 p66 소유권을 전체 pagination 완료로 표현하지 않는다.
 
 원본 HWP·HWPX와 각각의 기준 PDF, review PNG는 모두
 [`pdf/pr3740/README.md`](../../pdf/pr3740/README.md) 및 연결된 증적에 보관한다. 상세 페이지 비교와
@@ -67,7 +71,8 @@ fragment row 범위별 각주 예약과 ownership을 함께 고쳐 이 첫 분�
 [Stage 5 visual sweep](../working/task_m100_3738_stage5_visual_sweep.md),
 [Stage 6 visual sweep](../working/task_m100_3738_stage6_visual_sweep.md),
 [Stage 7 visual sweep](../working/task_m100_3738_stage7_visual_sweep.md),
-[Stage 8 visual sweep](../working/task_m100_3738_stage8_visual_sweep.md)에 기록했다.
+[Stage 8 visual sweep](../working/task_m100_3738_stage8_visual_sweep.md),
+[Stage 9 visual sweep](../working/task_m100_3738_stage9_visual_sweep.md)에 기록했다.
 
 현재 그림별 선택 페이지의 완료 판정과 전체 215쪽 pagination 완료 판정을 혼동하지 않는다. 전체 215쪽
 raster sweep이나 전체 integration test는 Stage 8의 좁은 caption 보정 완료 근거로 사용하지 않았다.
@@ -85,7 +90,9 @@ raster sweep이나 전체 integration test는 Stage 8의 좁은 caption 보정 �
 - HWPX p23–p24, p13–p15, 144 DPI visual sweep — 각각 2/2, 3/3 완료; p344 image/caption offset 복원 확인
 - `CARGO_TARGET_DIR=target/review-planet6897-20260802 CARGO_INCREMENTAL=0 cargo test --profile release-test --test issue_3738_hwp_caption_cell_alignment` — 1 passed
 - HWP p23, 144 DPI visual sweep — SVG/render tree 225쪽 생성, 선택 raster 1/1 완료; 그림 21 caption 직접 좌표와 PDF의 차이 0.46px
+- `CARGO_TARGET_DIR=target/review-planet6897-20260802 CARGO_INCREMENTAL=0 cargo test --profile release-test --test issue_3738_rowbreak_table_footnote_fragment` — 1 passed
+- HWP p66–p67, 144 DPI visual sweep — SVG/render tree 224쪽 생성, 선택 raster 2/2 완료; p66의 표 0–4행/각주 76·77 ownership 복원, p67 35px frame overflow 후보는 잔여로 기록
 
-전체 integration test와 215쪽 전체 raster sweep은 이 회차의 완료 근거로 사용하지 않았다. 현재 p66 이후
-fragment별 table footnote pagination과 그에 따른 쪽수 차이가 남아 있으므로, 이 보고서는 선택 페이지의
-그림 흐름 정합만 완료로 표현한다.
+전체 integration test와 215쪽 전체 raster sweep은 이 회차의 완료 근거로 사용하지 않았다. 전체
+pagination 정합이 아직 남아 있으므로, 이 보고서는 Stage 8의 선택 그림 흐름과 Stage 9 p66 table-footnote
+ownership만 완료로 표현한다.

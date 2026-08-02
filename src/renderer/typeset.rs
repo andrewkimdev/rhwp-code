@@ -57,6 +57,8 @@ struct TableContinuationCursor {
     start_cut_is_block: bool,
     is_continuation: bool,
     fragments_emitted: usize,
+    /// fragment queue에서 이미 page에 등록한 표 각주 수.
+    next_table_footnote: usize,
 }
 
 impl TableContinuationCursor {
@@ -111,6 +113,8 @@ struct BlockTableContinuationPreparedState {
     caption_overhead: f64,
     total_rows_height: f64,
     total_footnote_height: f64,
+    queue_table_footnotes: bool,
+    table_footnotes: Vec<TableCellFootnote>,
     footnote_margin: f64,
     host_spacing_total: f64,
     host_spacing_before: f64,
@@ -467,6 +471,20 @@ struct TableBreakToken {
     cell_content_offsets: Option<Vec<f64>>,
 }
 
+/// RowBreak 표가 쪽 경계를 넘을 때 순서대로 배치할 셀 각주.
+///
+/// 일반 표는 표 조판 뒤 한 페이지에 모아 등록하는 기존 계약을 유지한다. 표 본체와
+/// 모든 각주가 새 쪽 하나에는 들어가지만 현재 잔여에는 전부 들어가지 않는 작은
+/// RowBreak 표만 이 정보를 이용해 fragment별 각주 예약을 늦춘다.
+#[derive(Debug, Clone, Copy)]
+struct TableCellFootnote {
+    number: u16,
+    cell_index: usize,
+    cell_para_index: usize,
+    cell_control_index: usize,
+    content_height: f64,
+}
+
 // ========================================================
 // FormattedTable — 표의 format() 결과
 // ========================================================
@@ -501,6 +519,8 @@ struct FormattedTable {
     table_footnote_height: f64,
     /// 표 셀 내 각주 수 (separator/between-notes 예약 계산용)
     table_footnote_count: usize,
+    /// 표 셀 각주의 source·순서·측정 높이.
+    table_footnotes: Vec<TableCellFootnote>,
     /// #2439: 이 표 직후의 일반 문단은 trailing line advance까지 포함해 fit한다.
     /// native HWP의 단일 양수-offset 빈 호스트 RowBreak 표 증거가 있을 때만 true.
     strict_following_plain_text_fit: bool,
@@ -713,6 +733,9 @@ struct TypesetState {
     /// 같은 문단의 선행 RowBreak 표가 continuation 을 만들 때 후행 co-anchored 표를
     /// 후속 섹션 블록 뒤로 잠시 미루기 위한 큐.
     deferred_table_controls: Vec<DeferredTableControl>,
+    /// 표 조판 중 fragment별로 각주를 등록한 source 키. caller의 기존 표 완료 뒤
+    /// 일괄 등록을 건너뛰어 중복을 막는다.
+    fragment_queued_table_footnotes: std::collections::HashSet<(usize, usize)>,
     /// [Task #1753] 지연 이월되는 visible-host 자리차지 표 직전에 현재 쪽 잔여 공간으로
     /// 선행 배치(prefill)된 후속 문단들 — 메인 루프에서 스킵.
     prefilled_paras: std::collections::HashSet<usize>,
@@ -2069,6 +2092,7 @@ impl TypesetState {
             pending_body_wide_top_reserve: 0.0,
             visible_float_exclusions: Vec::new(),
             deferred_table_controls: Vec::new(),
+            fragment_queued_table_footnotes: std::collections::HashSet::new(),
             prefilled_paras: std::collections::HashSet::new(),
             pre_emitted_host_paras: std::collections::HashSet::new(),
             pre_emitted_host_heights: std::collections::HashMap::new(),
@@ -13345,13 +13369,21 @@ impl TypesetEngine {
         // 표 셀 내 각주 높이 사전 계산 (Paginator engine.rs:565-581 동일)
         let mut table_footnote_height = 0.0;
         let mut table_footnote_count = 0usize;
-        for cell in &table.cells {
-            for cp in &cell.paragraphs {
-                for cc in &cp.controls {
+        let mut table_footnotes = Vec::new();
+        for (cell_idx, cell) in table.cells.iter().enumerate() {
+            for (cp_idx, cp) in cell.paragraphs.iter().enumerate() {
+                for (cc_idx, cc) in cp.controls.iter().enumerate() {
                     if let Control::Footnote(fn_ctrl) = cc {
                         let fn_height = estimate_footnote_note_height(fn_ctrl, self.dpi);
                         table_footnote_height += fn_height;
                         table_footnote_count += 1;
+                        table_footnotes.push(TableCellFootnote {
+                            number: fn_ctrl.number,
+                            cell_index: cell_idx,
+                            cell_para_index: cp_idx,
+                            cell_control_index: cc_idx,
+                            content_height: fn_height,
+                        });
                     }
                 }
             }
@@ -13371,6 +13403,7 @@ impl TypesetEngine {
             cells,
             table_footnote_height,
             table_footnote_count,
+            table_footnotes,
             strict_following_plain_text_fit,
         }
     }
@@ -13516,24 +13549,29 @@ impl TypesetEngine {
                 composed,
             );
 
-            for (cell_idx, cell) in table.cells.iter().enumerate() {
-                for (cp_idx, cp) in cell.paragraphs.iter().enumerate() {
-                    for (cc_idx, cc) in cp.controls.iter().enumerate() {
-                        if let Control::Footnote(fn_ctrl) = cc {
-                            if let Some(page) = st.pages.last_mut() {
-                                page.footnotes.push(FootnoteRef {
-                                    number: fn_ctrl.number,
-                                    source: FootnoteSource::TableCell {
-                                        para_index: deferred.para_index,
-                                        table_control_index: deferred.control_index,
-                                        cell_index: cell_idx,
-                                        cell_para_index: cp_idx,
-                                        cell_control_index: cc_idx,
-                                    },
-                                });
+            if !st
+                .fragment_queued_table_footnotes
+                .contains(&(deferred.para_index, deferred.control_index))
+            {
+                for (cell_idx, cell) in table.cells.iter().enumerate() {
+                    for (cp_idx, cp) in cell.paragraphs.iter().enumerate() {
+                        for (cc_idx, cc) in cp.controls.iter().enumerate() {
+                            if let Control::Footnote(fn_ctrl) = cc {
+                                if let Some(page) = st.pages.last_mut() {
+                                    page.footnotes.push(FootnoteRef {
+                                        number: fn_ctrl.number,
+                                        source: FootnoteSource::TableCell {
+                                            para_index: deferred.para_index,
+                                            table_control_index: deferred.control_index,
+                                            cell_index: cell_idx,
+                                            cell_para_index: cp_idx,
+                                            cell_control_index: cc_idx,
+                                        },
+                                    });
+                                }
+                                let fn_height = estimate_footnote_note_height(fn_ctrl, self.dpi);
+                                st.add_footnote_height(fn_height);
                             }
-                            let fn_height = estimate_footnote_note_height(fn_ctrl, self.dpi);
-                            st.add_footnote_height(fn_height);
                         }
                     }
                 }
@@ -14010,25 +14048,30 @@ impl TypesetEngine {
                     }
 
                     // 표 셀 내 각주 수집 (Paginator engine.rs:679-701 동일)
-                    for (cell_idx, cell) in table.cells.iter().enumerate() {
-                        for (cp_idx, cp) in cell.paragraphs.iter().enumerate() {
-                            for (cc_idx, cc) in cp.controls.iter().enumerate() {
-                                if let Control::Footnote(fn_ctrl) = cc {
-                                    if let Some(page) = st.pages.last_mut() {
-                                        page.footnotes.push(FootnoteRef {
-                                            number: fn_ctrl.number,
-                                            source: FootnoteSource::TableCell {
-                                                para_index: para_idx,
-                                                table_control_index: ctrl_idx,
-                                                cell_index: cell_idx,
-                                                cell_para_index: cp_idx,
-                                                cell_control_index: cc_idx,
-                                            },
-                                        });
+                    if !st
+                        .fragment_queued_table_footnotes
+                        .contains(&(para_idx, ctrl_idx))
+                    {
+                        for (cell_idx, cell) in table.cells.iter().enumerate() {
+                            for (cp_idx, cp) in cell.paragraphs.iter().enumerate() {
+                                for (cc_idx, cc) in cp.controls.iter().enumerate() {
+                                    if let Control::Footnote(fn_ctrl) = cc {
+                                        if let Some(page) = st.pages.last_mut() {
+                                            page.footnotes.push(FootnoteRef {
+                                                number: fn_ctrl.number,
+                                                source: FootnoteSource::TableCell {
+                                                    para_index: para_idx,
+                                                    table_control_index: ctrl_idx,
+                                                    cell_index: cell_idx,
+                                                    cell_para_index: cp_idx,
+                                                    cell_control_index: cc_idx,
+                                                },
+                                            });
+                                        }
+                                        let fn_height =
+                                            estimate_footnote_note_height(fn_ctrl, self.dpi);
+                                        st.add_footnote_height(fn_height);
                                     }
-                                    let fn_height =
-                                        estimate_footnote_note_height(fn_ctrl, self.dpi);
-                                    st.add_footnote_height(fn_height);
                                 }
                             }
                         }
@@ -16166,7 +16209,7 @@ impl TypesetEngine {
         suspend_before_drain: bool,
     ) -> Option<BlockTableContinuationContext> {
         // 표 내 각주를 고려한 가용 높이 계산 (Paginator engine.rs:583-586 동일)
-        let total_footnote =
+        let mut total_footnote =
             st.projected_footnote_height(ft.table_footnote_height, ft.table_footnote_count);
         // [#1921 d=+1 / Task #1725 동형] tail-before-vpos-reset 표는 각주 안전마진
         // (보수 버퍼 40px)을 완화한다. 한글은 stored vpos 상 쪽 하단에 표+각주를
@@ -16186,7 +16229,7 @@ impl TypesetEngine {
                 .get(para_idx + 1)
                 .and_then(|p| p.line_segs.iter().find(|ls| !is_synthetic_line_seg(ls)))
                 .is_some_and(|ls| ls.vertical_pos <= 500 && ls.vertical_pos < table_anchor_vpos);
-        let fn_margin = if total_footnote > 0.0 {
+        let mut fn_margin = if total_footnote > 0.0 {
             if next_starts_new_page {
                 0.0
             } else {
@@ -16195,7 +16238,7 @@ impl TypesetEngine {
         } else {
             0.0
         };
-        let available =
+        let mut available =
             (st.base_available_height() - total_footnote - fn_margin - st.current_zone_y_offset)
                 .max(0.0);
 
@@ -16962,7 +17005,7 @@ impl TypesetEngine {
         // Partial table borders are rendered against the visible body area. The paginator-level
         // bottom tolerance is useful for text fit heuristics, but if row cuts spend it here the
         // table fragment can be painted into the footer/body edge and get clipped.
-        let table_available = (available - st.layout.pagination_tolerance_px).max(0.0);
+        let mut table_available = (available - st.layout.pagination_tolerance_px).max(0.0);
 
         // [Task #993] advance_row_cut 호출용 LayoutEngine — 컷 측정은 dpi 와
         // 셀 패딩/중첩 표 높이 계산에만 의존하므로 ad hoc 인스턴스로 충분하다.
@@ -17023,6 +17066,91 @@ impl TypesetEngine {
                 cut_row_h.iter().map(|h| (h * 10.0).round() / 10.0).collect::<Vec<_>>(),
                 mt.row_heights.iter().map(|h| (h * 10.0).round() / 10.0).collect::<Vec<_>>(),
             );
+        }
+
+        // [#3738 Stage 9] 모든 셀 각주를 첫 행 전부터 예약하면, 표 본체와 각주가
+        // 새 쪽 하나에는 함께 들어가는 작은 RowBreak 표도 현재 쪽에서 통째로
+        // 이월된다. 새 쪽에 표 전체와 모든 각주가 들어가고 rowspan/인트라-row
+        // ownership이 없는 형상만 queue로 좁힌다. 표 본체의 fragment가 확정된 뒤
+        // 현재 page에 들어가는 각주만 순서대로 등록한다. 거대 표(#1937)는 이 gate를
+        // 통과하지 않아 기존 연속-page 계약을
+        // 그대로 쓴다.
+        let fresh_all_footnotes_height = if ft.table_footnote_count == 0 {
+            0.0
+        } else {
+            st.footnote_separator_overhead
+                + st.footnote_between_notes_margin
+                    * ft.table_footnote_count.saturating_sub(1) as f64
+                + ft.table_footnote_height
+                + st.footnote_safety_margin
+        };
+        let fresh_all_rows_height = cut_row_h.iter().sum::<f64>()
+            + cs * row_count.saturating_sub(1) as f64
+            + ft.host_spacing.before
+            + ft.host_spacing.after_for_fit;
+        let all_notes_remaining = table_available - st.current_height;
+        let no_table_note_available = {
+            let projected = st.projected_footnote_height(0.0, 0);
+            let margin = if projected > 0.0 {
+                st.footnote_safety_margin
+            } else {
+                0.0
+            };
+            (st.base_available_height()
+                - projected
+                - margin
+                - st.current_zone_y_offset
+                - st.layout.pagination_tolerance_px)
+                .max(0.0)
+        };
+        let queue_table_footnotes = !table.common.treat_as_char
+            && matches!(
+                table.page_break,
+                crate::model::table::TablePageBreak::RowBreak
+            )
+            && row_count > 1
+            && !ft.table_footnotes.is_empty()
+            && table.cells.iter().all(|cell| cell.row_span == 1)
+            && fresh_all_rows_height + fresh_all_footnotes_height <= base_available + 0.5
+            // 모든 각주 예약이 첫 행 전부터 page를 막지만, 기존 page의 각주는
+            // 유지한 채 표 본체는 실제로 시작할 수 있는 형상으로 한정한다.
+            && all_notes_remaining <= 0.5
+            && no_table_note_available >= st.current_height + cut_row_h[0] + 0.5;
+        if queue_table_footnotes {
+            if std::env::var("RHWP_TABLE_DRIFT").is_ok() {
+                eprintln!(
+                    "TABLE_FOOTNOTE_QUEUE pi={} rows={} notes={} all_remaining={:.1} no_table_available={:.1} cur_h={:.1}",
+                    para_idx,
+                    row_count,
+                    ft.table_footnote_count,
+                    all_notes_remaining,
+                    no_table_note_available,
+                    st.current_height,
+                );
+            }
+            total_footnote = st.projected_footnote_height(0.0, 0);
+            fn_margin = if total_footnote > 0.0 {
+                if next_starts_new_page {
+                    0.0
+                } else {
+                    st.footnote_safety_margin
+                }
+            } else {
+                0.0
+            };
+            available = (st.base_available_height()
+                - total_footnote
+                - fn_margin
+                - st.current_zone_y_offset)
+                .max(0.0);
+            // row cut과 문서 저장 높이의 sub-pixel 변환 차이로, 기준 PDF에서
+            // 정확히 바닥에 닿는 마지막 행을 불필요하게 다음 fragment로 보내지
+            // 않도록 이 작은 queue 경로에만 1px round-off 여유를 준다.
+            table_available = (available - st.layout.pagination_tolerance_px + 1.0)
+                .min(st.base_available_height())
+                .max(0.0);
+            st.fragment_queued_table_footnotes
+                .insert((para_idx, ctrl_idx));
         }
 
         // 첫 행이 남은 공간보다 크면 다음 페이지로 (인트라-로우 분할 가능성 확인).
@@ -17354,6 +17482,8 @@ impl TypesetEngine {
             caption_overhead,
             total_rows_height: total_rows_h,
             total_footnote_height: total_footnote,
+            queue_table_footnotes,
+            table_footnotes: ft.table_footnotes.clone(),
             footnote_margin: fn_margin,
             host_spacing_total,
             host_spacing_before: ft.host_spacing.before,
@@ -17403,6 +17533,62 @@ impl TypesetEngine {
         None
     }
 
+    /// 작은 RowBreak 표의 cell-footnote queue를 이번 fragment page에 가능한 만큼
+    /// 등록한다. 마지막 fragment에서는 남은 각주를 모두 보존해 기존의 "각주 누락
+    /// 없음" 계약을 우선한다. queue gate는 표와 모든 각주가 fresh page에 함께
+    /// 들어가는 작은 형상으로 제한한다. 이후 일반 본문·각주의 전체 page fit은
+    /// 기존 paginator가 계속 판정한다.
+    fn register_queued_table_footnotes(
+        &self,
+        st: &mut TypesetState,
+        continuation: &mut TableContinuationCursor,
+        notes: &[TableCellFootnote],
+        para_idx: usize,
+        ctrl_idx: usize,
+        terminal_fragment: bool,
+    ) {
+        while let Some(note) = notes.get(continuation.next_table_footnote) {
+            let projected = st.projected_footnote_height(note.content_height, 1);
+            // 단일단의 중간 RowBreak fragment 뒤에는 같은 page에 이어질 본문이 없다.
+            // 다음 fragment가 새 page에서 시작하므로, 이 fragment의 table-cell 각주는
+            // 일반 본문 후속 배치를 위한 40px safety buffer를 중복 예약하지 않는다.
+            // p728의 77번처럼 기준 PDF 하단에 실제로 들어가는 각주를 보존하는 범위다.
+            let projected_margin = if projected > 0.0 && (terminal_fragment || st.col_count != 1) {
+                st.footnote_safety_margin
+            } else {
+                0.0
+            };
+            let reclaim = if st.section_has_no_footer {
+                st.layout.footer_area.height.max(0.0)
+            } else {
+                0.0
+            };
+            let page_available = (st.base_available_height()
+                - (projected - reclaim).max(0.0)
+                - projected_margin
+                - st.current_zone_y_offset
+                - st.current_bottom_fixed_exclusion)
+                .max(0.0);
+            if !terminal_fragment && st.current_height > page_available + 0.5 {
+                break;
+            }
+            if let Some(page) = st.pages.last_mut() {
+                page.footnotes.push(FootnoteRef {
+                    number: note.number,
+                    source: FootnoteSource::TableCell {
+                        para_index: para_idx,
+                        table_control_index: ctrl_idx,
+                        cell_index: note.cell_index,
+                        cell_para_index: note.cell_para_index,
+                        cell_control_index: note.cell_control_index,
+                    },
+                });
+            }
+            st.add_footnote_height(note.content_height);
+            continuation.next_table_footnote += 1;
+        }
+    }
+
     fn step_block_table_continuation(
         &self,
         continuation_context: &mut BlockTableContinuationContext,
@@ -17427,6 +17613,8 @@ impl TypesetEngine {
             let caption_overhead = prepared.caption_overhead;
             let total_rows_h = prepared.total_rows_height;
             let total_footnote = prepared.total_footnote_height;
+            let queue_table_footnotes = prepared.queue_table_footnotes;
+            let table_footnotes = &prepared.table_footnotes;
             let fn_margin = prepared.footnote_margin;
             let host_spacing_total = prepared.host_spacing_total;
             let host_spacing_before = prepared.host_spacing_before;
@@ -17895,6 +18083,16 @@ impl TypesetEngine {
                         + fragment_outer_bottom_overhead
                         + host_spacing_after_only;
                 }
+                if queue_table_footnotes {
+                    self.register_queued_table_footnotes(
+                        st,
+                        continuation,
+                        table_footnotes,
+                        para_idx,
+                        ctrl_idx,
+                        true,
+                    );
+                }
                 continuation.finish(row_count, true);
                 return TableContinuationIteration::Complete;
             }
@@ -17917,6 +18115,16 @@ impl TypesetEngine {
                 + vert_offset_overhead
                 + partial_height
                 + fragment_outer_bottom_overhead;
+            if queue_table_footnotes {
+                self.register_queued_table_footnotes(
+                    st,
+                    continuation,
+                    table_footnotes,
+                    para_idx,
+                    ctrl_idx,
+                    false,
+                );
+            }
             st.advance_column_or_new_page();
 
             // 커서 전진 — [Task #993] 컷은 절대 유닛 인덱스이므로 누적 없이 대입.
