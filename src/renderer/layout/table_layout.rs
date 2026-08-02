@@ -3255,14 +3255,33 @@ impl LayoutEngine {
                                     signed_hwpunit(pic.common.vertical_offset),
                                     self.dpi,
                                 );
+                                // [#3738 Stage 8] Bottom caption은 그림과 하나의
+                                // 시각 블록이다. 이를 빼고 Center/Bottom을 계산하면
+                                // 그림 본체만 셀 중앙에 놓이고, caption이 셀 밖으로
+                                // 넘쳐 뒤 본문과 겹친다. Top caption은 그림 위쪽
+                                // 좌표 계약이 달라 이 보정 대상이 아니다.
+                                let bottom_caption_h =
+                                    pic.caption.as_ref().map_or(0.0, |caption| {
+                                        if matches!(
+                                            caption.direction,
+                                            crate::model::shape::CaptionDirection::Bottom
+                                        ) {
+                                            self.calculate_caption_height(&pic.caption, styles)
+                                                + hwpunit_to_px(caption.spacing as i32, self.dpi)
+                                        } else {
+                                            0.0
+                                        }
+                                    });
+                                let aligned_visual_h = pic_h + bottom_caption_h;
                                 let content_top = content_cell_y + pad_top;
                                 match effective_valign {
                                     VerticalAlign::Top => content_top + v_off,
                                     VerticalAlign::Center => {
-                                        content_top + (inner_height - pic_h + v_off) / 2.0
+                                        content_top
+                                            + (inner_height - aligned_visual_h + v_off) / 2.0
                                     }
                                     VerticalAlign::Bottom => {
-                                        content_top + inner_height - pic_h - v_off
+                                        content_top + inner_height - aligned_visual_h - v_off
                                     }
                                 }
                             } else {

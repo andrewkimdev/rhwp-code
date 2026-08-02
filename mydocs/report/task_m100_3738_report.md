@@ -5,11 +5,11 @@ canonical: mydocs/manual/codex/docs_and_git_workflow.md
 last_verified: 2026-08-02
 ---
 
-# Task #3738 결과 보고 — Stage 1–7 HWP/HWPX 그림 23 흐름 보정
+# Task #3738 결과 보고 — Stage 1–8 그림 흐름 보정과 전체 pagination 잔여
 
 - 이슈: [#3738](https://github.com/edwardkim/rhwp/issues/3738)
 - 관련 PR: [#3740](https://github.com/edwardkim/rhwp/pull/3740)
-- 상태: **조사 범위 해소 — HWP p23–p24 및 HWPX p13–p15·p23–p24 그림 흐름을 기준 PDF와 대조해 복원**
+- 상태: **Stage 8의 HWP p23 그림 21 caption 정렬은 복원. 전체 215쪽 pagination 정합은 계속 조사 중.**
 
 ## 완료한 작업
 
@@ -38,14 +38,26 @@ last_verified: 2026-08-02
 9. Stage 7에서 HWPX p344의 image offset reset이 적용되지 않던 직접 원인(outer host stored vpos를
    HWP5에만 전달하던 caller gate)을 고쳤다. p344 picture는 p24 `y=92.5px`, Bottom caption은
    `y=434.4/455.7/477.1px`으로 복원됐고, p345 이후 flow도 기준 PDF 순서를 유지한다.
+10. Stage 8에서 native HWP p23의 그림 21/22가 Center cell 안에서 Bottom caption을 제외한 그림 본체만
+    중앙 정렬해 caption이 약 50px 아래로 밀리는 원인을 고쳤다. Bottom caption height와 spacing을 그림
+    본체와 하나의 시각 블록으로 Center/Bottom 정렬하되, Top caption·일반 picture·pagination은 바꾸지
+    않았다. 그림 21 caption 첫 줄은 `544.7px → 494.7px`으로 이동했고 한컴 PDF의 `495.16px`와
+    0.46px 차이다.
 
 ## 미해결과 다음 회차
 
 HWP 그림 23 p23–p24 체인, HWPX의 더 이른 그림 11 이월, HWPX p344 table의 페이지 소유권과 image/caption
-offset은 조사 범위에서 해소됐다. HWPX p344는 24쪽 `y=90.6px`, image `y=92.5px`, Bottom caption 3줄
-`y=434.4/455.7/477.1px`이고 23쪽에는 없다. p24의 `question_marker_flow_drift` 자동 후보는 일반
-`○` bullet을 exam marker로 오인한 것으로, review PNG와 render tree에서 그림 23 흐름 결함은 확인되지
-않았다. 원본 HWP·HWPX와 각각의 기준 PDF, review PNG는 모두
+offset, 그리고 HWP p23 그림 21 caption cell 정렬은 해당 선택 페이지 범위에서 해소됐다. HWPX p344는
+24쪽 `y=90.6px`, image `y=92.5px`, Bottom caption 3줄 `y=434.4/455.7/477.1px`이고 23쪽에는 없다.
+Stage 8 HWP 그림 21 caption 첫 줄은 PDF `495.16px` 대비 rhwp `494.7px`이다.
+
+그러나 전체 문서는 아직 **HWP 225쪽/HWPX 224쪽, 한컴 PDF 215쪽**이다. 첫 물리 흐름 분기는 p66–68의
+p728 7×2 `RowBreak` 표다. rhwp TypesetEngine은 모든 table-cell footnote `294.0px`를 첫 fragment 전에
+예약해 첫 행조차 p66에 넣지 못하고, 완료 뒤 각주를 전부 최종 fragment page에 등록한다. 다음 Stage는
+fragment row 범위별 각주 예약과 ownership을 함께 고쳐 이 첫 분기를 해소한다. 이는 전체 예약만 우회해
+각주와 본문을 겹치게 하는 방식으로 대체하지 않는다.
+
+원본 HWP·HWPX와 각각의 기준 PDF, review PNG는 모두
 [`pdf/pr3740/README.md`](../../pdf/pr3740/README.md) 및 연결된 증적에 보관한다. 상세 페이지 비교와
 자동 후보는
 [Stage 1 visual sweep](../working/task_m100_3738_stage1_visual_sweep.md),
@@ -54,10 +66,11 @@ offset은 조사 범위에서 해소됐다. HWPX p344는 24쪽 `y=90.6px`, image
 [Stage 4 visual sweep](../working/task_m100_3738_stage4_visual_sweep.md),
 [Stage 5 visual sweep](../working/task_m100_3738_stage5_visual_sweep.md),
 [Stage 6 visual sweep](../working/task_m100_3738_stage6_visual_sweep.md),
-[Stage 7 visual sweep](../working/task_m100_3738_stage7_visual_sweep.md)에 기록했다.
+[Stage 7 visual sweep](../working/task_m100_3738_stage7_visual_sweep.md),
+[Stage 8 visual sweep](../working/task_m100_3738_stage8_visual_sweep.md)에 기록했다.
 
-현재 확인한 HWP/HWPX 그림 23 흐름에는 추가 Stage를 열 필요가 없다. 전체 215쪽 raster sweep이나
-전체 integration test는 이 좁은 수정의 완료 근거로 사용하지 않았다.
+현재 그림별 선택 페이지의 완료 판정과 전체 215쪽 pagination 완료 판정을 혼동하지 않는다. 전체 215쪽
+raster sweep이나 전체 integration test는 Stage 8의 좁은 caption 보정 완료 근거로 사용하지 않았다.
 
 ## 검증 범위
 
@@ -70,7 +83,9 @@ offset은 조사 범위에서 해소됐다. HWPX p344는 24쪽 `y=90.6px`, image
 - HWPX p23–p24, p13–p15, 144 DPI visual sweep — 각각 2/2, 3/3 완료; p344 table ownership만 해소 확인
 - `CARGO_TARGET_DIR=target/review-planet6897-20260802 CARGO_INCREMENTAL=0 cargo test stored_layout_relocated --lib` — 2 passed
 - HWPX p23–p24, p13–p15, 144 DPI visual sweep — 각각 2/2, 3/3 완료; p344 image/caption offset 복원 확인
+- `CARGO_TARGET_DIR=target/review-planet6897-20260802 CARGO_INCREMENTAL=0 cargo test --profile release-test --test issue_3738_hwp_caption_cell_alignment` — 1 passed
+- HWP p23, 144 DPI visual sweep — SVG/render tree 225쪽 생성, 선택 raster 1/1 완료; 그림 21 caption 직접 좌표와 PDF의 차이 0.46px
 
-전체 integration test와 215쪽 전체 raster sweep은 이 회차의 완료 근거로 사용하지 않았다. 현재
-범위 밖 페이지와 글꼴 raster 차이는 남을 수 있으므로, 이 보고서는 선택 페이지의 그림 흐름 정합만
-표현한다.
+전체 integration test와 215쪽 전체 raster sweep은 이 회차의 완료 근거로 사용하지 않았다. 현재 p66 이후
+fragment별 table footnote pagination과 그에 따른 쪽수 차이가 남아 있으므로, 이 보고서는 선택 페이지의
+그림 흐름 정합만 완료로 표현한다.
