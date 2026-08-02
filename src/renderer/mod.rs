@@ -18,6 +18,8 @@ pub mod font_metrics_data;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod font_paths;
 pub(crate) mod form_caption;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod glyph_cache_file;
 pub(crate) mod hancom_pua;
 pub mod height_cursor;
 pub mod height_measurer;
