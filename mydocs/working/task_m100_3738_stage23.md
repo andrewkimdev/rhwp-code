@@ -1,6 +1,6 @@
 ---
 kind: investigation
-status: active
+status: completed
 canonical: mydocs/manual/bug_hunting_playbook.md
 last_verified: 2026-08-02
 ---
@@ -39,7 +39,7 @@ page-tail split 중 하나로 원인을 좁힌다. 전체 215↔219 page count�
 
 | 우선순위 | human 쪽 | 계약 | 현재 상태 |
 | --- | --- | --- | --- |
-| P0 | 43 | 본문 tail과 각주 39–44가 separator를 경계로 분리된다. | **이 Stage의 primary, 사용자 UI 재현** |
+| P0 | 43 | 본문 tail과 각주 39–44가 separator를 경계로 분리된다. | **해결 — Stage 23 p43 visual evidence** |
 | P0 | 26–27 | 각주 26)의 physical owner가 PDF와 같다. | 이월, source/PDF 재확인 대기 |
 | P0 | 44–45 | 표 20 뒤 본문 마지막 줄의 physical owner가 PDF와 같다. | Stage 19 PDF 직접 재현 |
 | P0 | 52–53 | 각주 60–62의 page owner/내용이 PDF와 같다. | Stage 19 PDF 직접 재현 |
@@ -101,3 +101,9 @@ control 없는 visible 본문·Body/non-fragment 각주만 대상으로, source/
 - source contract를 고정한 focused regression이 통과한다.
 - code revision과 분리된 visual evidence가 HWP/HWPX/PDF provenance·PNG·자동 후보/사람 판정을 남긴다.
 - 위 이월 원장 중 미처리 항목은 다음 Stage 문서에 다시 전부 옮긴다.
+
+## 결과
+
+code commit `659e1efca6453ce8510f679da1e2b4ace7362f6f`에서 p43의 physical separator collision을 해소했고,
+focused regression 14/14와 p42–45 한컴 PDF visual sweep을 완료했다. p43 완료 근거와 p44–45 residual은
+[Stage 23 visual sweep](task_m100_3738_stage23_p43_visual_sweep.md)에 고정한다.
