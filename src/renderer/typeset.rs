@@ -17112,9 +17112,10 @@ impl TypesetEngine {
             // 커도, 다음 문단의 저장 vpos가 되감기면 새 물리 페이지에서 시작한다. 이를
             // 일반 1×1 force-split으로 처리하면 남은 공간에 표 상자만 두고 그림을 위로
             // 끌어올린다(정책연구용역 보고서 그림 23: PDF p24 → rhwp p23). 한 페이지에
-            // 통째로 들어가는 native HWP 그림 표에만 적용해, 실제로 페이지보다 큰 1×1
-            // 표의 셀 내부 분할 계약은 보존한다.
-            let rewound_empty_figure_float_should_defer = st.profile.native_hwp5_layout()
+            // 통째로 들어가는 native HWP 및 original HWPX 저장 그림 표에만 적용해,
+            // 실제로 페이지보다 큰 1×1 표의 셀 내부 분할 계약은 보존한다.
+            let rewound_empty_figure_float_should_defer = (st.profile.native_hwp5_layout()
+                || st.profile.hwpx_stored_layout())
                 && !table.common.treat_as_char
                 && is_para_topbottom_float(&table.common)
                 && matches!(

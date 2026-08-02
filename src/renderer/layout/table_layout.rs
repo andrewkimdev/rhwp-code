@@ -63,14 +63,14 @@ fn has_initial_tac_shape_host(paragraphs: &[Paragraph]) -> bool {
     })
 }
 
-/// HWP5의 빈 RowBreak 그림 표가 fresh page로 이월된 뒤에도, 내부 picture가
+/// native HWP5와 original HWPX의 빈 RowBreak 그림 표가 fresh page로 이월된 뒤에도, 내부 picture가
 /// 이월 전 outer host 좌표를 상쇄하지 않도록 하는 정확한 형상 판정이다.
 ///
 /// `host_stored_vpos_hu`는 table의 소유 문단에서만 얻을 수 있으며 셀 paragraph의
 /// vpos와 다르다. 이 값을 table-cell 경로까지 명시적으로 전달해, page-scale 음수
 /// picture offset이 의도한 일반 음수 위치인지와 page boundary 상쇄인지 구분한다.
-fn native_hwp5_relocated_empty_rowbreak_picture_resets_offset(
-    native_hwp5_layout: bool,
+fn stored_layout_relocated_empty_rowbreak_picture_resets_offset(
+    stored_layout: bool,
     host_stored_vpos_hu: Option<i32>,
     table: &crate::model::table::Table,
     cell: &crate::model::table::Cell,
@@ -80,7 +80,7 @@ fn native_hwp5_relocated_empty_rowbreak_picture_resets_offset(
     let Some(host_vpos) = host_stored_vpos_hu else {
         return false;
     };
-    if !native_hwp5_layout
+    if !stored_layout
         || host_vpos <= 0
         || table.page_break != TablePageBreak::RowBreak
         || table.common.treat_as_char
@@ -3187,9 +3187,10 @@ impl LayoutEngine {
                             let unrestricted_take_place_cell_float = !pic.common.flow_with_text
                                 && matches!(pic.common.text_wrap, TextWrap::TopAndBottom)
                                 && matches!(pic.common.vert_rel_to, VertRelTo::Para);
-                            let reset_relocated_hwp5_picture_offset =
-                                native_hwp5_relocated_empty_rowbreak_picture_resets_offset(
-                                    self.profile.get().native_hwp5_layout(),
+                            let reset_relocated_stored_picture_offset =
+                                stored_layout_relocated_empty_rowbreak_picture_resets_offset(
+                                    self.profile.get().native_hwp5_layout()
+                                        || self.profile.get().hwpx_stored_layout(),
                                     outer_host_stored_vpos_hu,
                                     table,
                                     cell,
@@ -3240,7 +3241,7 @@ impl LayoutEngine {
                             //   TOP    = content_top + vOffset
                             //   CENTER = content_top + (content_h − pic_h + vOffset)/2
                             //   BOTTOM = content_bottom − pic_h − vOffset
-                            let pic_y = if reset_relocated_hwp5_picture_offset {
+                            let pic_y = if reset_relocated_stored_picture_offset {
                                 // 이 형상은 cell의 Center 값이 현 물리 페이지의 정렬 계약이
                                 // 아니라 stale 음수 offset과 짝을 이룬 이전 페이지 ladder다.
                                 // page-local content top이 한컴 PDF의 그림 상단이다.
@@ -8165,7 +8166,7 @@ impl LayoutEngine {
 
 #[cfg(test)]
 mod row_cut_tests {
-    use super::{native_hwp5_relocated_empty_rowbreak_picture_resets_offset, LayoutEngine};
+    use super::{stored_layout_relocated_empty_rowbreak_picture_resets_offset, LayoutEngine};
     use crate::model::control::Control;
     use crate::model::image::Picture;
     use crate::model::paragraph::{LineSeg, Paragraph};
@@ -8280,7 +8281,7 @@ mod row_cut_tests {
     }
 
     #[test]
-    fn native_hwp5_relocated_empty_rowbreak_picture_uses_outer_host_vpos() {
+    fn stored_layout_relocated_empty_rowbreak_picture_uses_outer_host_vpos() {
         let mut para = empty_anchor_non_inline_picture_para(0);
         let Control::Picture(picture) = &mut para.controls[0] else {
             panic!("그림 컨트롤 아님");
@@ -8300,30 +8301,36 @@ mod row_cut_tests {
             panic!("그림 컨트롤 아님");
         };
 
-        assert!(native_hwp5_relocated_empty_rowbreak_picture_resets_offset(
-            true,
-            Some(52_230),
-            &host,
-            &cell,
-            &para,
-            picture,
-        ));
-        assert!(!native_hwp5_relocated_empty_rowbreak_picture_resets_offset(
-            true,
-            Some(52_220),
-            &host,
-            &cell,
-            &para,
-            picture,
-        ));
-        assert!(!native_hwp5_relocated_empty_rowbreak_picture_resets_offset(
-            false,
-            Some(52_230),
-            &host,
-            &cell,
-            &para,
-            picture,
-        ));
+        assert!(
+            stored_layout_relocated_empty_rowbreak_picture_resets_offset(
+                true,
+                Some(52_230),
+                &host,
+                &cell,
+                &para,
+                picture,
+            )
+        );
+        assert!(
+            !stored_layout_relocated_empty_rowbreak_picture_resets_offset(
+                true,
+                Some(52_220),
+                &host,
+                &cell,
+                &para,
+                picture,
+            )
+        );
+        assert!(
+            !stored_layout_relocated_empty_rowbreak_picture_resets_offset(
+                false,
+                Some(52_230),
+                &host,
+                &cell,
+                &para,
+                picture,
+            )
+        );
     }
 
     #[test]

@@ -205,7 +205,7 @@ fn issue2439_full_table_top_matches_first_partial_fragment_top() {
 }
 
 #[test]
-fn relocated_hwp5_picture_caption_uses_next_saved_flow_anchor() {
+fn stored_layout_relocated_picture_caption_uses_next_saved_flow_anchor() {
     let picture = Picture {
         common: CommonObjAttr {
             height: 24_791,
@@ -275,7 +275,7 @@ fn relocated_hwp5_picture_caption_uses_next_saved_flow_anchor() {
         height: 900.0,
     };
 
-    let flow_top = native_hwp5_relocated_empty_rowbreak_picture_next_flow_top(
+    let flow_top = stored_layout_relocated_empty_rowbreak_picture_next_flow_top(
         true,
         &host,
         &table,
@@ -288,15 +288,17 @@ fn relocated_hwp5_picture_caption_uses_next_saved_flow_anchor() {
         (flow_top - 488.386_666_7).abs() < 0.001,
         "flow_top={flow_top}"
     );
-    assert!(native_hwp5_relocated_empty_rowbreak_picture_next_flow_top(
-        false,
-        &host,
-        &table,
-        Some(&next),
-        &col,
-        96.0,
-    )
-    .is_none());
+    assert!(
+        stored_layout_relocated_empty_rowbreak_picture_next_flow_top(
+            false,
+            &host,
+            &table,
+            Some(&next),
+            &col,
+            96.0,
+        )
+        .is_none()
+    );
 }
 
 #[test]

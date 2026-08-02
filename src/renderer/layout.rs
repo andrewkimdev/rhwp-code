@@ -815,19 +815,19 @@ fn native_empty_single_topbottom_table_saved_top(
         .then_some(top)
 }
 
-/// HWP5에서 페이지를 넘긴 빈 RowBreak 그림 표는 저장된 cell height가 그 페이지의
+/// native HWP5와 original HWPX에서 페이지를 넘긴 빈 RowBreak 그림 표는 저장된 cell height가 그 페이지의
 /// 실제 그림+caption flow보다 크게 남을 수 있다. 표 frame은 원본을 보존한 채, 뒤의
 /// 문단은 다음 저장 LINE_SEG anchor부터 재개해야 하는 형상만 골라 그 flow cursor를
 /// 반환한다.
-fn native_hwp5_relocated_empty_rowbreak_picture_next_flow_top(
-    native_hwp5_layout: bool,
+fn stored_layout_relocated_empty_rowbreak_picture_next_flow_top(
+    stored_layout: bool,
     host_para: &Paragraph,
     table: &crate::model::table::Table,
     next_para: Option<&Paragraph>,
     col_area: &LayoutRect,
     dpi: f64,
 ) -> Option<f64> {
-    if !native_hwp5_layout
+    if !stored_layout
         || para_has_visible_text(host_para)
         || host_para.controls.len() != 1
         || table.row_count != 1
@@ -7638,8 +7638,9 @@ impl LayoutEngine {
                     .get(control_index)
                     .and_then(|control| match control {
                         Control::Table(table) => {
-                            native_hwp5_relocated_empty_rowbreak_picture_next_flow_top(
-                                self.profile.get().native_hwp5_layout(),
+                            stored_layout_relocated_empty_rowbreak_picture_next_flow_top(
+                                self.profile.get().native_hwp5_layout()
+                                    || self.profile.get().hwpx_stored_layout(),
                                 para,
                                 table,
                                 paragraphs.get(para_index + 1),
