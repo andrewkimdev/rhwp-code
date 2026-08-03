@@ -236,8 +236,8 @@ TSV 저장: rd_out\geom_inventory.tsv
 
 ```
 sample	status	pages_a	pages_b	max_disp	worst_page	struct_pages	over_pages	elapsed_ms	error	struct_delta
-form-01.hwp	PASS	1	1	0.000	-	0	0	5		
-form-02.hwp	PASS	1	1	0.000	-	0	0	4		
+form-01.hwp	PASS	1	1	0.000	-	0	0	5
+form-02.hwp	PASS	1	1	0.000	-	0	0	4
 ```
 
 컬럼 그대로 CI 대시보드나 회귀 추이 스프레드시트에 붙여넣을 수 있다. 배치 요약에
