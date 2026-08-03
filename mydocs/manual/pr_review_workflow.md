@@ -81,7 +81,7 @@ CI preflight
        (영향 있음: success, 영향 없음: skipped) │
                          ┌────────────────────┴───────────────────┐
                          │                                        │
-        Build slow archive / regular A(1,2) / regular B(3)       Native Skia tests
+        Build slow+2 archive / regular 1 / regular 3             Native Skia tests
                          └───────────────────────────────┬───────────────────────────────┘
                                                          │
           Default-feature tests: slow + 일반 shard 1/3, 2/3, 3/3 (조건 충족 즉시 병렬)
@@ -90,13 +90,12 @@ CI preflight
 ~~~
 
 - Lint와 Frontend package gates는 preflight 뒤 병렬이다.
-- slow builder, regular A(`1`·`2`), regular B(`3`), Native Skia tests는 Lint가 성공하고, Frontend가
-  필요한 경우 success이거나 영향이 없어 skipped인 뒤 병렬이다. 각 builder는 자기 Cargo test target만
-  빌드해 `slow`, `1`, `2`, `3` archive 중 맡은 항목만 upload한다.
-- `slow shard`는 slow builder와 Native Skia만 성공하면 시작한다. 일반 `1/3`·`2/3`은 regular A와 Native
-  Skia, 일반 `3/3`은 regular B와 Native Skia 성공 뒤 시작한다. 총 worker 수는 4개이고, worker는 각자
-  archive 하나만 download한다. `1/3`·`2/3` matrix에는 `fail-fast`가 적용되며, slow와 `3/3`은 독립 job으로
-  집계 job이 성공 여부를 각각 확인한다.
+- slow+`2` builder, regular `1` builder, regular `3` builder, Native Skia tests는 Lint가 성공하고,
+  Frontend가 필요한 경우 success이거나 영향이 없어 skipped인 뒤 병렬이다. 각 builder는 자기 Cargo test
+  target만 빌드해 `slow`, `1`, `2`, `3` archive 중 맡은 항목만 upload한다.
+- `slow shard`와 일반 `2/3`은 slow+`2` builder와 Native Skia, 일반 `1/3`은 regular `1` builder와 Native
+  Skia, 일반 `3/3`은 regular `3` builder와 Native Skia 성공 뒤 시작한다. 총 worker 수는 4개이고, worker는
+  각자 archive 하나만 download한다. 네 worker는 독립 job이며 집계 job이 성공 여부를 각각 확인한다.
 - review-only fast-pass는 heavy job이 skipped일 수 있다. 이때도 preflight와 branch protection이
   요구하는 집계 상태를 최신 PR head 기준으로 확인한다.
 

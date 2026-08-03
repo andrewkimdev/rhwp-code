@@ -5,8 +5,12 @@ import path from "node:path";
 
 const SLOW_LABEL = "slow";
 const REGULAR_LABELS = ["1", "2", "3"];
-const BUILDER_A_LABELS = ["1", "2"];
-const BUILDER_B_LABELS = ["3"];
+const ARCHIVE_BUILDERS = new Map([
+  [SLOW_LABEL, "slow"],
+  ["1", "a"],
+  ["2", "slow"],
+  ["3", "b"],
+]);
 
 function fail(message) {
   throw new Error(message);
@@ -118,52 +122,35 @@ if (regularTargets.length < REGULAR_LABELS.length) {
   fail(`need at least ${REGULAR_LABELS.length} regular targets, found ${regularTargets.length}`);
 }
 
-// worker 실행량은 archive별 target 수가 비슷해야 하므로 먼저 세 regular archive의 capacity를 정한다.
-// A는 두 archive, B는 한 archive를 빌드한다. slow archive는 전용 builder가 만들므로 regular compile
-// 경로와 분리되고, source 크기 큰 target부터 least-loaded builder에 배정한다.
+// regular target을 세 archive에 직접 배정한다. builder group을 먼저 나누면 A가 두 archive를 만들어
+// compile 임계 경로가 길어진다. source 크기 큰 target부터 archive별 least-loaded group에 배정해 세
+// builder의 regular compile load를 함께 균형화한다.
 regularTargets.sort((left, right) => (
   right.sourceBytes - left.sourceBytes || left.identity.localeCompare(right.identity)
 ));
-const regularArchiveCapacities = new Map(
-  REGULAR_LABELS.map((label, index) => [label, splitCapacity(regularTargets.length, REGULAR_LABELS.length)[index]]),
-);
-const regularBuilderACount = BUILDER_A_LABELS.reduce(
-  (sum, label) => sum + regularArchiveCapacities.get(label),
-  0,
-);
-const builderGroups = [
-  { label: "a", capacity: regularBuilderACount, targets: [], sourceBytes: 0 },
-  { label: "b", capacity: regularTargets.length - regularBuilderACount, targets: [], sourceBytes: 0 },
-];
-assignTargets(regularTargets, builderGroups);
-if (builderGroups.some((builder) => builder.targets.length !== builder.capacity)) {
-  fail("builder regular target assignment does not match archive capacities");
-}
+const regularCapacities = splitCapacity(regularTargets.length, REGULAR_LABELS.length);
+const regularGroups = REGULAR_LABELS.map((label, index) => ({
+  label,
+  builder: ARCHIVE_BUILDERS.get(label),
+  capacity: regularCapacities[index],
+  targets: [],
+  sourceBytes: 0,
+}));
+assignTargets(regularTargets, regularGroups);
 
 const archives = new Map();
 archives.set(SLOW_LABEL, {
   label: SLOW_LABEL,
-  builder: "slow",
+  builder: ARCHIVE_BUILDERS.get(SLOW_LABEL),
   capacity: 1,
   targets: slowTargets,
   sourceBytes: slowTargets[0].sourceBytes,
 });
-for (const builder of builderGroups) {
-  const labels = builder.label === "a" ? BUILDER_A_LABELS : BUILDER_B_LABELS;
-  const groups = labels.map((label) => ({
-    label,
-    builder: builder.label,
-    capacity: regularArchiveCapacities.get(label),
-    targets: [],
-    sourceBytes: 0,
-  }));
-  assignTargets(builder.targets, groups);
-  for (const group of groups) {
-    if (group.targets.length === 0) {
-      fail(`archive ${group.label} has no Cargo test target`);
-    }
-    archives.set(group.label, group);
+for (const group of regularGroups) {
+  if (group.targets.length === 0) {
+    fail(`archive ${group.label} has no Cargo test target`);
   }
+  archives.set(group.label, group);
 }
 
 const orderedLabels = [SLOW_LABEL, ...REGULAR_LABELS];
@@ -180,10 +167,16 @@ fs.mkdirSync(outputDir, { recursive: true });
 const plan = {
   package: packageName,
   total_test_targets: candidates.length,
-  builders: Object.fromEntries(builderGroups.map((builder) => [builder.label, {
-    regular_target_count: builder.targets.length,
-    regular_source_bytes: builder.sourceBytes,
-  }])),
+  builders: Object.fromEntries(["slow", "a", "b"].map((builder) => {
+    const ownedArchives = orderedLabels
+      .map((label) => archives.get(label))
+      .filter((archive) => archive.builder === builder);
+    return [builder, {
+      archive_labels: ownedArchives.map((archive) => archive.label),
+      total_target_count: ownedArchives.reduce((sum, archive) => sum + archive.targets.length, 0),
+      total_source_bytes: ownedArchives.reduce((sum, archive) => sum + archive.sourceBytes, 0),
+    }];
+  })),
   archives: Object.fromEntries(orderedLabels.map((label) => {
     const archive = archives.get(label);
     fs.writeFileSync(path.join(outputDir, `${label}.args`), `${archive.targets.flatMap((target) => target.args).join("\n")}\n`);

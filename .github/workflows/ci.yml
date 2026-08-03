@@ -588,8 +588,8 @@ jobs:
           } >> "${GITHUB_STEP_SUMMARY}"
 
   # [#2393] 기본 테스트 병렬화 — CI impact shadow 검증이 preflight와 worker 조건을 나누는 경계다.
-  # [#3888] 느린 overflow baseline은 전용 builder에서 만들어 Native Skia 완료 직후 실행한다.
-  # 정규 target은 세 archive로 재배정하고, 네 worker는 정확히 자기 archive 하나만 내려받는다.
+  # [#3888] slow builder는 archive 2를 함께 만들어 runner 네 개 안에서 compile 부하를 균형화한다.
+  # regular target은 archive 1/2/3에 직접 배정하고, 네 worker는 정확히 자기 archive 하나만 내려받는다.
   # required check 는 집계 job "Build & Test" 로 불변이다.
   build-test-archive-slow:
     uses: ./.github/workflows/build-nextest-archives.yml
@@ -612,7 +612,7 @@ jobs:
       contents: read
     with:
       builder: slow
-      archive_labels: slow
+      archive_labels: "slow 2"
       expected_count_suffix: slow
 
   build-test-archive-a:
@@ -636,7 +636,7 @@ jobs:
       contents: read
     with:
       builder: a
-      archive_labels: "1 2"
+      archive_labels: "1"
       expected_count_suffix: a
 
   build-test-archive-b:
@@ -681,7 +681,7 @@ jobs:
       count_label: slow
       archive_label: slow
 
-  test-regular-shard-a:
+  test-regular-shard-1:
     uses: ./.github/workflows/run-nextest-archives.yml
     needs: [preflight, native-skia-tests, build-test-archive-a]
     if: >-
@@ -694,22 +694,30 @@ jobs:
       }}
     permissions:
       contents: read
-    strategy:
-      fail-fast: true
-      matrix:
-        include:
-          - label: shard 1/3
-            count_label: 1
-            archive_label: "1"
-          - label: shard 2/3
-            count_label: 2
-            archive_label: "2"
     with:
-      label: ${{ matrix.label }}
-      count_label: ${{ matrix.count_label }}
-      archive_label: ${{ matrix.archive_label }}
+      label: shard 1/3
+      count_label: "1"
+      archive_label: "1"
 
-  test-regular-shard-b:
+  test-regular-shard-2:
+    uses: ./.github/workflows/run-nextest-archives.yml
+    needs: [preflight, native-skia-tests, build-test-archive-slow]
+    if: >-
+      ${{
+        always()
+        && needs.preflight.result == 'success'
+        && needs.preflight.outputs.fast_pass != 'true'
+        && needs['native-skia-tests'].result == 'success'
+        && needs['build-test-archive-slow'].result == 'success'
+      }}
+    permissions:
+      contents: read
+    with:
+      label: shard 2/3
+      count_label: "2"
+      archive_label: "2"
+
+  test-regular-shard-3:
     uses: ./.github/workflows/run-nextest-archives.yml
     needs: [preflight, native-skia-tests, build-test-archive-b]
     if: >-
@@ -969,8 +977,9 @@ jobs:
       - build-test-archive-a
       - build-test-archive-b
       - test-slow-shard
-      - test-regular-shard-a
-      - test-regular-shard-b
+      - test-regular-shard-1
+      - test-regular-shard-2
+      - test-regular-shard-3
       - lint
       - native-skia-tests
       - frontend-package-gates
@@ -986,8 +995,9 @@ jobs:
           ${{
             needs.preflight.outputs.fast_pass != 'true'
             && needs['test-slow-shard'].result == 'success'
-            && needs['test-regular-shard-a'].result == 'success'
-            && needs['test-regular-shard-b'].result == 'success'
+            && needs['test-regular-shard-1'].result == 'success'
+            && needs['test-regular-shard-2'].result == 'success'
+            && needs['test-regular-shard-3'].result == 'success'
           }}
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
@@ -999,8 +1009,9 @@ jobs:
           ${{
             needs.preflight.outputs.fast_pass != 'true'
             && needs['test-slow-shard'].result == 'success'
-            && needs['test-regular-shard-a'].result == 'success'
-            && needs['test-regular-shard-b'].result == 'success'
+            && needs['test-regular-shard-1'].result == 'success'
+            && needs['test-regular-shard-2'].result == 'success'
+            && needs['test-regular-shard-3'].result == 'success'
           }}
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
@@ -1012,8 +1023,9 @@ jobs:
           ${{
             needs.preflight.outputs.fast_pass != 'true'
             && needs['test-slow-shard'].result == 'success'
-            && needs['test-regular-shard-a'].result == 'success'
-            && needs['test-regular-shard-b'].result == 'success'
+            && needs['test-regular-shard-1'].result == 'success'
+            && needs['test-regular-shard-2'].result == 'success'
+            && needs['test-regular-shard-3'].result == 'success'
           }}
         run: |
           shards=$(find . -maxdepth 1 -type f -name 'shard-count-*.txt' | wc -l | tr -d ' ')
@@ -1062,8 +1074,9 @@ jobs:
           BUILD_A_RESULT: ${{ needs['build-test-archive-a'].result }}
           BUILD_B_RESULT: ${{ needs['build-test-archive-b'].result }}
           TEST_SLOW_RESULT: ${{ needs['test-slow-shard'].result }}
-          TEST_REGULAR_A_RESULT: ${{ needs['test-regular-shard-a'].result }}
-          TEST_REGULAR_B_RESULT: ${{ needs['test-regular-shard-b'].result }}
+          TEST_REGULAR_1_RESULT: ${{ needs['test-regular-shard-1'].result }}
+          TEST_REGULAR_2_RESULT: ${{ needs['test-regular-shard-2'].result }}
+          TEST_REGULAR_3_RESULT: ${{ needs['test-regular-shard-3'].result }}
           LINT_RESULT: ${{ needs['lint'].result }}
           NATIVE_SKIA_RESULT: ${{ needs['native-skia-tests'].result }}
           FRONTEND_RESULT: ${{ needs['frontend-package-gates'].result }}
@@ -1076,8 +1089,9 @@ jobs:
           printf 'build_a=%s\n' "${BUILD_A_RESULT}"
           printf 'build_b=%s\n' "${BUILD_B_RESULT}"
           printf 'test_slow=%s\n' "${TEST_SLOW_RESULT}"
-          printf 'test_regular_a=%s\n' "${TEST_REGULAR_A_RESULT}"
-          printf 'test_regular_b=%s\n' "${TEST_REGULAR_B_RESULT}"
+          printf 'test_regular_1=%s\n' "${TEST_REGULAR_1_RESULT}"
+          printf 'test_regular_2=%s\n' "${TEST_REGULAR_2_RESULT}"
+          printf 'test_regular_3=%s\n' "${TEST_REGULAR_3_RESULT}"
           printf 'lint=%s\n' "${LINT_RESULT}"
           printf 'native_skia=%s\n' "${NATIVE_SKIA_RESULT}"
           printf 'frontend=%s\n' "${FRONTEND_RESULT}"
@@ -1094,11 +1108,11 @@ jobs:
 
           failed=0
           if [[ "${BUILD_SLOW_RESULT}" != "success" ]]; then
-            echo "::error::Build slow test archive result: ${BUILD_SLOW_RESULT}"
+            echo "::error::Build slow/2 test archives result: ${BUILD_SLOW_RESULT}"
             failed=1
           fi
           if [[ "${BUILD_A_RESULT}" != "success" ]]; then
-            echo "::error::Build regular test archives 1/2 result: ${BUILD_A_RESULT}"
+            echo "::error::Build regular test archive 1 result: ${BUILD_A_RESULT}"
             failed=1
           fi
           if [[ "${BUILD_B_RESULT}" != "success" ]]; then
@@ -1109,12 +1123,16 @@ jobs:
             echo "::error::Default-feature slow shard result: ${TEST_SLOW_RESULT}"
             failed=1
           fi
-          if [[ "${TEST_REGULAR_A_RESULT}" != "success" ]]; then
-            echo "::error::Default-feature regular shards 1/3 and 2/3 result: ${TEST_REGULAR_A_RESULT}"
+          if [[ "${TEST_REGULAR_1_RESULT}" != "success" ]]; then
+            echo "::error::Default-feature regular shard 1/3 result: ${TEST_REGULAR_1_RESULT}"
             failed=1
           fi
-          if [[ "${TEST_REGULAR_B_RESULT}" != "success" ]]; then
-            echo "::error::Default-feature regular shard 3/3 result: ${TEST_REGULAR_B_RESULT}"
+          if [[ "${TEST_REGULAR_2_RESULT}" != "success" ]]; then
+            echo "::error::Default-feature regular shard 2/3 result: ${TEST_REGULAR_2_RESULT}"
+            failed=1
+          fi
+          if [[ "${TEST_REGULAR_3_RESULT}" != "success" ]]; then
+            echo "::error::Default-feature regular shard 3/3 result: ${TEST_REGULAR_3_RESULT}"
             failed=1
           fi
           if [[ "${LINT_RESULT}" != "success" ]]; then
