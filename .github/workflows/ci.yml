@@ -946,13 +946,16 @@ jobs:
 
       # [#3664] Native FFI 크레이트가 워크스페이스 밖이라 어느 CI job 도 건드리지
       # 않는 사이 코어 API 변경을 못 따라가 이미 컴파일이 깨져 있었다(C#·Swift 래퍼
-      # 동반 무력화). 워크스페이스에 편입했지만 기본 `cargo clippy` 는 루트 크레이트만
-      # 보므로 명시적으로 지목한다. `--workspace` 를 쓰지 않는 이유는 feature 조건부인
-      # `rhwp-subsecond` 가 기본 빌드에서 실패하기 때문이다(이 축과 무관한 기존 성질).
-      - name: Check Native FFI bindings
+      # 동반 무력화). 기본 `cargo clippy` 는 루트 크레이트만 보므로 별도 검사가 필요하다.
+      #
+      # [#3890] 종전에는 `-p rhwp-native-ffi` 로 좁혔다 — `rhwp-subsecond` 가 feature
+      # 게이트 불일치로 `--workspace` 를 상시 깨뜨렸기 때문이다. 그 결함을 고쳐
+      # **워크스페이스 전체**로 넓힌다. 앞으로 추가되는 멤버가 자동으로 검사 대상이
+      # 되며, 깨진 채 들어오면 여기서 막힌다(그것이 이 가드의 목적이다).
+      - name: Check workspace members (FFI bindings, tools)
         run: |
-          cargo build -p rhwp-native-ffi
-          cargo clippy -p rhwp-native-ffi --all-targets -- -D warnings
+          cargo build --workspace
+          cargo clippy --workspace --all-targets -- -D warnings
 
       - name: Check WASM target
         run: cargo check --target wasm32-unknown-unknown --lib

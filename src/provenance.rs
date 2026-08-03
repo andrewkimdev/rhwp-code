@@ -177,6 +177,17 @@ pub const MAP: &[CommandProvenance] = &[
         note: "fieldCount·location 좌표·editableInForm 은 엔진값이다.",
     },
     CommandProvenance {
+        command: "explain",
+        untrusted: &[
+            f("fields[]", "collect_field_records — 누름틀 이름 목록"),
+            f(
+                "summary",
+                "explain_summary — 표 개수·누름틀 이름 등을 엮은 사람용 문장. 위 fields[] 와 같은 이름 문자열이 그대로 섞여 들어간다",
+            ),
+        ],
+        note: "format·pageCount·paragraphCount·footnoteCount·endnoteCount·encrypted 는 엔진값이고, tables[] 는 rows/cols/hasMergedCells 만 담아 셀 텍스트를 싣지 않는다.",
+    },
+    CommandProvenance {
         command: "export-tables",
         untrusted: &[
             f("tables[].caption", "표 캡션 텍스트"),
@@ -385,6 +396,12 @@ pub const MAP: &[CommandProvenance] = &[
         command: "export-provenance-map",
         untrusted: NONE,
         note: "본 지도 자신 — 문서를 열지 않는다.",
+    },
+    CommandProvenance {
+        command: "export-agent-manifest",
+        untrusted: NONE,
+        note: "문서를 열지 않는다 — capabilities·export-ir-schema·export-provenance-map \
+               (있으면 export-plan-schema)의 자기서술을 조립한 것뿐이다.",
     },
 ];
 
