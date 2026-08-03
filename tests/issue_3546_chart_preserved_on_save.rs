@@ -192,3 +192,66 @@ fn issue_3546_chart_preserved_on_save() {
         assert_chart_preserved(&format!("{label} (2-round)"), &original, &saved2);
     }
 }
+
+#[test]
+fn issue_3546_chart_part_is_password_protected() {
+    let repo_root = env!("CARGO_MANIFEST_DIR");
+    let mut paths = Vec::new();
+    chart_samples(&Path::new(repo_root).join("samples/chart"), &mut paths);
+    paths.sort();
+    let path = paths.first().expect("samples/chart fixture 하나 이상");
+    let label = path
+        .strip_prefix(repo_root)
+        .unwrap_or(path)
+        .display()
+        .to_string();
+    let bytes = std::fs::read(path).unwrap_or_else(|e| panic!("read {label}: {e}"));
+    let original = zip_entries(&bytes);
+
+    let doc = DocumentCore::from_bytes(&bytes).unwrap_or_else(|e| panic!("parse {label}: {e:?}"));
+    let password = b"issue-3546-chart-password";
+    let encrypted = doc
+        .export_hwpx_native_with_password(password)
+        .unwrap_or_else(|e| panic!("encrypt {label}: {e:?}"));
+    let encrypted_entries = zip_entries(&encrypted);
+    let manifest = String::from_utf8_lossy(
+        &encrypted_entries
+            .iter()
+            .find(|(name, _)| name == "META-INF/manifest.xml")
+            .expect("암호 HWPX manifest")
+            .1,
+    );
+
+    for (name, plaintext) in original
+        .iter()
+        .filter(|(name, _)| name.starts_with("Chart/"))
+    {
+        let ciphertext = encrypted_entries
+            .iter()
+            .find(|(saved_name, _)| saved_name == name)
+            .unwrap_or_else(|| panic!("암호 저장본에 {name} 이 없다"));
+        assert_ne!(
+            &ciphertext.1, plaintext,
+            "{label}: {name} 이 평문으로 남아서는 안 된다"
+        );
+        assert!(
+            manifest.contains(&format!(r#"full-path="{name}""#)),
+            "{label}: manifest에 암호화된 {name} 항목이 없다"
+        );
+    }
+
+    assert!(
+        DocumentCore::from_bytes(&encrypted).is_err(),
+        "{label}: 비밀번호 없이 암호 HWPX를 열면 안 된다"
+    );
+    let decrypted = DocumentCore::from_bytes_with_password(&encrypted, password)
+        .unwrap_or_else(|e| panic!("decrypt {label}: {e:?}"));
+    let restored = decrypted
+        .export_hwpx_native()
+        .unwrap_or_else(|e| panic!("re-export {label}: {e:?}"));
+    assert_chart_preserved(
+        &format!("{label} (password round-trip)"),
+        &original,
+        &restored,
+    );
+}
