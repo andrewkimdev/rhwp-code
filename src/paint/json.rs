@@ -1250,6 +1250,23 @@ fn write_visual_resources(buf: &mut String, resources: &ResourceArena) {
             .unwrap_or("");
         buf.push_str(&json_escape(key));
     }
+    buf.push_str("],\"fontBlobs\":[");
+    for (index, (_, bytes)) in resources.font_blob_resources().enumerate() {
+        if index > 0 {
+            buf.push(',');
+        }
+        write_json_base64(buf, bytes);
+    }
+    buf.push_str("],\"fontBlobKeys\":[");
+    for index in 0..resources.font_blob_count() {
+        if index > 0 {
+            buf.push(',');
+        }
+        let key = resources
+            .font_blob_resource_key(crate::paint::FontBlobResourceId(index))
+            .unwrap_or("");
+        buf.push_str(&json_escape(key));
+    }
     buf.push_str("]}");
 }
 
@@ -3127,6 +3144,8 @@ mod tests {
     };
     use serde_json::Value;
 
+    const FIXTURE_TTC: &[u8] = include_bytes!("../../tests/fixtures/fonts/RHWPExactFaceSmoke.ttc");
+
     #[test]
     fn serializes_text_and_shape_ops_for_browser_replay() {
         let text = PaintOp::text_run(
@@ -3788,7 +3807,7 @@ mod tests {
                     flags: Vec::new(),
                 }],
                 direction: TextDirection::Ltr,
-                bidi_level: None,
+                bidi_level: Some(0),
                 writing_mode: WritingMode::HorizontalTb,
                 orientation: GlyphRunOrientation::Horizontal,
                 glyph_transforms: None,
@@ -3819,8 +3838,8 @@ mod tests {
     }
 
     fn add_portable_font_resources(resources: &mut ResourceArena) {
-        let font_bytes = [0_u8, 1, 2, 3];
-        resources.intern_font_blob_bytes(&font_bytes);
+        let font_bytes = FIXTURE_TTC;
+        resources.intern_font_blob_bytes(font_bytes);
         let blob_key = FontBlobKey("blob-0".to_string());
         let face_key = FontFaceKey("face-0".to_string());
         let digest_value = resource_digest_hex(font_bytes);
@@ -3883,6 +3902,8 @@ mod tests {
         assert!(json.contains("\"fontResources\":{\"blobs\":["));
         assert!(json.contains("\"portability\":\"portableBlob\""));
         assert!(json.contains("\"faces\":["));
+        assert!(json.contains("\"fontBlobs\":[\"dHRjZg"));
+        assert!(json.contains("\"fontBlobKeys\":[\"font:blake3:1752:"));
         assert!(json.contains("\"optionalFeatures\":[\"fontResources\",\"text.glyphRun\"]"));
         assert!(json.contains("\"variants\":[\"textRun\",\"glyphRun\"]"));
         assert!(json.contains("\"strictVariantAvailable\":true"));

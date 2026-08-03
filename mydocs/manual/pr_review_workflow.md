@@ -111,7 +111,10 @@ CodeQL, Render Diff 등 별도 workflow의 결과도 같은 PR head 기준으로
 - 다른 PR의 접수 분류. 단, 각 PR의 reviewer assign과 최종 판단은 해당 PR별로 기록한다.
 
 CI가 끝난 뒤 또는 contributor가 새 commit을 push한 뒤에는 head SHA, mergeable 상태, required check를
-다시 읽는다. 초안·이전 CI 결과를 최신 head의 최종 판정으로 재사용하지 않는다.
+다시 읽는다. 초안·이전 CI 결과를 최신 head의 최종 판정으로 재사용하지 않는다. 새 head가 최신
+`devel` 병합 또는 update branch를 포함하면 로컬 `devel`과 visibility review branch도 같은 기준선으로
+갱신하고, PR 고유 diff와 재실행할 검증 범위를 다시 판정한다. 상세 절차는
+[다수 PR과 update branch](pr_review/multi_pr_update_branch.md)의 "2.6 검토 중 기준선 갱신"을 따른다.
 
 ### 3.3 순차로 유지할 일
 
