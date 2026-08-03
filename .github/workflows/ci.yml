@@ -587,6 +587,7 @@ jobs:
             printf '| reason | %s |\n' "${SHADOW_REASON}"
           } >> "${GITHUB_STEP_SUMMARY}"
 
+  # [#2393] 기본 테스트 병렬화 — CI impact shadow 검증이 preflight와 worker 조건을 나누는 경계다.
   # [#3888] 느린 overflow baseline은 전용 builder에서 만들어 Native Skia 완료 직후 실행한다.
   # 정규 target은 세 archive로 재배정하고, 네 worker는 정확히 자기 archive 하나만 내려받는다.
   # required check 는 집계 job "Build & Test" 로 불변이다.
