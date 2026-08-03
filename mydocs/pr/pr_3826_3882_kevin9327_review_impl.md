@@ -83,5 +83,5 @@ cell replacement로 잘못 해석되지 않게 `SearchHit` 경계를 명시했�
 
 1. review 문서를 포함한 head에서 LFS 대상 여부와 staged diff를 확인한다.
 2. 작업지시자 승인 뒤 `upstream`의 임시 head branch로 push하고 `devel` 대상 통합 PR을 만든다.
-3. 통합 PR의 최신 head, mergeability, required Actions를 확인한다. 원 PR #3826·#3827·#3832·#3835·#3836·#3838·#3839·#3841·#3842·#3843·#3867·#3870·#3871·#3872·#3873·#3875·#3876·#3877·#3878·#3879·#3882도 최신 상태를 개별 재확인한다.
-4. 최신 CI 성공과 작업지시자 승인 뒤 통합 PR만 merge하고, 실제 merge commit 및 원 PR close 상태를 확인한 뒤 post-merge 절차를 수행한다.
+3. 통합 PR의 최신 head와 mergeability를 확인한다. 원 PR #3826·#3827·#3832·#3835·#3836·#3838·#3839·#3841·#3842·#3843·#3867·#3870·#3871·#3872·#3873·#3875·#3876·#3877·#3878·#3879·#3882도 최신 상태를 개별 재확인한다.
+4. 통합 PR을 merge하고, 실제 merge commit 및 원 PR close 상태를 확인한 뒤 post-merge 절차를 수행한다.
