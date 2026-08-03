@@ -9,6 +9,7 @@
 | 변경 분류 | HWPX parser·serializer 및 암호화 저장 |
 | source commit | `822e9057ddd05a5ca1825342984bb3e7da0e52eb` |
 | maintainer test commit | `6d8232cd1f1e754c7f8f3855bbbf48405da4d858` |
+| CodeQL 보정 commit | `71fdd2527545691a48984eb2ebc7766ba47e71e8` |
 
 ## 검토와 보정
 
@@ -20,6 +21,9 @@ merge한 상태임을 확인했고, maintainer 수정 권한을 사용해 review
 항목이 평문이 아니며 manifest에 등록되고, 비밀번호 없이는 열 수 없고 올바른 비밀번호로 재저장해도
 chart 바이트와 구조가 유지되는지를 검사하는 통합 테스트를 별도 maintainer commit으로 추가했다.
 
+최초 CI의 GitHub Advanced Security가 이 테스트의 고정 비밀번호 리터럴을 critical alert로 보고했다.
+보정 commit은 이를 실행 process ID에서 만든 런타임 바이트로 바꿔 고정 credential을 제거했다.
+
 ## 로컬 검증
 
 | 범위 | 결과 |
@@ -29,6 +33,7 @@ chart 바이트와 구조가 유지되는지를 검사하는 통합 테스트를
 | `cargo test --test issue_3546_chart_preserved_on_save` | 2 passed |
 | `cargo test --profile release-test --tests` | exit code 0 |
 | `cargo clippy --all-targets -- -D warnings` | exit code 0 |
+| CodeQL 보정 뒤 focused test·Clippy | 2 passed / exit code 0 |
 
 변경은 HWPX 저장 구조와 암호화 경로만 다루며 renderer/layout 코드를 수정하지 않는다. 따라서 별도
 시각 sweep은 수행하지 않고, 원본 chart fixture를 통한 구조·바이트 round-trip 검증으로 대체한다.

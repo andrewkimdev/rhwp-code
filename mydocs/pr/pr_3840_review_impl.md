@@ -21,6 +21,11 @@ maintainer commit으로만 추가하며, `maintainerCanModify=true` 권한을 �
 
 이 검사는 PR의 `is_hwpx_protected_path`가 `Chart/`를 보호 경로에 포함한 동작을 직접 고정한다.
 
+`71fdd2527545691a48984eb2ebc7766ba47e71e8` (`test(hwpx): 고정 비밀번호 CodeQL 경고 제거`):
+
+- GitHub Advanced Security가 test의 고정 비밀번호 리터럴을 critical로 보고한 정확한 annotation을 확인했다.
+- 비밀번호를 process ID 기반 런타임 바이트로 바꿨고, focused test 2개와 Clippy를 다시 성공시켰다.
+
 ## 검증과 remote 순서
 
 1. 전용 target(`CARGO_TARGET_DIR=target/review-pr3840`, `CARGO_INCREMENTAL=0`)에서 fmt, diff check,
