@@ -562,10 +562,9 @@ def check_declared_flags_real(binary: Path, caps_j, rep: Report) -> None:
 # 실패 경로에서 stdout 봉투를 내는 것이 **의도된 설계**인 명령.
 #
 # `run` 은 계획 파싱이 성공한 뒤의 실패를 저널 봉투로 보고한다 —
-# MCP `hwp_run_plan` 과 같은 저널을 공유하기 때문이다. 다만 이 예외가
-# `capabilities.jsonContract.failure` 자기서술에는 적혀 있지 않다(#3884 G3).
-# 여기 넣는다고 그 불일치가 해소되는 것은 아니므로, 자기서술 쪽을 고칠 때까지
-# 이 목록이 그 사실의 기록 역할을 한다.
+# MCP `hwp_run_plan` 과 같은 저널을 공유하기 때문이다. 이 예외는
+# `capabilities.jsonContract.failure` 에도 명시돼 있다. 이 목록은 전체 명령
+# 실패-stdout sweep 이 구조화 저널을 stdout 오염으로 오판하지 않도록 한다.
 FAILURE_STDOUT_ALLOWED = {"run"}
 
 

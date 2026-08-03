@@ -402,6 +402,60 @@ fn schema_conditions_are_exactly_what_the_engine_accepts() {
     );
 }
 
+#[test]
+fn condition_schema_rejects_empty_operands_that_engine_rejects() {
+    let p = sample();
+    if !p.exists() {
+        eprintln!("샘플 없음 — 건너뜀");
+        return;
+    }
+    let schema = schema_body();
+    let defs = &schema["$defs"];
+    for operand in [
+        &defs["StepCondition"]["properties"]["fieldExists"],
+        &defs["StepCondition"]["properties"]["textFound"],
+        &defs["FieldEqualsCondition"]["properties"]["name"],
+    ] {
+        assert_eq!(
+            operand["minLength"], 1,
+            "실행기가 거부하는 빈 조건 피연산자를 스키마도 거부해야 한다: {operand}"
+        );
+    }
+    // `fieldEquals.value` 는 실제 누름틀의 빈 값과 비교할 수 있으므로 의도적으로 비어
+    // 있어도 된다. 이름만 빈 문자열을 금지한다.
+    assert!(
+        defs["FieldEqualsCondition"]["properties"]["value"]
+            .get("minLength")
+            .is_none(),
+        "비교값에는 빈 문자열을 허용해야 한다"
+    );
+
+    let out = TempFileGuard::new(temp_path("condition-empty", "hwp"));
+    let plan = serde_json::json!({
+        "planVersion": "1.0",
+        "input": p.to_str().unwrap(),
+        "output": out.path().to_str().unwrap(),
+        "steps": [
+            { "action": "set_checkbox", "occurrence": 0, "if": { "fieldExists": "" } },
+            { "action": "set_checkbox", "occurrence": 0, "if": { "textFound": "" } },
+            { "action": "set_checkbox", "occurrence": 0, "if": {
+                "fieldEquals": { "name": "", "value": "" }
+            } },
+        ],
+    });
+    let (code, journal) = run_plan("condition-empty", &plan);
+    assert_eq!(code, 2, "빈 조건은 사용법 오류여야 한다: {journal}");
+    assert_eq!(
+        journal["invalid"].as_array().map(Vec::len),
+        Some(3),
+        "세 빈 피연산자를 모두 선검증에서 잡아야 한다: {journal}"
+    );
+    assert!(
+        !out.path().exists(),
+        "조건 문법 오류면 산출물이 생기면 안 된다"
+    );
+}
+
 // ── 4) 조건부 step 동작 (§6-8) ──────────────────────────────────────────
 
 #[test]

@@ -82,6 +82,17 @@ fn bench_rejects_unknown_flag_with_silent_stdout() {
 }
 
 #[test]
+fn bench_rejects_a_flag_consumed_as_an_option_value() {
+    // `--iters` 값 자리를 미지 플래그가 차지해도 기본 반복 횟수로 조용히 되돌아가면
+    // 같은 침묵 무시다. 오류는 파일을 열기 전에 exit 2 로 끝나야 한다.
+    let s = sample();
+    assert_rejects(
+        &["bench", s.to_str().unwrap(), "--iters", "--bogus-flag"],
+        "--iters",
+    );
+}
+
+#[test]
 fn bench_total_failure_keeps_stdout_empty() {
     // [G1] 측정 성공 0건이면 stdout 은 빈다 — 빈 표에 배너를 얹어 내보내면 파이프
     // 소비자가 "측정 결과"로 읽는다. 실패의 전말은 stderr 와 exit 1 이 말한다.
@@ -139,6 +150,17 @@ fn dump_rejects_json_flag_until_it_has_a_json_contract() {
 fn dump_rejects_flag_in_file_position() {
     // 첫 인자 자리의 플래그가 "파일을 읽을 수 없습니다 - --json"(exit 1)로 새지 않는다.
     assert_rejects(&["dump", "--json"], "--json");
+}
+
+#[test]
+fn dump_rejects_a_flag_consumed_as_a_filter_value() {
+    // 종전에는 `--section --bogus-flag` 의 두 번째 플래그를 숫자 변환 실패값(None)으로
+    // 삼킨 뒤 문서를 정상 출력했다. 옵션 값 자리도 명령줄 문법의 일부다.
+    let s = sample();
+    assert_rejects(
+        &["dump", s.to_str().unwrap(), "--section", "--bogus-flag"],
+        "--section",
+    );
 }
 
 #[test]

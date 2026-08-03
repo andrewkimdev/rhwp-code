@@ -58,15 +58,41 @@ pub fn run(args: &[String]) -> i32 {
         match args[i].as_str() {
             "--batch" => {
                 i += 1;
-                batch = args.get(i).cloned();
+                let Some(value) = args.get(i) else {
+                    eprintln!("오류: --batch 뒤에 폴더 경로가 필요합니다.");
+                    return super::EXIT_USAGE;
+                };
+                if value.starts_with('-') {
+                    eprintln!("오류: --batch 뒤에 폴더 경로가 필요합니다 - {value}");
+                    return super::EXIT_USAGE;
+                }
+                batch = Some(value.clone());
             }
             "-n" | "--iters" => {
                 i += 1;
-                iters = args.get(i).and_then(|s| s.parse().ok()).unwrap_or(3);
+                let Some(value) = args.get(i) else {
+                    eprintln!("오류: --iters 뒤에 반복 횟수가 필요합니다.");
+                    return super::EXIT_USAGE;
+                };
+                match value.parse::<usize>() {
+                    Ok(parsed) => iters = parsed,
+                    Err(_) => {
+                        eprintln!("오류: --iters 뒤에는 0 이상의 정수가 필요합니다 - {value}");
+                        return super::EXIT_USAGE;
+                    }
+                }
             }
             "--tsv" => {
                 i += 1;
-                tsv = args.get(i).cloned();
+                let Some(value) = args.get(i) else {
+                    eprintln!("오류: --tsv 뒤에 출력 경로가 필요합니다.");
+                    return super::EXIT_USAGE;
+                };
+                if value.starts_with('-') {
+                    eprintln!("오류: --tsv 뒤에 출력 경로가 필요합니다 - {value}");
+                    return super::EXIT_USAGE;
+                }
+                tsv = Some(value.clone());
             }
             // [#3884 G2] 미지 플래그를 파일 이름으로 접지 않는다 — `--json` 을 주면
             // "그런 파일이 없다"로 실패하던 것이 대표 증상이다. 침묵 무시는 더 나쁘다:

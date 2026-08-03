@@ -9064,19 +9064,33 @@ fn dump_controls(args: &[String]) -> i32 {
     while i < args.len() {
         match args[i].as_str() {
             "--section" | "-s" => {
-                if i + 1 < args.len() {
-                    filter_section = args[i + 1].parse().ok();
-                    i += 2;
-                } else {
-                    i += 1;
+                i += 1;
+                let Some(value) = args.get(i) else {
+                    eprintln!("오류: --section 뒤에 0 이상의 구역 번호가 필요합니다.");
+                    return EXIT_USAGE;
+                };
+                match value.parse::<usize>() {
+                    Ok(section) => filter_section = Some(section),
+                    Err(_) => {
+                        eprintln!(
+                            "오류: --section 뒤에는 0 이상의 구역 번호가 필요합니다 - {value}"
+                        );
+                        return EXIT_USAGE;
+                    }
                 }
             }
             "--para" | "-p" => {
-                if i + 1 < args.len() {
-                    filter_para = args[i + 1].parse().ok();
-                    i += 2;
-                } else {
-                    i += 1;
+                i += 1;
+                let Some(value) = args.get(i) else {
+                    eprintln!("오류: --para 뒤에 0 이상의 문단 번호가 필요합니다.");
+                    return EXIT_USAGE;
+                };
+                match value.parse::<usize>() {
+                    Ok(para) => filter_para = Some(para),
+                    Err(_) => {
+                        eprintln!("오류: --para 뒤에는 0 이상의 문단 번호가 필요합니다 - {value}");
+                        return EXIT_USAGE;
+                    }
                 }
             }
             // [#3884 G2] 미지 플래그 침묵 무시 금지 — `--json` 을 붙이면 JSON 이 나올

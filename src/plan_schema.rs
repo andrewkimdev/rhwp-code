@@ -60,6 +60,14 @@ fn prim(ty: &str, description: &str) -> Value {
     json!({ "type": ty, "description": description })
 }
 
+/// 비어 있으면 뜻이 없는 문자열.
+///
+/// 조건 피연산자는 빈 문자열을 받으면 실행기가 사용법 오류로 거부한다. 스키마도 같은
+/// 제약을 내보내야 검증기를 통과한 계획이 실행 단계에서 막히지 않는다.
+fn nonempty_string(description: &str) -> Value {
+    json!({ "type": "string", "minLength": 1, "description": description })
+}
+
 /// 값이 고정된 문자열 — 판별 유니온의 판별자와 버전 상수에 쓴다.
 fn constant(value: &str, description: &str) -> Value {
     json!({ "type": "string", "const": value, "description": description })
@@ -330,8 +338,7 @@ fn set_checkbox_step_def() -> Value {
 fn step_condition_def() -> Value {
     let mut def = closed_object(
         json!({
-            "fieldExists": prim(
-                "string",
+            "fieldExists": nonempty_string(
                 "그 이름의 누름틀이 문서에 있으면 참. `이름[순번]`(0 기준)으로 특정 순번의 \
                  존재를 물을 수도 있다 — 동명 필드가 몇 개인지에 따라 참·거짓이 갈린다.",
             ),
@@ -339,8 +346,7 @@ fn step_condition_def() -> Value {
                 "FieldEqualsCondition",
                 "지목한 누름틀의 **현재 값**이 주어진 값과 정확히 같으면 참.",
             ),
-            "textFound": prim(
-                "string",
+            "textFound": nonempty_string(
                 "그 문자열이 본문에 한 건이라도 있으면 참 (대소문자 구별).",
             ),
         }),
@@ -391,8 +397,7 @@ fn preview_step_def() -> Value {
 fn field_equals_condition_def() -> Value {
     closed_object(
         json!({
-            "name": prim(
-                "string",
+            "name": nonempty_string(
                 "누름틀 이름. `이름[순번]`(0 기준)으로 동명 필드 중 하나를 지목할 수 있다.",
             ),
             "value": prim("string", "비교할 값. 문자열 완전 일치로만 판정한다."),
