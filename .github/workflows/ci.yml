@@ -695,7 +695,7 @@ jobs:
           if-no-files-found: error
 
   test-shard:
-    name: Default-feature tests (shard ${{ matrix.shard }}/8)
+    name: Default-feature tests (${{ matrix.label }})
     runs-on: ubuntu-latest
     # [#3284] 러너 hang 을 실패로 드러내는 상한 (성능 목표 아님) — 실험 종료 후에도 유지
     timeout-minutes: 30
@@ -713,10 +713,42 @@ jobs:
     permissions:
       contents: read
     strategy:
-      # [#3064] 8개 shard는 계속 병렬 실행하되 하나가 실패하면 나머지를 즉시 취소한다.
+      # [#3888] slow worker 1개와 일반 worker 7개를 같은 matrix로 유지해, 하나가 실패하면
+      # 나머지 일곱 worker도 즉시 취소한다. 총 러너 수는 기존과 같이 8개다.
       fail-fast: true
       matrix:
-        shard: [1, 2, 3, 4, 5, 6, 7, 8]
+        include:
+          - label: slow shard
+            kind: slow
+            count_label: slow
+          - label: shard 1/7
+            kind: regular
+            partition: 1
+            count_label: 1
+          - label: shard 2/7
+            kind: regular
+            partition: 2
+            count_label: 2
+          - label: shard 3/7
+            kind: regular
+            partition: 3
+            count_label: 3
+          - label: shard 4/7
+            kind: regular
+            partition: 4
+            count_label: 4
+          - label: shard 5/7
+            kind: regular
+            partition: 5
+            count_label: 5
+          - label: shard 6/7
+            kind: regular
+            partition: 6
+            count_label: 6
+          - label: shard 7/7
+            kind: regular
+            partition: 7
+            count_label: 7
 
     steps:
       # 테스트가 samples/ pdf/ 등 저장소 픽스처를 읽으므로 checkout 필요.
@@ -740,19 +772,33 @@ jobs:
       # [#2393] 공허 통과 방지: Summary 의 run/skipped 를 파싱해 샤드별
       # `<run> <total>` 을 아티팩트로 남긴다. 집계 job 이 8샤드 합계 = 전체
       # 테스트 수를 대조한다 (샤드 누락·파티션 중복이 green 으로 위장 불가).
-      - name: Run shard ${{ matrix.shard }}/8
+      - name: Run ${{ matrix.label }}
+        env:
+          SHARD_KIND: ${{ matrix.kind }}
+          PARTITION: ${{ matrix.partition }}
+          COUNT_LABEL: ${{ matrix.count_label }}
         run: |
           set -o pipefail
           # --extract-to . : CLI 테스트의 env!("CARGO_BIN_EXE_rhwp") 는 빌드
           # 러너 절대 경로가 컴파일 타임에 박힌다. GitHub 러너는 job 간
           # workspace 경로가 동일하므로 워크스페이스에 풀어 target/ 경로를
           # 그대로 복원한다 (임시 디렉터리 추출 시 NotFound — PR CI 실측).
-          cargo nextest run \
-            --archive-file tests.tar.zst \
-            --workspace-remap . \
-            --extract-to . \
-            --partition "hash:${{ matrix.shard }}/8" \
-            2>&1 | tee nextest-shard.log
+          if [[ "${SHARD_KIND}" == "slow" ]]; then
+            cargo nextest run \
+              --archive-file tests.tar.zst \
+              --workspace-remap . \
+              --extract-to . \
+              -E 'binary_id(=rhwp::overflow_cell_baseline) & test(=overflow_cell_lines_do_not_grow)' \
+              2>&1 | tee nextest-shard.log
+          else
+            cargo nextest run \
+              --archive-file tests.tar.zst \
+              --workspace-remap . \
+              --extract-to . \
+              -E 'not (binary_id(=rhwp::overflow_cell_baseline) & test(=overflow_cell_lines_do_not_grow))' \
+              --partition "hash:${PARTITION}/7" \
+              2>&1 | tee nextest-shard.log
+          fi
           # CARGO_TERM_COLOR=always 로 Summary 라인에 ANSI 색코드가 섞이므로
           # 스트립 후 파싱한다 (2차 PR CI 실측 — 376 run green 인데 파싱 실패).
           summary=$(sed 's/\x1b\[[0-9;]*m//g' nextest-shard.log | grep -E "Summary \[" | tail -1)
@@ -761,14 +807,14 @@ jobs:
           if [[ -z "$run" ]]; then
             echo "::error::shard summary parse failed"; exit 1
           fi
-          echo "$run $((run + skipped))" > "shard-count-${{ matrix.shard }}.txt"
-          cat "shard-count-${{ matrix.shard }}.txt"
+          echo "$run $((run + skipped))" > "shard-count-${COUNT_LABEL}.txt"
+          cat "shard-count-${COUNT_LABEL}.txt"
 
-      - name: Upload shard count
+      - name: Upload ${{ matrix.label }} count
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: shard-count-${{ matrix.shard }}
-          path: shard-count-${{ matrix.shard }}.txt
+          name: shard-count-${{ matrix.count_label }}
+          path: shard-count-${{ matrix.count_label }}.txt
           retention-days: 1
           if-no-files-found: error
 
