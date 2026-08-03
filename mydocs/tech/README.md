@@ -34,6 +34,7 @@ last_verified: 2026-07-19
 | 외부 바인딩 공통 기반(M18~M20) | [IR 스키마 버저닝·표면 판단·파이썬 1호 명세](bindings_foundation.md) | 로드맵 #3608 M18~M20, [에이전트 표면 플레이북](../manual/agent_surface_playbook.md) |
 | WASM/브라우저 에이전트 표면(M24) | [WASM 에이전트 표면 문서 지도](wasm_agent_surface/README.md) | [WASM capabilities 자기서술](wasm_agent_surface/self_description.md), [브라우저 MCP-유사 브리지](wasm_agent_surface/browser_bridge.md), [설치 0 온보딩](wasm_agent_surface/zero_install_onboarding.md), 로드맵 #3608 M24·#3869 |
 | 문서 지능 서버(M25) — 파일 감시·워크스페이스·참조 조회 | [문서 지능 서버 문서 지도](document_intelligence/README.md) | [파일 감시와 증분 재파싱](document_intelligence/incremental_reparse.md), [다문서 워크스페이스 핸들](document_intelligence/workspace_handles.md), [참조 조회](document_intelligence/reference_queries.md), 로드맵 #3608 M25 |
+| 바인딩들 사이의 동등성 계약 | [바인딩 동등성 계약](bindings/parity_contract.md) | [바인딩 문서 지도](bindings/README.md), [새 언어 바인딩 추가 절차](bindings/new_binding_guide.md), [파이썬·Node 실측 대조](bindings/python_node_comparison.md) |
 | 이슈별 기술 조사 | [이슈별 기술 조사 지도](investigations/README.md) | [Issue #511 IR wrap 조사](investigations/issue-511/README.md), [Issue #1151 picture TAC 조사](investigations/issue-1151/README.md), [Issue #1584 이후 HWPX 잔여 IR 차이 조사](investigations/issue-1584/README.md), [Issue #1658 페이지네이션 조사](investigations/issue-1658/README.md), [Issue #1772 잔여 OVER 조사](investigations/issue-1772/README.md), [Issue #2125 font ownership 조사](investigations/issue-2125/README.md) |
 
 ## 현재 구조를 읽는 법
