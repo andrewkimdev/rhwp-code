@@ -1,6 +1,6 @@
 ---
 kind: canonical
-status: draft
+status: active
 canonical: mydocs/tech/wasm_agent_surface/browser_bridge.md
 last_verified: 2026-08-03
 ---

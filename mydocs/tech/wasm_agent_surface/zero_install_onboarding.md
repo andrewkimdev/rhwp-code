@@ -1,6 +1,6 @@
 ---
 kind: guide
-status: draft
+status: active
 canonical: mydocs/tech/wasm_agent_surface/zero_install_onboarding.md
 last_verified: 2026-08-03
 ---
