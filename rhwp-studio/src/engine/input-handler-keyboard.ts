@@ -1026,6 +1026,7 @@ export function onKeyDown(this: any, e: KeyboardEvent): void {
       } else {
         // phase 1: 단일 셀 이동
         this.cursor.moveCellSelection(dr, dc);
+        this.updateCaret();
       }
       this.updateCellSelection();
       return;
