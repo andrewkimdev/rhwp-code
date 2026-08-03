@@ -21118,12 +21118,17 @@ fn test_task229_field_svg_guide_text() {
     let mut hwp_doc = HwpDocument::from_bytes(&data).expect("HwpDocument 생성 실패");
     let svg = hwp_doc.render_page_svg_native(0).expect("SVG 렌더링 실패");
 
-    // SVG에 안내문 텍스트가 빨간색 기울임체로 렌더링되는지 확인
+    // SVG에 안내문 텍스트가 빨간색으로 렌더링되는지 확인 (기울임체는 아님 -
+    // 한글 폰트는 대개 이탤릭 글리프가 없어 PDF 경로에서만 업라이트로
+    // 대체되던 문제가 있었음. SVG/PDF 출력 일관성을 위해 기울임체 미적용으로 통일)
     assert!(
         svg.contains("ff0000"),
         "SVG에 빨간색(#ff0000) 텍스트가 있어야 함"
     );
-    assert!(svg.contains("italic"), "SVG에 기울임체 텍스트가 있어야 함");
+    assert!(
+        !svg.contains("italic"),
+        "SVG 안내문 텍스트는 기울임체가 아니어야 함"
+    );
     assert!(svg.contains(">여</text>"), "SVG에 '여' 글자가 있어야 함");
     assert!(svg.contains(">입</text>"), "SVG에 '입' 글자가 있어야 함");
 }
