@@ -37,6 +37,9 @@ mydocs/orders/YYYYMMDD.md                  # 갱신이 필요한 경우
 PR 번호 발급 뒤 번호를 보태기 위해 오늘할일을 다시 만들거나 갱신하지 않는다. 이미 active 경로에 만든
 review 문서는 다음 PR에 임시로 동반하지 말고 같은 PR 준비 단계에서 archive 경로로 옮긴다.
 
+이 시점에 local CI 검증이 완료됐다면 review 문서와 오늘할일에는 결과를 과거형으로 적는다. 검증을
+다시 실행할 계획처럼 쓰지 말고, 남은 GitHub Actions·작업지시자 승인·merge만 미래 조건으로 분리한다.
+
 ## 8.3 remote push
 
 collaborator는 권한 제약이 없는 한 fork origin이 아니라 원본 remote upstream의 작업 branch로 push한다.

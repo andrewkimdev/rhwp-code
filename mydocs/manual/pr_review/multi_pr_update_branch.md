@@ -38,6 +38,9 @@ contributor 또는 maintainer가 Update branch를 수행해 PR head가 바뀌면
    등록되므로(#3503 실측) 워크플로가 릴리즈로 main에 실린 뒤부터 발동한다.** 그 전의
    fork PR은 아래 3의 script 폴백을 쓴다.
 2. reaper가 성공했다면 이전 SHA run이 `completed/cancelled`가 되었고 최신 head run이 시작됐는지 확인한다.
+   목록 조회와 force-cancel 요청 사이에 대상 run이 스스로 끝나 GitHub가 409을 반환할 수 있다.
+   이 경우 reaper는 대상 run을 다시 조회해 `completed`임을 확인한 경우에만 정상 경과로 기록한다.
+   409 자체를 무조건 무시하거나, 여전히 active인 run을 성공으로 처리하면 안 된다.
 3. reaper 실패·미실행 시에는 `scripts/cancel_stale_pr_runs.sh <PR번호>`로 정리한다(#3508 —
    현재 head 확인 → 이전 SHA active run 나열 → force-cancel → 완료 재확인을 한 명령으로,
    `--dry-run`은 목록만). 이 경로도 **일반 `gh run cancel`을 먼저 시도하지 않고** force-cancel

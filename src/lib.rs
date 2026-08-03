@@ -4,17 +4,20 @@
 
 use wasm_bindgen::prelude::*;
 
+pub mod capabilities_schema;
 pub mod diagnostics;
 pub mod doclang;
 pub mod document_core;
 pub mod emf;
 pub mod error;
+pub mod ir_schema;
 pub mod model;
 pub mod ole_chart;
 pub mod ooxml_chart;
 pub mod paint;
 pub mod parser;
 pub mod password_crypto;
+pub mod provenance;
 pub mod renderer;
 pub mod serializer;
 #[cfg(feature = "subsecond-dev")]

@@ -1,7 +1,7 @@
 import type { DocumentPosition, CursorRect, LineInfo, CellPathEntry, NavContextEntry, CellBbox } from '@/core/types';
 import type { WasmBridge } from '@/core/wasm-bridge';
 // [#2756] 셀 좌표 축 헬퍼는 command.ts 와 단일 정의를 공유한다(축 유도 복제 금지).
-import { cellAxisPath } from './command';
+import { cellAxisPath, type FocusedCellCursorGeometry } from './command';
 
 type CellSelectionReason = 'manual' | 'protected';
 
@@ -24,6 +24,12 @@ type PictureSelectionRef = {
 export class CursorState {
   private position: DocumentPosition = { sectionIndex: 0, paragraphIndex: 0, charOffset: 0 };
   private rect: CursorRect | null = null;
+  /** [#3137] 직전 rect가 현재 공개 pagination의 exact/hit geometry에서 출발했는지 여부. */
+  private focusedGeometryValid = false;
+  /** fast path로 적용한 마지막 deferred mutation revision. exact 조회 뒤에는 null이다. */
+  private focusedGeometryRevision: number | null = null;
+  /** mutation 직후 다음 moveTo 한 번에만 소비하는 focused geometry transition. */
+  private preparedFocusedGeometry: FocusedCellCursorGeometry | null = null;
 
   /** 수직 이동 시 원래 X 좌표를 기억 (§6.4.4 preferred X) */
   private preferredX: number | null = null;
@@ -249,6 +255,87 @@ export class CursorState {
     return this.rect ? { ...this.rect } : null;
   }
 
+  private static sameFocusedCellPosition(
+    left: DocumentPosition,
+    right: DocumentPosition,
+  ): boolean {
+    if (
+      left.sectionIndex !== right.sectionIndex
+      || left.paragraphIndex !== right.paragraphIndex
+      || left.parentParaIndex !== right.parentParaIndex
+      || left.charOffset !== right.charOffset
+      || left.isTextBox !== right.isTextBox
+    ) {
+      return false;
+    }
+    const leftPath = cellAxisPath(left);
+    const rightPath = cellAxisPath(right);
+    return leftPath.length === rightPath.length
+      && leftPath.every((entry, index) => {
+        const other = rightPath[index];
+        return entry.controlIndex === other.controlIndex
+          && entry.cellIndex === other.cellIndex
+          && entry.cellParaIndex === other.cellParaIndex;
+      });
+  }
+
+  /**
+   * [#3137] mutation 결과의 같은-line transition을 다음 moveTo에 준비한다.
+   *
+   * 준비가 실패하면 mutation 뒤의 직전 rect는 더 이상 현재 문서의 exact geometry가
+   * 아니므로 invalid로 두고, moveTo가 기존 WASM exact query로 복구하게 한다.
+   */
+  prepareFocusedCellCursorGeometry(geometry: FocusedCellCursorGeometry): boolean {
+    this.preparedFocusedGeometry = null;
+    const revisionMatches = this.focusedGeometryRevision === null
+      || geometry.baseRevision === this.focusedGeometryRevision;
+    if (
+      !this.focusedGeometryValid
+      || !this.rect
+      || this.rect.cellOverflowed === true
+      || !Number.isFinite(geometry.deltaX)
+      || geometry.revision <= geometry.baseRevision
+      || !revisionMatches
+      || !CursorState.sameFocusedCellPosition(this.position, geometry.source)
+      || this.isInVerticalCell()
+    ) {
+      this.invalidateFocusedCellCursorGeometry();
+      return false;
+    }
+    this.preparedFocusedGeometry = geometry;
+    return true;
+  }
+
+  /** pagination commit/flush 또는 geometry 없는 mutation 뒤 다음 이동을 exact query로 강제한다. */
+  invalidateFocusedCellCursorGeometry(): void {
+    this.preparedFocusedGeometry = null;
+    this.focusedGeometryValid = false;
+    this.focusedGeometryRevision = null;
+  }
+
+  private applyPreparedFocusedCellCursorGeometry(): boolean {
+    const geometry = this.preparedFocusedGeometry;
+    this.preparedFocusedGeometry = null;
+    if (
+      !geometry
+      || !this.focusedGeometryValid
+      || !this.rect
+      || !CursorState.sameFocusedCellPosition(this.position, geometry.target)
+    ) {
+      return false;
+    }
+    const x = this.rect.x + geometry.deltaX;
+    if (!Number.isFinite(x)) return false;
+    const bounds = this.rect.cellBounds;
+    if (bounds && (x < bounds.x || x > bounds.x + Math.max(0, bounds.w))) {
+      return false;
+    }
+    this.rect = { ...this.rect, x };
+    this.focusedGeometryRevision = geometry.revision;
+    this.focusedGeometryValid = true;
+    return true;
+  }
+
   /** 커서가 셀 내부에 있는지 반환한다 */
   isInCell(): boolean {
     return (this.position.cellPath?.length ?? 0) > 0
@@ -295,8 +382,11 @@ export class CursorState {
   moveToHit(pos: DocumentPosition): void {
     this.position = { ...pos };
     this.atLineEnd = false;
+    this.preparedFocusedGeometry = null;
     if (pos.cursorRect) {
       this.rect = { ...pos.cursorRect };
+      this.focusedGeometryValid = true;
+      this.focusedGeometryRevision = null;
     } else {
       this.updateRect();
     }
@@ -1034,6 +1124,9 @@ export class CursorState {
     try {
       // 머리말/꼬리말 편집 모드
       if (this._headerFooterMode !== 'none') {
+        this.preparedFocusedGeometry = null;
+        this.focusedGeometryValid = false;
+        this.focusedGeometryRevision = null;
         const isHeader = this._headerFooterMode === 'header';
         this.rect = this.wasm.getCursorRectInHeaderFooter(
           this._hfSectionIdx, isHeader, this._hfApplyTo,
@@ -1044,6 +1137,9 @@ export class CursorState {
 
       // 각주 편집 모드
       if (this._footnoteMode) {
+        this.preparedFocusedGeometry = null;
+        this.focusedGeometryValid = false;
+        this.focusedGeometryRevision = null;
         const noteRect = this.wasm.getCursorRectInNote?.(
           this._fnSectionIdx,
           this._fnParaIdx,
@@ -1058,6 +1154,10 @@ export class CursorState {
         this.rect = this.wasm.getCursorRectInFootnote(
           this._fnPageNum, this._fnFootnoteIndex, this._fnInnerParaIdx, this._fnCharOffset,
         );
+        return;
+      }
+
+      if (this.applyPreparedFocusedCellCursorGeometry()) {
         return;
       }
 
@@ -1087,7 +1187,10 @@ export class CursorState {
           this.rect.pageIndex, this.position.cursorRect.pageIndex);
         this.rect = { ...this.position.cursorRect };
       }
+      this.focusedGeometryValid = this.rect !== null;
+      this.focusedGeometryRevision = null;
     } catch (e) {
+      this.invalidateFocusedCellCursorGeometry();
       // getCursorRect 실패 시 hitTest에서 전달된 cursorRect 폴백
       const pos = this.position;
       if (pos.cursorRect) {
@@ -1316,6 +1419,18 @@ export class CursorState {
     this.cellAnchor = { row: newRow, col: newCol };
     this.cellFocus = { row: newRow, col: newCol };
     this.excludedCells.clear();
+
+    // F5 단일 셀 선택의 화살표 이동은 하이라이트뿐 아니라 실제 편집 캐럿도 대상 셀 첫 위치로 옮긴다.
+    // 그래야 셀 선택을 끝낸 직후의 입력·서식 명령이 표시된 셀에 적용된다.
+    const targetCell = bboxes.find(b =>
+      newRow >= b.row && newRow < b.row + b.rowSpan
+        && newCol >= b.col && newCol < b.col + b.colSpan,
+    );
+    if (!targetCell) return;
+    this.preferredX = null;
+    this.atLineEnd = false;
+    this.moveToCellByIndex(sec, ppi, ci, cellPath, targetCell.cellIdx, 'start');
+    this.updateRect();
   }
 
   /** Shift+클릭: anchor 고정, focus를 클릭 셀로 이동 (범위 선택). */

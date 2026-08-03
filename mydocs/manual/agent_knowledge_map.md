@@ -2,7 +2,7 @@
 kind: canonical
 status: active
 canonical: mydocs/manual/agent_knowledge_map.md
-last_verified: 2026-07-31
+last_verified: 2026-08-02
 ---
 
 # 에이전트 지식 지도 — rhwp 참조 문서의 단일 진입점
@@ -32,7 +32,7 @@ rhwp 를 도구로 부리는 AI 에이전트·스크립트가 **첫 번째로 �
 | 표 기록 — 격자 좌표 | `export-tables` → `edit set-cell` (`hwp_set_cell`) | `overflow`·`oldText`/`newText` | [서식 가이드 §2](form_filling_guide.md#2-set-cell-심화) |
 | 치환 — 문구 일괄 교체 | `edit replace-text` → `search` 재독 (`hwp_replace_text`) | `replacedCount` | [서식 가이드 §3](form_filling_guide.md#3-replace-text-심화) |
 | 생성 — JSON 명세 → HWPX | `build-from-ingest` (`hwp_build_from_ingest`) | 재독 대조(`export-text`) | [CLI 매뉴얼](cli_commands.md) §build-from-ingest, [예제집 5](agent_task_playbook.md) |
-| 대량 — 아카이브 스윕 | `batch` 6축 NDJSON (`hwp_batch`·`hwp_batch_search`) | 레코드별 `error`·`exitClass` | [JSON 파이프라인 가이드](cli_json_pipeline_guide.md) |
+| 대량 — 아카이브 스윕 | `batch` 7축 NDJSON — 읽기 6축은 `hwp_batch`·`hwp_batch_search`, 쓰기 `convert`는 CLI 전용 | 레코드별 `error`·`exitClass` | [JSON 파이프라인 가이드](cli_json_pipeline_guide.md) |
 | 세션 — 재파싱 없는 반복 | `mcp-serve` 전용: `hwp_open` → `hwp_doc_*` → `hwp_doc_save`/`hwp_close` | `docId` 핸들 | [MCP 가이드 §세션](mcp_integration_guide.md#세션-도구--재파싱-없는-반복-조회-서버-전용) |
 
 온보딩은 명령 추측이 아니라 자기서술로 한다: `rhwp capabilities` 1회 호출로 전
@@ -60,6 +60,23 @@ rhwp 를 도구로 부리는 AI 에이전트·스크립트가 **첫 번째로 �
 절차(이슈 → red 계약 테스트 → 구현 → 증적 2종 → PR)를 따른다. 잔여 목록·우선순위의
 권위는 [#3608](https://github.com/edwardkim/rhwp/issues/3608)이다. 절차를 어긴 표면
 추가는 되돌린다.
+
+### 1-4. 다른 언어에서 쓰려는가 — 바인딩 가이드
+
+바인딩은 **새 표면이 아니라 기존 계약의 재포장**이다. 판정·좌표·파싱은 전부 rhwp
+본체가 하고, 바인딩은 인자 조립·봉투 파싱·종료 코드 매핑 셋만 한다. 그래서 §1-1 의
+명령 표와 §2 의 봉투 필드 사전이 언어를 바꿔도 그대로 권위다.
+
+| 언어 | 패키지 | 가이드 | 상태 |
+|---|---|---|---|
+| Node/TypeScript | `@rhwp/node` | [node_binding_guide.md](node_binding_guide.md) | M19 [#3776](https://github.com/edwardkim/rhwp/issues/3776) — 통합 검토 중 |
+| Python | `rhwp` | [python_binding_guide.md](python_binding_guide.md) | M18 [#3762](https://github.com/edwardkim/rhwp/issues/3762) — 통합 검토 중 |
+
+노출 기준은 손으로 고른 목록이 아니라 `capabilities` 의 `json` 선언이다 — 진단
+계열처럼 `--json` 이 없는 명령은 바인딩에 함수로 없고, 필요하면 저수준 실행기로
+직접 부른다. IR 모양은 `rhwp export-ir-schema`, 명령 표면은
+`rhwp export-capabilities-schema`를 코드 생성의 단일 출처로 쓴다. 두 가이드가 서로
+어긋나면 계약이 언어마다 갈린 것이므로 어긋난 쪽을 고친다.
 
 ## 2. 봉투 필드 사전 — 필드 이름으로 찾는 역인덱스
 
@@ -89,6 +106,9 @@ rhwp 를 도구로 부리는 AI 에이전트·스크립트가 **첫 번째로 �
 
 - **페이지는 0 기준**: `-p`, `search` 의 `matches[].page`, `export-text` 의
   `pages[].page` 가 전부 같은 좌표계다. 사람에게 보여줄 때만 +1 한다.
+  - **예외 하나 — `extract-pages` 의 `--from`/`--to` 는 1 기준이다**(첫 쪽이 1).
+    다른 축의 값을 그대로 옮기면 **오류 없이 한 쪽 밀린 문서**가 나온다.
+    `search` 가 `page: 1`(2쪽)을 줬다면 잘라 낼 때는 `--from 2 --to 2` 다.
 - **반복 필드는 `이름[N]`**: 같은 이름이 여러 번 나오는 서식은 0 기준 순번으로
   지목한다. 순번은 `fields --json` 목록 순서와 같다 (#3476).
 - **표 격자 좌표는 `export-tables` 와 동형**: `edit set-cell` 의
@@ -143,10 +163,13 @@ exit 3 ↔ `isError:false` + `identical:false`. 상세는
 | `mcp_server_contract.rs` | `mcp-serve` 핸드셰이크·선언-서버 드리프트 가드·isError (#3140) |
 | `mcp_session_query_contract.rs` | 세션 조회·치환(hwp_doc_search·hwp_doc_replace_text) (#3601) |
 | `mcp_session_edit_contract.rs` | 세션 채움·형식 보존 저장(hwp_doc_fill_fields·hwp_doc_save) (#3598) |
+| `mcp_session_changed_pages_contract.rs` | 세션 편집 3종 `changedPages` — 무상태 판 동형·재조판 후 렌더 가능 (#3719 §6-1) |
 | `issue_3366_thumbnail_contract.rs` | `thumbnail` 종료 코드·파싱 계약 (#3366) |
 | `issue_3372_gian_form_contract.rs` | 일반기안문 표준 서식 자산의 유효성 (#3372) |
 | `render_p22_web_canvas_contract.rs` | 웹 캔버스 레이어 재생이 render node 를 재구축하지 않는 계약 |
 | `render_p23_pdf_export_contract.rs` | PDF export native API 경로 계약 |
+| `ir_schema_contract.rs` | `export-ir-schema` 스키마 건전성 — 끊어진 참조·고아 정의·닫힌 객체 금지 (#3762) |
+| `capabilities_schema_contract.rs` | `export-capabilities-schema` — 명령 표면 자기서술의 스키마 건전성 (#3776). 바인딩 타입 생성기가 이 모양에 기대므로 여기가 계약이다 |
 
 ## 유지 규약
 

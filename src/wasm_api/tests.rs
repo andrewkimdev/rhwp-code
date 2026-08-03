@@ -25778,6 +25778,423 @@ fn issue2214_scoped_cache_coherence_preserves_transient_pagination() {
     }
 }
 
+/// #3137 Stage 3: stable cell edit가 돌려준 local x delta는 직전 absolute rect에 적용했을 때
+/// cache miss page-tree rebuild로 얻은 exact rect와 같아야 한다.
+#[test]
+fn issue3137_focused_cell_geometry_matches_exact_rect() {
+    #[derive(Debug, PartialEq, Eq)]
+    struct FocusedRunSnapshot {
+        text: String,
+        char_start: Option<usize>,
+        char_shape_id: Option<u32>,
+        para_shape_id: Option<u16>,
+        is_para_end: bool,
+        border_fill_id: u16,
+        bbox_bits: [u64; 4],
+        baseline_bits: u64,
+        font_family: String,
+        font_size_bits: u64,
+        letter_spacing_bits: u64,
+        ratio_bits: u64,
+        line_x_offset_bits: u64,
+        available_width_bits: u64,
+    }
+
+    fn focused_line_snapshot(
+        tree: &crate::renderer::render_tree::PageRenderTree,
+    ) -> ([u64; 4], Vec<FocusedRunSnapshot>) {
+        use crate::renderer::render_tree::{RenderNode, RenderNodeType};
+
+        fn visit(node: &RenderNode) -> Option<([u64; 4], Vec<FocusedRunSnapshot>)> {
+            if let RenderNodeType::TextLine(line) = &node.node_type {
+                if line.section_index == Some(0)
+                    && line.para_index == Some(5)
+                    && line.line_index == Some(3)
+                    && node.children.iter().all(|child| {
+                        matches!(
+                            &child.node_type,
+                            RenderNodeType::TextRun(run)
+                                if run.cell_context.as_ref().is_some_and(|context| {
+                                    context.parent_para_index == 0
+                                        && context.path.len() == 1
+                                        && context.path[0].control_index == 2
+                                        && context.path[0].cell_index == 2
+                                        && context.path[0].cell_para_index == 5
+                                })
+                        )
+                    })
+                {
+                    let runs = node
+                        .children
+                        .iter()
+                        .map(|child| {
+                            let RenderNodeType::TextRun(run) = &child.node_type else {
+                                unreachable!("focused line children were validated as TextRun");
+                            };
+                            FocusedRunSnapshot {
+                                text: run.text.clone(),
+                                char_start: run.char_start,
+                                char_shape_id: run.char_shape_id,
+                                para_shape_id: run.para_shape_id,
+                                is_para_end: run.is_para_end,
+                                border_fill_id: run.border_fill_id,
+                                bbox_bits: [
+                                    child.bbox.x.to_bits(),
+                                    child.bbox.y.to_bits(),
+                                    child.bbox.width.to_bits(),
+                                    child.bbox.height.to_bits(),
+                                ],
+                                baseline_bits: run.baseline.to_bits(),
+                                font_family: run.style.font_family.clone(),
+                                font_size_bits: run.style.font_size.to_bits(),
+                                letter_spacing_bits: run.style.letter_spacing.to_bits(),
+                                ratio_bits: run.style.ratio.to_bits(),
+                                line_x_offset_bits: run.style.line_x_offset.to_bits(),
+                                available_width_bits: run.style.available_width.to_bits(),
+                            }
+                        })
+                        .collect();
+                    return Some((
+                        [
+                            node.bbox.x.to_bits(),
+                            node.bbox.y.to_bits(),
+                            node.bbox.width.to_bits(),
+                            node.bbox.height.to_bits(),
+                        ],
+                        runs,
+                    ));
+                }
+            }
+            node.children.iter().find_map(visit)
+        }
+
+        visit(&tree.root).expect("focused final TextLine")
+    }
+
+    fn assert_cached_line_matches_fresh(doc: &HwpDocument, label: &str, operation: &str) {
+        let cached = {
+            let cache = doc.core.page_tree_cache.borrow();
+            focused_line_snapshot(
+                cache
+                    .first()
+                    .and_then(Option::as_ref)
+                    .expect("focused page tree cache"),
+            )
+        };
+        let fresh = focused_line_snapshot(
+            &doc.build_page_render_tree(0)
+                .expect("fresh focused page render tree"),
+        );
+        assert_eq!(
+            cached, fresh,
+            "{label} {operation}: patched TextLine must equal a fresh page build"
+        );
+    }
+
+    fn rect_number(rect: &Value, key: &str) -> f64 {
+        rect[key]
+            .as_f64()
+            .unwrap_or_else(|| panic!("cursor rect field {key}: {rect}"))
+    }
+
+    fn assert_geometry(
+        label: &str,
+        operation: &str,
+        before_rect: &Value,
+        mutation: &Value,
+        after_rect: &Value,
+        expected_source: u64,
+        expected_target: u64,
+    ) {
+        assert_eq!(
+            mutation["cellFlowChanged"].as_bool(),
+            Some(false),
+            "{label} {operation}: stable flow"
+        );
+        assert_eq!(
+            mutation["focusedPageTreePatched"].as_bool(),
+            Some(true),
+            "{label} {operation}: focused page tree patch"
+        );
+        let page_patch = &mutation["focusedPagePatch"];
+        assert!(
+            page_patch.is_object(),
+            "{label} {operation}: focused page repaint patch missing: {mutation}"
+        );
+        assert_eq!(
+            page_patch["pageIndex"], before_rect["pageIndex"],
+            "{label} {operation}: focused page repaint page"
+        );
+        for key in ["x", "y", "width", "height"] {
+            let value = page_patch[key]
+                .as_f64()
+                .unwrap_or_else(|| panic!("{label} {operation}: page patch {key}"));
+            assert!(
+                value.is_finite(),
+                "{label} {operation}: non-finite page patch {key}={value}"
+            );
+            if key == "width" || key == "height" {
+                assert!(
+                    value > 0.0,
+                    "{label} {operation}: non-positive page patch {key}={value}"
+                );
+            }
+        }
+        let geometry = &mutation["focusedCursorGeometry"];
+        assert!(
+            geometry.is_object(),
+            "{label} {operation}: focused geometry missing: {mutation}"
+        );
+        assert_eq!(
+            geometry["sourceCharOffset"].as_u64(),
+            Some(expected_source),
+            "{label} {operation}: source offset"
+        );
+        assert_eq!(
+            geometry["targetCharOffset"].as_u64(),
+            Some(expected_target),
+            "{label} {operation}: target offset"
+        );
+        assert!(
+            geometry["revision"].as_u64().unwrap_or(0)
+                > geometry["baseRevision"].as_u64().unwrap_or(u64::MAX),
+            "{label} {operation}: revision chain"
+        );
+
+        for key in ["pageIndex", "y", "height", "cellOverflowed"] {
+            assert_eq!(
+                before_rect.get(key),
+                after_rect.get(key),
+                "{label} {operation}: stable cursor field {key}"
+            );
+        }
+        assert_eq!(
+            before_rect.get("cellBounds"),
+            after_rect.get("cellBounds"),
+            "{label} {operation}: stable cell bounds"
+        );
+        let predicted_x = rect_number(before_rect, "x") + rect_number(geometry, "deltaX");
+        let exact_x = rect_number(after_rect, "x");
+        assert!(
+            // 공개 rect는 0.1px로 직렬화되므로 직전 rounded 원점의 최대 반올림 오차를 허용한다.
+            (predicted_x - exact_x).abs() <= 0.051,
+            "{label} {operation}: predicted x={predicted_x}, exact x={exact_x}, geometry={geometry}"
+        );
+    }
+
+    for (label, relative) in [
+        ("hwp", "samples/issue1949_giant_cell_nested_tables_perf.hwp"),
+        (
+            "hwpx",
+            "samples/issue1949_giant_cell_nested_tables_perf.hwpx",
+        ),
+    ] {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(relative);
+        let bytes = std::fs::read(path).expect("read #3137 fixture");
+        let mut doc = HwpDocument::from_bytes(&bytes).expect("load #3137 fixture");
+
+        let rect_130: Value = serde_json::from_str(
+            &doc.get_cursor_rect_in_cell_native(0, 0, 2, 2, 5, 130)
+                .expect("initial exact rect"),
+        )
+        .expect("initial rect json");
+        doc.get_cursor_rect_by_path_with_hint(
+            0,
+            0,
+            r#"[{"controlIndex":2,"cellIndex":2,"cellParaIndex":5}]"#,
+            130,
+            Some(0),
+        )
+        .expect("warm initial page tree cache");
+        let insert_1: Value = serde_json::from_str(
+            &doc.insert_text_in_cell_native_deferred_pagination(0, 0, 2, 2, 5, 130, "1")
+                .expect("first stable insert"),
+        )
+        .expect("first insert json");
+        let rect_131: Value = serde_json::from_str(
+            &doc.get_cursor_rect_in_cell_native(0, 0, 2, 2, 5, 131)
+                .expect("first exact rect"),
+        )
+        .expect("first exact rect json");
+        assert_eq!(
+            insert_1["cellFlowChanged"].as_bool(),
+            Some(false),
+            "{label} first insert flow"
+        );
+        // 원본 LineSeg가 첫 local reflow에서 합성 metrics로 정규화되는 문서는 첫 입력을
+        // exact fallback한다. 그 exact rect가 다음 revision의 재사용 기준점이 된다.
+        if insert_1["focusedCursorGeometry"].is_object() {
+            assert_geometry(label, "insert-1", &rect_130, &insert_1, &rect_131, 130, 131);
+        }
+        doc.get_cursor_rect_by_path_with_hint(
+            0,
+            0,
+            r#"[{"controlIndex":2,"cellIndex":2,"cellParaIndex":5}]"#,
+            131,
+            Some(0),
+        )
+        .expect("warm post-normalization page tree cache");
+
+        let insert_2: Value = serde_json::from_str(
+            &doc.insert_text_in_cell_native_deferred_pagination(0, 0, 2, 2, 5, 131, "a")
+                .expect("second stable insert"),
+        )
+        .expect("second insert json");
+        let focused_alignment = doc
+            .core
+            .get_cell_paragraph_ref(0, 0, 2, 2, 5)
+            .and_then(|paragraph| {
+                doc.core
+                    .styles
+                    .para_styles
+                    .get(paragraph.para_shape_id as usize)
+            })
+            .map(|style| style.alignment);
+        assert_eq!(
+            insert_2["focusedPageTreePatched"].as_bool(),
+            Some(true),
+            "{label} insert-a must stay on the focused stable-alignment fast path: alignment={focused_alignment:?}, mutation={insert_2}"
+        );
+        assert_cached_line_matches_fresh(&doc, label, "insert-a");
+        let rect_132: Value = serde_json::from_str(
+            &doc.get_cursor_rect_in_cell_native(0, 0, 2, 2, 5, 132)
+                .expect("second exact rect"),
+        )
+        .expect("second exact rect json");
+        assert_geometry(label, "insert-a", &rect_131, &insert_2, &rect_132, 131, 132);
+
+        let replace: Value = serde_json::from_str(
+            &doc.replace_text_in_cell_native_deferred_pagination(0, 0, 2, 2, 5, 131, 1, "한")
+                .expect("stable IME replace"),
+        )
+        .expect("replace json");
+        assert_cached_line_matches_fresh(&doc, label, "replace-ime");
+        let rect_replaced: Value = serde_json::from_str(
+            &doc.get_cursor_rect_in_cell_native(0, 0, 2, 2, 5, 132)
+                .expect("replace exact rect"),
+        )
+        .expect("replace exact rect json");
+        assert_geometry(
+            label,
+            "replace-ime",
+            &rect_132,
+            &replace,
+            &rect_replaced,
+            132,
+            132,
+        );
+
+        let delete: Value = serde_json::from_str(
+            &doc.delete_text_in_cell_native_deferred_pagination(0, 0, 2, 2, 5, 131, 1)
+                .expect("stable backspace"),
+        )
+        .expect("delete json");
+        assert_cached_line_matches_fresh(&doc, label, "delete-backward");
+        let rect_deleted: Value = serde_json::from_str(
+            &doc.get_cursor_rect_in_cell_native(0, 0, 2, 2, 5, 131)
+                .expect("delete exact rect"),
+        )
+        .expect("delete exact rect json");
+        assert_geometry(
+            label,
+            "delete-backward",
+            &rect_replaced,
+            &delete,
+            &rect_deleted,
+            132,
+            131,
+        );
+
+        // 중간 오프셋 편집은 후속 TextRun char_start까지 바꾸므로 보수적으로 전체
+        // 캐시 무효화한다. 같은 text를 되돌린 뒤 page tree를 다시 warm한다.
+        let middle_insert: Value = serde_json::from_str(
+            &doc.insert_text_in_cell_native_deferred_pagination(0, 0, 2, 2, 5, 125, "x")
+                .expect("middle insert fallback"),
+        )
+        .expect("middle insert json");
+        assert_eq!(
+            middle_insert["focusedPageTreePatched"].as_bool(),
+            Some(false),
+            "{label}: middle edit must not patch the cached tail line"
+        );
+        assert!(
+            middle_insert["focusedPagePatch"].is_null(),
+            "{label}: middle edit must not expose a repaint patch"
+        );
+        assert!(
+            doc.core
+                .page_tree_cache
+                .borrow()
+                .iter()
+                .all(Option::is_none),
+            "{label}: middle edit must invalidate cached page trees"
+        );
+        let middle_delete: Value = serde_json::from_str(
+            &doc.delete_text_in_cell_native_deferred_pagination(0, 0, 2, 2, 5, 125, 1)
+                .expect("restore middle insert"),
+        )
+        .expect("middle delete json");
+        assert_eq!(
+            middle_delete["focusedPageTreePatched"].as_bool(),
+            Some(false),
+            "{label}: uncached restore must keep the full invalidation fallback"
+        );
+        doc.get_cursor_rect_by_path_with_hint(
+            0,
+            0,
+            r#"[{"controlIndex":2,"cellIndex":2,"cellParaIndex":5}]"#,
+            131,
+            Some(0),
+        )
+        .expect("rewarm after middle-edit fallback");
+
+        // 원본 뒤 첫 숫자가 이미 들어간 상태다. 55개를 더 넣으면 마지막 입력에서
+        // 4→5줄 flow 경계가 발생하고, 그 경계만 page-tree patch를 중단해야 한다.
+        for inserted in 0..55 {
+            let mutation: Value = serde_json::from_str(
+                &doc.insert_text_in_cell_native_deferred_pagination(
+                    0,
+                    0,
+                    2,
+                    2,
+                    5,
+                    131 + inserted,
+                    "1",
+                )
+                .expect("tail insert through flow boundary"),
+            )
+            .expect("tail boundary json");
+            let boundary = inserted == 54;
+            assert_eq!(
+                mutation["cellFlowChanged"].as_bool(),
+                Some(boundary),
+                "{label}: tail input {} flow signal",
+                inserted + 2
+            );
+            assert_eq!(
+                mutation["focusedPageTreePatched"].as_bool(),
+                Some(!boundary),
+                "{label}: tail input {} patch signal",
+                inserted + 2
+            );
+            assert_eq!(
+                mutation["focusedPagePatch"].is_object(),
+                !boundary,
+                "{label}: tail input {} repaint patch signal",
+                inserted + 2
+            );
+        }
+        assert!(
+            doc.core
+                .page_tree_cache
+                .borrow()
+                .iter()
+                .all(Option::is_none),
+            "{label}: flow boundary must invalidate the focused page tree"
+        );
+    }
+}
+
 /// #2424 Stage D: 공개 pagination을 유지한 채 한 호출당 한 fragment만 전진하고,
 /// 마지막 step에서만 full-pagination oracle과 같은 cut chain을 원자적으로 commit한다.
 #[test]
@@ -26181,5 +26598,138 @@ fn local_body_replace_paginates_immediately_at_flow_boundary() {
             .iter()
             .map(|section| section.pages.len())
             .sum::<usize>() as u32
+    );
+}
+
+// ─── Alt(local resize) 조절 셀이 Ctrl(칸 전체 delta) 조절을 따라오는지 ─────────
+//
+// Alt+방향키(localResize + render 힌트)로 조절한
+// 행은 `local_resize_cell_widths` 에 절대값 override 를 갖는다. 이후 Ctrl+방향키
+// (plain widthDelta)가 칸 전체를 조절하면 cell.width 는 움직이는데 override 는
+// 그대로 남아 — Alt 만진 행만 옛 경계에 얼어붙고 나머지 칸이 움직인다("따로 논다").
+// 계약: plain delta 가 override 를 가진 셀에 적용되면 override 도 같은 양만큼
+// 이동해야 한다 (높이 동일).
+
+#[test]
+fn local_resize_override_follows_plain_width_delta() {
+    let mut doc = HwpDocument::create_empty();
+    let table_result = doc.create_table_native(0, 0, 0, 3, 3).expect("표 생성");
+    let table_para_idx = issue_1481_json_usize(&table_result, "paraIdx");
+
+    // 대상 셀: row1 col1 (cellIdx 는 행 우선)
+    let (target_idx, base_width) = {
+        let table = issue_1481_table(&doc, table_para_idx);
+        let (idx, cell) = table
+            .cells
+            .iter()
+            .enumerate()
+            .find(|(_, c)| c.row == 1 && c.col == 1)
+            .expect("row1col1");
+        (idx, cell.width)
+    };
+
+    // 1) Alt 상당: localResize + renderWidth override 등록
+    let render_w = base_width + 900;
+    doc.resize_table_cells_native(
+        0,
+        table_para_idx,
+        0,
+        &format!(
+            r#"[{{"cellIdx":{target_idx},"widthDelta":900,"localResize":true,"renderWidth":{render_w}}}]"#
+        ),
+    )
+    .expect("local resize");
+    {
+        let table = issue_1481_table(&doc, table_para_idx);
+        let (_, w) = table
+            .local_resize_cell_widths
+            .iter()
+            .find(|(idx, _)| *idx == target_idx)
+            .expect("override 등록");
+        assert_eq!(*w, render_w);
+    }
+
+    // 2) Ctrl 상당: 같은 칸(col1) 전체에 plain widthDelta +600
+    let col_updates = {
+        let table = issue_1481_table(&doc, table_para_idx);
+        table
+            .cells
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| c.col == 1 && c.col_span == 1)
+            .map(|(idx, _)| format!(r#"{{"cellIdx":{idx},"widthDelta":600}}"#))
+            .collect::<Vec<_>>()
+            .join(",")
+    };
+    doc.resize_table_cells_native(0, table_para_idx, 0, &format!("[{col_updates}]"))
+        .expect("칸 전체 resize");
+
+    let table = issue_1481_table(&doc, table_para_idx);
+    let (_, w) = table
+        .local_resize_cell_widths
+        .iter()
+        .find(|(idx, _)| *idx == target_idx)
+        .expect("override 유지");
+    assert_eq!(
+        *w,
+        render_w + 600,
+        "plain widthDelta 가 override 를 가진 셀에 적용되면 override 도 같은 양만큼 \
+         이동해야 한다 — 아니면 Alt 조절 행만 옛 경계에 얼어붙는다"
+    );
+}
+
+#[test]
+fn local_resize_override_follows_plain_height_delta() {
+    // 폭 테스트(local_resize_override_follows_plain_width_delta)의 높이 대칭.
+    let mut doc = HwpDocument::create_empty();
+    let table_result = doc.create_table_native(0, 0, 0, 3, 3).expect("표 생성");
+    let table_para_idx = issue_1481_json_usize(&table_result, "paraIdx");
+
+    let (target_idx, base_height) = {
+        let table = issue_1481_table(&doc, table_para_idx);
+        let (idx, cell) = table
+            .cells
+            .iter()
+            .enumerate()
+            .find(|(_, c)| c.row == 1 && c.col == 1)
+            .expect("row1col1");
+        (idx, cell.height)
+    };
+
+    let render_h = base_height + 900;
+    doc.resize_table_cells_native(
+        0,
+        table_para_idx,
+        0,
+        &format!(
+            r#"[{{"cellIdx":{target_idx},"heightDelta":900,"localResize":true,"renderHeight":{render_h}}}]"#
+        ),
+    )
+    .expect("local resize");
+
+    let row_updates = {
+        let table = issue_1481_table(&doc, table_para_idx);
+        table
+            .cells
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| c.row == 1 && c.row_span == 1)
+            .map(|(idx, _)| format!(r#"{{"cellIdx":{idx},"heightDelta":600}}"#))
+            .collect::<Vec<_>>()
+            .join(",")
+    };
+    doc.resize_table_cells_native(0, table_para_idx, 0, &format!("[{row_updates}]"))
+        .expect("줄 전체 resize");
+
+    let table = issue_1481_table(&doc, table_para_idx);
+    let (_, h) = table
+        .local_resize_cell_heights
+        .iter()
+        .find(|(idx, _)| *idx == target_idx)
+        .expect("override 유지");
+    assert_eq!(
+        *h,
+        render_h + 600,
+        "높이 override 도 plain delta 를 따라와야 한다 (폭과 대칭)"
     );
 }

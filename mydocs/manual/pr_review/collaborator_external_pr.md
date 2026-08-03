@@ -41,6 +41,10 @@ mydocs/orders/YYYYMMDD.md                  # 갱신이 필요한 경우
 오늘할일이 필요하면 merge 후 별도 PR로 늦게 만들지 않는다. review 문서와 함께 contributor PR head에
 포함하고, 뒤에 추가한 review-only commit은 9.3.2의 fast-pass 조건으로 판정한다.
 
+local CI 검증이 완료된 경우 review 문서와 오늘할일은 실행 결과를 과거형으로 기록한다. 아직 실행하지
+않은 GitHub Actions·작업지시자 승인·merge만 미래 조건으로 남기며, 완료 검증을 "실행할 예정"으로
+표현하지 않는다.
+
 ## 9.3 PR head push
 
 contributor 원 commit을 rewrite하지 않는다. review 문서·오늘할일·보정 code는 별도 commit으로 나누고,
@@ -90,24 +94,27 @@ merge 가능한 상태인지 확인한다.
 차단 결함을 collaborator가 고치기로 하면 별도 통합 branch로 옮기지 않고 maintainer_can_modify가 true인
 **현재 contributor PR head 위에만** 추가 commit을 만든다.
 
-#### 9.3.1.1 source head 고정과 보정 branch
+#### 9.3.1.1 source head 고정과 가시성 branch 연속 사용
 
-push 직전 PR head SHA, git ls-remote SHA, fetch한 local branch SHA가 모두 같아야 한다. fetch 뒤에는 반드시
-해당 local 보정 branch로 전환한다. 이 switch가 없으면 현재 작업 branch의 HEAD를 contributor source에
-잘못 push할 수 있다.
+push 직전 PR head SHA, `git ls-remote` SHA, 가시성 branch의 시작 source SHA가 모두 같아야 한다. 처음
+가시성 branch를 만든 뒤에는 검토·보정·review 문서 commit을 **같은 local branch**에서 연속해 만든다.
+보정만을 위해 `review/prN-maintainer` 같은 두 번째 local branch를 새로 만들거나 checkout하지 않는다. 이
+규칙은 사용자가 VS Code와 터미널에서 contributor 원 변경부터 메인터너 보정까지 하나의 그래프로 확인할 수
+있게 한다.
 
 ~~~bash
 gh pr view N --repo edwardkim/rhwp \
   --json headRefName,headRefOid,headRepository,maintainerCanModify
 git ls-remote --heads https://github.com/<contributor>/rhwp.git refs/heads/<head-branch>
 git fetch https://github.com/<contributor>/rhwp.git \
-  refs/heads/<head-branch>:refs/heads/review/prN-maintainer
-git switch review/prN-maintainer
+  refs/heads/<head-branch>:refs/remotes/contributor/prN-head
+git switch review/<contributor>-<yyyymmdd>
 git rev-parse HEAD
 ~~~
 
-세 SHA가 다르면 보정을 시작하지 않는다. contributor가 새 commit을 push했으면 새 head에서 local 보정
-branch를 다시 준비하고, contributor commit을 rebase, amend, reset, force-push하지 않는다.
+가시성 branch의 첫 source commit SHA는 fetch한 PR head와 같아야 하며, 이후 collaborator commit은 그 위에만
+추가한다. 세 SHA가 다르면 보정을 시작하지 않는다. contributor가 새 commit을 push했으면 새 head를 fetch해
+같은 가시성 branch의 기준을 다시 확인하고, contributor commit을 rebase, amend, reset, force-push하지 않는다.
 
 #### 9.3.1.2 commit 분리와 LFS dry-run
 

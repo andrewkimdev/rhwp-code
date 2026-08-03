@@ -20,7 +20,7 @@ use std::collections::BTreeSet;
 
 use crate::model::bin_data::{BinDataContent, BinDataStatus, BinDataType};
 use crate::model::control::Control;
-use crate::model::document::{Document, Section, SectionDef};
+use crate::model::document::{Document, HwpVersion, Section, SectionDef};
 use crate::model::image::Picture;
 use crate::model::paragraph::Paragraph;
 use crate::model::shape::{common_obj_offsets, ShapeObject, TextBox};
@@ -60,6 +60,8 @@ pub struct AdapterReport {
     pub border_fills_no_fill_normalized: u32,
     /// HWPX 출처 FileHeader를 HWP5 compressed 저장 관례로 보정한 횟수
     pub file_header_compression_normalized: u32,
+    /// [#3706] HWP3 출처 FileHeader 버전(major=3)을 HWP5 버전으로 실체화한 횟수
+    pub file_header_version_materialized: u32,
     /// HWPX 출처 DocProperties.section_count 보정 횟수
     pub doc_properties_section_count_normalized: u32,
     /// HWPX embedded BinData metadata 보정 횟수
@@ -133,6 +135,7 @@ impl AdapterReport {
                 + self.cells_list_header_contract_materialized
                 + self.border_fills_no_fill_normalized
                 + self.file_header_compression_normalized
+                + self.file_header_version_materialized
                 + self.doc_properties_section_count_normalized
                 + self.bin_data_metadata_normalized
                 + self.bin_data_order_materialized
@@ -808,6 +811,33 @@ fn normalize_file_header_for_hwp(doc: &mut Document, report: &mut AdapterReport)
 
     if doc.header.flags & 0x01 == 0 {
         doc.header.flags |= 0x01;
+        changed = true;
+    }
+
+    // [#3706, #3676 후속] HWP3 파서는 HWP5 컨테이너용 버전(5.0.3.0)을 `raw_data` 바이트
+    // (32..36 = revision/build/minor/major)에만 기록하고, 필드 `version` 은
+    // major=3 (메모리 전용 표시)으로 남긴다 — `serialize_file_header` 가
+    // raw_data 를 우선 쓰는 것을 전제한 설계다 (`parser/hwp3/mod.rs`).
+    // 그런데 본 함수가 아래에서 raw_data 를 버리므로 직렬화가 필드 경로로
+    // 떨어져 HWP5 컨테이너에 버전 3 이 기록됐다(규격 위반 — 한컴 저장본은
+    // 예외 없이 5.x). 버리기 전에 raw_data 의 5.x 버전을 필드로 회수하고,
+    // 회수할 수 없으면 파서 기본값 5.0.3.0 으로 실체화한다.
+    // 이미 5.x 인 경로(HWPX 파서는 5.1.0.0 을 필드에 직접 기록)는 무변경.
+    if doc.header.version.major < 5 {
+        let salvaged = doc
+            .header
+            .raw_data
+            .as_deref()
+            .filter(|raw| raw.len() >= 36 && raw[35] >= 5)
+            .map(|raw| (raw[35], raw[34], raw[33], raw[32]));
+        let (major, minor, build, revision) = salvaged.unwrap_or((5, 0, 3, 0));
+        doc.header.version = HwpVersion {
+            major,
+            minor,
+            build,
+            revision,
+        };
+        report.file_header_version_materialized += 1;
         changed = true;
     }
 
@@ -1975,6 +2005,22 @@ fn adapt_cell_list_attr(cell: &mut Cell, report: &mut AdapterReport) {
 /// 마커가 사라지며 그 문서는 진짜 native HWP5 가 되므로 시멘틱이 자기일관적이다.
 pub const HWPX_ORIGIN_STREAM_PATH: &str = "/RhwpHwpxOrigin";
 
+/// [#3707] HWP3 출처 마커. `RhwpHwpxOrigin` 과 같은 방식이다.
+///
+/// HWP3 파싱은 `apply_hwp3_origin_fixup` 으로 `margin_bottom` 에서 1600 HU(21.3px)를
+/// 빼 한글97 의 마지막 줄 tolerance 를 모방한다. 그 보정은 IR 에만 있고 저장 파일의
+/// 여백은 원본 그대로다(그래야 한컴이 보는 기하가 원본과 같다). 그런데 재파싱 때
+/// 보정을 다시 걸지 판단하는 조건이 **문단 대비 모양 비율**이라, 저장하며 문단마다
+/// 모양이 생성돼 비율이 임계를 넘으면 보정이 사라진다(실측: ps 0.707 · cs 1.115 vs
+/// 임계 0.05 / 0.15).
+///
+/// 그 21.3px 만큼 미주 단 가용이 줄어 단 전환이 일찍 걸리고, 2단 미주의 왼쪽 단이
+/// 조기에 닫혀 미주가 다음 쪽으로 밀린다(SO-SUEOP 44쪽). 한컴은 원본·왕복본 모두
+/// 두 단을 고르게 채우므로 보정이 유지되는 쪽이 정답지와 맞는다.
+///
+/// 저장 여백을 줄이는 대신 **출처만 기록**해 재파싱이 보정을 결정론적으로 되건다.
+pub const HWP3_ORIGIN_STREAM_PATH: &str = "/RhwpHwp3Origin";
+
 /// `source_format` 검사 후 어댑터를 호출하는 보조 함수.
 ///
 /// 호출자: `DocumentCore::export_hwp_with_adapter()` (Stage 5 에서 추가).
@@ -1992,6 +2038,18 @@ pub fn convert_if_hwpx_source(doc: &mut Document, source_format: FileFormat) -> 
     {
         doc.extra_streams
             .push((HWPX_ORIGIN_STREAM_PATH.to_string(), b"1".to_vec()));
+    }
+    // [#3707] HWP3 출처 마커 — 재파싱이 쪽나눔 허용치를 되돌릴 수 있게 한다.
+    // HWP3 파서가 세우는 `pagination_bottom_tolerance`(1600 HU)는 렌더러 내부 값이라
+    // 저장 파일에 남지 않는다. 마커로 출처만 기록해 재파싱이 결정론적으로 복원한다.
+    if matches!(source_format, FileFormat::Hwp3)
+        && !doc
+            .extra_streams
+            .iter()
+            .any(|(p, _)| p == HWP3_ORIGIN_STREAM_PATH)
+    {
+        doc.extra_streams
+            .push((HWP3_ORIGIN_STREAM_PATH.to_string(), b"1".to_vec()));
     }
     convert_to_hwp_ir(doc)
 }

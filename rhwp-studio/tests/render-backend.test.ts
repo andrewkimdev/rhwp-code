@@ -360,6 +360,21 @@ test('CanvasView forwards text-edit invalidation as static overlay reuse context
   assert.match(source, /renderPage\(pageIdx,\s*canvas,\s*renderScale,\s*zoom,\s*dpr,\s*renderContext\)/);
 });
 
+test('#3137 stable text edit forwards a validated focused patch to partial Canvas replay', () => {
+  const canvasView = readFileSync(new URL('../src/view/canvas-view.ts', import.meta.url), 'utf8');
+  const pageRenderer = readFileSync(new URL('../src/view/page-renderer.ts', import.meta.url), 'utf8');
+  const wasmBridge = readFileSync(new URL('../src/core/wasm-bridge.ts', import.meta.url), 'utf8');
+
+  assert.match(canvasView, /'focusedPagePatch' in payload/);
+  assert.match(canvasView, /candidate\.pageIndex !== pageIndex/);
+  assert.match(canvasView, /\.\.\.\(validFocusedPagePatch \? \{ focusedPagePatch: validFocusedPagePatch \} : \{\}\)/);
+  assert.match(pageRenderer, /context\.focusedPagePatch\?\.pageIndex === pageIdx/);
+  assert.match(pageRenderer, /this\.renderFocusedPagePatch\(pageIdx,\s*canvas,\s*renderScale,\s*context\)/);
+  assert.match(pageRenderer, /layers\.imageCount > 0 \|\| layers\.rawSvgCount > 0/);
+  assert.match(pageRenderer, /this\.wasm\.renderPagePatchToCanvasFiltered\(/);
+  assert.match(wasmBridge, /renderPagePatchToCanvasFilteredWithProfile/);
+});
+
 test('CanvasView coalesces text-edit invalidations before rerendering a page', () => {
   const source = readFileSync(new URL('../src/view/canvas-view.ts', import.meta.url), 'utf8');
   assert.match(source, /pendingTextEditRefreshes = new Map<number,\s*PageRenderContext>\(\)/);

@@ -336,6 +336,12 @@ hwp5rb	text-align.hwp	sections[].paragraphs[].controls[].cells[].list_header_wid
 hwp5rb	대각선샘플.hwp	sections[].paragraphs[].controls[].cells[].list_header_width_ref	10
 hwp5rb	복학원서.hwp	sections[].paragraphs[].controls[].cells[].list_header_width_ref	30
 hwp5rb	셀보호2.hwp	sections[].paragraphs[].controls[].cells[].list_header_width_ref	15
+hwp5rb	정책연구용역사업 중간진도보고서(살아있는 간장 기증자의 의학적 선별기준 연구).hwp	sections[].paragraphs[].control_mask	1
+hwp5rb	정책연구용역사업 중간진도보고서(살아있는 간장 기증자의 의학적 선별기준 연구).hwp	sections[].paragraphs[].controls[].caption.paragraphs[].control_mask	2
+hwp5rb	정책연구용역사업 중간진도보고서(살아있는 간장 기증자의 의학적 선별기준 연구).hwp	sections[].paragraphs[].controls[].cells[].list_header_width_ref	217
+hwp5rb	정책연구용역사업 중간진도보고서(살아있는 간장 기증자의 의학적 선별기준 연구).hwp	sections[].paragraphs[].controls[].cells[].paragraphs[].control_mask	2
+hwp5rb	정책연구용역사업 중간진도보고서(살아있는 간장 기증자의 의학적 선별기준 연구).hwp	sections[].paragraphs[].controls[].cells[].paragraphs[].controls[].paragraphs[].control_mask	2
+hwp5rb	정책연구용역사업 중간진도보고서(살아있는 간장 기증자의 의학적 선별기준 연구).hwp	sections[].paragraphs[].controls[].paragraphs[].control_mask	6
 hwp5rb	추진일정.hwp	sections[].paragraphs[].char_count	1
 hwp5rb	추진일정.hwp	sections[].paragraphs[].char_offsets[]	7
 hwp5rb	추진일정.hwp	sections[].paragraphs[].control_mask	1
@@ -360,12 +366,10 @@ hwpx	2024년 연간 해외직접투자 보도자료 _ ff.hwpx	sections[].paragra
 hwpx	2024년 연간 해외직접투자 보도자료 _ ff.hwpx	sections[].paragraphs[].controls[].cells[].paragraphs[].controls[].shape_attr.offset_y	1
 hwpx	2024년 연간 해외직접투자 보도자료 _ ff.hwpx	sections[].paragraphs[].controls[].cells[].paragraphs[].raw_header_extra[]	1880
 hwpx	2024년 연간 해외직접투자 보도자료 _ ff.hwpx	sections[].paragraphs[].raw_header_extra[]	118
-hwpx	2025년 1분기 해외직접투자 보도자료f.hwpx	sections[].paragraphs[].controls[].cells[].paragraphs[].raw_header_extra[]	1857
+hwpx	2025년 1분기 해외직접투자 보도자료f.hwpx	sections[].paragraphs[].controls[].cells[].paragraphs[].raw_header_extra[]	1859
 hwpx	2025년 1분기 해외직접투자 보도자료f.hwpx	sections[].paragraphs[].controls[].text_box.paragraphs[].controls[].shape_attr.offset_x	2
 hwpx	2025년 1분기 해외직접투자 보도자료f.hwpx	sections[].paragraphs[].controls[].text_box.paragraphs[].controls[].shape_attr.offset_y	2
 hwpx	2025년 1분기 해외직접투자 보도자료f.hwpx	sections[].paragraphs[].controls[].text_box.paragraphs[].raw_header_extra[]	2
-hwpx	2025년 1분기 해외직접투자 보도자료f.hwpx	sections[].paragraphs[].controls[][].drawing.shape_attr.offset_x	1
-hwpx	2025년 1분기 해외직접투자 보도자료f.hwpx	sections[].paragraphs[].controls[][].drawing.shape_attr.offset_y	1
 hwpx	2025년 1분기 해외직접투자 보도자료f.hwpx	sections[].paragraphs[].raw_header_extra[]	135
 hwpx	2025년 2분기 해외직접투자 (최종).hwpx	sections[].paragraphs[].controls[].cells[].paragraphs[].raw_header_extra[]	1868
 hwpx	2025년 2분기 해외직접투자 (최종).hwpx	sections[].paragraphs[].raw_header_extra[]	132
@@ -387,8 +391,6 @@ hwpx	basic-table-01.hwpx	sections[].paragraphs[].raw_header_extra[]	5
 hwpx	blank_hwpx.hwpx	sections[].paragraphs[].raw_header_extra[]	4
 hwpx	business_overview.hwpx	sections[].paragraphs[].controls[].cells[].paragraphs[].raw_header_extra[]	32
 hwpx	business_overview.hwpx	sections[].paragraphs[].raw_header_extra[]	120
-hwpx	el-school-001.hwpx	sections[].paragraphs[].controls[].cells[].paragraphs[].controls[][].drawing.shape_attr.offset_x	4
-hwpx	el-school-001.hwpx	sections[].paragraphs[].controls[].cells[].paragraphs[].controls[][].drawing.shape_attr.offset_y	4
 hwpx	el-school-001.hwpx	sections[].paragraphs[].controls[].cells[].paragraphs[].raw_header_extra[]	47
 hwpx	el-school-001.hwpx	sections[].paragraphs[].raw_header_extra[]	13
 hwpx	eq-002.hwpx	sections[].paragraphs[].raw_header_extra[]	16
@@ -400,7 +402,6 @@ hwpx	exam-kor-1p.hwpx	sections[].paragraphs[].controls[].paragraphs[].raw_header
 hwpx	exam-kor-1p.hwpx	sections[].paragraphs[].controls[].shape_attr.offset_x	2
 hwpx	exam-kor-1p.hwpx	sections[].paragraphs[].controls[].shape_attr.offset_y	7
 hwpx	exam-kor-1p.hwpx	sections[].paragraphs[].controls[].text_box.paragraphs[].raw_header_extra[]	4
-hwpx	exam-kor-1p.hwpx	sections[].paragraphs[].controls[][].drawing.shape_attr.offset_y	2
 hwpx	exam-kor-1p.hwpx	sections[].paragraphs[].raw_header_extra[]	64
 hwpx	exam-kor-2p.hwpx	sections[].paragraphs[].controls[].cells[].paragraphs[].controls[].text_box.paragraphs[].raw_header_extra[]	2
 hwpx	exam-kor-2p.hwpx	sections[].paragraphs[].controls[].cells[].paragraphs[].raw_header_extra[]	4
@@ -410,7 +411,6 @@ hwpx	exam-kor-2p.hwpx	sections[].paragraphs[].controls[].paragraphs[].raw_header
 hwpx	exam-kor-2p.hwpx	sections[].paragraphs[].controls[].shape_attr.offset_x	2
 hwpx	exam-kor-2p.hwpx	sections[].paragraphs[].controls[].shape_attr.offset_y	7
 hwpx	exam-kor-2p.hwpx	sections[].paragraphs[].controls[].text_box.paragraphs[].raw_header_extra[]	6
-hwpx	exam-kor-2p.hwpx	sections[].paragraphs[].controls[][].drawing.shape_attr.offset_y	2
 hwpx	exam-kor-2p.hwpx	sections[].paragraphs[].raw_header_extra[]	101
 hwpx	exam-kor-3p.hwpx	sections[].paragraphs[].controls[].cells[].paragraphs[].controls[].text_box.paragraphs[].raw_header_extra[]	2
 hwpx	exam-kor-3p.hwpx	sections[].paragraphs[].controls[].cells[].paragraphs[].raw_header_extra[]	16
@@ -420,7 +420,6 @@ hwpx	exam-kor-3p.hwpx	sections[].paragraphs[].controls[].paragraphs[].raw_header
 hwpx	exam-kor-3p.hwpx	sections[].paragraphs[].controls[].shape_attr.offset_x	2
 hwpx	exam-kor-3p.hwpx	sections[].paragraphs[].controls[].shape_attr.offset_y	7
 hwpx	exam-kor-3p.hwpx	sections[].paragraphs[].controls[].text_box.paragraphs[].raw_header_extra[]	8
-hwpx	exam-kor-3p.hwpx	sections[].paragraphs[].controls[][].drawing.shape_attr.offset_y	2
 hwpx	exam-kor-3p.hwpx	sections[].paragraphs[].raw_header_extra[]	204
 hwpx	exam-kor-4p.hwpx	sections[].paragraphs[].controls[].cells[].paragraphs[].controls[].text_box.paragraphs[].raw_header_extra[]	2
 hwpx	exam-kor-4p.hwpx	sections[].paragraphs[].controls[].cells[].paragraphs[].raw_header_extra[]	16
@@ -430,7 +429,6 @@ hwpx	exam-kor-4p.hwpx	sections[].paragraphs[].controls[].paragraphs[].raw_header
 hwpx	exam-kor-4p.hwpx	sections[].paragraphs[].controls[].shape_attr.offset_x	2
 hwpx	exam-kor-4p.hwpx	sections[].paragraphs[].controls[].shape_attr.offset_y	7
 hwpx	exam-kor-4p.hwpx	sections[].paragraphs[].controls[].text_box.paragraphs[].raw_header_extra[]	12
-hwpx	exam-kor-4p.hwpx	sections[].paragraphs[].controls[][].drawing.shape_attr.offset_y	2
 hwpx	exam-kor-4p.hwpx	sections[].paragraphs[].raw_header_extra[]	287
 hwpx	exam_kor.hwpx	sections[].paragraphs[].controls[].cells[].paragraphs[].controls[].shape_attr.offset_x	2
 hwpx	exam_kor.hwpx	sections[].paragraphs[].controls[].cells[].paragraphs[].controls[].shape_attr.offset_y	2
@@ -442,16 +440,12 @@ hwpx	exam_kor.hwpx	sections[].paragraphs[].controls[].paragraphs[].raw_header_ex
 hwpx	exam_kor.hwpx	sections[].paragraphs[].controls[].shape_attr.offset_x	4
 hwpx	exam_kor.hwpx	sections[].paragraphs[].controls[].shape_attr.offset_y	11
 hwpx	exam_kor.hwpx	sections[].paragraphs[].controls[].text_box.paragraphs[].raw_header_extra[]	41
-hwpx	exam_kor.hwpx	sections[].paragraphs[].controls[][].drawing.shape_attr.offset_y	5
-hwpx	exam_kor.hwpx	sections[].paragraphs[].raw_header_extra[]	1587
+hwpx	exam_kor.hwpx	sections[].paragraphs[].raw_header_extra[]	1592
 hwpx	exam_social-p1.hwpx	sections[].paragraphs[].controls[].cells[].paragraphs[].controls[].cells[].paragraphs[].raw_header_extra[]	76
 hwpx	exam_social-p1.hwpx	sections[].paragraphs[].controls[].cells[].paragraphs[].controls[].text_box.paragraphs[].raw_header_extra[]	4
-hwpx	exam_social-p1.hwpx	sections[].paragraphs[].controls[].cells[].paragraphs[].controls[][].drawing.shape_attr.offset_x	1
-hwpx	exam_social-p1.hwpx	sections[].paragraphs[].controls[].cells[].paragraphs[].controls[][].drawing.shape_attr.offset_y	1
 hwpx	exam_social-p1.hwpx	sections[].paragraphs[].controls[].cells[].paragraphs[].raw_header_extra[]	166
 hwpx	exam_social-p1.hwpx	sections[].paragraphs[].controls[].list_attr	1
 hwpx	exam_social-p1.hwpx	sections[].paragraphs[].controls[].paragraphs[].controls[].cells[].paragraphs[].controls[].text_box.paragraphs[].raw_header_extra[]	8
-hwpx	exam_social-p1.hwpx	sections[].paragraphs[].controls[].paragraphs[].controls[].cells[].paragraphs[].controls[][].drawing.shape_attr.offset_x	2
 hwpx	exam_social-p1.hwpx	sections[].paragraphs[].controls[].paragraphs[].controls[].cells[].paragraphs[].raw_header_extra[]	4
 hwpx	exam_social-p1.hwpx	sections[].paragraphs[].controls[].paragraphs[].raw_header_extra[]	5
 hwpx	exam_social-p1.hwpx	sections[].paragraphs[].raw_header_extra[]	50
@@ -460,12 +454,9 @@ hwpx	exam_social.hwpx	sections[].paragraphs[].controls[].cells[].paragraphs[].co
 hwpx	exam_social.hwpx	sections[].paragraphs[].controls[].cells[].paragraphs[].controls[].cells[].paragraphs[].controls[].cells[].paragraphs[].raw_header_extra[]	3
 hwpx	exam_social.hwpx	sections[].paragraphs[].controls[].cells[].paragraphs[].controls[].cells[].paragraphs[].raw_header_extra[]	329
 hwpx	exam_social.hwpx	sections[].paragraphs[].controls[].cells[].paragraphs[].controls[].text_box.paragraphs[].raw_header_extra[]	4
-hwpx	exam_social.hwpx	sections[].paragraphs[].controls[].cells[].paragraphs[].controls[][].drawing.shape_attr.offset_x	1
-hwpx	exam_social.hwpx	sections[].paragraphs[].controls[].cells[].paragraphs[].controls[][].drawing.shape_attr.offset_y	1
 hwpx	exam_social.hwpx	sections[].paragraphs[].controls[].cells[].paragraphs[].raw_header_extra[]	770
 hwpx	exam_social.hwpx	sections[].paragraphs[].controls[].list_attr	1
 hwpx	exam_social.hwpx	sections[].paragraphs[].controls[].paragraphs[].controls[].cells[].paragraphs[].controls[].text_box.paragraphs[].raw_header_extra[]	8
-hwpx	exam_social.hwpx	sections[].paragraphs[].controls[].paragraphs[].controls[].cells[].paragraphs[].controls[][].drawing.shape_attr.offset_x	2
 hwpx	exam_social.hwpx	sections[].paragraphs[].controls[].paragraphs[].controls[].cells[].paragraphs[].raw_header_extra[]	4
 hwpx	exam_social.hwpx	sections[].paragraphs[].controls[].paragraphs[].raw_header_extra[]	3
 hwpx	exam_social.hwpx	sections[].paragraphs[].controls[].shape_attr.offset_x	1
@@ -503,20 +494,16 @@ hwpx	hwpx-h-01.hwpx	sections[].paragraphs[].controls[].cells[].paragraphs[].raw_
 hwpx	hwpx-h-01.hwpx	sections[].paragraphs[].raw_header_extra[]	134
 hwpx	hwpx-h-02.hwpx	sections[].paragraphs[].controls[].cells[].paragraphs[].raw_header_extra[]	1868
 hwpx	hwpx-h-02.hwpx	sections[].paragraphs[].raw_header_extra[]	132
-hwpx	hwpx-h-03.hwpx	sections[].paragraphs[].controls[].cells[].paragraphs[].raw_header_extra[]	1857
+hwpx	hwpx-h-03.hwpx	sections[].paragraphs[].controls[].cells[].paragraphs[].raw_header_extra[]	1859
 hwpx	hwpx-h-03.hwpx	sections[].paragraphs[].controls[].text_box.paragraphs[].controls[].shape_attr.offset_x	2
 hwpx	hwpx-h-03.hwpx	sections[].paragraphs[].controls[].text_box.paragraphs[].controls[].shape_attr.offset_y	2
 hwpx	hwpx-h-03.hwpx	sections[].paragraphs[].controls[].text_box.paragraphs[].raw_header_extra[]	2
-hwpx	hwpx-h-03.hwpx	sections[].paragraphs[].controls[][].drawing.shape_attr.offset_x	1
-hwpx	hwpx-h-03.hwpx	sections[].paragraphs[].controls[][].drawing.shape_attr.offset_y	1
 hwpx	hwpx-h-03.hwpx	sections[].paragraphs[].raw_header_extra[]	135
 hwpx	hy-001.hwpx	sections[].paragraphs[].controls[].cells[].paragraphs[].raw_header_extra[]	41
 hwpx	hy-001.hwpx	sections[].paragraphs[].controls[].text_box.paragraphs[].raw_header_extra[]	2
-hwpx	hy-001.hwpx	sections[].paragraphs[].controls[][].drawing.shape_attr.offset_y	1
 hwpx	hy-001.hwpx	sections[].paragraphs[].raw_header_extra[]	59
 hwpx	hy-002.hwpx	sections[].paragraphs[].controls[].cells[].paragraphs[].raw_header_extra[]	114
 hwpx	hy-002.hwpx	sections[].paragraphs[].controls[].text_box.paragraphs[].raw_header_extra[]	2
-hwpx	hy-002.hwpx	sections[].paragraphs[].controls[][].drawing.shape_attr.offset_y	1
 hwpx	hy-002.hwpx	sections[].paragraphs[].raw_header_extra[]	52
 hwpx	issue1948_cross_para_fieldend.hwpx	sections[].paragraphs[].controls[].cells[].paragraphs[].controls[].cells[].paragraphs[].raw_header_extra[]	127
 hwpx	issue1948_cross_para_fieldend.hwpx	sections[].paragraphs[].controls[].cells[].paragraphs[].raw_header_extra[]	23
@@ -578,24 +565,20 @@ hwpx	pagenation-001.hwpx	sections[].paragraphs[].controls[].cells[].paragraphs[]
 hwpx	pagenation-001.hwpx	sections[].paragraphs[].controls[].text_box.paragraphs[].controls[].shape_attr.offset_x	3
 hwpx	pagenation-001.hwpx	sections[].paragraphs[].controls[].text_box.paragraphs[].controls[].shape_attr.offset_y	4
 hwpx	pagenation-001.hwpx	sections[].paragraphs[].controls[].text_box.paragraphs[].raw_header_extra[]	2
-hwpx	pagenation-001.hwpx	sections[].paragraphs[].controls[][].drawing.shape_attr.offset_y	1
 hwpx	pagenation-001.hwpx	sections[].paragraphs[].raw_header_extra[]	36
 hwpx	para-001.hwpx	sections[].paragraphs[].raw_header_extra[]	80
 hwpx	para-unit-01.hwpx	sections[].paragraphs[].raw_header_extra[]	27
 hwpx	pr-1674.hwpx	sections[].paragraphs[].controls[].cells[].paragraphs[].controls[].cells[].paragraphs[].raw_header_extra[]	156
 hwpx	pr-1674.hwpx	sections[].paragraphs[].controls[].cells[].paragraphs[].controls[].shape_attr.offset_y	1
 hwpx	pr-1674.hwpx	sections[].paragraphs[].controls[].cells[].paragraphs[].controls[].text_box.paragraphs[].raw_header_extra[]	5
-hwpx	pr-1674.hwpx	sections[].paragraphs[].controls[].cells[].paragraphs[].raw_header_extra[]	1399
+hwpx	pr-1674.hwpx	sections[].paragraphs[].controls[].cells[].paragraphs[].raw_header_extra[]	1403
 hwpx	pr-1674.hwpx	sections[].paragraphs[].controls[].text_box.paragraphs[].raw_header_extra[]	24
-hwpx	pr-1674.hwpx	sections[].paragraphs[].controls[][].drawing.shape_attr.offset_y	4
 hwpx	pr-1674.hwpx	sections[].paragraphs[].raw_header_extra[]	411
 hwpx	ref/ref_empty.hwpx	sections[].paragraphs[].raw_header_extra[]	4
 hwpx	ref/ref_mixed.hwpx	sections[].paragraphs[].raw_header_extra[]	7
 hwpx	ref/ref_table.hwpx	sections[].paragraphs[].controls[].cells[].paragraphs[].raw_header_extra[]	5
 hwpx	ref/ref_table.hwpx	sections[].paragraphs[].raw_header_extra[]	5
 hwpx	ref/ref_text.hwpx	sections[].paragraphs[].raw_header_extra[]	4
-hwpx	shape-001.hwpx	sections[].paragraphs[].controls[][].drawing.shape_attr.offset_x	2
-hwpx	shape-001.hwpx	sections[].paragraphs[].controls[][].drawing.shape_attr.offset_y	2
 hwpx	ta-pic-001-r.hwpx	sections[].paragraphs[].controls[].caption.paragraphs[].raw_header_extra[]	1
 hwpx	ta-pic-001-r.hwpx	sections[].paragraphs[].controls[].cells[].paragraphs[].controls[].shape_attr.offset_x	1
 hwpx	ta-pic-001-r.hwpx	sections[].paragraphs[].controls[].cells[].paragraphs[].controls[].shape_attr.offset_y	1

@@ -193,13 +193,28 @@ rhwp export-pdf input.hwp -o out.pdf \
 ### `export-text <파일> [옵션]`
 페이지별 텍스트 → TXT. `-o`, `-p`.
 - `--json` (#3237): 파일 저장 대신 stdout 에 순수 JSON 하나를 출력. 진행 메시지 없음.
-  `{"schemaVersion":"1.0","source","pageCount","pages":[{"page","text"}]}` —
+  `{"schemaVersion":"1.0","source","pageCount","truncated","omittedCount","pages":[{"page","text"}]}` —
   `schemaVersion` 이 계약이며 필드 추가는 허용, 변경·삭제는 `tests/cli_json_contract.rs` 가 잡는다.
   `page` 는 `-p` 와 같은 0 기준.
+- `--max-chars <N>` (#3787 S7): 본문 문자 상한. **기본은 무제한**이고, `--json` 과
+  함께 써야 한다(파일 저장 모드에는 절단 사실을 실을 봉투가 없어 exit 2 로 거부).
+  거대 문서가 에이전트 컨텍스트를 밀어내는 것을 막는 용도다.
+  - **조용히 자르지 않는다** — 최상위 `truncated:true` 와 `omittedCount`(생략 문자 수)를
+    싣고, 잘린 쪽마다 `pages[].truncated`·`pages[].omittedCount` 를 붙인다.
+  - **쪽 주소를 보존한다** — 예산이 떨어져도 `pages[]` 에서 항목을 빼지 않는다.
+    빼면 `pageCount` 가 줄어 문서가 실제보다 짧아 보인다.
+  - `0`·음수·비정수는 사용법 오류(exit 2)다. `0` 을 무제한으로 뭉개면 "아무것도 주지
+    마라"는 요청이 "전부 달라"로 뒤집힌다.
+  - 계약 근거는 [에이전트 경계 무결성 계약](../tech/agent_boundary_contract.md) S7.
+
+```bash
+# 처음 보는 대형 문서를 컨텍스트 예산 안에서 훑기
+rhwp export-text 편람.hwp --json --max-chars 4000 | jq '{truncated, omittedCount}'
+```
 - 옵션은 파일 앞뒤 어디에 와도 된다 (#3349, export-structure/export-tables 와 동일 규약).
   파일 positional 을 두 번 주면 exit 2.
 
-### `batch <export-text|info|export-structure|export-tables|fields|search> --json [옵션]` (#3238, #3261, #3346)
+### `batch <export-text|info|export-structure|export-tables|fields|search|convert> --json [옵션]` (#3238, #3261, #3346, #3626)
 stdin 의 파일 목록(한 줄당 경로 하나)을 **한 프로세스에서 파일 간 병렬**로 처리해
 NDJSON(한 줄당 레코드 하나)을 stdin 입력 순서대로 스트림 출력한다.
 - `batch export-text` 성공 레코드: `{"schemaVersion":"1.0","source","pageCount","text"}`
@@ -213,6 +228,19 @@ NDJSON(한 줄당 레코드 하나)을 stdin 입력 순서대로 스트림 출�
   **`--query <검색어>` 는 이 축 전용이며 필수**다(없으면 사용법 오류 2).
   대량 코퍼스에서 스트림이 부풀지 않도록 **파일당 매치 1,000건 상한**을 둔다
   (단건 `search --limit` 과 같은 취지). 대소문자는 구분한다.
+- `batch convert` 는 **CLI 전용 쓰기 축**이다. `--out-dir <폴더>`가 필수이고,
+  `--verify`·`--verify-pages`를 선택할 수 있다. 입력마다 `<out-dir>/<입력이름>.hwp`를
+  한 번만 쓴 뒤 단건 `convert --json`과 같은 봉투를 NDJSON으로 낸다. MCP `hwp_batch`에는
+  쓰기 산출물 계약을 아직 노출하지 않는다.
+- convert는 쓰기 전에 모든 산출 이름을 예약한다. 같은 이름뿐 아니라 대소문자만 다른
+  이름도 충돌로 처리해 exit 2로 끝내며, 산출 파일을 하나도 쓰지 않는다. 이 보수적
+  규약은 macOS/Windows 기본 파일시스템과 Linux 재실행에서 같은 결과를 보장한다.
+- stdin은 **파일 경로 목록 전용**이다. `batch`는 전역 인증 옵션
+  `--password`·`--password-stdin`·`--output-password`·`--output-password-stdin`을
+  지원하지 않으며, 함께 주면 입력을 소비하지 않고 exit 2로 거부한다. 암호화 문서의
+  batch 처리/암호화 산출물은 credential 전달·산출 형식 계약이 정의된 뒤 별도로 제공한다.
+- `--out-dir`의 값은 다음 플래그가 될 수 없다. 이름이 `-`로 시작하는 실제 폴더를
+  지정할 때는 `./-결과`처럼 명시한다.
 - 실패 레코드(공통): `{"schemaVersion":"1.0","source","error","exitClass":"runtime"}`
 - 건별 실패(읽기·파싱·추출·panic)는 레코드로 격리하고 스트림을 계속한다.
   하나라도 실패하면 최종 종료 코드 1 (#2707 계약).
@@ -230,6 +258,9 @@ find docs/ -name '*.hwp' | rhwp batch search --query "위임전결" --json   | j
 # 코퍼스 표 수확 / 서식 템플릿 일괄 조사
 find docs/ -name '*.hwp' | rhwp batch export-tables --json | jq -c '{source, tableCount}'
 find forms/ -name '*.hwp' | rhwp batch fields --json | jq -c 'select(.fieldCount>0) | {source, fieldCount}'
+
+# 편집 가능한 HWP5를 한 폴더에 만들고 저장본 검증까지 집계 (CLI 전용)
+find inbox/ -name '*.hwp' | rhwp batch convert --out-dir converted --verify --verify-pages --json > converted.ndjson
 ```
 
 검증된 에이전트·파이프라인 시나리오(선별→추출, RAG 청킹, 실패 처리)는
@@ -275,11 +306,15 @@ rhwp export-tables 별표.hwp --json | jq '.tables[].cells[] | select(.isHeader)
   기본 출력(무봉투 pretty JSON·`-o` 저장)은 무변경. `batch export-structure` 레코드와 같은 스키마.
 - `--mode outline`: IR 개요 수준(`ParaShape.para_level`/head_type) 기반.
 - `--mode clause`: 법률 조문 텍스트 패턴(편·장·절·관·조 / 항①②③ / 호1. / 목가.) 기반.
-- `--mode auto`(기본): 개요 head_type 있으면 outline, 없으면 clause.
+- `--mode auto`(기본): 명시적 `Outline` head_type을 최우선한다. `Number`와 조문형 텍스트가
+  충돌하면 목차 쪽번호 tail·조사형 상호참조가 아닌 `제N조` 제목만 clause 선택 증거로 인정한다.
+  편·장·절·관은 일반 보고서에도 흔해 Number를 단독으로 뒤집지 않으며, confidence를 통과한 조 제목이
+  없으면 Number 문서는 outline을 선택한다. Outline과 Number가 모두 없으면 기존처럼 clause로 폴백한다.
+  항·호·목 모양도 일반 번호 목록과 구분할 수 없어 auto 선택 증거로 쓰지 않는다.
 - JSON: `{mode, node_count, preamble, roots:[{level,kind,marker,heading,section,paragraph,body,children}]}`.
   비제목 문단은 직전 제목 노드의 `body` 에 귀속. `-o` 생략 시 stdout.
 
-### `export-doclang <파일.hwp|.hwpx> [-o <출력.xml>] [--assets-dir <디렉터리>]`
+### `export-doclang <파일.hwp|.hwpx> [-o <출력.xml>] [--assets-dir <디렉터리>] [--json]`
 HWP5 / HWPX 문서를 **DocLang v0.6** 의미 XML 로 내보낸다 (다운스트림 AI 파이프라인용).
 문서를 의미 IR(SirDocument)로 낮춘 뒤 `<doclang version="0.6">` 루트의 XML 로 직렬화한다.
 - 입력은 `.hwp`(HWP5) / `.hwpx` 만 받는다. HWP3·HML·DRM·빈 파일은 사용법 오류로 거부한다.
@@ -288,6 +323,10 @@ HWP5 / HWPX 문서를 **DocLang v0.6** 의미 XML 로 내보낸다 (다운스트
 - `--assets-dir <디렉터리>` — 그림 등 이진 자원을 이 디렉터리에 파일로 기록하고 XML 은
   해당 경로를 참조한다. 생략 시 자원은 base64 data URI 로 XML 에 인라인된다.
 - DocLang v0.6 으로 표현할 수 없는 정보는 손실 보고 건수로 요약 출력한다(변환 자체는 성공).
+- `--json` (#3696): 산출 봉투를 stdout 순수 JSON 으로 (변환 동작 무변경).
+  `{"schemaVersion":"1.0","source","output","format":"doclang","doclangVersion":"0.6","bytes","assetsDir","assetCount","lossCount"}`
+  — `assetsDir` 는 `--assets-dir` 를 준 경우에만 문자열, 아니면 `null`. `lossCount` 는
+  사람용 "손실 보고 N건"의 기계 필드. 실패 경로의 stdout 은 비운다(#3596 규약).
 
 ---
 
@@ -384,20 +423,32 @@ export-text 로 첫 장을 읽는" 3단 파이프라인을 **한 번 호출**로
 rhwp digest 편람.hwp --json --max-chars 500
 ```
 
-### `search <파일> <검색어> [--json] [--ignore-case] [--limit N]` (#3283)
+### `search <파일> [--json] [--ignore-case] [--limit N] [--] <검색어>` (#3283)
 문서를 검색해 매치마다 **구역·문단·페이지·문자 오프셋**을 함께 돌려준다.
 평문을 뽑아 외부에서 찾으면 주소가 소멸해 근거 제시가 불가능한데, rhwp 는 조판 엔진이
 있어 "몇 쪽"에 답할 수 있다. 파서/렌더 무변경 읽기 질의.
-- `--json` 봉투: `{"schemaVersion":"1.0","source","query","caseSensitive","matchCount","totalMatchCount","truncated","matches":[…]}`
+- `--json` 봉투: `{"schemaVersion":"1.0","source","query","caseSensitive","matchCount","totalMatchCount","truncated","omittedCount","matches":[…]}`
 - 매치: `{section,paragraph,page?,charOffset,length,text,context,cell?}`
   - `page` 는 0부터 시작하는 글로벌 페이지. 조판에 배치되지 않은 문단이면 생략된다.
   - `cell` 은 표 셀 안의 매치일 때 `{control,cell,paragraph}` 좌표
   - `context` 는 매치 앞뒤 발췌(각 40자)
 - 검색 범위는 본문 + 표 셀 + 글상자 (`search_query::search_all` 과 동일)
 - **매치 0건은 오류가 아니다** — `matchCount:0`, 종료 코드 0 (1은 런타임 실패 전용)
-- `--limit N` 은 대형 문서에서 컨텍스트를 아끼기 위한 상한. 절단돼도
-  `totalMatchCount`(문서 전체 매치 수)와 `truncated:true` 로 총량이 보인다 (#3353) —
-  `matchCount` 는 종전대로 반환된 매치 수(= `matches` 길이)다.
+- `--max-matches N`(= `--limit N`, #3353)은 대형 문서에서 컨텍스트를 아끼기 위한 상한.
+  **기본은 무제한**이다. 절단돼도 `totalMatchCount`(문서 전체 매치 수)·`truncated:true`·
+  `omittedCount`(생략 매치 수)로 총량이 보인다 — `matchCount` 는 종전대로 반환된 매치
+  수(= `matches` 길이)다. 두 이름은 같은 축이며 봉투가 완전히 같다(`--max-matches` 가
+  `export-text --max-chars` 와 어휘를 맞춘 이름, #3787 S7). `0` 은 사용법 오류(exit 2).
+- **검색어가 `-` 로 시작하면 `--` 뒤에 둔다.** 그러지 않으면 옵션으로 파싱돼
+  `알 수 없는 옵션` exit 2 가 난다. `--` 이후는 전부 위치 인자로 읽는다.
+
+  ```bash
+  rhwp search 문서.hwp --json -- "-회계"   # '-회계' 를 검색어로
+  ```
+
+  MCP `hwp_search` 는 이 구분자를 이미 배선에 넣어 두었으므로 `query` 를 그대로
+  주면 된다. `batch search --query` 와 세션 `hwp_doc_search` 는 위치 인자가
+  아니라서 원래부터 영향이 없다.
 - 성능: 페이지 매핑 비용은 0이다(로드 시 조판 완료). `(구역,문단)→페이지` 인덱스를
   한 번만 만들어 재사용한다. 실측 393쪽·10MB 문서에서 19건 검색 **215ms**(파싱 포함).
 
@@ -406,6 +457,47 @@ rhwp digest 편람.hwp --json --max-chars 500
 rhwp search 편람.hwp "위임전결" --json | jq -r '.matches[] | "\(.page+1)쪽: \(.context)"'
 # 찾은 페이지를 이미지로 렌더해 눈으로 확인
 rhwp export-png 편람.hwp -p "$(rhwp search 편람.hwp "위임전결" --json | jq '.matches[0].page')"
+```
+
+### `extract-data <파일> [--kind date|amount|number|all] [--limit N] [--json]` (#3719)
+행정문서의 **날짜·금액·수량**을 값마다 **구역·문단·페이지·문자 오프셋**과 함께 뽑는다.
+`search` 가 검색어에 대해 한 일을 데이터 값에 대해 한다 — 평문을 뽑아 밖에서 정규식을
+돌리면 값은 얻어도 주소가 소멸해 근거 제시가 불가능하다. 파서/렌더 무변경 읽기 질의.
+- `--json` 봉투: `{"schemaVersion":"1.0","source","kind","itemCount","totalItemCount","truncated","counts","items":[…]}`
+- 항목: `{kind,raw,normalized,currency?,unit?,section,paragraph,page?,charOffset,length,cell?,textbox?}`
+  - `raw` 는 문서에 적힌 그대로, `normalized` 는 기계용 값이다
+  - `counts` 는 **요청한 종류의 문서 전체 건수**(`--limit` 절단 전). 요청하지 않은
+    종류의 키는 넣지 않는다 — `"amount":0` 은 "금액이 없다"로 오독되기 때문이다
+- 인식 규칙 (실물 표기 기준)
+  - 날짜: `2026년 8월 2일` · `2026년 8월 2일(월)` · `2026. 8. 2.` · `2026-08-02` ·
+    `2026/8/2` · `'26.8.2`. 연·월만 있는 표기(`2026. 1.` · `2025년 12월`)도 인식한다
+  - 금액: `1,234,567원` · `금113,560원`(접두 `금`·`일금`) · `₩1,234,567` ·
+    `3,180백만원`·`21,345천원`(단위 배수 반영) · `금 1,234,567원정`. `currency:"KRW"`
+  - 수량: `12개` · `3.5%` · `1,000명` — 단위는 `unit` 으로 분리한다. **단위가 없는 맨
+    숫자는 항목이 아니다**(표 하나가 수백 건의 잡음이 된다). 한글 단위는 붙여 쓴 것만
+    인정하고(`표 3 개요` 의 `개` 를 삼키지 않는다), 기호·라틴 단위는 공백 하나를 허용한다.
+    `제3조`·`제137호` 같은 서수는 수량이 아니다
+- **정규화 규약 — 모르는 것은 모른다고 한다**
+  - `normalized` 는 날짜면 ISO-8601 문자열, 금액·수량이면 숫자다. 일(日)이 없는 표기는
+    **부분 날짜**(`2026-01`)로 둔다 — 없는 날을 1일로 채우면 조용히 틀린 값이 된다
+  - 정규화할 수 없으면 `normalized: null` 이고 `raw` 만 믿을 수 있다. 두 자리 연도
+    (`'26.8.2`)는 세기를 추정하지 않고, 한글 수사 금액(`일금 백이십삼만원`)은 v1 범위 밖이다
+  - 금액은 정수 연산으로만 배수를 반영한다(`1.5억원` → `150000000`). 정수로 떨어지지
+    않으면 추정하지 않고 `null` 이다
+- 추출 범위는 본문 + 표 셀 + 글상자. 표 셀·글상자 값에는 `cell`/`textbox` 좌표가 붙고,
+  분할 표는 그 행이 실제로 렌더되는 쪽을 쓴다(#3403). 페이지 인덱스는 `search` 와 같은
+  `build_paragraph_page_index` 를 재사용한다
+- **0건은 오류가 아니다** — `itemCount:0`, 종료 코드 0 (1은 런타임 실패 전용)
+- `--limit N` 은 컨텍스트 상한이다. 절단돼도 `totalItemCount`·`truncated:true` 로 총량이 보인다
+- 정규식을 쓰지 않는다 — 왼쪽에서 오른쪽으로 한 번 훑고 인식한 구간을 건너뛰므로
+  되추적이 없고(ReDoS 불가), 항목끼리 겹치지 않는다
+
+```bash
+# 문서의 금액을 쪽 주소와 함께 (근거를 댈 수 있는 집계)
+rhwp extract-data 편람.hwp --kind amount --json \
+  | jq -r '.items[] | "\(.page+1)쪽 \(.raw) → \(.normalized)"'
+# 정규화하지 못한 표기만 골라 사람이 확인
+rhwp extract-data 보고서.hwpx --json | jq '.items[] | select(.normalized == null)'
 ```
 
 ### `thumbnail <파일> [옵션]`
@@ -512,8 +604,87 @@ rhwp edit set-cell 양식.hwpx --table 0 --row 2 --col 1 --text "1,234" -o 작�
 rhwp export-tables 작성본.hwpx --json | jq '.tables[0].cells[] | select(.row==2 and .col==1).text'
 ```
 
+### `edit redact <파일> [--kind …] [--mask <문자>] [--dry-run] [-o <출력>|--in-place]` (#3719 §6-11)
+공개 전 개인정보 마스킹 — 주민등록번호·전화번호·이메일·카드번호를 찾아 **자릿수를 유지한 채**
+가린다. 탐지는 읽기 전용 코어(`document_core::queries::pii_scan`)가 하고, 실제 변경은 검증된
+치환 경로(`replace_all_native`)를 재사용하므로 새 편집 로직이 없다. 주소는 `grep` 재사용이라
+매치마다 구역·문단·**쪽**·문자 오프셋이 따라온다.
+
+- `--kind <목록>` — `ssn|phone|email|card|all` 을 쉼표로 나열 (기본 `all`)
+- `--mask <문자>` — 마스킹 문자 **한 글자**. 영숫자는 거부한다(본문과 구별 불가). 두 글자
+  이상이면 자릿수 보존이 깨지므로 조용히 자르지 않고 exit 2.
+- `--dry-run` — **권장 첫 단계**. 파일을 만들지 않고 `findings[]` 만 보고한다.
+- `-o, --output <파일>` / `--in-place` — 둘 중 하나가 **반드시** 필요하다(§원본 보호).
+- `--verify` — 저장 직후 IR 자기검증(차이 시 exit 3, #3702)
+- `--json` 봉투:
+  `{"schemaVersion":"1.0","source","kinds","mask","dryRun","inPlace","findingCount",`
+  `"findings":[{"kind","raw","masked","section","paragraph","page","charOffset"}],`
+  `"redactedCount","changedPages","output"?,"outputFormat"?,"verify"?}`
+  - `output`/`outputFormat`/`verify` 는 실제 저장했을 때만 실린다 — **탐지 0건이면 출력
+    파일을 만들지 않는다**.
+
+**탐지 규칙(보수적)** — 마스킹은 되돌릴 수 없고 오탐은 본문을 훼손하므로, 형태가 맞아도
+검증을 통과하지 못하면 **탐지하지 않는다**.
+
+| 종류 | 형태 | 추가 검증 |
+| --- | --- | --- |
+| `ssn` | `######-#######` | 생년월일 실재(윤년 포함) + 성별/세기 코드 1~8 + mod 11 검증 숫자 |
+| `card` | `4-4-4-4`(`-`/공백), Amex `4-6-5`, 연속 15·16자리 | Luhn |
+| `phone` | `01[016789]-3~4자리-4자리`, `02-3~4자리-4자리` | 하이픈 필수 |
+| `email` | `지역부@라벨(.라벨)+` | 라벨 2개 이상 + 최상위 도메인 영문 2자 이상 |
+
+- 앞뒤가 숫자면 더 긴 토큰의 일부로 보고 버린다(계좌번호 안의 16자리 부분열 오인 방지).
+- **02 외 지역번호, 13·14·19자리 카드, 여권번호·계좌번호는 v1 범위 밖**이다 — 체크섬이
+  없거나 문서번호와 구별할 근거가 없어 보수적 판정이 불가능하다. 근거와 확장 조건은
+  [처리 기록](../report/task_m100_redact/README.md)에 있다.
+
+**원본 보호** — `-o` 도 `--in-place` 도 없으면 **실행하지 않는다**(exit 2). 다른 `edit`
+명령과 달리 `_redacted.hwp` 같은 기본 이름도 만들지 않는다. `-o` 가 원본 자신을 가리켜도
+같은 이유로 거부한다. 쓰기는 원자적이라 `--in-place` 도중 실패해도 원본이 잘리지 않는다.
+
+> `findings[].raw` 는 **원문 개인정보 그 자체**다. 감사를 위해 넣었지만 로그·이슈에 그대로
+> 붙이면 유출 경로가 된다.
+
+```bash
+# 권장 흐름: 먼저 무엇이 지워질지 본다 → 확인 후 적용
+rhwp edit redact 계약서.hwp --dry-run --json | jq '.findings[] | {kind, page, masked}'
+rhwp edit redact 계약서.hwp -o 공개본.hwp --verify --json | jq '{redactedCount, changedPages}'
+rhwp edit redact 계약서.hwp --kind ssn,card -o 공개본.hwp --json   # 종류를 좁힐 수도 있다
+```
+
+### `edit sanitize <파일> [--keep-preview] [-o <출력>] [--json]` (#3719 §6-11)
+문서 메타데이터 제거 — 작성자·제목·주제·최종수정자·작성/수정 일시·미리보기.
+**본문 내용은 건드리지 않는다**(`export-text` 결과가 전후 동일).
+
+- `--keep-preview` — 미리보기 **이미지**를 남긴다(기본은 제거). 미리보기 텍스트는 언제나 대상.
+- `-o, --output <파일>` — 출력 파일 (기본 `<입력명>_sanitized.<입력과 같은 확장자>`)
+- `--json` 봉투:
+  `{"schemaVersion":"1.0","source","keepPreview","removedCount","removed":[{"field","before"}],"output","outputFormat"}`
+
+지우는 대상은 셋이다.
+
+1. **OLE 요약 정보**(`\x05HwpSummaryInformation`) — `title`·`subject`·`author`·`keywords`·
+   `comments`·`lastSavedBy`·`revisionNumber`·`dateString`(문자열)과 `createdAt`·
+   `lastSavedAt`·`lastPrintedAt`(FILETIME → ISO 8601 로 보고). 속성 오프셋 표가 절대 위치를
+   담고 있어 **바이트 길이를 바꾸지 않고** 비운다.
+2. **HWPX 저작자 메타**(`Contents/content.hpf` 의 `<opf:metadata>`) — 직렬화기가 원본에서
+   그대로 splice 하는 유일한 저작자 경로다. 중립 블록으로 교체한다.
+3. **미리보기**(PrvText·PrvImage) — ZIP 엔트리와 HWP5 계약 스트림 양쪽.
+
+`removed[]` 는 **거짓 보고를 하지 않는다**. HWP5 직렬화기는 PrvText 가 비면 본문 앞부분으로
+다시 채우므로, 미리보기 텍스트는 **지금 본문과 다를 때만**(= 예전 판의 잔재일 때만) 지우고
+보고한다. HWPX 원본의 `/HwpSummaryInformation` 은 파일에 없던 계약 fallback 상수라 HWPX 로
+저장할 때는 손대지 않고, HWP5 로 변환할 때만 처리한다. 그래서 **두 번째 실행은
+`removedCount: 0`** 이다 — 첫 실행이 실제로 지웠다는 증거다.
+
+```bash
+rhwp edit sanitize 보고서.hwp -o 배포본.hwp --json | jq '.removed[] | "\(.field): \(.before)"'
+rhwp edit sanitize 배포본.hwp -o /tmp/재확인.hwp --json | jq .removedCount   # → 0
+```
+
 ### `edit` 산출 형식 (#3383)
-`edit` 3종(`fill-fields`/`replace-text`/`set-cell`)은 **입력 형식을 보존**한다.
+`edit` 5종(`fill-fields`/`replace-text`/`set-cell`/`redact`/`sanitize`)은
+**입력 형식을 보존**한다.
 
 - HWPX 입력 → HWPX 산출(`export_hwpx_native`), 기본 확장자도 `.hwpx`
 - 그 밖의 입력(HWP5/HWP3) → HWP5 산출. 이때 직렬화는 **어댑터 경유**
@@ -544,6 +715,10 @@ rhwp export-tables 작성본.hwpx --json | jq '.tables[0].cells[] | select(.row=
 ### `extract-pages <입력> <출력.hwp> --from N --to M [--json]` (#3565)
 지정한 쪽 범위만 남겨 저장한다. **대형 문서의 결함을 이분법으로 좁히기 위한 진단 도구**다
 (387쪽 문서가 저장 후 한컴에서 열리지 않을 때 절반씩 잘라 재현 여부를 본다).
+- **`--from`/`--to` 는 1 기준이다** (첫 쪽이 1). rhwp 의 다른 쪽 축(`-p`,
+  `export-text` 의 `pages[].page`, `search` 의 `matches[].page`)은 0 기준이므로
+  그대로 옮겨 쓰면 **오류 없이 한 쪽 밀린 문서**가 나온다. `search` 가 `page: 1` 을
+  줬다면 여기서는 `--from 2 --to 2` 다.
 - 쪽 단위로 자르되 **문단 단위로** 지운다. 여러 쪽에 걸친 문단은 한 쪽이라도 범위 안이면 남긴다.
 - 결과 쪽수가 요청 범위와 정확히 같지 않을 수 있다(잘라 낸 뒤 레이아웃이 다시 흐른다).
   목적은 **재현 최소화**이지 정밀한 페이지 오려내기가 아니다.
@@ -569,6 +744,22 @@ HWP 문서를 HWPX(ZIP+XML)로 변환 저장. `convert`(배포용 해제)와 별
   재파싱 실패는 판정 불가이므로 stdout 을 비우고 기존 코드로 끝난다.
   `convert` 는 이 옵션을 받지 않는다(구현 없는 침묵 수용 방지, exit 2).
 - 더 넓은 시각 정합은 `tools/roundtrip_fidelity_harness.py` 또는 `render-diff`로 별도 대조한다.
+  단, 한컴 기준 PDF가 있는 대형 문서는 `tools/fidelity_compare/fidelity_compare.py`의 direct pair
+  `--source <HWP/HWPX> --reference-pdf <PDF> --label <ASCII>`를 사용한다. 먼저
+  `--text-only --export-all-svg --layout-ledger`로 PDF text↔SVG text 및 render-tree 기하 후보(본문/각주,
+  표/footer, frame, Square/Tight/Through 그림을 3행 이상 침범한 본문)를 전수 수집하고, 후보 페이지만
+  pixel compare/visual sweep으로 확정한다. 이때 `text-owner-shift-candidates.tsv`의 인접 쪽
+  reciprocal text difference와 `text-owner-sequence-candidates.tsv`의 NFC·공백 정규화 16자 이상
+  순서 보존 text 이동은 각주·본문·caption이 한 쪽 이르게/늦게 놓인 physical owner 후보를 바로 묶어 준다.
+  후자는 p52→p53 URL처럼 다른 본문과 문자 Counter가 상쇄되는 이동을 보완한다.
+  `table-fragment-candidates.tsv`는 같은 source `(pi, ci)` Body 표가 인접 render-tree 쪽에 연속한 경우와
+  표/footer·frame 신호, 또는 쪽 하단 표와 24자 이상 text delta를 rows/cols·bbox·쪽 신호와 함께 묶는다.
+  이는 visual review 우선순위 후보일 뿐 **PDF table row owner나 표 분할 정답을 판정하지 않는다.**
+  `page-count-ledger.tsv`는 PDF↔전체 SVG/render-tree page count drift를 별도로 드러낸다. 이 신호들은
+  모두 candidate일 뿐 전역 page-break 보정의 근거는 아니다. 같은 문자만으로는 표 row geometry·same-page
+  overlap을 판정할 수 없다.
+  `render-diff`는 rhwp
+  자기 roundtrip 비교이므로 한컴 PDF 기준 fidelity 후보를 대신하지 않는다.
 
 ### `export-hml <입력.hml> -o <출력.hml>`
 HML 원본 문서를 의미 보존 HWPML 2.91 XML로 저장한다.

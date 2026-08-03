@@ -2,15 +2,18 @@
 
 use super::super::helpers::get_textbox_from_shape;
 use super::super::queries::field_query::rebuild_char_offsets;
+use super::super::queries::rendering::FocusedPageTreePatch;
 use crate::document_core::{
     ActiveFieldInfo, DeferredPaginationDescriptor, DeferredPaginationTargetStatus, DocumentCore,
 };
 use crate::error::HwpError;
 use crate::model::control::{Control, FieldType};
+use crate::model::document::Document;
 use crate::model::event::DocumentEvent;
 use crate::model::page::ColumnDef;
 use crate::model::paragraph::{ParaMeta, Paragraph};
 use crate::model::shape::{ShapeObject, TextWrap, VertRelTo};
+use crate::model::style::Alignment;
 use crate::renderer::composer::{compose_paragraph, reflow_line_segs, ComposedParagraph};
 use crate::renderer::page_layout::PageLayoutInfo;
 use crate::renderer::pagination::PageItem;
@@ -125,6 +128,224 @@ fn relative_paragraph_flow_advance(paragraph: &Paragraph) -> Option<i64> {
     Some(
         i64::from(last.vertical_pos) + i64::from(last.line_height) + i64::from(last.line_spacing)
             - i64::from(first.vertical_pos),
+    )
+}
+
+/// [#3137] focused geometry/page patch가 허용되는 실제 flat table cell인지 확인한다.
+///
+/// 공용 cell edit API는 표 캡션, 글상자, 그림 캡션도 다루지만 Stage 3/4 fast path의
+/// page-tree identity와 layout cache 계약은 일반 `Control::Table` cell에만 성립한다.
+fn is_focused_table_cell_target(
+    document: &Document,
+    section_idx: usize,
+    parent_para_idx: usize,
+    control_idx: usize,
+    cell_idx: usize,
+    cell_para_idx: usize,
+) -> bool {
+    if cell_idx == super::super::TABLE_CAPTION_CELL_SENTINEL {
+        return false;
+    }
+    document
+        .sections
+        .get(section_idx)
+        .and_then(|section| section.paragraphs.get(parent_para_idx))
+        .and_then(|paragraph| paragraph.controls.get(control_idx))
+        .and_then(|control| match control {
+            Control::Table(table) => table.cells.get(cell_idx),
+            _ => None,
+        })
+        .and_then(|cell| cell.paragraphs.get(cell_para_idx))
+        .is_some()
+}
+
+/// [#3137] page-tree를 다시 만들지 않고 재사용할 수 있는 focused caret의 문단 로컬 기하.
+///
+/// absolute page/cell 원점은 Studio가 직전 exact rect에서 보존한다. 여기서는 편집 전후가
+/// 같은 visual line이라는 것을 보수적으로 확인하고, 그 line 안의 caret x만 계산한다.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct FocusedLineSignature {
+    text_start: u32,
+    vertical_pos: i32,
+    line_height: i32,
+    text_height: i32,
+    baseline_distance: i32,
+    line_spacing: i32,
+    column_start: i32,
+    segment_width: i32,
+    tag: u32,
+}
+
+impl From<&crate::model::paragraph::LineSeg> for FocusedLineSignature {
+    fn from(line: &crate::model::paragraph::LineSeg) -> Self {
+        Self {
+            text_start: line.text_start,
+            vertical_pos: line.vertical_pos,
+            line_height: line.line_height,
+            text_height: line.text_height,
+            baseline_distance: line.baseline_distance,
+            line_spacing: line.line_spacing,
+            column_start: line.column_start,
+            segment_width: line.segment_width,
+            tag: line.tag,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct FocusedCursorLocalGeometry {
+    line_index: usize,
+    line_start: usize,
+    line_signature: FocusedLineSignature,
+    x: f64,
+}
+
+fn focused_cursor_local_geometry(
+    paragraph: &Paragraph,
+    char_offset: usize,
+    styles: &ResolvedStyleSet,
+) -> Option<FocusedCursorLocalGeometry> {
+    use crate::renderer::layout::{compute_char_positions, resolved_to_text_style};
+
+    // Studio cell cursor offset과 이 native edit 경로의 char 인덱스가 일치하는 BMP 문단만
+    // 대상으로 한다. 복합 인라인 컨트롤/강제 줄바꿈/탭은 page-tree exact 경로가 담당한다.
+    if paragraph.text.chars().count() != paragraph.text.encode_utf16().count()
+        || !paragraph.controls.is_empty()
+        || paragraph
+            .text
+            .chars()
+            .any(|ch| matches!(ch, '\r' | '\n' | '\t'))
+    {
+        return None;
+    }
+
+    let text_len = paragraph.text.chars().count();
+    if char_offset > text_len {
+        return None;
+    }
+
+    let composed = compose_paragraph(paragraph);
+    let line_index = composed
+        .lines
+        .iter()
+        .rposition(|line| char_offset >= line.char_start)?;
+    let line = composed.lines.get(line_index)?;
+    let line_end = composed
+        .lines
+        .get(line_index + 1)
+        .map(|next| next.char_start)
+        .unwrap_or(text_len);
+    if char_offset > line_end {
+        return None;
+    }
+
+    // Justify는 강제 줄바꿈이 아닌 마지막 줄에서만 Left와 같은 원점/spacing을 쓴다.
+    // 그 외 정렬은 편집으로 line start 또는 분배 간격이 움직이므로 exact 경로에 남긴다.
+    let alignment = styles
+        .para_styles
+        .get(paragraph.para_shape_id as usize)
+        .map(|style| style.alignment)
+        .unwrap_or(Alignment::Left);
+    let stable_alignment = alignment == Alignment::Left
+        || (alignment == Alignment::Justify
+            && line_index + 1 == composed.lines.len()
+            && !line.has_line_break);
+    if !stable_alignment {
+        return None;
+    }
+
+    let mut remaining = char_offset.saturating_sub(line.char_start);
+    let mut x = 0.0;
+    for run in &line.runs {
+        // PUA 표시 확장, 글자겹침, 각주 마커와 기타 언어 shaping은 exact walker에 맡긴다.
+        if run.display_text.is_some()
+            || run.char_overlap.is_some()
+            || run.footnote_marker.is_some()
+            || !(run.lang_index <= 3 || run.lang_index == 5)
+        {
+            return None;
+        }
+        let run_len = run.text.chars().count();
+        let style = resolved_to_text_style(styles, run.char_style_id, run.lang_index);
+        // Justify underflow의 음수 자간 보정은 line origin/spacing을 별도로 움직인다.
+        // cached page run과 같은 위치임을 증명할 수 없으므로 보수적으로 제외한다.
+        if alignment == Alignment::Justify && style.letter_spacing < -0.01 {
+            return None;
+        }
+        let positions = compute_char_positions(&run.text, &style);
+        if positions.len() != run_len + 1 {
+            return None;
+        }
+        if remaining <= run_len {
+            x += positions[remaining];
+            if !x.is_finite() {
+                return None;
+            }
+            return Some(FocusedCursorLocalGeometry {
+                line_index,
+                line_start: line.char_start,
+                line_signature: paragraph.line_segs.get(line_index)?.into(),
+                x,
+            });
+        }
+        x += *positions.last()?;
+        remaining -= run_len;
+    }
+
+    if remaining != 0 || !x.is_finite() {
+        return None;
+    }
+    Some(FocusedCursorLocalGeometry {
+        line_index,
+        line_start: line.char_start,
+        line_signature: paragraph.line_segs.get(line_index)?.into(),
+        x,
+    })
+}
+
+fn focused_cursor_delta_x(
+    before: Option<FocusedCursorLocalGeometry>,
+    after: Option<FocusedCursorLocalGeometry>,
+) -> Option<f64> {
+    let before = before?;
+    let after = after?;
+    if before.line_index != after.line_index
+        || before.line_start != after.line_start
+        || before.line_signature != after.line_signature
+    {
+        return None;
+    }
+    let delta = after.x - before.x;
+    delta.is_finite().then_some(delta)
+}
+
+fn focused_cursor_geometry_json_suffix(
+    focused_page_tree_patch: Option<&FocusedPageTreePatch>,
+    base_revision: u64,
+    revision: u64,
+    source_char_offset: usize,
+    target_char_offset: usize,
+    delta_x: Option<f64>,
+) -> String {
+    // absolute origin은 검증된 cached TextLine patch와 한 revision으로 묶일 때만 권위가
+    // 있다. patch 실패 뒤 geometry만 내보내면 stale page-tree 기준 caret가 게시된다.
+    let (Some(_), Some(delta_x)) = (focused_page_tree_patch, delta_x) else {
+        return String::new();
+    };
+    format!(
+        ",\"focusedCursorGeometry\":{{\"baseRevision\":{},\"revision\":{},\"sourceCharOffset\":{},\"targetCharOffset\":{},\"deltaX\":{}}}",
+        base_revision, revision, source_char_offset, target_char_offset, delta_x
+    )
+}
+
+fn focused_page_tree_patch_json_suffix(patch: Option<&FocusedPageTreePatch>) -> String {
+    let Some(patch) = patch else {
+        return String::new();
+    };
+    let rect = patch.dirty_rect;
+    format!(
+        ",\"focusedPagePatch\":{{\"pageIndex\":{},\"x\":{},\"y\":{},\"width\":{},\"height\":{}}}",
+        patch.page_index, rect.x, rect.y, rect.width, rect.height
     )
 }
 
@@ -1196,6 +1417,34 @@ impl DocumentCore {
         text: &str,
         paginate_immediately: bool,
     ) -> Result<String, HwpError> {
+        let new_chars_count = text.chars().count();
+        let focused_target_is_table_cell = !paginate_immediately
+            && is_focused_table_cell_target(
+                &self.document,
+                section_idx,
+                parent_para_idx,
+                control_idx,
+                cell_idx,
+                cell_para_idx,
+            );
+        let focused_base_revision = self.deferred_pagination_revision;
+        // insert는 edit start, replace는 교체 전 조합 문자열의 끝이 현재 caret이다.
+        let focused_source_offset = char_offset + delete_count;
+        let focused_before = if focused_target_is_table_cell {
+            self.get_cell_paragraph_ref(
+                section_idx,
+                parent_para_idx,
+                control_idx,
+                cell_idx,
+                cell_para_idx,
+            )
+            .and_then(|paragraph| {
+                focused_cursor_local_geometry(paragraph, focused_source_offset, &self.styles)
+            })
+        } else {
+            None
+        };
+
         // 셀 문단 접근 검증 및 텍스트 교체
         let active_field = self.active_field.clone();
         let cell_path = [(control_idx, cell_idx, cell_para_idx)];
@@ -1206,6 +1455,7 @@ impl DocumentCore {
             cell_idx,
             cell_para_idx,
         )?;
+        let old_text_len = cell_para.text.chars().count();
         let flow_advance_before = relative_paragraph_flow_advance(cell_para);
         let local_contribution_before =
             crate::renderer::layout::LayoutEngine::paragraph_contributes_to_table_nested_text_flag(
@@ -1216,7 +1466,6 @@ impl DocumentCore {
         } else {
             0
         };
-        let new_chars_count = text.chars().count();
         let outside_insertions = inactive_field_end_insertions(
             cell_para,
             active_field.as_ref(),
@@ -1283,6 +1532,22 @@ impl DocumentCore {
             )
         };
         let cell_flow_changed = flow_advance_before != flow_advance_after;
+        let new_offset = char_offset + new_chars_count;
+        let focused_after = if focused_target_is_table_cell {
+            self.get_cell_paragraph_ref(
+                section_idx,
+                parent_para_idx,
+                control_idx,
+                cell_idx,
+                cell_para_idx,
+            )
+            .and_then(|paragraph| {
+                focused_cursor_local_geometry(paragraph, new_offset, &self.styles)
+            })
+        } else {
+            None
+        };
+        let focused_delta_x = focused_cursor_delta_x(focused_before, focused_after);
 
         // Table의 일반 cell만 pointer-key layout cache의 owner다. 표 캡션 sentinel과
         // Shape/Picture 텍스트 경로에는 cell_units cache가 없으므로 적용하지 않는다.
@@ -1316,6 +1581,10 @@ impl DocumentCore {
             cell_idx,
             cell_para_idx,
         )?;
+        let had_pending_flow_change = self
+            .deferred_pagination_descriptor
+            .as_ref()
+            .is_some_and(|pending| pending.cell_flow_changed);
         if !paginate_immediately {
             let target_first_page =
                 target_table_first_global_page(self, section_idx, parent_para_idx, control_idx);
@@ -1362,12 +1631,37 @@ impl DocumentCore {
             self.compute_render_normalized();
         }
         self.mark_section_pagination_dirty(section_idx);
-        self.invalidate_page_tree_cache_from(0);
+        let new_text_len = old_text_len - deleted_count + new_chars_count;
+        let focused_page_tree_patched = if !paginate_immediately
+            && !cell_flow_changed
+            && !had_pending_flow_change
+            && focused_delta_x.is_some()
+            && focused_source_offset == old_text_len
+            && new_offset == new_text_len
+        {
+            focused_after.and_then(|geometry| {
+                self.try_patch_cached_focused_cell_tail_line(
+                    section_idx,
+                    parent_para_idx,
+                    control_idx,
+                    cell_idx,
+                    cell_para_idx,
+                    geometry.line_index,
+                    geometry.line_start,
+                    old_text_len,
+                    new_text_len,
+                )
+            })
+        } else {
+            None
+        };
+        if focused_page_tree_patched.is_none() {
+            self.invalidate_page_tree_cache_from(0);
+        }
         if paginate_immediately {
             self.paginate_if_needed();
         }
 
-        let new_offset = char_offset + new_chars_count;
         self.event_log.push(DocumentEvent::CellTextChanged {
             section: section_idx,
             para: parent_para_idx,
@@ -1377,9 +1671,27 @@ impl DocumentCore {
         let result_fields = if paginate_immediately {
             format!("\"charOffset\":{}", new_offset)
         } else {
+            let focused_geometry = if !cell_flow_changed && !had_pending_flow_change {
+                focused_cursor_geometry_json_suffix(
+                    focused_page_tree_patched.as_ref(),
+                    focused_base_revision,
+                    self.deferred_pagination_revision,
+                    focused_source_offset,
+                    new_offset,
+                    focused_delta_x,
+                )
+            } else {
+                String::new()
+            };
+            let focused_page_patch =
+                focused_page_tree_patch_json_suffix(focused_page_tree_patched.as_ref());
             format!(
-                "\"charOffset\":{},\"cellFlowChanged\":{}",
-                new_offset, cell_flow_changed
+                "\"charOffset\":{},\"cellFlowChanged\":{},\"focusedPageTreePatched\":{}{}{}",
+                new_offset,
+                cell_flow_changed,
+                focused_page_tree_patched.is_some(),
+                focused_page_patch,
+                focused_geometry
             )
         };
         Ok(super::super::helpers::json_ok_with(&result_fields))
@@ -1444,6 +1756,34 @@ impl DocumentCore {
         count: usize,
         paginate_immediately: bool,
     ) -> Result<String, HwpError> {
+        let focused_target_is_table_cell = !paginate_immediately
+            && is_focused_table_cell_target(
+                &self.document,
+                section_idx,
+                parent_para_idx,
+                control_idx,
+                cell_idx,
+                cell_para_idx,
+            );
+        let focused_base_revision = self.deferred_pagination_revision;
+        // Backspace의 현재 caret은 삭제 범위 끝이다. forward Delete는 source 불일치로
+        // Studio가 보수적으로 exact query에 fallback한다.
+        let focused_source_offset = char_offset + count;
+        let focused_before = if focused_target_is_table_cell {
+            self.get_cell_paragraph_ref(
+                section_idx,
+                parent_para_idx,
+                control_idx,
+                cell_idx,
+                cell_para_idx,
+            )
+            .and_then(|paragraph| {
+                focused_cursor_local_geometry(paragraph, focused_source_offset, &self.styles)
+            })
+        } else {
+            None
+        };
+
         // 셀 문단 접근 검증 및 텍스트 삭제
         let cell_para = self.get_cell_paragraph_mut(
             section_idx,
@@ -1452,12 +1792,13 @@ impl DocumentCore {
             cell_idx,
             cell_para_idx,
         )?;
+        let old_text_len = cell_para.text.chars().count();
         let flow_advance_before = relative_paragraph_flow_advance(cell_para);
         let local_contribution_before =
             crate::renderer::layout::LayoutEngine::paragraph_contributes_to_table_nested_text_flag(
                 cell_para,
             );
-        cell_para.delete_text_at(char_offset, count);
+        let deleted_count = cell_para.delete_text_at(char_offset, count);
 
         // 부모 컨트롤 dirty 마킹 (표 또는 글상자)
         self.mark_cell_control_dirty(section_idx, parent_para_idx, control_idx);
@@ -1499,6 +1840,23 @@ impl DocumentCore {
             )
         };
         let cell_flow_changed = flow_advance_before != flow_advance_after;
+        let focused_after = if focused_target_is_table_cell {
+            self.get_cell_paragraph_ref(
+                section_idx,
+                parent_para_idx,
+                control_idx,
+                cell_idx,
+                cell_para_idx,
+            )
+            .and_then(|paragraph| {
+                focused_cursor_local_geometry(paragraph, char_offset, &self.styles)
+            })
+        } else {
+            None
+        };
+        let focused_delta_x = (deleted_count == count)
+            .then(|| focused_cursor_delta_x(focused_before, focused_after))
+            .flatten();
 
         // Table의 일반 cell만 pointer-key layout cache의 owner다.
         if cell_idx != 65534 {
@@ -1529,6 +1887,10 @@ impl DocumentCore {
             cell_idx,
             cell_para_idx,
         )?;
+        let had_pending_flow_change = self
+            .deferred_pagination_descriptor
+            .as_ref()
+            .is_some_and(|pending| pending.cell_flow_changed);
         if !paginate_immediately {
             let target_first_page =
                 target_table_first_global_page(self, section_idx, parent_para_idx, control_idx);
@@ -1572,7 +1934,33 @@ impl DocumentCore {
             self.compute_render_normalized();
         }
         self.mark_section_pagination_dirty(section_idx);
-        self.invalidate_page_tree_cache_from(0);
+        let new_text_len = old_text_len.saturating_sub(deleted_count);
+        let focused_page_tree_patched = if !paginate_immediately
+            && !cell_flow_changed
+            && !had_pending_flow_change
+            && focused_delta_x.is_some()
+            && focused_source_offset == old_text_len
+            && char_offset == new_text_len
+        {
+            focused_after.and_then(|geometry| {
+                self.try_patch_cached_focused_cell_tail_line(
+                    section_idx,
+                    parent_para_idx,
+                    control_idx,
+                    cell_idx,
+                    cell_para_idx,
+                    geometry.line_index,
+                    geometry.line_start,
+                    old_text_len,
+                    new_text_len,
+                )
+            })
+        } else {
+            None
+        };
+        if focused_page_tree_patched.is_none() {
+            self.invalidate_page_tree_cache_from(0);
+        }
         if paginate_immediately {
             self.paginate_if_needed();
         }
@@ -1586,9 +1974,27 @@ impl DocumentCore {
         let result_fields = if paginate_immediately {
             format!("\"charOffset\":{}", char_offset)
         } else {
+            let focused_geometry = if !cell_flow_changed && !had_pending_flow_change {
+                focused_cursor_geometry_json_suffix(
+                    focused_page_tree_patched.as_ref(),
+                    focused_base_revision,
+                    self.deferred_pagination_revision,
+                    char_offset + deleted_count,
+                    char_offset,
+                    focused_delta_x,
+                )
+            } else {
+                String::new()
+            };
+            let focused_page_patch =
+                focused_page_tree_patch_json_suffix(focused_page_tree_patched.as_ref());
             format!(
-                "\"charOffset\":{},\"cellFlowChanged\":{}",
-                char_offset, cell_flow_changed
+                "\"charOffset\":{},\"cellFlowChanged\":{},\"focusedPageTreePatched\":{}{}{}",
+                char_offset,
+                cell_flow_changed,
+                focused_page_tree_patched.is_some(),
+                focused_page_patch,
+                focused_geometry
             )
         };
         Ok(super::super::helpers::json_ok_with(&result_fields))
@@ -4582,6 +4988,81 @@ mod tests {
     use super::*;
     use crate::document_core::helpers::removed_para_meta_of;
     use crate::model::paragraph::{CharShapeRef, ColumnBreakType, NumberingRestart};
+
+    #[test]
+    fn issue3137_focused_geometry_requires_verified_page_tree_patch() {
+        let patch = FocusedPageTreePatch {
+            page_index: 0,
+            dirty_rect: crate::renderer::render_tree::BoundingBox::new(0.0, 0.0, 1.0, 1.0),
+        };
+
+        assert!(
+            focused_cursor_geometry_json_suffix(None, 1, 2, 3, 4, Some(5.0)).is_empty(),
+            "geometry without a verified page patch must not be published"
+        );
+        assert!(
+            focused_cursor_geometry_json_suffix(Some(&patch), 1, 2, 3, 4, None).is_empty(),
+            "page patch without verified local delta must not publish geometry"
+        );
+        assert!(
+            focused_cursor_geometry_json_suffix(Some(&patch), 1, 2, 3, 4, Some(5.0))
+                .contains("focusedCursorGeometry")
+        );
+    }
+
+    #[test]
+    fn issue3137_focused_fast_path_admits_only_regular_table_cells() {
+        use crate::model::document::Section;
+        use crate::model::shape::{Caption, DrawingObjAttr, RectangleShape, TextBox};
+        use crate::model::table::{Cell, Table};
+
+        let table = Table {
+            cells: vec![Cell {
+                paragraphs: vec![Paragraph::default()],
+                ..Default::default()
+            }],
+            caption: Some(Caption {
+                paragraphs: vec![Paragraph::default()],
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let textbox = ShapeObject::Rectangle(RectangleShape {
+            drawing: DrawingObjAttr {
+                text_box: Some(TextBox {
+                    paragraphs: vec![Paragraph::default()],
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+            ..Default::default()
+        });
+        let document = Document {
+            sections: vec![Section {
+                paragraphs: vec![Paragraph {
+                    controls: vec![
+                        Control::Table(Box::new(table)),
+                        Control::Shape(Box::new(textbox)),
+                    ],
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        assert!(is_focused_table_cell_target(&document, 0, 0, 0, 0, 0));
+        assert!(!is_focused_table_cell_target(
+            &document,
+            0,
+            0,
+            0,
+            crate::document_core::TABLE_CAPTION_CELL_SENTINEL,
+            0,
+        ));
+        assert!(!is_focused_table_cell_target(&document, 0, 0, 1, 0, 0));
+        assert!(!is_focused_table_cell_target(&document, 0, 0, 0, 1, 0));
+    }
 
     /// 본문 문단 병합의 undo 가 사라진 문단의 스코프 메타데이터를 되돌리는지 (Task #2342).
     ///

@@ -10,6 +10,7 @@ use crate::model::control::Control;
 use crate::model::document::{Document, Section};
 use crate::model::page::ColumnDef;
 use crate::model::paragraph::{ColumnBreakType, Paragraph};
+use crate::model::style::Alignment;
 use crate::paint::{
     resolve_embedded_font_face_index, EmbeddedFontFace, LayerBuilder, LayerOutputOptions,
     PageLayerTree, RenderProfile,
@@ -19,19 +20,234 @@ use crate::renderer::composer::{compose_paragraph, compose_section, ComposedPara
 use crate::renderer::height_measurer::{HeightMeasurer, MeasuredSection, MeasuredTable};
 use crate::renderer::html::HtmlRenderer;
 use crate::renderer::layer_renderer::LayerRenderer;
-use crate::renderer::layout::LayoutEngine;
+use crate::renderer::layout::{
+    estimate_text_width, resolved_to_text_style, CellContext, LayoutEngine,
+};
 use crate::renderer::page_layout::PageLayoutInfo;
 use crate::renderer::pagination::{MasterPageRef, PageContent, PaginationResult, Paginator};
-use crate::renderer::render_tree::PageRenderTree;
+use crate::renderer::render_tree::{
+    BoundingBox, FieldMarkerType, PageRenderTree, RenderNode, RenderNodeType, TextRunNode,
+};
 use crate::renderer::style_resolver::resolve_styles;
 use crate::renderer::svg::SvgRenderer;
 use crate::renderer::svg_layer::SvgLayerRenderer;
 use crate::renderer::typeset::TypesetEngine;
+use crate::renderer::TextStyle;
 use std::cell::RefCell;
 use std::fmt::Write as _;
 
 const MAX_EMBEDDED_FONT_BYTES: usize = 32 * 1024 * 1024;
 const MAX_EMBEDDED_FONT_BYTES_PER_PAGE: usize = 64 * 1024 * 1024;
+const FOCUSED_PAGE_REPAINT_PAD: f64 = 3.0;
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct FocusedPageTreePatch {
+    pub(crate) page_index: u32,
+    pub(crate) dirty_rect: BoundingBox,
+}
+
+fn focused_partial_repaint_alignment_is_safe(
+    alignment: Alignment,
+    is_last_line: bool,
+    has_line_break: bool,
+) -> bool {
+    alignment == Alignment::Left
+        || (alignment == Alignment::Justify && is_last_line && !has_line_break)
+}
+
+/// 고정 dirty rect 밖으로 잉크/장식이 나가거나 cached run spacing을 재계산해야 하는
+/// 스타일은 부분 repaint에서 제외한다. 이 경로는 plain horizontal text 전용이다.
+fn focused_partial_repaint_style_is_safe(style: &TextStyle) -> bool {
+    style.right_tab_block_width_override.is_none()
+        && style.tab_leaders.is_empty()
+        && style.inline_tabs.is_empty()
+        && style.extra_word_spacing.abs() <= 0.001
+        && style.extra_char_spacing.abs() <= 0.001
+        && style.extra_dash_advance.abs() <= 0.001
+        && style.letter_spacing >= -0.01
+        && style.outline_type == 0
+        && style.shadow_type == 0
+        && !style.emboss
+        && !style.engrave
+        && !style.superscript
+        && !style.subscript
+        && style.emphasis_dot == 0
+        && matches!(style.underline, crate::model::style::UnderlineType::None)
+        && !style.strikethrough
+}
+
+/// [#3137 Stage 4] stable tail edit가 재사용할 수 있는 캐시된 마지막 TextLine 정보.
+///
+/// 페이지/셀 원점과 줄 bbox는 Stage 3의 same-line signature가 보존한다. 여기서는
+/// 기존 line의 plain TextRun 자식만 교체하고 표/페이지 구조는 그대로 둔다.
+#[derive(Clone)]
+struct CachedFocusedTailLine {
+    page_index: usize,
+    line_node_id: u32,
+    line_bbox: BoundingBox,
+    run_x: f64,
+    run_y: f64,
+    run_height: f64,
+    baseline: f64,
+    column_x: f64,
+    layout_style: TextStyle,
+    cell_context: CellContext,
+}
+
+fn focused_flat_cell_context_matches(
+    context: &CellContext,
+    parent_para_idx: usize,
+    control_idx: usize,
+    cell_idx: usize,
+    cell_para_idx: usize,
+) -> bool {
+    if context.parent_para_index != parent_para_idx || context.path.len() != 1 {
+        return false;
+    }
+    let entry = &context.path[0];
+    entry.control_index == control_idx
+        && entry.cell_index == cell_idx
+        && entry.cell_para_index == cell_para_idx
+        && entry.text_direction == 0
+}
+
+#[allow(clippy::too_many_arguments)]
+fn collect_cached_focused_tail_lines(
+    node: &RenderNode,
+    page_index: usize,
+    section_idx: usize,
+    parent_para_idx: usize,
+    control_idx: usize,
+    cell_idx: usize,
+    cell_para_idx: usize,
+    line_index: usize,
+    line_start: usize,
+    old_text_len: usize,
+    output: &mut Vec<CachedFocusedTailLine>,
+) {
+    if let RenderNodeType::TextLine(line) = &node.node_type {
+        let line_identity_matches = line.section_index == Some(section_idx)
+            && line.para_index == Some(cell_para_idx)
+            && line.line_index == Some(line_index as u32);
+        if line_identity_matches && !node.children.is_empty() {
+            let mut expected_char_start = line_start;
+            let mut expected_x: Option<f64> = None;
+            let mut first_run: Option<(&RenderNode, &TextRunNode)> = None;
+            let mut valid = true;
+
+            for (index, child) in node.children.iter().enumerate() {
+                let RenderNodeType::TextRun(run) = &child.node_type else {
+                    valid = false;
+                    break;
+                };
+                let context_matches = run.cell_context.as_ref().is_some_and(|context| {
+                    focused_flat_cell_context_matches(
+                        context,
+                        parent_para_idx,
+                        control_idx,
+                        cell_idx,
+                        cell_para_idx,
+                    )
+                });
+                if !context_matches
+                    || run.section_index != Some(section_idx)
+                    || run.para_index != Some(cell_para_idx)
+                    || run.char_start != Some(expected_char_start)
+                    || run.display_text.is_some()
+                    || run.char_overlap.is_some()
+                    || run.field_marker != FieldMarkerType::None
+                    || run.is_line_break_end
+                    || run.is_vertical
+                    || run.rotation.abs() > 0.001
+                    || !focused_partial_repaint_style_is_safe(&run.style)
+                    || !child.visible
+                    || child.editor_only
+                    || child.layer.is_some()
+                    || !child.children.is_empty()
+                {
+                    valid = false;
+                    break;
+                }
+                if index + 1 == node.children.len() {
+                    if !run.is_para_end {
+                        valid = false;
+                        break;
+                    }
+                } else if run.is_para_end {
+                    valid = false;
+                    break;
+                }
+                if let Some(x) = expected_x {
+                    if (child.bbox.x - x).abs() > 0.051 {
+                        valid = false;
+                        break;
+                    }
+                }
+                expected_x = Some(child.bbox.x + child.bbox.width);
+                expected_char_start += run.text.chars().count();
+                first_run.get_or_insert((child, run));
+            }
+
+            if valid && expected_char_start == old_text_len {
+                if let Some((child, run)) = first_run {
+                    let column_x = child.bbox.x - run.style.line_x_offset;
+                    if child.bbox.x.is_finite()
+                        && child.bbox.y.is_finite()
+                        && child.bbox.height.is_finite()
+                        && run.baseline.is_finite()
+                        && column_x.is_finite()
+                        && run.style.available_width.is_finite()
+                        && run.style.available_width > 0.0
+                    {
+                        output.push(CachedFocusedTailLine {
+                            page_index,
+                            line_node_id: node.id,
+                            line_bbox: node.bbox,
+                            run_x: child.bbox.x,
+                            run_y: child.bbox.y,
+                            run_height: child.bbox.height,
+                            baseline: run.baseline,
+                            column_x,
+                            layout_style: run.style.clone(),
+                            cell_context: run
+                                .cell_context
+                                .clone()
+                                .expect("검증된 focused cell context"),
+                        });
+                    }
+                }
+            }
+        }
+    }
+
+    for child in &node.children {
+        collect_cached_focused_tail_lines(
+            child,
+            page_index,
+            section_idx,
+            parent_para_idx,
+            control_idx,
+            cell_idx,
+            cell_para_idx,
+            line_index,
+            line_start,
+            old_text_len,
+            output,
+        );
+    }
+}
+
+fn find_render_node_mut(node: &mut RenderNode, node_id: u32) -> Option<&mut RenderNode> {
+    if node.id == node_id {
+        return Some(node);
+    }
+    for child in &mut node.children {
+        if let Some(found) = find_render_node_mut(child, node_id) {
+            return Some(found);
+        }
+    }
+    None
+}
 
 /// 문단 본문과 수식 script를 컨트롤 문자 위치에 직접 합친다.
 ///
@@ -3649,6 +3865,16 @@ impl DocumentCore {
         }
     }
 
+    /// 편집 API(누름틀 채움·전체 치환 등)가 `recompose_section` 으로 남긴 dirty
+    /// 구역을 즉시 재페이지네이션하는 공개 표면 — 같은 인스턴스에서 편집 직후
+    /// 페이지 어휘(page_count·페이지 텍스트·렌더·grep 의 page 주소)를 읽는
+    /// 세션형 소비자(mcp-serve 핸들)가 호출한다. 무상태 CLI 는 편집 후 곧바로
+    /// 직렬화·종료하므로 부르지 않는다. batch 모드에서는 Command 흐름과 같은
+    /// 규약으로 미룬다.
+    pub fn repaginate_if_needed(&mut self) {
+        self.paginate_if_needed();
+    }
+
     /// 모든 구역을 페이지로 분할한다 (dirty 구역만 재처리, 증분 표 측정).
     ///
     /// [Task #1046] 사후 reflow(A) 접근은 페이지네이터↔렌더러 측정 드리프트로 인해
@@ -4744,6 +4970,408 @@ impl DocumentCore {
         Err(HwpError::PageOutOfRange(page_num))
     }
 
+    /// [#3697] dump-pages 텍스트/JSON 두 출력이 공유하는 구역 전처리.
+    ///
+    /// 미주 문단 합침(#1082)과 items 밖 문단(어울림/빈 줄 감춤) 페이지 귀속
+    /// (#1700·#1705·#1955)을 한 곳에 두어, 텍스트 덤프와 JSON 계약이 서로 다른
+    /// 진단을 보고하는 드리프트를 구조적으로 차단한다.
+    fn page_dump_section_ctx<'a>(
+        &'a self,
+        sec_idx: usize,
+        pr: &'a PaginationResult,
+        sec_start_page: u32,
+    ) -> PageDumpSectionCtx<'a> {
+        use crate::model::control::Control;
+        use crate::renderer::hwpunit_to_px;
+        use crate::renderer::pagination::PageItem;
+
+        let dpi = self.dpi;
+        let body_paragraphs = self.section_render_paragraphs(sec_idx);
+        // [Task #1082] 미주 paragraphs 를 본문 뒤에 합쳐 인덱싱 정합.
+        // 미주 PageItem 의 para_index = body_paragraphs.len() + 미주 로컬 인덱스
+        // (typeset.rs en_para_idx 와 동일). 합치지 않으면 미주 항목이 out-of-bounds 로
+        // 본문이 빈 것처럼 표시된다(시험지 다단 미주 디버깅 차단).
+        let body_len = body_paragraphs.len();
+        let paragraphs: std::borrow::Cow<'a, [Paragraph]> = if pr.endnote_paragraphs.is_empty() {
+            std::borrow::Cow::Borrowed(body_paragraphs)
+        } else {
+            std::borrow::Cow::Owned(
+                body_paragraphs
+                    .iter()
+                    .chain(pr.endnote_paragraphs.iter())
+                    .cloned()
+                    .collect(),
+            )
+        };
+
+        // [Task #1700] cc.items 에 없는 문단(어울림 흡수 / 빈 줄 감춤)을 페이지 PI 로 표면화
+        // 하기 위한 사전 패스. 한글(OLE)은 이들을 본문 문단으로 카운트하므로 문단→페이지
+        // 매핑이 정합된다. 레이아웃/렌더 트리는 변경하지 않으므로 기하·페이지 수·시각 불변.
+        // 1) items 문단 → 표시 페이지(global+1) 매핑 — **마지막** 출현 페이지(다중 페이지 표는
+        //    끝 페이지에 빈 문단이 따라오므로 last-page 가 한글과 정합).
+        let mut item_disp_page: std::collections::HashMap<usize, u32> =
+            std::collections::HashMap::new();
+        // [#1705] 표의 첫(앵커) 출현 페이지 — 어울림 빈 문단이 표 옆 wrap zone 에 있을 때 사용.
+        let mut item_first_page: std::collections::HashMap<usize, u32> =
+            std::collections::HashMap::new();
+        for (li, page) in pr.pages.iter().enumerate() {
+            let disp = sec_start_page + li as u32 + 1;
+            for cc in &page.column_contents {
+                for item in &cc.items {
+                    let pidx = match item {
+                        PageItem::FullParagraph { para_index }
+                        | PageItem::PartialParagraph { para_index, .. }
+                        | PageItem::Table { para_index, .. }
+                        | PageItem::PartialTable { para_index, .. }
+                        | PageItem::Shape { para_index, .. } => Some(*para_index),
+                        _ => None,
+                    };
+                    if let Some(p) = pidx {
+                        item_disp_page.insert(p, disp); // 마지막(끝) 페이지
+                        item_first_page.entry(p).or_insert(disp); // 첫(앵커) 페이지
+                    }
+                }
+            }
+        }
+        // 2) 표면화 대상을 페이지별로 그룹화: (para_index, is_wrap, table_pi).
+        //    - 어울림(wrap-around): 앵커 표(table_para_index)의 페이지에 귀속.
+        //    - 빈 줄 감춤(hidden_empty_paras): 직전 item 문단(대개 표)의 페이지에 귀속.
+        let mut extra_by_page: std::collections::HashMap<u32, Vec<(usize, bool, usize)>> =
+            std::collections::HashMap::new();
+        let mut emitted_extra: std::collections::HashSet<usize> = std::collections::HashSet::new();
+        for page in pr.pages.iter() {
+            for cc in &page.column_contents {
+                for wp in &cc.wrap_around_paras {
+                    if !emitted_extra.insert(wp.para_index) {
+                        continue;
+                    }
+                    // [#1705] 어울림(floating) 표의 트레일링 빈 문단 귀속:
+                    //   line_seg 폭(sw)이 좁으면(표 옆 wrap zone) 표의 **첫(앵커) 페이지**,
+                    //   전체 폭이면(표 아래로 흐름) 표의 **마지막 페이지**.
+                    //   한글은 wrap zone 문단을 앵커 페이지에, 전체폭 문단을 표 끝 페이지에 둔다.
+                    let sw_px = paragraphs
+                        .get(wp.para_index)
+                        .and_then(|p| p.line_segs.first())
+                        .map(|s| hwpunit_to_px(s.segment_width as i32, dpi))
+                        .unwrap_or(0.0);
+                    let body_w = page.layout.body_area.width;
+                    let is_wrap_zone = sw_px > 0.0 && sw_px < body_w * 0.9;
+                    // [#1955] 글뒤로/글앞으로 anchor 표는 플로우를 소비하지 않으므로
+                    // 후행 문단은 폭과 무관하게 **앵커 페이지** 귀속 (한글: stored
+                    // LINE_SEG vpos 가 앵커 쪽 위치를 가리킴).
+                    let anchor_behind = paragraphs
+                        .get(wp.table_para_index)
+                        .map(|p| {
+                            p.controls.iter().any(|c| {
+                                matches!(c, Control::Table(t)
+                                    if !t.common.treat_as_char
+                                        && matches!(t.common.text_wrap,
+                                            crate::model::shape::TextWrap::BehindText
+                                                | crate::model::shape::TextWrap::InFrontOfText))
+                            })
+                        })
+                        .unwrap_or(false);
+                    let disp = if is_wrap_zone || anchor_behind {
+                        item_first_page.get(&wp.table_para_index)
+                    } else {
+                        item_disp_page.get(&wp.table_para_index)
+                    }
+                    .copied()
+                    .unwrap_or(sec_start_page + 1);
+                    extra_by_page.entry(disp).or_default().push((
+                        wp.para_index,
+                        true,
+                        wp.table_para_index,
+                    ));
+                }
+            }
+        }
+        let mut hidden_sorted: Vec<usize> = pr
+            .hidden_empty_paras
+            .iter()
+            .copied()
+            .filter(|p| !item_disp_page.contains_key(p) && !emitted_extra.contains(p))
+            .collect();
+        hidden_sorted.sort_unstable();
+        for hidx in hidden_sorted {
+            let mut disp = sec_start_page + 1;
+            for j in (0..hidx).rev() {
+                if let Some(d) = item_disp_page.get(&j) {
+                    disp = *d;
+                    break;
+                }
+            }
+            extra_by_page
+                .entry(disp)
+                .or_default()
+                .push((hidx, false, 0));
+            emitted_extra.insert(hidx);
+        }
+
+        PageDumpSectionCtx {
+            paragraphs,
+            body_len,
+            extra_by_page,
+        }
+    }
+
+    /// [#3697] 페이지네이션 결과를 기계 계약 JSON 으로 덤프 (#3608 1-C).
+    ///
+    /// 텍스트 덤프(`dump_page_items`)와 같은 순회·같은 구역 전처리
+    /// (`page_dump_section_ctx`)를 공유하고, 표현만 구조화 필드로 바꾼다.
+    /// 반환값은 `pages` 배열 — 봉투(schemaVersion·source 등)는 CLI 가 감싼다.
+    pub fn dump_page_items_json(&self, page_filter: Option<u32>) -> serde_json::Value {
+        use crate::model::control::Control;
+        use crate::renderer::pagination::PageItem;
+
+        let dpi = self.dpi;
+        let mut pages_out: Vec<serde_json::Value> = Vec::new();
+        let mut global_page = 0u32;
+
+        for (sec_idx, pr) in self.pagination.iter().enumerate() {
+            let ctx = self.page_dump_section_ctx(sec_idx, pr, global_page);
+            let paragraphs: &[Paragraph] = &ctx.paragraphs;
+            let body_len = ctx.body_len;
+            let measured = self.measured_sections.get(sec_idx);
+
+            // 미주 항목(pi >= body_len)의 원본 위치 — 텍스트 덤프의 `src=...` 와 동일.
+            let endnote_source_json = |para_index: usize| -> serde_json::Value {
+                if para_index < body_len {
+                    return serde_json::Value::Null;
+                }
+                pr.endnote_para_sources
+                    .get(para_index - body_len)
+                    .map(|src| {
+                        serde_json::json!({
+                            "section": src.section_index,
+                            "para": src.para_index,
+                            "controlIndex": src.control_index,
+                            "noteParaIndex": src.note_para_index,
+                        })
+                    })
+                    .unwrap_or(serde_json::Value::Null)
+            };
+
+            for page in pr.pages.iter() {
+                if let Some(pf) = page_filter {
+                    if global_page != pf {
+                        global_page += 1;
+                        continue;
+                    }
+                }
+
+                let la = &page.layout;
+                let mut columns_out: Vec<serde_json::Value> = Vec::new();
+                for (col_idx, cc) in page.column_contents.iter().enumerate() {
+                    let hwp_used_px = compute_hwp_used_height(cc, paragraphs, dpi);
+                    let mut items_out: Vec<serde_json::Value> = Vec::new();
+                    for item in &cc.items {
+                        let v = match item {
+                            PageItem::FullParagraph { para_index } => {
+                                let height = measured
+                                    .and_then(|m| m.get_measured_paragraph(*para_index))
+                                    .map(|mp| {
+                                        let lh_sum: f64 = mp.line_heights.iter().sum();
+                                        let ls_sum: f64 = mp.line_spacings.iter().sum();
+                                        serde_json::json!({
+                                            "total": mp.spacing_before
+                                                + lh_sum
+                                                + ls_sum
+                                                + mp.spacing_after,
+                                            "spacingBefore": mp.spacing_before,
+                                            "lineHeightSum": lh_sum,
+                                            "lineSpacingSum": ls_sum,
+                                            "spacingAfter": mp.spacing_after,
+                                        })
+                                    });
+                                serde_json::json!({
+                                    "kind": "fullParagraph",
+                                    "paraIndex": para_index,
+                                    "isEndnote": *para_index >= body_len,
+                                    "endnoteSource": endnote_source_json(*para_index),
+                                    "height": height,
+                                    "vpos": vpos_range_json(paragraphs.get(*para_index), None, None),
+                                    "lineSegs": line_seg_brief_json(paragraphs.get(*para_index)),
+                                    "textPreview": para_text_preview(paragraphs.get(*para_index)),
+                                })
+                            }
+                            PageItem::PartialParagraph {
+                                para_index,
+                                start_line,
+                                end_line,
+                            } => serde_json::json!({
+                                "kind": "partialParagraph",
+                                "paraIndex": para_index,
+                                "startLine": start_line,
+                                "endLine": end_line,
+                                "isEndnote": *para_index >= body_len,
+                                "endnoteSource": endnote_source_json(*para_index),
+                                "vpos": vpos_range_json(
+                                    paragraphs.get(*para_index),
+                                    Some(*start_line),
+                                    Some(*end_line),
+                                ),
+                                "lineSegs": line_seg_brief_json(paragraphs.get(*para_index)),
+                            }),
+                            PageItem::Table {
+                                para_index,
+                                control_index,
+                            } => serde_json::json!({
+                                "kind": "table",
+                                "paraIndex": para_index,
+                                "controlIndex": control_index,
+                                "isEndnote": *para_index >= body_len,
+                                "endnoteSource": endnote_source_json(*para_index),
+                                "table": table_summary_json(
+                                    paragraphs,
+                                    *para_index,
+                                    *control_index,
+                                    dpi,
+                                    true,
+                                ),
+                                "vpos": vpos_range_json(paragraphs.get(*para_index), None, None),
+                                "lineSegs": line_seg_brief_json(paragraphs.get(*para_index)),
+                            }),
+                            PageItem::PartialTable {
+                                para_index,
+                                control_index,
+                                start_row,
+                                end_row,
+                                is_continuation,
+                                start_cut,
+                                end_cut,
+                                ..
+                            } => serde_json::json!({
+                                "kind": "partialTable",
+                                "paraIndex": para_index,
+                                "controlIndex": control_index,
+                                "startRow": start_row,
+                                "endRow": end_row,
+                                "isContinuation": is_continuation,
+                                "startCut": start_cut,
+                                "endCut": end_cut,
+                                "isEndnote": *para_index >= body_len,
+                                "endnoteSource": endnote_source_json(*para_index),
+                                "table": table_summary_json(
+                                    paragraphs,
+                                    *para_index,
+                                    *control_index,
+                                    dpi,
+                                    false,
+                                ),
+                                "vpos": vpos_range_json(paragraphs.get(*para_index), None, None),
+                                "lineSegs": line_seg_brief_json(paragraphs.get(*para_index)),
+                            }),
+                            PageItem::Shape {
+                                para_index,
+                                control_index,
+                            } => {
+                                let control = paragraphs
+                                    .get(*para_index)
+                                    .and_then(|p| p.controls.get(*control_index))
+                                    .map(|c| match c {
+                                        Control::Shape(s) => serde_json::json!({
+                                            "type": "shape",
+                                            "textWrap": format!("{:?}", s.common().text_wrap),
+                                            "treatAsChar": s.common().treat_as_char,
+                                        }),
+                                        Control::Picture(p) => serde_json::json!({
+                                            "type": "picture",
+                                            "treatAsChar": p.common.treat_as_char,
+                                        }),
+                                        Control::Equation(_) => {
+                                            serde_json::json!({ "type": "equation" })
+                                        }
+                                        _ => serde_json::json!({ "type": "other" }),
+                                    });
+                                serde_json::json!({
+                                    "kind": "shape",
+                                    "paraIndex": para_index,
+                                    "controlIndex": control_index,
+                                    "isEndnote": *para_index >= body_len,
+                                    "endnoteSource": endnote_source_json(*para_index),
+                                    "control": control,
+                                    "vpos": vpos_range_json(paragraphs.get(*para_index), None, None),
+                                    "lineSegs": line_seg_brief_json(paragraphs.get(*para_index)),
+                                })
+                            }
+                            PageItem::EndnoteSeparator {
+                                separator_length,
+                                margin_above,
+                                margin_below,
+                                line_width,
+                                color,
+                                ..
+                            } => serde_json::json!({
+                                "kind": "endnoteSeparator",
+                                "separatorLength": separator_length,
+                                "marginAbove": margin_above,
+                                "marginBelow": margin_below,
+                                "lineWidth": line_width,
+                                "color": format!("#{:06x}", color & 0x00ff_ffff),
+                            }),
+                        };
+                        items_out.push(v);
+                    }
+                    columns_out.push(serde_json::json!({
+                        "index": col_idx,
+                        "itemCount": cc.items.len(),
+                        "usedHeight": cc.used_height,
+                        "hwpUsedHeight": hwp_used_px,
+                        "usedDiff": hwp_used_px.map(|h| cc.used_height - h),
+                        "zoneYOffset": cc.zone_y_offset,
+                        "items": items_out,
+                    }));
+                }
+
+                // [Task #1700] cc.items 에 없는 문단(어울림/빈 줄 감춤) — 텍스트 덤프와 동일 귀속.
+                let disp_page = global_page + 1;
+                let extras_out: Vec<serde_json::Value> = ctx
+                    .extra_by_page
+                    .get(&disp_page)
+                    .map(|list| {
+                        list.iter()
+                            .map(|(pidx, is_wrap, tpi)| {
+                                if *is_wrap {
+                                    serde_json::json!({
+                                        "kind": "wrapAroundPara",
+                                        "paraIndex": pidx,
+                                        "tableParaIndex": tpi,
+                                        "textPreview": para_text_preview(paragraphs.get(*pidx)),
+                                    })
+                                } else {
+                                    serde_json::json!({
+                                        "kind": "hiddenEmptyPara",
+                                        "paraIndex": pidx,
+                                        "textPreview": para_text_preview(paragraphs.get(*pidx)),
+                                    })
+                                }
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+
+                pages_out.push(serde_json::json!({
+                    "pageIndex": global_page,
+                    "displayPage": global_page + 1,
+                    "section": sec_idx,
+                    "pageNumber": page.page_number,
+                    "bodyArea": {
+                        "x": la.body_area.x,
+                        "y": la.body_area.y,
+                        "width": la.body_area.width,
+                        "height": la.body_area.height,
+                    },
+                    "columns": columns_out,
+                    "extras": extras_out,
+                }));
+
+                global_page += 1;
+            }
+        }
+        serde_json::Value::Array(pages_out)
+    }
+
     /// 페이지네이션 결과를 텍스트로 덤프 (디버깅용).
     /// page_filter: None이면 전체, Some(n)이면 해당 페이지만.
     pub fn dump_page_items(&self, page_filter: Option<u32>) -> String {
@@ -4756,130 +5384,13 @@ impl DocumentCore {
         let mut global_page = 0u32;
 
         for (sec_idx, pr) in self.pagination.iter().enumerate() {
-            let body_paragraphs = self.section_render_paragraphs(sec_idx);
-            // [Task #1082] 미주 paragraphs 를 본문 뒤에 합쳐 인덱싱 정합.
-            // 미주 PageItem 의 para_index = body_paragraphs.len() + 미주 로컬 인덱스
-            // (typeset.rs en_para_idx 와 동일). 합치지 않으면 미주 항목이 out-of-bounds 로
-            // 본문이 빈 것처럼 표시된다(시험지 다단 미주 디버깅 차단).
-            let body_len = body_paragraphs.len();
-            let combined: Vec<Paragraph>;
-            let paragraphs: &[Paragraph] = if pr.endnote_paragraphs.is_empty() {
-                body_paragraphs
-            } else {
-                combined = body_paragraphs
-                    .iter()
-                    .chain(pr.endnote_paragraphs.iter())
-                    .cloned()
-                    .collect();
-                &combined
-            };
+            // [#3697] 구역 전처리(미주 합침 #1082 · items 밖 문단 귀속 #1700 계열)는
+            // JSON 덤프(`dump_page_items_json`)와 공유한다 — 두 출력의 드리프트 차단.
+            let ctx = self.page_dump_section_ctx(sec_idx, pr, global_page);
+            let paragraphs: &[Paragraph] = &ctx.paragraphs;
+            let body_len = ctx.body_len;
+            let extra_by_page = &ctx.extra_by_page;
             let measured = self.measured_sections.get(sec_idx);
-
-            // [Task #1700] cc.items 에 없는 문단(어울림 흡수 / 빈 줄 감춤)을 페이지 PI 로 표면화
-            // 하기 위한 사전 패스. 한글(OLE)은 이들을 본문 문단으로 카운트하므로 문단→페이지
-            // 매핑이 정합된다. 레이아웃/렌더 트리는 변경하지 않으므로 기하·페이지 수·시각 불변.
-            // 1) items 문단 → 표시 페이지(global+1) 매핑 — **마지막** 출현 페이지(다중 페이지 표는
-            //    끝 페이지에 빈 문단이 따라오므로 last-page 가 한글과 정합).
-            let sec_start_page = global_page;
-            let mut item_disp_page: std::collections::HashMap<usize, u32> =
-                std::collections::HashMap::new();
-            // [#1705] 표의 첫(앵커) 출현 페이지 — 어울림 빈 문단이 표 옆 wrap zone 에 있을 때 사용.
-            let mut item_first_page: std::collections::HashMap<usize, u32> =
-                std::collections::HashMap::new();
-            for (li, page) in pr.pages.iter().enumerate() {
-                let disp = sec_start_page + li as u32 + 1;
-                for cc in &page.column_contents {
-                    for item in &cc.items {
-                        let pidx = match item {
-                            PageItem::FullParagraph { para_index }
-                            | PageItem::PartialParagraph { para_index, .. }
-                            | PageItem::Table { para_index, .. }
-                            | PageItem::PartialTable { para_index, .. }
-                            | PageItem::Shape { para_index, .. } => Some(*para_index),
-                            _ => None,
-                        };
-                        if let Some(p) = pidx {
-                            item_disp_page.insert(p, disp); // 마지막(끝) 페이지
-                            item_first_page.entry(p).or_insert(disp); // 첫(앵커) 페이지
-                        }
-                    }
-                }
-            }
-            // 2) 표면화 대상을 페이지별로 그룹화: (para_index, is_wrap, table_pi).
-            //    - 어울림(wrap-around): 앵커 표(table_para_index)의 페이지에 귀속.
-            //    - 빈 줄 감춤(hidden_empty_paras): 직전 item 문단(대개 표)의 페이지에 귀속.
-            let mut extra_by_page: std::collections::HashMap<u32, Vec<(usize, bool, usize)>> =
-                std::collections::HashMap::new();
-            let mut emitted_extra: std::collections::HashSet<usize> =
-                std::collections::HashSet::new();
-            for page in pr.pages.iter() {
-                for cc in &page.column_contents {
-                    for wp in &cc.wrap_around_paras {
-                        if !emitted_extra.insert(wp.para_index) {
-                            continue;
-                        }
-                        // [#1705] 어울림(floating) 표의 트레일링 빈 문단 귀속:
-                        //   line_seg 폭(sw)이 좁으면(표 옆 wrap zone) 표의 **첫(앵커) 페이지**,
-                        //   전체 폭이면(표 아래로 흐름) 표의 **마지막 페이지**.
-                        //   한글은 wrap zone 문단을 앵커 페이지에, 전체폭 문단을 표 끝 페이지에 둔다.
-                        let sw_px = paragraphs
-                            .get(wp.para_index)
-                            .and_then(|p| p.line_segs.first())
-                            .map(|s| hwpunit_to_px(s.segment_width as i32, dpi))
-                            .unwrap_or(0.0);
-                        let body_w = page.layout.body_area.width;
-                        let is_wrap_zone = sw_px > 0.0 && sw_px < body_w * 0.9;
-                        // [#1955] 글뒤로/글앞으로 anchor 표는 플로우를 소비하지 않으므로
-                        // 후행 문단은 폭과 무관하게 **앵커 페이지** 귀속 (한글: stored
-                        // LINE_SEG vpos 가 앵커 쪽 위치를 가리킴).
-                        let anchor_behind = paragraphs
-                            .get(wp.table_para_index)
-                            .map(|p| {
-                                p.controls.iter().any(|c| {
-                                    matches!(c, Control::Table(t)
-                                        if !t.common.treat_as_char
-                                            && matches!(t.common.text_wrap,
-                                                crate::model::shape::TextWrap::BehindText
-                                                    | crate::model::shape::TextWrap::InFrontOfText))
-                                })
-                            })
-                            .unwrap_or(false);
-                        let disp = if is_wrap_zone || anchor_behind {
-                            item_first_page.get(&wp.table_para_index)
-                        } else {
-                            item_disp_page.get(&wp.table_para_index)
-                        }
-                        .copied()
-                        .unwrap_or(sec_start_page + 1);
-                        extra_by_page.entry(disp).or_default().push((
-                            wp.para_index,
-                            true,
-                            wp.table_para_index,
-                        ));
-                    }
-                }
-            }
-            let mut hidden_sorted: Vec<usize> = pr
-                .hidden_empty_paras
-                .iter()
-                .copied()
-                .filter(|p| !item_disp_page.contains_key(p) && !emitted_extra.contains(p))
-                .collect();
-            hidden_sorted.sort_unstable();
-            for hidx in hidden_sorted {
-                let mut disp = sec_start_page + 1;
-                for j in (0..hidx).rev() {
-                    if let Some(d) = item_disp_page.get(&j) {
-                        disp = *d;
-                        break;
-                    }
-                }
-                extra_by_page
-                    .entry(disp)
-                    .or_default()
-                    .push((hidx, false, 0));
-                emitted_extra.insert(hidx);
-            }
 
             for (local_idx, page) in pr.pages.iter().enumerate() {
                 if let Some(pf) = page_filter {
@@ -5233,6 +5744,248 @@ impl DocumentCore {
         for i in from..json_cache.len() {
             json_cache[i].clear();
         }
+    }
+
+    /// [#3137 Stage 4] same-line인 셀 문단 꼬리 편집을 캐시된 TextLine에 반영한다.
+    ///
+    /// 이 경로는 새 page tree를 만들지 않는다. 기존 캐시에 대상 마지막 줄이 정확히
+    /// 하나 있고, 편집 후 문단도 컨트롤/번호/배경 없는 가로 plain text이며 자연 폭이
+    /// 셀 너비 안에 있는 경우에만 TextRun 자식을 재생성한다. 하나라도 다르면 caller가
+    /// 기존 `invalidate_page_tree_cache_from(0)`으로 폴백한다.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn try_patch_cached_focused_cell_tail_line(
+        &self,
+        section_idx: usize,
+        parent_para_idx: usize,
+        control_idx: usize,
+        cell_idx: usize,
+        cell_para_idx: usize,
+        line_index: usize,
+        line_start: usize,
+        old_text_len: usize,
+        new_text_len: usize,
+    ) -> Option<FocusedPageTreePatch> {
+        // partial Canvas replay는 일반 화면 text만 대상으로 한다. 편집 표식/디버그
+        // overlay는 bbox 밖에 별도 glyph를 그릴 수 있으므로 기존 full repaint를 유지한다.
+        if self.show_paragraph_marks || self.show_control_codes || self.debug_overlay {
+            return None;
+        }
+        let valid_table_cell = self
+            .document
+            .sections
+            .get(section_idx)
+            .and_then(|section| section.paragraphs.get(parent_para_idx))
+            .and_then(|paragraph| paragraph.controls.get(control_idx))
+            .and_then(|control| match control {
+                Control::Table(table) if cell_idx != super::super::TABLE_CAPTION_CELL_SENTINEL => {
+                    table.cells.get(cell_idx)
+                }
+                _ => None,
+            })
+            .and_then(|cell| cell.paragraphs.get(cell_para_idx))
+            .is_some();
+        if !valid_table_cell {
+            return None;
+        }
+        let paragraph = self.get_cell_paragraph_ref(
+            section_idx,
+            parent_para_idx,
+            control_idx,
+            cell_idx,
+            cell_para_idx,
+        )?;
+        if paragraph.text.chars().count() != new_text_len
+            || paragraph.text.encode_utf16().count() != new_text_len
+            || !paragraph.controls.is_empty()
+            || !paragraph.range_tags.is_empty()
+            || !paragraph.field_ranges.is_empty()
+            || !paragraph.orphan_field_ends.is_empty()
+            || !paragraph.tab_extended.is_empty()
+            || paragraph
+                .text
+                .chars()
+                .any(|character| matches!(character, '\r' | '\n' | '\t'))
+        {
+            return None;
+        }
+
+        let composed = compose_paragraph(paragraph);
+        if composed.numbering_text.is_some()
+            || !composed.inline_controls.is_empty()
+            || !composed.tac_controls.is_empty()
+            || !composed.footnote_positions.is_empty()
+            || !composed.tab_extended.is_empty()
+            || composed.lines.len() != paragraph.line_segs.len()
+            || line_index + 1 != composed.lines.len()
+        {
+            return None;
+        }
+        let line = composed.lines.get(line_index)?;
+        if line.char_start != line_start || line.has_line_break || line.runs.is_empty() {
+            return None;
+        }
+        let alignment = self
+            .styles
+            .para_styles
+            .get(paragraph.para_shape_id as usize)
+            .map(|style| style.alignment)
+            .unwrap_or(Alignment::Left);
+        if !focused_partial_repaint_alignment_is_safe(
+            alignment,
+            line_index + 1 == composed.lines.len(),
+            line.has_line_break,
+        ) {
+            return None;
+        }
+
+        let mut candidates = Vec::new();
+        {
+            let cache = self.page_tree_cache.borrow();
+            for (page_index, tree) in cache.iter().enumerate() {
+                let Some(tree) = tree else {
+                    continue;
+                };
+                collect_cached_focused_tail_lines(
+                    &tree.root,
+                    page_index,
+                    section_idx,
+                    parent_para_idx,
+                    control_idx,
+                    cell_idx,
+                    cell_para_idx,
+                    line_index,
+                    line_start,
+                    old_text_len,
+                    &mut candidates,
+                );
+            }
+        }
+        if candidates.len() != 1 {
+            return None;
+        }
+        let template = candidates.pop().expect("길이 1을 확인한 focused line");
+        if !template.line_bbox.x.is_finite()
+            || !template.line_bbox.y.is_finite()
+            || !template.line_bbox.width.is_finite()
+            || !template.line_bbox.height.is_finite()
+            || template.line_bbox.width <= 0.0
+            || template.line_bbox.height <= 0.0
+        {
+            return None;
+        }
+
+        let mut char_start = line_start;
+        let mut x = template.run_x;
+        let mut prepared = Vec::with_capacity(line.runs.len());
+        for (run_index, run) in line.runs.iter().enumerate() {
+            let char_style = self.styles.char_styles.get(run.char_style_id as usize)?;
+            let run_border_fill_id = char_style.border_fill_id;
+            let run_has_background = run_border_fill_id > 0
+                && self
+                    .styles
+                    .border_styles
+                    .get((run_border_fill_id as usize).saturating_sub(1))
+                    .is_some_and(|border| border.fill_color.is_some());
+            if run.display_text.is_some()
+                || run.char_overlap.is_some()
+                || run.footnote_marker.is_some()
+                || !(run.lang_index <= 3 || run.lang_index == 5)
+                || run_has_background
+            {
+                return None;
+            }
+
+            let mut style = resolved_to_text_style(&self.styles, run.char_style_id, run.lang_index);
+            if !focused_partial_repaint_style_is_safe(&style) {
+                return None;
+            }
+            style.default_tab_width = template.layout_style.default_tab_width;
+            style.tab_stops = template.layout_style.tab_stops.clone();
+            style.auto_tab_right = template.layout_style.auto_tab_right;
+            style.available_width = template.layout_style.available_width;
+            style.text_start_offset = template.layout_style.text_start_offset;
+            style.line_x_offset = x - template.column_x;
+            style.right_tab_block_width_override = None;
+            style.tab_leaders.clear();
+            style.inline_tabs.clear();
+            style.extra_word_spacing = 0.0;
+            style.extra_char_spacing = 0.0;
+            style.extra_dash_advance = 0.0;
+
+            let width = estimate_text_width(&run.text, &style);
+            if !width.is_finite() || width < 0.0 {
+                return None;
+            }
+            let run_len = run.text.chars().count();
+            let is_last_run = run_index + 1 == line.runs.len();
+            prepared.push((
+                TextRunNode {
+                    text: run.text.clone(),
+                    style,
+                    char_shape_id: Some(run.char_style_id),
+                    para_shape_id: Some(composed.para_style_id),
+                    section_index: Some(section_idx),
+                    para_index: Some(cell_para_idx),
+                    char_start: Some(char_start),
+                    cell_context: Some(template.cell_context.clone()),
+                    is_para_end: is_last_run,
+                    is_line_break_end: false,
+                    rotation: 0.0,
+                    is_vertical: false,
+                    char_overlap: None,
+                    border_fill_id: run_border_fill_id,
+                    baseline: template.baseline,
+                    field_marker: FieldMarkerType::None,
+                    display_text: None,
+                },
+                BoundingBox::new(x, template.run_y, width, template.run_height),
+            ));
+            char_start += run_len;
+            x += width;
+        }
+        if char_start != new_text_len
+            || x - template.run_x > template.layout_style.available_width + 0.051
+        {
+            return None;
+        }
+
+        {
+            let mut cache = self.page_tree_cache.borrow_mut();
+            let tree = cache.get_mut(template.page_index)?.as_mut()?;
+            let mut replacement_nodes = Vec::with_capacity(prepared.len());
+            for (run, bbox) in prepared {
+                let node_id = tree.next_id();
+                replacement_nodes.push(RenderNode::new(
+                    node_id,
+                    RenderNodeType::TextRun(run),
+                    bbox,
+                ));
+            }
+            let line_node = find_render_node_mut(&mut tree.root, template.line_node_id)?;
+            if !matches!(line_node.node_type, RenderNodeType::TextLine(_)) {
+                return None;
+            }
+            line_node.children = replacement_nodes;
+            line_node.invalidate();
+            tree.root.invalidate();
+        }
+
+        if let Some(variants) = self
+            .layer_tree_json_cache
+            .borrow_mut()
+            .get_mut(template.page_index)
+        {
+            variants.clear();
+        }
+        Some(FocusedPageTreePatch {
+            page_index: template.page_index as u32,
+            dirty_rect: BoundingBox::new(
+                template.line_bbox.x - FOCUSED_PAGE_REPAINT_PAD,
+                template.line_bbox.y - FOCUSED_PAGE_REPAINT_PAD,
+                template.line_bbox.width + FOCUSED_PAGE_REPAINT_PAD * 2.0,
+                template.line_bbox.height + FOCUSED_PAGE_REPAINT_PAD * 2.0,
+            ),
+        })
     }
 
     /// 페이지 렌더 트리 캐시 전체 무효화.
@@ -5943,6 +6696,78 @@ impl DocumentCore {
     // =====================================================================
 }
 
+/// [#3697] dump-pages 텍스트/JSON 두 출력이 공유하는 구역 전처리 결과.
+struct PageDumpSectionCtx<'a> {
+    /// 본문(+미주 #1082) 문단. 미주가 없으면 원본 슬라이스 차용.
+    paragraphs: std::borrow::Cow<'a, [Paragraph]>,
+    /// 본문 문단 수 — 이 인덱스 이상은 미주 문단.
+    body_len: usize,
+    /// 표시 페이지(global+1) → (para_index, 어울림 여부, 앵커 표 para_index) — #1700 계열.
+    extra_by_page: std::collections::HashMap<u32, Vec<(usize, bool, usize)>>,
+}
+
+/// [#3697] dump-pages JSON 의 문단 미리보기 — 텍스트 덤프와 같은 제어문자 제거 + 40자.
+/// 기계 소비자용이므로 텍스트 덤프의 "(빈)" 대체 표기는 쓰지 않는다 (빈 문단 = "").
+fn para_text_preview(para: Option<&Paragraph>) -> String {
+    para.map(|p| {
+        p.text
+            .chars()
+            .filter(|c| *c > '\u{001F}')
+            .take(40)
+            .collect()
+    })
+    .unwrap_or_default()
+}
+
+/// [#3697] dump-pages JSON 의 표 컨트롤 요약.
+/// `with_geometry` 는 전체 표 항목에서만 true (텍스트 덤프와 같은 정보 범위).
+fn table_summary_json(
+    paragraphs: &[Paragraph],
+    para_index: usize,
+    control_index: usize,
+    dpi: f64,
+    with_geometry: bool,
+) -> serde_json::Value {
+    use crate::model::control::Control;
+    use crate::renderer::hwpunit_to_px;
+
+    paragraphs
+        .get(para_index)
+        .and_then(|p| p.controls.get(control_index))
+        .and_then(|c| {
+            if let Control::Table(t) = c {
+                let mut v = serde_json::json!({
+                    "rowCount": t.row_count,
+                    "colCount": t.col_count,
+                });
+                if with_geometry {
+                    if let Some(obj) = v.as_object_mut() {
+                        obj.insert(
+                            "widthPx".into(),
+                            serde_json::json!(hwpunit_to_px(t.common.width as i32, dpi)),
+                        );
+                        obj.insert(
+                            "heightPx".into(),
+                            serde_json::json!(hwpunit_to_px(t.common.height as i32, dpi)),
+                        );
+                        obj.insert(
+                            "textWrap".into(),
+                            serde_json::json!(format!("{:?}", t.common.text_wrap)),
+                        );
+                        obj.insert(
+                            "treatAsChar".into(),
+                            serde_json::json!(t.common.treat_as_char),
+                        );
+                    }
+                }
+                Some(v)
+            } else {
+                None
+            }
+        })
+        .unwrap_or(serde_json::Value::Null)
+}
+
 /// 단이 HWP 원본 layout 에서 사용했을 높이를 LINE_SEG vpos 기준으로 추정 (px).
 ///
 /// 알고리즘:
@@ -6057,29 +6882,38 @@ fn compute_hwp_used_height(
     Some(hwpunit_to_px((bottom_hwpu - base_top).max(0), dpi))
 }
 
-/// LINE_SEG vertical_pos 범위를 문자열로 포맷.
+/// [#3697] vpos 범위 분석 결과 — 텍스트(`format_vpos_range`)/JSON(`vpos_range_json`)
+/// 두 표현이 같은 판정(리셋/되감기)을 공유하기 위한 중간 형태.
+struct VposRange {
+    first: i32,
+    last: i32,
+    /// 요청 범위가 한 줄이면 true (텍스트 표현이 단일값으로 축약).
+    single: bool,
+    resets: Vec<usize>,
+    rewinds: Vec<usize>,
+}
+
+/// LINE_SEG vertical_pos 범위 분석.
 ///
 /// `start_line..end_line` 가 None 이면 문단 전체 범위.
 /// `vertical_pos == 0` 인 줄(문단 첫 줄 제외)을 vpos-reset 으로 마킹.
-fn format_vpos_range(
+fn vpos_range(
     para: Option<&Paragraph>,
     start_line: Option<usize>,
     end_line: Option<usize>,
-) -> String {
-    let Some(p) = para else { return String::new() };
+) -> Option<VposRange> {
+    let p = para?;
     if p.line_segs.is_empty() {
-        return String::new();
-    };
+        return None;
+    }
     let total = p.line_segs.len();
     let s = start_line.unwrap_or(0).min(total.saturating_sub(1));
     let end_exclusive = end_line.unwrap_or(total).min(total);
     if s >= end_exclusive {
-        return String::new();
-    };
+        return None;
+    }
     let e = end_exclusive - 1;
 
-    let first = p.line_segs[s].vertical_pos;
-    let last = p.line_segs[e].vertical_pos;
     let mut resets: Vec<usize> = Vec::new();
     let mut rewinds: Vec<usize> = Vec::new();
     for i in s..=e {
@@ -6091,18 +6925,81 @@ fn format_vpos_range(
             rewinds.push(i);
         }
     }
-    let mut s_out = if s == e {
-        format!("vpos={}", first)
-    } else {
-        format!("vpos={}..{}", first, last)
+    Some(VposRange {
+        first: p.line_segs[s].vertical_pos,
+        last: p.line_segs[e].vertical_pos,
+        single: s == e,
+        resets,
+        rewinds,
+    })
+}
+
+/// LINE_SEG vertical_pos 범위를 문자열로 포맷.
+fn format_vpos_range(
+    para: Option<&Paragraph>,
+    start_line: Option<usize>,
+    end_line: Option<usize>,
+) -> String {
+    let Some(r) = vpos_range(para, start_line, end_line) else {
+        return String::new();
     };
-    for r in resets {
-        s_out.push_str(&format!(" [vpos-reset@line{}]", r));
+    let mut s_out = if r.single {
+        format!("vpos={}", r.first)
+    } else {
+        format!("vpos={}..{}", r.first, r.last)
+    };
+    for i in r.resets {
+        s_out.push_str(&format!(" [vpos-reset@line{}]", i));
     }
-    for r in rewinds {
-        s_out.push_str(&format!(" [vpos-rewind@line{}]", r));
+    for i in r.rewinds {
+        s_out.push_str(&format!(" [vpos-rewind@line{}]", i));
     }
     s_out
+}
+
+/// [#3697] `format_vpos_range` 와 같은 분석(`vpos_range`)의 JSON 표현.
+fn vpos_range_json(
+    para: Option<&Paragraph>,
+    start_line: Option<usize>,
+    end_line: Option<usize>,
+) -> serde_json::Value {
+    match vpos_range(para, start_line, end_line) {
+        Some(r) => serde_json::json!({
+            "first": r.first,
+            "last": r.last,
+            "resets": r.resets,
+            "rewinds": r.rewinds,
+        }),
+        None => serde_json::Value::Null,
+    }
+}
+
+/// [#3697] `format_line_seg_brief` 와 같은 요약(첫/마지막 줄)의 JSON 표현.
+fn line_seg_brief_json(para: Option<&Paragraph>) -> serde_json::Value {
+    fn seg_json(seg: &crate::model::paragraph::LineSeg) -> serde_json::Value {
+        serde_json::json!({
+            "textStart": seg.text_start,
+            "lineHeight": seg.line_height,
+            "textHeight": seg.text_height,
+            "baselineDistance": seg.baseline_distance,
+            "lineSpacing": seg.line_spacing,
+            "columnStart": seg.column_start,
+            "segmentWidth": seg.segment_width,
+        })
+    }
+    let Some(p) = para else {
+        return serde_json::Value::Null;
+    };
+    if p.line_segs.is_empty() {
+        return serde_json::json!({ "count": 0 });
+    }
+    let first = &p.line_segs[0];
+    let last = p.line_segs.last().unwrap_or(first);
+    serde_json::json!({
+        "count": p.line_segs.len(),
+        "first": seg_json(first),
+        "last": seg_json(last),
+    })
 }
 
 /// dump-pages에서 line_seg 계약을 빠르게 대조하기 위한 한 줄 요약.
@@ -6153,6 +7050,147 @@ mod tests {
     use super::*;
     use crate::model::bin_data::BinDataContent;
     use crate::renderer::render_tree::RenderNodeType;
+
+    #[test]
+    fn issue3137_focused_partial_repaint_rejects_unsafe_justify_and_extra_spacing() {
+        assert!(focused_partial_repaint_alignment_is_safe(
+            Alignment::Left,
+            false,
+            false
+        ));
+        assert!(focused_partial_repaint_alignment_is_safe(
+            Alignment::Justify,
+            true,
+            false
+        ));
+        assert!(!focused_partial_repaint_alignment_is_safe(
+            Alignment::Justify,
+            false,
+            false
+        ));
+        assert!(!focused_partial_repaint_alignment_is_safe(
+            Alignment::Justify,
+            true,
+            true
+        ));
+
+        let plain = TextStyle::default();
+        assert!(focused_partial_repaint_style_is_safe(&plain));
+
+        for (label, style) in [
+            (
+                "word spacing",
+                TextStyle {
+                    extra_word_spacing: 1.0,
+                    ..plain.clone()
+                },
+            ),
+            (
+                "character spacing",
+                TextStyle {
+                    extra_char_spacing: 1.0,
+                    ..plain.clone()
+                },
+            ),
+            (
+                "dash advance",
+                TextStyle {
+                    extra_dash_advance: 1.0,
+                    ..plain.clone()
+                },
+            ),
+            (
+                "negative letter spacing",
+                TextStyle {
+                    letter_spacing: -0.02,
+                    ..plain.clone()
+                },
+            ),
+        ] {
+            assert!(
+                !focused_partial_repaint_style_is_safe(&style),
+                "{label} must use full repaint"
+            );
+        }
+    }
+
+    #[test]
+    fn issue3137_focused_partial_repaint_rejects_extended_ink_styles() {
+        let plain = TextStyle::default();
+        let styled = [
+            (
+                "outline",
+                TextStyle {
+                    outline_type: 1,
+                    ..plain.clone()
+                },
+            ),
+            (
+                "shadow",
+                TextStyle {
+                    shadow_type: 1,
+                    shadow_offset_x: 8.0,
+                    ..plain.clone()
+                },
+            ),
+            (
+                "emboss",
+                TextStyle {
+                    emboss: true,
+                    ..plain.clone()
+                },
+            ),
+            (
+                "engrave",
+                TextStyle {
+                    engrave: true,
+                    ..plain.clone()
+                },
+            ),
+            (
+                "emphasis",
+                TextStyle {
+                    emphasis_dot: 1,
+                    ..plain.clone()
+                },
+            ),
+            (
+                "underline",
+                TextStyle {
+                    underline: crate::model::style::UnderlineType::Bottom,
+                    ..plain.clone()
+                },
+            ),
+            (
+                "strike",
+                TextStyle {
+                    strikethrough: true,
+                    ..plain.clone()
+                },
+            ),
+            (
+                "superscript",
+                TextStyle {
+                    superscript: true,
+                    ..plain.clone()
+                },
+            ),
+            (
+                "subscript",
+                TextStyle {
+                    subscript: true,
+                    ..plain.clone()
+                },
+            ),
+        ];
+
+        for (label, style) in styled {
+            assert!(
+                !focused_partial_repaint_style_is_safe(&style),
+                "{label} must use full repaint"
+            );
+        }
+    }
 
     #[test]
     fn markdown_table_paragraph_preserves_equation_script() {
