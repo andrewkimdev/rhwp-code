@@ -11,7 +11,7 @@ members = [".", "tools/rhwp-subsecond"]
 resolver = "2"
 
 [lib]
-# Dioxus CLI 0.7.9 classifies the first crate type when capturing hot-patch args.
+# Dioxus CLI 0.7.10 classifies the first crate type when capturing hot-patch args.
 crate-type = ["rlib", "cdylib"]
 
 [[bin]]
@@ -36,7 +36,7 @@ cipher = "0.5"
 hmac = "0.13"
 pbkdf2 = "0.13"
 getrandom = { version = "0.4", features = ["wasm_js"] }
-sha1 = "0.10"
+sha1 = "0.11"
 sha2 = "0.11"
 blake3 = "1"
 zip = { version = "8.5", default-features = false, features = ["deflate"] }

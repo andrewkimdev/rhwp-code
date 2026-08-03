@@ -236,7 +236,7 @@ test('repository exposes a feature-gated dx adapter without changing normal WASM
   const studioPackage = readFileSync(new URL('../package.json', import.meta.url), 'utf8');
 
   assert.match(cargo, /subsecond-dev\s*=\s*\["dep:subsecond"\]/);
-  assert.match(cargo, /subsecond\s*=\s*\{\s*version\s*=\s*"=0\.7\.9",\s*optional\s*=\s*true\s*\}/);
+  assert.match(cargo, /subsecond\s*=\s*\{\s*version\s*=\s*"=0\.7\.10",\s*optional\s*=\s*true\s*\}/);
   assert.match(cargo, /members\s*=\s*\[[\s\S]*"tools\/rhwp-subsecond"/);
   assert.match(adapterCargo, /name\s*=\s*"rhwp-subsecond"/);
   assert.match(adapterCargo, /build\s*=\s*"build\.rs"/);
@@ -260,7 +260,7 @@ test('repository exposes a feature-gated dx adapter without changing normal WASM
   assert.match(vite, /rhwp-subsecond-vite/);
   assert.match(vite, /rhwp-subsecond\.js/);
   assert.match(studioPackage, /"subsecond:sync"[\s\S]*rhwp-subsecond-vite/);
-  assert.match(studioPackage, /"subsecond:install"[\s\S]*dioxus-cli --version 0\.7\.9 --locked/);
+  assert.match(studioPackage, /"subsecond:install"[\s\S]*dioxus-cli --version 0\.7\.10 --locked/);
   assert.match(studioPackage, /"subsecond:serve"[\s\S]*--package rhwp-subsecond[\s\S]*--hot-patch/);
   assert.match(studioPackage, /"dev:subsecond"\s*:\s*"npm run subsecond:sync && RHWP_SUBSECOND=1 vite"/);
 });
