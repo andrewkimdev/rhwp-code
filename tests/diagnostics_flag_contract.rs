@@ -187,6 +187,30 @@ fn diag_rejects_flag_in_file_position() {
     assert_rejects(&["diag", "--verbose"], "--verbose");
 }
 
+// ── capabilities 내부 개발 명령 ────────────────────────────────────────────
+
+#[test]
+fn internal_commands_reject_unknown_flags_before_reading_or_writing() {
+    // capabilities 에 보이는 내부 명령도 선언된 flags 가 없다는 이유로 침묵 성공해서는
+    // 안 된다. 특히 gen-pua 는 이를 출력 경로로 오독하면 저장소 루트에 산출물을 만들 수
+    // 있으므로, 파일 접근 전에 exit 2 + stdout 0바이트로 멈춰야 한다.
+    for command in [
+        "gen-pua",
+        "gen-table",
+        "measure-width",
+        "test-caption",
+        "test-field",
+        "test-shape",
+    ] {
+        assert_rejects(&[command, "--bogus-flag"], "--bogus-flag");
+    }
+}
+
+#[test]
+fn measure_width_rejects_a_flag_consumed_as_an_option_value() {
+    assert_rejects(&["measure-width", "--size", "--bogus-flag"], "--size");
+}
+
 // ── run 예외의 자기서술 (G3) ─────────────────────────────────────────────
 
 #[test]

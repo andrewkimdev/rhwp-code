@@ -11885,7 +11885,26 @@ fn dump_raw_records(args: &[String]) -> i32 {
     EXIT_OK
 }
 
+/// 옵션을 받지 않는 내부 개발 명령의 위치 인자를 엄격히 검증한다.
+///
+/// 이 명령들은 capabilities 에도 노출되어 있다. 플래그처럼 보이는 값을 위치 인자로
+/// 삼키거나 여분 인자를 무시하면, 호출자는 오타 난 자동화를 성공으로 오인한다.
+fn validate_internal_positionals(command: &str, args: &[String], max: usize) -> Result<(), i32> {
+    if let Some(flag) = args.iter().find(|arg| arg.starts_with('-')) {
+        eprintln!("오류: {command} 은 알 수 없는 옵션을 받지 않습니다 - {flag}");
+        return Err(EXIT_USAGE);
+    }
+    if args.len() > max {
+        eprintln!("오류: {command} 은 위치 인자를 최대 {max}개만 받습니다.");
+        return Err(EXIT_USAGE);
+    }
+    Ok(())
+}
+
 fn test_shape_roundtrip(args: &[String]) -> i32 {
+    if let Err(code) = validate_internal_positionals("test-shape", args, 2) {
+        return code;
+    }
     let input = if args.is_empty() {
         "saved/g555-s.hwp"
     } else {
@@ -11961,6 +11980,13 @@ fn test_caption(args: &[String]) -> i32 {
         eprintln!("사용법: rhwp test-caption <파일.hwp> [-o <출력 폴더>]");
         return EXIT_USAGE;
     }
+    if args[0].starts_with('-') {
+        eprintln!(
+            "오류: test-caption 입력 파일 자리에 옵션을 쓸 수 없습니다 - {}",
+            args[0]
+        );
+        return EXIT_USAGE;
+    }
 
     let input = &args[0];
     let mut output_dir = Path::new("output/caption-test");
@@ -11972,6 +11998,10 @@ fn test_caption(args: &[String]) -> i32 {
                     eprintln!("오류: {} 뒤에 출력 폴더 경로가 필요합니다.", args[i]);
                     return EXIT_USAGE;
                 };
+                if value.starts_with('-') {
+                    eprintln!("오류: {} 뒤에 출력 폴더 경로가 필요합니다.", args[i]);
+                    return EXIT_USAGE;
+                }
                 output_dir = Path::new(value);
                 i += 2;
             }
@@ -12100,8 +12130,29 @@ fn test_caption(args: &[String]) -> i32 {
 }
 
 fn gen_table(args: &[String]) -> i32 {
-    let rows: u16 = args.first().and_then(|s| s.parse().ok()).unwrap_or(1000);
-    let cols: u16 = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(6);
+    if let Err(code) = validate_internal_positionals("gen-table", args, 3) {
+        return code;
+    }
+    let rows = match args.first() {
+        Some(value) => match value.parse::<u16>() {
+            Ok(value) => value,
+            Err(_) => {
+                eprintln!("오류: gen-table 행 수는 0~65535 정수여야 합니다 - {value}");
+                return EXIT_USAGE;
+            }
+        },
+        None => 1000,
+    };
+    let cols = match args.get(1) {
+        Some(value) => match value.parse::<u16>() {
+            Ok(value) => value,
+            Err(_) => {
+                eprintln!("오류: gen-table 열 수는 0~65535 정수여야 합니다 - {value}");
+                return EXIT_USAGE;
+            }
+        },
+        None => 6,
+    };
     let output = args
         .get(2)
         .map(|s| s.as_str())
@@ -12201,6 +12252,9 @@ fn gen_table(args: &[String]) -> i32 {
 ///   rhwp gen-pua [output_path]
 ///   기본 출력: output/pua-test.hwp
 fn gen_pua_test(args: &[String]) -> i32 {
+    if let Err(code) = validate_internal_positionals("gen-pua", args, 1) {
+        return code;
+    }
     // gen-pua 의 positional 은 입력이 아니라 **출력** 경로다. capabilities 가 다른
     // 진단 명령과 나란히 노출하는 탓에 `rhwp gen-pua 문서.hwp` 를 "이 파일을 조사"로
     // 읽은 호출이 실제로 원본을 말없이 덮어썼다(#3691 조사 중 발생). 사용자가 명시한
@@ -12312,6 +12366,9 @@ fn test_field_roundtrip(args: &[String]) -> i32 {
     if args.is_empty() {
         eprintln!("사용법: rhwp test-field <파일.hwp> [출력.hwp]");
         return EXIT_USAGE;
+    }
+    if let Err(code) = validate_internal_positionals("test-field", args, 2) {
+        return code;
     }
     let input = args[0].as_str();
     let output = args
