@@ -4843,7 +4843,7 @@ impl HwpDocument {
 
     /// 문서 텍스트 검색
     ///
-    /// [#3865] `include_cells` 를 참으로 주면 표 셀·글상자 안의 매치도 돌려준다. 그 경우
+    /// [#3865] `include_cells` 를 참으로 주면 표 셀 안의 일반 텍스트 매치도 돌려준다. 그 경우
     /// 결과에 `cellContext`(parentPara·ctrlIdx·cellIdx·cellPara)가 실리므로, 호출자는
     /// 그 좌표로 커서를 옮길 수 있어야 한다. 생략하면 종전대로 본문만 본다.
     #[wasm_bindgen(js_name = searchText)]

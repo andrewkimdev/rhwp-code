@@ -27,8 +27,37 @@ const TABLE_HML: &str = r#"<HWPML Version="2.91"><HEAD/><BODY><SECTION>
   </TABLE></TEXT></P>
 </SECTION></BODY><TAIL/></HWPML>"#;
 
+/// 글상자 매치는 `cellContext`의 네 숫자만으로는 표 셀과 구별되지 않는다. Find/F3의
+/// #3865 opt-in은 표 셀 좌표만 이동·치환하므로, 이 매치는 반환하면 안 된다.
+const TEXTBOX_HML: &str = r#"<HWPML Version="2.91"><HEAD/><BODY><SECTION>
+  <P><TEXT><RECTANGLE X0="0" X1="1000" X2="1000" X3="0" Y0="0" Y1="0" Y2="500" Y3="500">
+    <SHAPEOBJECT><SIZE Width="1000" Height="500"/></SHAPEOBJECT>
+    <DRAWINGOBJECT><SHAPECOMPONENT XPos="0" YPos="0" OriWidth="1000" OriHeight="500" CurWidth="1000" CurHeight="500"/>
+      <LINESHAPE Width="0" Style="Solid" EndCap="Flat" Alpha="0"/>
+      <DRAWTEXT><TEXTMARGIN Left="0" Right="0" Top="0" Bottom="0"/><PARALIST>
+        <P><TEXT><CHAR>글상자전용단어</CHAR></TEXT></P>
+      </PARALIST></DRAWTEXT>
+    </DRAWINGOBJECT>
+  </RECTANGLE></TEXT></P>
+</SECTION></BODY><TAIL/></HWPML>"#;
+
 fn core() -> DocumentCore {
     DocumentCore::from_bytes(TABLE_HML.as_bytes()).expect("표 픽스처가 열려야 한다")
+}
+
+#[test]
+fn opting_in_keeps_textbox_matches_out_of_table_cell_navigation() {
+    let core =
+        DocumentCore::from_bytes(TEXTBOX_HML.as_bytes()).expect("글상자 픽스처가 열려야 한다");
+
+    let found = core
+        .search_text_native("글상자전용단어", 0, 0, 0, true, true, true)
+        .expect("검색 실패");
+
+    assert!(
+        found.contains("\"found\":false"),
+        "표 셀 전용 opt-in이 글상자 매치를 Find/F3로 넘기면 부모 문단을 이동·치환할 수 있다: {found}"
+    );
 }
 
 /// 끈 상태의 동작을 먼저 고정한다 — 이게 무너지면 아래 판정이 공허하다.

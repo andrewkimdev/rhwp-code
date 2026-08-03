@@ -291,13 +291,15 @@ fn every_stateless_tool_belongs_to_some_specific_profile() {
         }
     }
 
-    // [#3762/#3776/#3787] 자기서술(문서 IR·capabilities·출처지도) 스키마 도구 — 업무를
+    // [#3762/#3776/#3787/#3828] 자기서술(문서 IR·capabilities·출처지도·agent manifest)
+    // 스키마 도구 — 업무를
     // 수행하는 직무가 아니라 외부 바인딩·코드 생성기 저자를 위한 개발자 도구이므로
     // 의도적으로 `개발통합`(필터 없음)에만 있고 특정 업무 프로필에는 없다.
     let meta_only_by_design: std::collections::HashSet<&str> = [
         "hwp_export_ir_schema",
         "hwp_export_capabilities_schema",
         "hwp_export_provenance_map",
+        "hwp_export_agent_manifest",
     ]
     .into_iter()
     .collect();

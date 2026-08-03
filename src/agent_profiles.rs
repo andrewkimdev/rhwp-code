@@ -67,6 +67,7 @@ pub const PROFILES: &[AgentProfile] = &[
         summary: "임원·보고용 — 문서 파악과 요약 근거 수집, 제출용 산출물 확인",
         tools: &[
             "hwp_info",
+            "hwp_explain",
             "hwp_digest",
             "hwp_export_text",
             "hwp_export_structure",
@@ -76,7 +77,7 @@ pub const PROFILES: &[AgentProfile] = &[
         ],
         session_tools: None,
         recipe: &[
-            "hwp_digest 로 메타·개요·발췌를 한 번에, 또는 hwp_info 로 규모·형식만 파악",
+            "hwp_explain 으로 메타·구조·표·누름틀을 한 봉투로, 또는 hwp_digest 로 메타·개요·발췌를 한 번에 파악",
             "hwp_export_structure 로 목차 확보 후 필요한 절만 hwp_export_text",
             "근거 위치는 hwp_search 로 쪽 번호까지",
             "제출용은 hwp_export_pdf, 훑어보기는 hwp_thumbnail",
