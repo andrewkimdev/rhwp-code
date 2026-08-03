@@ -121,3 +121,21 @@ test('F5 단일 셀 선택 이동은 화면 캐럿을 숨긴다', () => {
   assert.match(phaseOne, /this\.cursor\.moveCellSelection\(dr, dc\);\s*[\s\S]*this\.caret\.hide\(\);/);
   assert.doesNotMatch(phaseOne, /this\.updateCaret\(\)/);
 });
+
+test('F5 셀 선택에서 Escape는 마지막 셀의 편집 캐럿으로 복귀한다', () => {
+  const keyboardPath = path.join(studioRoot, 'src/engine/input-handler-keyboard.ts');
+  const keyboard = readFileSync(keyboardPath, 'utf8');
+  const modeStart = keyboard.indexOf('// ─── 셀 선택 모드 중 키 처리');
+  const escapeStart = keyboard.indexOf("if (e.key === 'Escape')", modeStart);
+  const escapeEnd = keyboard.indexOf('// 셀 크기 조절', escapeStart);
+
+  assert.notEqual(modeStart, -1, 'F5 셀 선택 키 처리 블록을 찾을 수 없습니다');
+  assert.notEqual(escapeStart, -1, 'F5 셀 선택 Escape 처리 블록을 찾을 수 없습니다');
+  assert.notEqual(escapeEnd, -1, 'F5 셀 선택 Escape 처리 블록의 끝을 찾을 수 없습니다');
+
+  const escapeBlock = keyboard.slice(escapeStart, escapeEnd);
+  assert.match(escapeBlock, /this\.cursor\.exitCellSelectionMode\(\);/);
+  assert.match(escapeBlock, /this\.cellSelectionRenderer\?\.clear\(\);/);
+  assert.match(escapeBlock, /this\.updateCaret\(\);/);
+  assert.doesNotMatch(escapeBlock, /enterTableObjectSelection|renderTableObjectSelection|table-object-selection-changed/);
+});

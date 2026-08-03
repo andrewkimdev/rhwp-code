@@ -971,17 +971,10 @@ export function onKeyDown(this: any, e: KeyboardEvent): void {
   if (this.cursor.isInCellSelectionMode()) {
     if (e.key === 'Escape') {
       e.preventDefault();
-      // 셀 선택 모드 → 표 객체 선택 모드
+      // F5 셀 선택 모드 → 마지막 선택 셀의 편집 상태
       this.cursor.exitCellSelectionMode();
       this.cellSelectionRenderer?.clear();
-      if (this.cursor.enterTableObjectSelection()) {
-        this.caret.hide();
-        this.selectionRenderer.clear();
-        this.renderTableObjectSelection();
-        this.eventBus.emit('table-object-selection-changed', true);
-      } else {
-        this.updateCaret();
-      }
+      this.updateCaret();
       return;
     }
     // 셀 크기 조절 — 한컴 3모드 (help.hancom.com hwp/table/table(size).htm):
