@@ -37,8 +37,10 @@ PDF와의 독립 시각 동일성을 주장하지 않으며, 자동 SVG/visual b
 
 ## 다음 단계
 
-1. 작업지시자 승인 뒤 이 branch와 두 검토 문서를 원격 head로 push해 하나의 통합 PR을 만든다.
-2. 통합 PR의 최신 CI·mergeability를 확인한다.
-3. 통과와 merge 승인 뒤 통합 PR을 merge하고, 원 #3782·#3783은 중복 구현을 막기 위해 close한다.
-4. merge 후에만 오늘할일·후속 기록 및 해당 review target/branch 정리를 `post_merge.md` 절차로
-   수행한다.
+1. [통합 PR #3881](https://github.com/edwardkim/rhwp/pull/3881)을 원격
+   `review/twoloop-40-20260803` head로 생성했다.
+2. code head `b88bd6e80`의 CI·CodeQL·Render Diff가 모두 통과했다. 이 문서-only trailing commit의
+   최신 head도 review-only fast-pass로 재검증한다.
+3. 최신 head의 fast-pass와 mergeability 확인 뒤 통합 PR을 merge하고, 원 #3782·#3783은 중복 구현을
+   막기 위해 close한다.
+4. merge 후에만 devel 동기화와 해당 review branch·격리 target 정리를 `post_merge.md` 절차로 수행한다.

@@ -76,3 +76,8 @@ fixture로 추가하는 것이 다음 증적 보강이다.
 **통합 PR 수용 권고.** raw packed attr 우선 직렬화 계약과 enum mapping을 따라, 필요한 anchor
 bit만 동기화하고 다른 bit와 `attr == 0` 합성 경로를 보존한다. 최신 `devel` 위 cumulative
 검증도 성공했다. 실제 merge 전 통합 PR head의 최신 원격 CI와 작업지시자 승인을 다시 확인한다.
+
+후속 [통합 PR #3881](https://github.com/edwardkim/rhwp/pull/3881)의 code head
+`b88bd6e80`에서는 [CI](https://github.com/edwardkim/rhwp/actions/runs/30808394555),
+[CodeQL](https://github.com/edwardkim/rhwp/actions/runs/30808395173),
+[Render Diff](https://github.com/edwardkim/rhwp/actions/runs/30808395295)가 모두 성공했다.

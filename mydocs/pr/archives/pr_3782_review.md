@@ -74,3 +74,8 @@ range는 빈 범위로 정규화된다.
 **통합 PR 수용 권고.** 최신 `devel` 위 누적 적용에서 범위 방어의 의미와 기존 계산 보존을
 확인했고, focused·전체·native·WASM·정적 검증이 모두 성공했다. 원 PR의 CI 성공은 참고로만
 기록하며, 실제 merge 전에는 통합 PR head의 최신 원격 CI와 작업지시자 승인을 다시 확인한다.
+
+후속 [통합 PR #3881](https://github.com/edwardkim/rhwp/pull/3881)의 code head
+`b88bd6e80`에서는 [CI](https://github.com/edwardkim/rhwp/actions/runs/30808394555),
+[CodeQL](https://github.com/edwardkim/rhwp/actions/runs/30808395173),
+[Render Diff](https://github.com/edwardkim/rhwp/actions/runs/30808395295)가 모두 성공했다.
