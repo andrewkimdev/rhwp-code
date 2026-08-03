@@ -5861,7 +5861,6 @@ impl LayoutEngine {
                     if let Some(guide) = field.guide_text() {
                         let mut guide_style = base_style.clone();
                         guide_style.color = 0x0000FF; // BGR: 빨간색
-                        guide_style.italic = true;
                         let guide_width = estimate_text_width(guide, &guide_style);
                         // 안내문은 [누름틀 시작] 마커 뒤에 위치
                         let guide_x = find_x_for_char(fr.start_char_idx);
