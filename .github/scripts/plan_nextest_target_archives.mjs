@@ -5,8 +5,8 @@ import path from "node:path";
 
 const SLOW_LABEL = "slow";
 const REGULAR_LABELS = ["1", "2", "3", "4", "5", "6", "7"];
-const BUILDER_A_LABELS = ["1", "2", "3", "4"];
-const BUILDER_B_LABELS = ["5", "6", "7"];
+const BUILDER_A_LABELS = ["1", "2", "3"];
+const BUILDER_B_LABELS = ["4", "5", "6", "7"];
 
 function fail(message) {
   throw new Error(message);

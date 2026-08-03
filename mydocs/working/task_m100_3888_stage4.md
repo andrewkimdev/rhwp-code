@@ -19,9 +19,9 @@ Cargo metadata 기준 기본 member `rhwp`에는 test-enabled target 443개가 �
 
 1. metadata 전용 planner가 기본 package의 test-enabled target을 `slow`, `1`~`7` archive label로
    배정한다. `overflow_cell_baseline` target은 slow label에 단독 배정한다.
-2. regular archive는 각각 63~64 target이 되도록 배정한다. A는 slow와 네 개, B는 세 개 regular
-   archive를 만든다. builder target 수는 다를 수 있으나 source bytes가 비슷해지도록 배정한다. 일반 실행
-   shard 수는 종전처럼 일곱 개로 유지한다.
+2. 4단계에서는 regular archive를 각각 63~64 target으로 배정하고 A가 slow와 네 개, B가 세 개 regular
+   archive를 만들었다. 5단계에서 archive 4를 B로 옮기는 보정 계획은
+   [`task_m100_3888_stage5.md`](task_m100_3888_stage5.md)에 기록한다.
 3. `build-test-archive` job을 A/B matrix로 실행한다. 각 matrix job은 자기 label의 target selector만
    `cargo nextest archive`에 전달하고, 다른 builder의 target은 컴파일하지 않는다.
 4. 각 archive 직후 같은 selector로 `cargo nextest list`를 실행해 실제 runnable test 수를 기록한다.

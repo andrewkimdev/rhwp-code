@@ -618,11 +618,11 @@ jobs:
       fail-fast: true
       matrix:
         include:
-          # 일반 archive는 63~64 target으로 맞추고, A/B의 compile source bytes는 planner가 균형화한다.
+          # 일반 archive target 수 차이는 1 이하로 맞추고, A/B의 compile source bytes는 planner가 균형화한다.
           - builder: a
-            archive_labels: "slow 1 2 3 4"
+            archive_labels: "slow 1 2 3"
           - builder: b
-            archive_labels: "5 6 7"
+            archive_labels: "4 5 6 7"
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -754,7 +754,7 @@ jobs:
           if-no-files-found: error
 
       - name: Upload test archive 4
-        if: ${{ matrix.builder == 'a' }}
+        if: ${{ matrix.builder == 'b' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: test-archive-${{ github.run_id }}-4
