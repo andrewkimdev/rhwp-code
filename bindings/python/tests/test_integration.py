@@ -254,11 +254,12 @@ def test_binding_covers_every_agent_value_command(wired_binary: Path) -> None:
     }
     # 바인딩이 노출하는 이름 (CLI 명령명 기준으로 환산).
     exported = {
-        "info", "export-text", "export-structure", "export-tables", "export-svg",
-        "export-pdf", "export-markdown", "export-hml", "export-doclang", "export-hwpx", "convert",
-        "search", "fields", "digest", "ir-diff", "thumbnail", "extract-pages",
-        "build-from-ingest", "edit", "batch", "run", "capabilities", "export-ir-schema",
-        "export-capabilities-schema",
+            "info", "export-text", "export-structure", "export-tables", "table-to-csv",
+            "export-svg",
+            "export-pdf", "export-markdown", "export-hml", "export-doclang", "export-hwpx", "convert",
+            "search", "fields", "digest", "extract-data", "inspect", "ir-diff", "thumbnail", "extract-pages",
+            "build-from-ingest", "edit", "batch", "run", "capabilities", "export-ir-schema",
+            "export-capabilities-schema", "export-provenance-map", "csv-to-table",
     }
     missing = declared - exported
     assert not missing, (
