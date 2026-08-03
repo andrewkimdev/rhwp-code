@@ -1463,7 +1463,7 @@ export function resizeCellByKeyboard(this: any, key: ResizeArrowKey): void {
   applyKeyboardResize.call(this, key, 'resizeCellByKeyboard', buildColumnResizeUpdates);
 }
 
-/** Alt+방향키 — 선택 칸만 조절, 표 크기 유지 (한컴 table(size).htm). */
+/** Alt+방향키 — 선택 칸/줄과 바로 오른쪽/아래 이웃을 반대로 조절 (한컴 table(size).htm). */
 export function resizeCellLocalByKeyboard(this: any, key: ResizeArrowKey): void {
   applyKeyboardResize.call(this, key, 'resizeCellLocalByKeyboard', buildLocalResizeUpdates);
 }

@@ -986,7 +986,7 @@ export function onKeyDown(this: any, e: KeyboardEvent): void {
     }
     // 셀 크기 조절 — 한컴 3모드 (help.hancom.com hwp/table/table(size).htm):
     //   Ctrl/Cmd+방향키  = 칸/줄 전체 크기 조절, 표 전체 크기 변화
-    //   Alt+방향키       = 선택 칸만 조절, 표 전체 크기 유지 (같은 줄 나머지가 흡수)
+    //   Alt+방향키       = 선택 칸/줄 전체와 바로 오른쪽/아래 이웃을 반대로 조절 (표 크기 유지)
     //   Shift+방향키     = 경계 이동 — 셀이 커진 만큼 이웃 셀이 작아짐
     const isArrow = e.key === 'ArrowUp' || e.key === 'ArrowDown' ||
         e.key === 'ArrowLeft' || e.key === 'ArrowRight';

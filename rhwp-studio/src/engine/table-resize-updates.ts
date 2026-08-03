@@ -72,6 +72,22 @@ function overlapCount(b: CellBbox, isHoriz: boolean, start: number, end: number)
   return Math.max(0, Math.min(axisEnd(b, isHoriz), end) - Math.max(axisStart(b, isHoriz), start) + 1);
 }
 
+/** F5는 병합 셀의 시작 좌표만 보관하므로 실제 병합 범위까지 선택 축을 확장한다. */
+function selectedAxisRange(
+  cells: CellBbox[],
+  range: CellSelectionRange,
+  isHoriz: boolean,
+): { start: number; end: number } | null {
+  const selected = cells.filter(cell =>
+    overlapCount(cell, true, range.startCol, range.endCol) > 0
+      && overlapCount(cell, false, range.startRow, range.endRow) > 0);
+  if (selected.length === 0) return null;
+  return {
+    start: Math.min(...selected.map(cell => axisStart(cell, isHoriz))),
+    end: Math.max(...selected.map(cell => axisEnd(cell, isHoriz))),
+  };
+}
+
 function sizeUpdate(
   cellIdx: number,
   isHoriz: boolean,
@@ -121,9 +137,9 @@ export function buildLocalResizeUpdates(
 ): LocalResizeUpdate[] {
   const { isHoriz, delta } = resizeAxis(key);
   const cells = collectUniqueCells(bboxes);
-  const [selectionStart, selectionEnd] = isHoriz
-    ? [range.startCol, range.endCol]
-    : [range.startRow, range.endRow];
+  const selectedRange = selectedAxisRange(cells, range, isHoriz);
+  if (!selectedRange) return [];
+  const { start: selectionStart, end: selectionEnd } = selectedRange;
   const selectionSpan = selectionEnd - selectionStart + 1;
   const neighborAxis = selectionEnd + 1;
   if (!cells.some(b => axisStart(b, isHoriz) <= neighborAxis && neighborAxis <= axisEnd(b, isHoriz))) {

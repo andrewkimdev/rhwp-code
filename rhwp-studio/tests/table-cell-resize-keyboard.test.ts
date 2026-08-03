@@ -136,9 +136,9 @@ test('Alt ↓: 선택 가로줄 전체 +300, 바로 아래 가로줄 전체 −3
   ]));
 });
 
-test('Alt: 병합 셀은 선택 칸 수만큼 조절하고, 다음 칸이 같은 양을 흡수한다', () => {
+test('Alt: F5가 병합 시작 좌표만 선택해도 실제 병합 폭을 조절한다', () => {
   const cells = mergeRight(grid(2, 3), 0, 0, 2);
-  const range = { startRow: 0, startCol: 0, endRow: 0, endCol: 1 };
+  const range = { startRow: 0, startCol: 0, endRow: 0, endCol: 0 };
   const updates = buildLocalResizeUpdates(cells, range, 'ArrowRight');
 
   assert.deepEqual(deltasByCell(updates, 'widthDelta'), new Map([
@@ -146,6 +146,17 @@ test('Alt: 병합 셀은 선택 칸 수만큼 조절하고, 다음 칸이 같은
     [3, 300], [4, 300], [5, -600],
   ]));
   assert.equal(widthSum(updates), 0);
+});
+
+test('Alt: F5가 세로 병합 시작 좌표만 선택해도 실제 병합 높이를 조절한다', () => {
+  const cells = mergeDown(grid(3, 2), 0, 0, 2);
+  const range = { startRow: 0, startCol: 0, endRow: 0, endCol: 0 };
+  const updates = buildLocalResizeUpdates(cells, range, 'ArrowDown');
+
+  assert.deepEqual(deltasByCell(updates, 'heightDelta'), new Map([
+    [0, 600], [1, 300], [3, 300], [4, -600], [5, -600],
+  ]));
+  assert.equal(updates.reduce((sum, update) => sum + (update.heightDelta ?? 0), 0), 0);
 });
 
 test('Alt: 바로 오른쪽 이웃이 최소 크기 미달이면 전체 조절을 건너뛴다', () => {
