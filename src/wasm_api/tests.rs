@@ -27694,3 +27694,117 @@ fn corpus_split_join_sweep_all_samples() {
     }
     assert!(failures.is_empty(), "{}건 실패 (위 로그)", failures.len());
 }
+
+#[test]
+fn split_after_local_resize_keeps_render_grid() {
+    // Alt(행별 폭, local resize)로 조절한 표를 나누면, base grid 재계산이
+    // override 행을 제외하지 않을 경우 뒤 표의 common.width 가 override 폭만큼
+    // 부풀어 전 행이 넓게 렌더된다 (override 행은 residual 몰아주기로 두 배).
+    // 한컴 의미론: Alt 는 표 폭 유지, 나누기도 폭 불변 — 렌더 폭이 나누기
+    // 전후로 같아야 한다.
+    use crate::model::control::Control;
+    let bytes = std::fs::read(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/samples/21868765_별표2_보건소_분장사무.hwp"
+    ))
+    .expect("샘플");
+    let mut doc = HwpDocument::from_bytes(&bytes).expect("파싱");
+    doc.paginate();
+    let para_idx = doc.document.sections[0]
+        .paragraphs
+        .iter()
+        .enumerate()
+        .find(|(_, p)| p.controls.iter().any(|c| matches!(c, Control::Table(_))))
+        .map(|(i, _)| i)
+        .expect("표 문단");
+
+    let bb = |d: &HwpDocument, p: usize| -> Vec<(u16, u16, f64)> {
+        let json = d
+            .get_table_cell_bboxes_by_path_native(
+                0,
+                p,
+                r#"[{"controlIndex":0,"cellIndex":0,"cellParaIndex":0}]"#,
+            )
+            .expect("bbox");
+        let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+        v.as_array()
+            .unwrap()
+            .iter()
+            .map(|c| {
+                (
+                    c["row"].as_u64().unwrap() as u16,
+                    c["col"].as_u64().unwrap() as u16,
+                    c["w"].as_f64().unwrap(),
+                )
+            })
+            .collect()
+    };
+    let at = |v: &Vec<(u16, u16, f64)>, r: u16, c: u16| {
+        v.iter()
+            .find(|x| x.0 == r && x.1 == c)
+            .map(|x| x.2)
+            .unwrap()
+    };
+
+    // Alt+→ ×3 상당: (12,2) +900, 같은 줄 (12,0)/(12,1) 이 -450 씩 흡수
+    let (i0, w0, i1, w1, i2, w2) = {
+        let t = issue_1481_table(&doc, para_idx);
+        let f = |r: u16, c: u16| {
+            t.cells
+                .iter()
+                .position(|x| x.row == r && x.col == c && x.row_span == 1)
+                .expect("셀")
+        };
+        let (a, b, c) = (f(12, 0), f(12, 1), f(12, 2));
+        (
+            a,
+            t.cells[a].width,
+            b,
+            t.cells[b].width,
+            c,
+            t.cells[c].width,
+        )
+    };
+    let payload = format!(
+        r#"[{{"cellIdx":{i2},"widthDelta":900,"localResize":true,"renderWidth":{}}},{{"cellIdx":{i0},"widthDelta":-450,"localResize":true,"renderWidth":{}}},{{"cellIdx":{i1},"widthDelta":-450,"localResize":true,"renderWidth":{}}}]"#,
+        w2 + 900,
+        w0 - 450,
+        w1 - 450,
+    );
+    doc.resize_table_cells_native(0, para_idx, 0, &payload)
+        .expect("alt resize");
+
+    let pre = bb(&doc, para_idx);
+    let (pre_plain_c2, pre_override_c2) = (at(&pre, 11, 2), at(&pre, 12, 2));
+
+    doc.split_table_native(0, para_idx, 0, 10).expect("나누기");
+
+    let tables: Vec<usize> = doc.document.sections[0]
+        .paragraphs
+        .iter()
+        .enumerate()
+        .filter(|(_, p)| p.controls.iter().any(|c| matches!(c, Control::Table(_))))
+        .map(|(i, _)| i)
+        .collect();
+    let back = bb(&doc, tables[1]);
+
+    // 원래 row 11/12/13 → 뒤 표 row 1/2/3
+    assert!(
+        (at(&back, 1, 2) - pre_plain_c2).abs() < 0.5,
+        "나누기 후 일반 행 폭이 변하면 안 된다: {} → {}",
+        pre_plain_c2,
+        at(&back, 1, 2)
+    );
+    assert!(
+        (at(&back, 3, 2) - pre_plain_c2).abs() < 0.5,
+        "나누기 후 일반 행 폭이 변하면 안 된다: {} → {}",
+        pre_plain_c2,
+        at(&back, 3, 2)
+    );
+    assert!(
+        (at(&back, 2, 2) - pre_override_c2).abs() < 0.5,
+        "나누기 후 Alt 행 폭이 변하면 안 된다: {} → {}",
+        pre_override_c2,
+        at(&back, 2, 2)
+    );
+}

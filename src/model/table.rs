@@ -808,7 +808,7 @@ impl Table {
     ///   [12..16] width, [16..20] height, [20..24] z_order,
     ///   [24..32] outer_margin (i16×4), [32..36] instance_id
     pub fn update_ctrl_dimensions(&mut self) {
-        let total_width: HwpUnit = self.get_column_widths().iter().sum();
+        let total_width: HwpUnit = self.base_grid_column_widths().iter().sum();
         let total_height: HwpUnit = self.get_row_heights().iter().sum();
         // (1) serialize source — raw_ctrl_data bytes (HWP 직렬화 시 사용).
         // HWPX 파스 문서처럼 raw 가 없으면 건너뛴다 — 그 경우 직렬화기가
@@ -879,6 +879,37 @@ impl Table {
         for w in &mut widths {
             if *w == 0 {
                 *w = 1800;
+            }
+        }
+        widths
+    }
+
+    /// base grid 기준 열별 폭 — 행별 폭 조절(local resize) 행과 base grid
+    /// 이탈 행을 제외한 열 max. 렌더러의 `resolve_column_widths` 와 같은
+    /// 기준이라, 표 폭(common.width) 재계산이 override 행의 커진 셀에 끌려
+    /// 부풀지 않는다 (Alt 는 표 폭 유지 의미론). 제외하고 남는 행이 없으면
+    /// `get_column_widths` 로 폴백한다.
+    pub fn base_grid_column_widths(&self) -> Vec<HwpUnit> {
+        if self.local_resize_rows.is_empty() {
+            return self.get_column_widths();
+        }
+        let outliers = self.base_grid_outlier_rows();
+        let excluded = |row: u16| self.local_resize_rows.contains(&row) || outliers.contains(&row);
+        let mut widths = vec![0u32; self.col_count as usize];
+        for cell in &self.cells {
+            if cell.col_span == 1 && (cell.col as usize) < widths.len() && !excluded(cell.row) {
+                if cell.width > widths[cell.col as usize] {
+                    widths[cell.col as usize] = cell.width;
+                }
+            }
+        }
+        if widths.iter().all(|w| *w == 0) {
+            return self.get_column_widths();
+        }
+        let fallback = self.get_column_widths();
+        for (w, fb) in widths.iter_mut().zip(fallback) {
+            if *w == 0 {
+                *w = fb;
             }
         }
         widths
