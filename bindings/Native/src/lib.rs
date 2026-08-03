@@ -55,8 +55,17 @@ pub extern "C" fn rhwp_read_text(input_path: *const c_char, page: i32) -> *mut c
     })
 }
 
+/// 이 모듈이 돌려준 문자열을 해제한다.
+///
+/// # Safety
+///
+/// `ptr` 은 이 모듈의 `rhwp_export_text`·`rhwp_export_markdown`·`rhwp_read_text` 가
+/// 돌려준 포인터이거나 널이어야 한다. 다른 할당자에서 온 포인터를 넘기거나 같은
+/// 포인터를 두 번 넘기면 정의되지 않은 동작이다.
+///
+/// C ABI 심볼은 바뀌지 않으므로 C#·Swift 등 호출 측 선언은 그대로 쓸 수 있다.
 #[no_mangle]
-pub extern "C" fn rhwp_string_free(ptr: *mut c_char) {
+pub unsafe extern "C" fn rhwp_string_free(ptr: *mut c_char) {
     if ptr.is_null() {
         return;
     }
@@ -212,9 +221,12 @@ fn extract_image_data(
     bin_data_id: u16,
 ) -> Result<Option<(String, Vec<u8>)>, String> {
     if let (Some(si), Some(pi), Some(ci)) = (sec_idx, para_idx, control_idx) {
+        // [#1161] cell_path 가 비면 본문 문단. FFI 표면은 셀/글상자 안 컨트롤을
+        // 아직 지정할 수 없으므로 본문으로 고정한다 — `src/main.rs` 의 CLI 경로와 같다.
+        const BODY_PARA: &[(usize, usize, usize)] = &[];
         if let (Ok(mime), Ok(data)) = (
-            doc.get_control_image_mime_native(si, pi, ci),
-            doc.get_control_image_data_native(si, pi, ci),
+            doc.get_control_image_mime_native(si, pi, BODY_PARA, ci),
+            doc.get_control_image_data_native(si, pi, BODY_PARA, ci),
         ) {
             return Ok(Some((mime, data)));
         }
@@ -343,13 +355,7 @@ fn error_json(error: &str) -> String {
 fn text_json(page_count: u32, pages: &[(u32, String)]) -> String {
     let pages_json = pages
         .iter()
-        .map(|(index, text)| {
-            format!(
-                "{{\"index\":{},\"text\":\"{}\"}}",
-                index,
-                json_escape(text)
-            )
-        })
+        .map(|(index, text)| format!("{{\"index\":{},\"text\":\"{}\"}}", index, json_escape(text)))
         .collect::<Vec<_>>()
         .join(",");
 

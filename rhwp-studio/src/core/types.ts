@@ -954,6 +954,7 @@ export interface PageLayerTree {
     /** Compatibility mirror; prefer debugOptions.debugOverlay. */
     debugOverlay?: boolean;
   };
+  fontResources?: LayerFontResources;
   resources?: LayerResources;
   root: LayerNode;
 }
@@ -966,6 +967,43 @@ export interface LayerResources {
   svgFragments?: Array<string | undefined>;
   svgHashes?: string[];
   svgKeys?: string[];
+  fontBlobs?: Array<Uint8Array | number[] | string | undefined>;
+  fontBlobKeys?: string[];
+}
+
+export interface LayerFontResources {
+  blobs: LayerFontBlobResource[];
+  faces: LayerFontFaceResource[];
+}
+
+export interface LayerFontDigest {
+  algorithm: string;
+  value: string;
+}
+
+export interface LayerFontBlobResource {
+  id: string;
+  source: 'embedded' | 'bundled' | 'systemResolved' | 'externalUrl' | 'unresolvedFallback';
+  portability:
+    | 'portableBlob'
+    | 'externalVerified'
+    | 'resolvedButNotEmbedded'
+    | 'systemNameOnly'
+    | 'unresolvedFallback';
+  digest?: LayerFontDigest;
+  dataRef?: { kind: 'fontBlob' | 'externalFont'; id: string };
+}
+
+export interface LayerFontFaceResource {
+  id: string;
+  blobKey: string;
+  faceIndex: number;
+  postscriptName?: string;
+  familyNames?: Array<{ value: string; locale?: string }>;
+  styleNames?: Array<{ value: string; locale?: string }>;
+  weightClass?: number;
+  widthClass?: number;
+  italic?: boolean;
 }
 
 export interface LayerInfo {
@@ -1380,7 +1418,21 @@ export interface LayerCharOverlapOp {
 export interface LayerGlyphRunOp {
   type: 'glyphRun';
   bbox: LayerBounds;
-  variant?: LayerTextVariantMeta;
+  source: LayerTextSourceSpan;
+  variant: LayerTextVariantMeta;
+  paintStyle: LayerTextStyle;
+  shapeKey: LayerShapeKey;
+  placement: LayerTextRunPlacement;
+  glyphIds: number[];
+  positions: LayerPoint[];
+  advances?: LayerVector[];
+  clusters: LayerGlyphCluster[];
+  direction: LayerTextDirection;
+  bidiLevel?: number;
+  writingMode: LayerWritingMode;
+  orientation: LayerGlyphRunOrientation;
+  glyphTransforms?: LayerGlyphTransform[];
+  diagnostics: LayerGlyphRunDiagnostics;
 }
 
 export interface LayerGlyphOutlineOp {
@@ -1410,6 +1462,88 @@ export interface LayerTextVariantMeta {
   quality?: string;
   anchorOpId?: string;
   localPaintOrder?: number;
+}
+
+export interface LayerTextSourceRange {
+  start: number;
+  end: number;
+}
+
+export interface LayerTextSourceSpan {
+  id: number;
+  utf8Range: LayerTextSourceRange;
+  utf16Range: LayerTextSourceRange;
+  stableSourceKey?: string;
+}
+
+export interface LayerTextRunPlacement {
+  runToPage: LayerAffineTransform;
+  baselineY?: number;
+}
+
+export interface LayerPoint {
+  x: number;
+  y: number;
+}
+
+export interface LayerVector {
+  dx: number;
+  dy: number;
+}
+
+export interface LayerShapeKey {
+  fontInstance: {
+    faceKey: string;
+    sizePx: number;
+    variations?: Array<{ tag: string; value: number }>;
+    syntheticBold?: boolean;
+    syntheticItalic?: boolean;
+  };
+  direction: LayerTextDirection;
+  writingMode: LayerWritingMode;
+  script?: string;
+  language?: string;
+  features?: Array<{ tag: string; enabled: boolean; value?: number }>;
+  shapingEngine: string;
+  fallbackPolicy: string;
+}
+
+export type LayerTextDirection = 'ltr' | 'rtl' | 'auto';
+export type LayerWritingMode = 'horizontal-tb' | 'vertical-rl' | 'vertical-lr';
+export type LayerGlyphRunOrientation =
+  | 'horizontal'
+  | 'vertical-upright'
+  | 'vertical-sideways'
+  | 'mixedPerGlyph';
+
+export interface LayerGlyphCluster {
+  sourceRangeUtf8: LayerTextSourceRange;
+  sourceRangeUtf16?: LayerTextSourceRange;
+  textRangeUtf8?: LayerTextSourceRange;
+  glyphRange: LayerTextSourceRange;
+  flags?: Array<'ligature' | 'fallbackBoundary'>;
+}
+
+export interface LayerGlyphTransform {
+  xx: number;
+  xy: number;
+  yx: number;
+  yy: number;
+  tx: number;
+  ty: number;
+}
+
+export interface LayerGlyphRunDiagnostics {
+  quality: 'exact' | 'positionAdjusted' | 'approximate' | 'diagnosticOnly' | 'omitted';
+  replayEligibility: 'portable' | 'conditionalExternalFont' | 'localDiagnosticOnly' | 'notReplayable';
+  strictVisualEligible: boolean;
+  maxOriginDeltaPx: number;
+  maxAdvanceDeltaPx: number;
+  maxResidualAfterAdjustmentPx: number;
+  clusterMismatchCount: number;
+  missingGlyphCount: number;
+  usedFallbackFontCount: number;
+  reason?: string;
 }
 
 export type LayerGlyphOutlinePayloadKind =

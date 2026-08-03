@@ -81,19 +81,21 @@ CI preflight
        (영향 있음: success, 영향 없음: skipped) │
                          ┌────────────────────┴───────────────────┐
                          │                                        │
-                    Build test archive                     Native Skia tests
-                         └────────────────────┬───────────────────┘
-                                              │
-                              Default-feature tests: 8 shards 병렬
+        Build slow+2 archive / regular 1 / regular 3             Native Skia tests
+                         └───────────────────────────────┬───────────────────────────────┘
+                                                         │
+          Default-feature tests: slow + 일반 shard 1/3, 2/3, 3/3 (조건 충족 즉시 병렬)
                                               │
                                       Build & Test 집계
 ~~~
 
 - Lint와 Frontend package gates는 preflight 뒤 병렬이다.
-- Build test archive와 Native Skia tests는 Lint가 성공하고, Frontend가 필요한 경우 success이거나
-  영향이 없어 skipped인 뒤 병렬이다.
-- 8개 default-feature shard는 archive와 Native Skia가 모두 성공한 뒤 병렬이며, shard 실패 시
-  fail-fast로 나머지를 취소할 수 있다.
+- slow+`2` builder, regular `1` builder, regular `3` builder, Native Skia tests는 Lint가 성공하고,
+  Frontend가 필요한 경우 success이거나 영향이 없어 skipped인 뒤 병렬이다. 각 builder는 자기 Cargo test
+  target만 빌드해 `slow`, `1`, `2`, `3` archive 중 맡은 항목만 upload한다.
+- `slow shard`와 일반 `2/3`은 slow+`2` builder와 Native Skia, 일반 `1/3`은 regular `1` builder와 Native
+  Skia, 일반 `3/3`은 regular `3` builder와 Native Skia 성공 뒤 시작한다. 총 worker 수는 4개이고, worker는
+  각자 archive 하나만 download한다. 네 worker는 독립 job이며 집계 job이 성공 여부를 각각 확인한다.
 - review-only fast-pass는 heavy job이 skipped일 수 있다. 이때도 preflight와 branch protection이
   요구하는 집계 상태를 최신 PR head 기준으로 확인한다.
 
@@ -111,7 +113,10 @@ CodeQL, Render Diff 등 별도 workflow의 결과도 같은 PR head 기준으로
 - 다른 PR의 접수 분류. 단, 각 PR의 reviewer assign과 최종 판단은 해당 PR별로 기록한다.
 
 CI가 끝난 뒤 또는 contributor가 새 commit을 push한 뒤에는 head SHA, mergeable 상태, required check를
-다시 읽는다. 초안·이전 CI 결과를 최신 head의 최종 판정으로 재사용하지 않는다.
+다시 읽는다. 초안·이전 CI 결과를 최신 head의 최종 판정으로 재사용하지 않는다. 새 head가 최신
+`devel` 병합 또는 update branch를 포함하면 로컬 `devel`과 visibility review branch도 같은 기준선으로
+갱신하고, PR 고유 diff와 재실행할 검증 범위를 다시 판정한다. 상세 절차는
+[다수 PR과 update branch](pr_review/multi_pr_update_branch.md)의 "2.6 검토 중 기준선 갱신"을 따른다.
 
 ### 3.3 순차로 유지할 일
 

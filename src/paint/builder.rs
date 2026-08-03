@@ -380,11 +380,16 @@ mod tests {
         };
         assert!(matches!(
             ops.as_slice(),
-            [PaintOp::TextRun { .. }, PaintOp::GlyphOutline { .. }]
+            [
+                PaintOp::TextRun { .. },
+                PaintOp::GlyphRun { .. },
+                PaintOp::GlyphOutline { .. }
+            ]
         ));
         assert_eq!(layer_tree.resources.image_count(), 1);
-        assert!(layer_tree.resources.font_resources().blobs.is_empty());
-        assert!(layer_tree.resources.font_resources().faces.is_empty());
+        assert_eq!(layer_tree.resources.font_blob_count(), 1);
+        assert_eq!(layer_tree.resources.font_resources().blobs.len(), 1);
+        assert_eq!(layer_tree.resources.font_resources().faces.len(), 1);
     }
 
     #[test]
