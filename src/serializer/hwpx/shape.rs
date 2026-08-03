@@ -414,6 +414,83 @@ pub(crate) fn write_ole<W: Write>(
 }
 
 // =====================================================================
+// <hp:chart> — HWPX OOXML 차트 원형 재방출 (#3546)
+// 파서는 hp:chart 를 OLE 모델(bin_data_id=60000+N)로 변환한다. 종전 저장은
+// 이를 일반 OLE 로 방출해 hp:chart → hp:ole 치환·Chart/chartN.xml →
+// BinData/image6000N.ooxml_chart 이동이 일어났고, 한컴오피스가 차트 XML 을
+// OLE 복합문서로 해석했다. chart_id_ref 표식이 있으면 원형 구조로 되쓴다.
+// =====================================================================
+pub(crate) fn write_ole_or_chart<W: Write>(
+    w: &mut Writer<W>,
+    ole: &OleShape,
+    ctx: &mut SerializeContext,
+) -> Result<(), SerializeError> {
+    match ole.chart_id_ref.as_deref() {
+        Some(chart_id_ref) => write_chart_switch(w, ole, chart_id_ref, ctx),
+        None => write_ole(w, ole, ctx),
+    }
+}
+
+/// hp:chart 재방출 — 원본이 <hp:switch> 래핑(fallback OLE 보유)이었으면 같은
+/// 구조로, bare <hp:chart> 였으면 같은 형태로 되쓴다.
+const OOXML_CHART_REQUIRED_NS: &str = "http://www.hancom.co.kr/hwpml/2016/ooxmlchart";
+
+fn write_chart_switch<W: Write>(
+    w: &mut Writer<W>,
+    ole: &OleShape,
+    chart_id_ref: &str,
+    ctx: &mut SerializeContext,
+) -> Result<(), SerializeError> {
+    match &ole.chart_switch_fallback {
+        Some(fallback) => {
+            start_tag(w, "hp:switch")?;
+            start_tag_attrs(
+                w,
+                "hp:case",
+                &[("hp:required-namespace", OOXML_CHART_REQUIRED_NS)],
+            )?;
+            write_chart_element(w, ole, chart_id_ref)?;
+            end_tag(w, "hp:case")?;
+            start_tag(w, "hp:default")?;
+            write_ole(w, fallback, ctx)?;
+            end_tag(w, "hp:default")?;
+            end_tag(w, "hp:switch")?;
+            Ok(())
+        }
+        None => write_chart_element(w, ole, chart_id_ref),
+    }
+}
+
+fn write_chart_element<W: Write>(
+    w: &mut Writer<W>,
+    ole: &OleShape,
+    chart_id_ref: &str,
+) -> Result<(), SerializeError> {
+    let c = &ole.common;
+    let id_str = c.instance_id.to_string();
+    let z_order = c.z_order.to_string();
+    start_tag_attrs(
+        w,
+        "hp:chart",
+        &[
+            ("id", &id_str),
+            ("zOrder", &z_order),
+            ("numberingType", numbering_type_str(c.numbering_type)),
+            ("textWrap", text_wrap_str(c.text_wrap)),
+            ("textFlow", text_flow_str(c.text_flow)),
+            ("lock", bool01(c.locked)),
+            ("dropcapstyle", "None"),
+            ("chartIDRef", chart_id_ref),
+        ],
+    )?;
+    write_sz(w, c)?;
+    write_pos(w, c)?;
+    write_out_margin(w, c)?;
+    end_tag(w, "hp:chart")?;
+    Ok(())
+}
+
+// =====================================================================
 // <hp:drawText> — 글상자 내부 텍스트
 // =====================================================================
 

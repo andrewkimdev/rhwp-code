@@ -6002,7 +6002,22 @@ fn parse_switch_chart_or_ole(reader: &mut Reader<&[u8]>) -> Result<Option<Contro
         }
         buf.clear();
     }
-    Ok(chart_ctrl.or(ole_ctrl))
+    // [#3546] 차트가 있으면 <hp:default> 의 fallback OLE 를 버리지 않고 차트에
+    // 매달아 보존한다 — 저장 시 원형 <hp:switch>/<hp:case>/<hp:default> 구조
+    // 재방출의 재료다(종전에는 fallback 이 소실되어 hp:ole 단독으로 되쓰였다).
+    match (chart_ctrl, ole_ctrl) {
+        (Some(mut chart), Some(ole)) => {
+            if let (Control::Shape(chart_shape), Control::Shape(ole_shape)) = (&mut chart, ole) {
+                if let (ShapeObject::Ole(chart_ole), ShapeObject::Ole(fallback)) =
+                    (chart_shape.as_mut(), *ole_shape)
+                {
+                    chart_ole.chart_switch_fallback = Some(fallback);
+                }
+            }
+            Ok(Some(chart))
+        }
+        (chart, ole) => Ok(chart.or(ole)),
+    }
 }
 
 /// `<hp:chart chartIDRef="Chart/chartN.xml" zOrder="..." textWrap="..." ...>` 내부를 OLE 모델로 변환
@@ -6015,6 +6030,8 @@ fn parse_hp_chart_element(
     let mut common = CommonObjAttr::default();
     common.hwp5_gen_shape_attr_bit26 = true;
     let mut chart_num: u16 = 0;
+    let mut chart_id_ref: Option<String> = None;
+    let mut id_attr: u32 = 0;
     let mut numbering_type_picture = false;
 
     for attr in e.attributes().flatten() {
@@ -6057,7 +6074,13 @@ fn parse_hp_chart_element(
                 let s = attr_str(&attr);
                 let digits: String = s.chars().filter(|c| c.is_ascii_digit()).collect();
                 chart_num = digits.parse().unwrap_or(0);
+                // [#3546] 원문을 보존한다 — 저장 시 hp:chart 원형 재방출의 표식.
+                chart_id_ref = Some(s);
             }
+            // [#3546] 실물 hp:chart 는 instid 없이 id 만 기록한다 — 미파싱이면
+            // 재방출 id 가 항상 "0" 으로 되쓰인다. instid 가 있으면 그쪽이 우선
+            // (아래 arm 이 뒤에서 덮는 것이 아니라 후처리에서 판정).
+            b"id" => id_attr = parse_u32(&attr),
             b"instid" => common.instance_id = parse_u32(&attr),
             // [#2931] 개체 잠금(lock) — 종전 미파싱으로 직렬화 시 항상 "0"으로
             // 되돌아가 차트 개체의 잠금 상태가 유실됐다.
@@ -6065,9 +6088,13 @@ fn parse_hp_chart_element(
             _ => {}
         }
     }
+    if common.instance_id == 0 {
+        common.instance_id = id_attr;
+    }
 
     let mut extent: Option<(i32, i32)> = None;
-    parse_common_shape_children(reader, &mut common, b"chart", &mut extent)?;
+    let mut shape_attr = ShapeComponentAttr::default();
+    parse_common_shape_children(reader, &mut common, b"chart", &mut extent, &mut shape_attr)?;
     if numbering_type_picture {
         common.hwp5_gen_shape_attr_bit28 = true;
     }
@@ -6079,7 +6106,9 @@ fn parse_hp_chart_element(
 
     let mut ole = OleShape::default();
     ole.common = common;
+    ole.drawing.shape_attr = shape_attr;
     ole.bin_data_id = 60000u32 + chart_num as u32;
+    ole.chart_id_ref = chart_id_ref;
     // <hc:extent> 가 있으면 원본 개체 크기를 보존한다(없으면 종전 기본값 7200).
     let (ext_x, ext_y) = extent.unwrap_or((7200, 7200));
     ole.extent_x = if ext_x > 0 { ext_x } else { 7200 };
@@ -6164,7 +6193,8 @@ fn parse_hp_ole_element(
     }
 
     let mut extent: Option<(i32, i32)> = None;
-    parse_common_shape_children(reader, &mut common, b"ole", &mut extent)?;
+    let mut shape_attr = ShapeComponentAttr::default();
+    parse_common_shape_children(reader, &mut common, b"ole", &mut extent, &mut shape_attr)?;
     if numbering_type_picture {
         common.hwp5_gen_shape_attr_bit28 = true;
     }
@@ -6172,6 +6202,7 @@ fn parse_hp_ole_element(
 
     let mut ole = OleShape::default();
     ole.common = common;
+    ole.drawing.shape_attr = shape_attr;
     ole.bin_data_id = bin_id;
     ole.drawing_aspect = draw_aspect;
     // <hc:extent> 가 있으면 원본 개체 크기를 보존한다(없으면 종전 기본값 7200).
@@ -6223,6 +6254,9 @@ fn parse_common_shape_children(
     // OLE 전용 `<hc:extent>`(원본 개체 크기) 수집용. 호출자(ole/chart)만 사용한다.
     // 종전엔 이 자식을 무시하고 호출자가 7200 을 하드코딩해 개체 크기가 유실됐다.
     extent_out: &mut Option<(i32, i32)>,
+    // [#3546] `<hp:rotationInfo>` 수집용. 종전 미파싱으로 저장 시 기본값으로
+    // 되쓰여 rotateimage="1" 등 원본 값이 뒤집혔다(#2726 sz 기준 유실과 동형).
+    shape_attr_out: &mut ShapeComponentAttr,
 ) -> Result<(), HwpxError> {
     let mut buf = Vec::new();
     loop {
@@ -6242,6 +6276,9 @@ fn parse_common_shape_children(
                             }
                         }
                         *extent_out = Some((x, y));
+                    }
+                    b"rotationInfo" => {
+                        parse_shape_rotation_info(ce, shape_attr_out);
                     }
                     b"sz" => {
                         for attr in ce.attributes().flatten() {
