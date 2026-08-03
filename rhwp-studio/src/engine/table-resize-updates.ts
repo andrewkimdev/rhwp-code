@@ -38,13 +38,12 @@ function resizeAxis(key: ResizeArrowKey): { isHoriz: boolean; delta: number } {
   return { isHoriz, delta };
 }
 
-/** 페이지 fragment 중복을 제거하고 조절 축의 span==1 셀만 남긴다. */
-function collectSpanOneCells(bboxes: CellBbox[], isHoriz: boolean): CellBbox[] {
+/** 페이지 fragment 중복을 제거한다. 병합 셀도 실제 경계를 찾아 처리해야 한다. */
+function collectUniqueCells(bboxes: CellBbox[]): CellBbox[] {
   const seen = new Set<number>();
   const out: CellBbox[] = [];
   for (const b of bboxes) {
     if (seen.has(b.cellIdx)) continue;
-    if (isHoriz ? b.colSpan !== 1 : b.rowSpan !== 1) continue;
     seen.add(b.cellIdx);
     out.push(b);
   }
@@ -53,6 +52,24 @@ function collectSpanOneCells(bboxes: CellBbox[], isHoriz: boolean): CellBbox[] {
 
 function cellSizeHwp(b: CellBbox, isHoriz: boolean): number {
   return Math.round((isHoriz ? b.w : b.h) * RESIZE_HWPUNIT_PER_PX);
+}
+
+function axisStart(b: CellBbox, isHoriz: boolean): number {
+  return isHoriz ? b.col : b.row;
+}
+
+function axisEnd(b: CellBbox, isHoriz: boolean): number {
+  return axisStart(b, isHoriz) + (isHoriz ? b.colSpan : b.rowSpan) - 1;
+}
+
+function crossContains(b: CellBbox, isHoriz: boolean, position: number): boolean {
+  const start = isHoriz ? b.row : b.col;
+  const span = isHoriz ? b.rowSpan : b.colSpan;
+  return start <= position && position < start + span;
+}
+
+function overlapCount(b: CellBbox, isHoriz: boolean, start: number, end: number): number {
+  return Math.max(0, Math.min(axisEnd(b, isHoriz), end) - Math.max(axisStart(b, isHoriz), start) + 1);
 }
 
 function sizeUpdate(
@@ -81,14 +98,10 @@ export function buildColumnResizeUpdates(
 ): LocalResizeUpdate[] {
   const { isHoriz, delta } = resizeAxis(key);
   const updates: LocalResizeUpdate[] = [];
-  const seen = new Set<number>();
-  for (const b of bboxes) {
-    if (seen.has(b.cellIdx)) continue;
-    seen.add(b.cellIdx);
+  for (const b of collectUniqueCells(bboxes)) {
     // 셀이 걸친 선택 칸(열)/줄(행) 수 — span==1 이면 0 또는 1.
-    const [lo, hi] = isHoriz ? [b.col, b.col + b.colSpan - 1] : [b.row, b.row + b.rowSpan - 1];
     const [selLo, selHi] = isHoriz ? [range.startCol, range.endCol] : [range.startRow, range.endRow];
-    const overlap = Math.min(hi, selHi) - Math.max(lo, selLo) + 1;
+    const overlap = overlapCount(b, isHoriz, selLo, selHi);
     if (overlap <= 0) continue;
     const d = delta * overlap;
     updates.push(isHoriz ? { cellIdx: b.cellIdx, widthDelta: d } : { cellIdx: b.cellIdx, heightDelta: d });
@@ -97,10 +110,9 @@ export function buildColumnResizeUpdates(
 }
 
 /**
- * Alt+방향키: 선택 칸만 조절, 표 전체 크기 유지 — 같은 줄(가로)/칸(세로)의
- * 나머지 셀이 반대 방향으로 흡수한다. 흡수량 합계는 delta 합계와 정확히
- * 일치시킨다(나머지는 뒤쪽 셀부터 1씩 배분). 최소 크기 미달이 생기는
- * 줄/칸은 통째로 건너뛴다.
+ * Alt+방향키: 선택 세로 칸/가로줄 전체와 바로 오른쪽/아래 이웃을 반대로
+ * 조절해 표 크기를 유지한다. 병합 셀은 걸친 선택 칸/줄 수만큼 delta를
+ * 적용한다. 선택의 바깥 경계가 없는 경우에는 표 크기를 바꾸지 않는다.
  */
 export function buildLocalResizeUpdates(
   bboxes: CellBbox[],
@@ -108,46 +120,40 @@ export function buildLocalResizeUpdates(
   key: ResizeArrowKey,
 ): LocalResizeUpdate[] {
   const { isHoriz, delta } = resizeAxis(key);
-  const cells = collectSpanOneCells(bboxes, isHoriz);
-  const inRange = (b: CellBbox) =>
-    isHoriz
-      ? b.col >= range.startCol && b.col <= range.endCol
-      : b.row >= range.startRow && b.row <= range.endRow;
-  const laneOf = (b: CellBbox) => (isHoriz ? b.row : b.col);
-  const inLaneRange = (b: CellBbox) =>
-    isHoriz
-      ? b.row >= range.startRow && b.row <= range.endRow
-      : b.col >= range.startCol && b.col <= range.endCol;
-  const lanes = new Set(cells.filter(b => inLaneRange(b) && inRange(b)).map(laneOf));
-
-  const updates: LocalResizeUpdate[] = [];
-  for (const lane of lanes) {
-    const laneCells = cells.filter(b => laneOf(b) === lane);
-    const targets = laneCells.filter(inRange);
-    const others = laneCells.filter(b => !inRange(b));
-    if (targets.length === 0 || others.length === 0) continue; // 홑칸 줄 — 유지 불가
-
-    // 흡수량 배분: 합계를 정확히 delta*targets 로 맞춘다. 균등 몫에서 남는
-    // 나머지는 뒤쪽 셀부터 1 HWPUNIT 씩 얹는다 (반올림 누적으로 표 폭이
-    // 새는 것을 막는다).
-    const total = delta * targets.length;
-    const base = Math.trunc(total / others.length);
-    const remainder = total - base * others.length; // |remainder| < others.length
-    const extra = Math.abs(remainder);
-    const sign = Math.sign(remainder);
-    const absorbs = others.map((_, i) => base + (others.length - 1 - i < extra ? sign : 0));
-
-    if (targets.some(t => cellSizeHwp(t, isHoriz) + delta < RESIZE_MIN_CELL_HWP)) continue;
-    if (others.some((o, i) => cellSizeHwp(o, isHoriz) - absorbs[i] < RESIZE_MIN_CELL_HWP)) continue;
-
-    for (const t of targets) {
-      updates.push(sizeUpdate(t.cellIdx, isHoriz, delta, cellSizeHwp(t, isHoriz) + delta));
-    }
-    others.forEach((o, i) => {
-      updates.push(sizeUpdate(o.cellIdx, isHoriz, -absorbs[i], cellSizeHwp(o, isHoriz) - absorbs[i]));
-    });
+  const cells = collectUniqueCells(bboxes);
+  const [selectionStart, selectionEnd] = isHoriz
+    ? [range.startCol, range.endCol]
+    : [range.startRow, range.endRow];
+  const selectionSpan = selectionEnd - selectionStart + 1;
+  const neighborAxis = selectionEnd + 1;
+  if (!cells.some(b => axisStart(b, isHoriz) <= neighborAxis && neighborAxis <= axisEnd(b, isHoriz))) {
+    return [];
   }
-  return updates;
+
+  const deltas = new Map<number, { cell: CellBbox; delta: number }>();
+  const addDelta = (cell: CellBbox, amount: number) => {
+    const entry = deltas.get(cell.cellIdx);
+    if (entry) entry.delta += amount;
+    else deltas.set(cell.cellIdx, { cell, delta: amount });
+  };
+  for (const cell of cells) {
+    const selectedCount = overlapCount(cell, isHoriz, selectionStart, selectionEnd);
+    if (selectedCount > 0) addDelta(cell, delta * selectedCount);
+    if (axisStart(cell, isHoriz) <= neighborAxis && neighborAxis <= axisEnd(cell, isHoriz)) {
+      addDelta(cell, -delta * selectionSpan);
+    }
+  }
+  const changed = [...deltas.values()].filter(entry => entry.delta !== 0);
+  if (changed.some(entry => cellSizeHwp(entry.cell, isHoriz) + entry.delta < RESIZE_MIN_CELL_HWP)) {
+    return [];
+  }
+  return changed.map(entry =>
+    sizeUpdate(
+      entry.cell.cellIdx,
+      isHoriz,
+      entry.delta,
+      cellSizeHwp(entry.cell, isHoriz) + entry.delta,
+    ));
 }
 
 /**
@@ -162,23 +168,29 @@ export function buildBoundaryResizeUpdates(
   key: ResizeArrowKey,
 ): LocalResizeUpdate[] {
   const { isHoriz, delta } = resizeAxis(key);
-  const cells = collectSpanOneCells(bboxes, isHoriz);
+  const cells = collectUniqueCells(bboxes);
 
   const updates: LocalResizeUpdate[] = [];
+  const processedTargets = new Set<number>();
+  const processedNeighbors = new Set<number>();
   const laneStart = isHoriz ? range.startRow : range.startCol;
   const laneEnd = isHoriz ? range.endRow : range.endCol;
+  const edge = isHoriz ? range.endCol : range.endRow;
   for (let lane = laneStart; lane <= laneEnd; lane++) {
-    const at = (main: number, cross: number) =>
-      cells.find(b => (isHoriz ? b.row === cross && b.col === main : b.col === cross && b.row === main));
-    const edge = isHoriz ? range.endCol : range.endRow;
-    const target = at(edge, lane);
-    const neighbor = at(edge + 1, lane);
+    const target = cells.find(b =>
+      axisStart(b, isHoriz) <= edge && edge <= axisEnd(b, isHoriz) && crossContains(b, isHoriz, lane));
+    if (!target || processedTargets.has(target.cellIdx)) continue;
+    const neighborAxis = axisEnd(target, isHoriz) + 1;
+    const neighbor = cells.find(b => axisStart(b, isHoriz) === neighborAxis && crossContains(b, isHoriz, lane));
     if (!target || !neighbor) continue; // 마지막 칸/줄 — 이웃 없음
     if (cellSizeHwp(target, isHoriz) + delta < RESIZE_MIN_CELL_HWP) continue;
     if (cellSizeHwp(neighbor, isHoriz) - delta < RESIZE_MIN_CELL_HWP) continue;
     updates.push(sizeUpdate(target.cellIdx, isHoriz, delta, cellSizeHwp(target, isHoriz) + delta));
-    updates.push(sizeUpdate(neighbor.cellIdx, isHoriz, -delta, cellSizeHwp(neighbor, isHoriz) - delta));
+    processedTargets.add(target.cellIdx);
+    if (!processedNeighbors.has(neighbor.cellIdx)) {
+      updates.push(sizeUpdate(neighbor.cellIdx, isHoriz, -delta, cellSizeHwp(neighbor, isHoriz) - delta));
+      processedNeighbors.add(neighbor.cellIdx);
+    }
   }
   return updates;
 }
-

@@ -11,7 +11,7 @@ import type { CellBbox } from '../src/core/types.ts';
 // F5 셀 선택 후 키보드 셀 크기 조절 3모드(한컴 table(size).htm)의 update 구성 계약.
 //
 // - Ctrl/Cmd = 선택 칸(열)/줄(행) 전체에 같은 delta (표 전체 크기 변화)
-// - Alt      = 선택 칸만 조절, 같은 줄 나머지가 흡수 (표 크기 유지)
+// - Alt      = 선택 칸/줄 전체와 바로 오른쪽/아래 이웃을 반대로 조절 (표 크기 유지)
 // - Shift    = 선택 끝 경계 이동, 이웃이 반대로 조절 (표 크기 유지)
 //
 // 렌더 괘선은 열별 max base grid 를 쓰므로 Ctrl 이 단일 셀에만 delta 를 보내면
@@ -44,6 +44,24 @@ const cellAt = (cells: CellBbox[], row: number, col: number) =>
 
 function widthSum(updates: ReturnType<typeof buildColumnResizeUpdates>): number {
   return updates.reduce((s, u) => s + (u.widthDelta ?? 0), 0);
+}
+
+function deltasByCell(updates: ReturnType<typeof buildColumnResizeUpdates>, axis: 'widthDelta' | 'heightDelta') {
+  return new Map(updates.map(update => [update.cellIdx, update[axis] ?? 0]));
+}
+
+function mergeRight(cells: CellBbox[], row: number, col: number, span: number): CellBbox[] {
+  const merged = cellAt(cells, row, col);
+  merged.colSpan = span;
+  merged.w *= span;
+  return cells.filter(cell => cell.row !== row || cell.col <= col || cell.col >= col + span);
+}
+
+function mergeDown(cells: CellBbox[], row: number, col: number, span: number): CellBbox[] {
+  const merged = cellAt(cells, row, col);
+  merged.rowSpan = span;
+  merged.h *= span;
+  return cells.filter(cell => cell.col !== col || cell.row <= row || cell.row >= row + span);
 }
 
 // ─── Ctrl: 칸/줄 전체 ─────────────────────────────────────────────
@@ -90,31 +108,47 @@ test('Ctrl: 선택 범위가 병합 셀을 두 칸 걸치면 2×delta', () => {
   assert.equal(single.widthDelta, 300);
 });
 
-// ─── Alt: 칸만 조절, 표 크기 유지 ─────────────────────────────────
+// ─── Alt: 칸/줄 전체와 바로 오른쪽/아래 이웃 ──────────────────────
 
-test('Alt: 대상 +delta, 나머지가 흡수해 줄 합계가 0 (표 폭 유지)', () => {
-  const cells = grid(1, 4);
-  const range = { startRow: 0, startCol: 1, endRow: 0, endCol: 1 };
+test('Alt →: 선택 세로 칸 전체 +300, 바로 오른쪽 세로 칸 전체 −300', () => {
+  const cells = grid(3, 3);
+  const range = { startRow: 1, startCol: 1, endRow: 1, endCol: 1 };
   const updates = buildLocalResizeUpdates(cells, range, 'ArrowRight');
 
-  assert.equal(updates.length, 4);
+  assert.equal(updates.length, 6);
   assert.equal(widthSum(updates), 0, '늘어난 만큼 정확히 흡수돼야 표 폭이 유지된다');
-  const target = updates.find(u => u.cellIdx === cellAt(cells, 0, 1).cellIdx)!;
-  assert.equal(target.widthDelta, 300);
+  assert.deepEqual(deltasByCell(updates, 'widthDelta'), new Map([
+    [1, 300], [4, 300], [7, 300],
+    [2, -300], [5, -300], [8, -300],
+  ]));
   assert.ok(updates.every(u => u.localResize === true && typeof u.renderWidth === 'number'));
 });
 
-test('Alt: 나눠떨어지지 않는 흡수도 합계가 정확히 보존된다 (반올림 누수 금지)', () => {
-  // 대상 2, 흡수 7 — 600/7 은 나눠떨어지지 않는다.
-  const cells = grid(1, 9);
+test('Alt ↓: 선택 가로줄 전체 +300, 바로 아래 가로줄 전체 −300', () => {
+  const cells = grid(3, 3);
+  const range = { startRow: 1, startCol: 1, endRow: 1, endCol: 1 };
+  const updates = buildLocalResizeUpdates(cells, range, 'ArrowDown');
+
+  assert.equal(updates.length, 6);
+  assert.deepEqual(deltasByCell(updates, 'heightDelta'), new Map([
+    [3, 300], [4, 300], [5, 300],
+    [6, -300], [7, -300], [8, -300],
+  ]));
+});
+
+test('Alt: 병합 셀은 선택 칸 수만큼 조절하고, 다음 칸이 같은 양을 흡수한다', () => {
+  const cells = mergeRight(grid(2, 3), 0, 0, 2);
   const range = { startRow: 0, startCol: 0, endRow: 0, endCol: 1 };
   const updates = buildLocalResizeUpdates(cells, range, 'ArrowRight');
 
-  assert.equal(updates.length, 9);
-  assert.equal(widthSum(updates), 0, '2:7 배분에서도 표 폭이 한 단위도 새면 안 된다');
+  assert.deepEqual(deltasByCell(updates, 'widthDelta'), new Map([
+    [0, 600], [2, -600],
+    [3, 300], [4, 300], [5, -600],
+  ]));
+  assert.equal(widthSum(updates), 0);
 });
 
-test('Alt: 흡수로 최소 크기 미달이 나는 줄은 통째로 건너뛴다', () => {
+test('Alt: 바로 오른쪽 이웃이 최소 크기 미달이면 전체 조절을 건너뛴다', () => {
   const cells = grid(1, 2, 5); // 5px ≈ 375 HWPUNIT — 흡수하면 최소(300) 미달
   const range = { startRow: 0, startCol: 0, endRow: 0, endCol: 0 };
   const updates = buildLocalResizeUpdates(cells, range, 'ArrowRight');
@@ -122,9 +156,9 @@ test('Alt: 흡수로 최소 크기 미달이 나는 줄은 통째로 건너뛴�
   assert.equal(updates.length, 0);
 });
 
-test('Alt: 홑칸 줄(흡수할 이웃 없음)은 조절하지 않는다', () => {
-  const cells = grid(1, 1);
-  const range = { startRow: 0, startCol: 0, endRow: 0, endCol: 0 };
+test('Alt: 마지막 칸은 바로 오른쪽 이웃이 없어 조절하지 않는다', () => {
+  const cells = grid(2, 2);
+  const range = { startRow: 0, startCol: 1, endRow: 1, endCol: 1 };
   assert.equal(buildLocalResizeUpdates(cells, range, 'ArrowRight').length, 0);
 });
 
@@ -174,4 +208,22 @@ test('Shift: 이웃이 최소 크기 미달이 되면 그 줄은 건너뛴다', 
   cellAt(cells, 0, 1).w = 5; // ≈375 HWPUNIT — −300 하면 최소 미달
   const range = { startRow: 0, startCol: 0, endRow: 0, endCol: 0 };
   assert.equal(buildBoundaryResizeUpdates(cells, range, 'ArrowRight').length, 0);
+});
+
+test('Shift →: 병합 셀은 실제 오른쪽 경계와 이웃 한 셀만 조절한다', () => {
+  const cells = mergeRight(grid(1, 3), 0, 0, 2);
+  const range = { startRow: 0, startCol: 0, endRow: 0, endCol: 0 };
+  const updates = buildBoundaryResizeUpdates(cells, range, 'ArrowRight');
+
+  assert.deepEqual(deltasByCell(updates, 'widthDelta'), new Map([[0, 300], [2, -300]]));
+  assert.equal(updates.find(update => update.cellIdx === 0)?.renderWidth, 6300);
+});
+
+test('Shift ↓: 세로 병합 셀은 실제 아래 경계와 이웃 한 셀만 조절한다', () => {
+  const cells = mergeDown(grid(3, 1), 0, 0, 2);
+  const range = { startRow: 0, startCol: 0, endRow: 0, endCol: 0 };
+  const updates = buildBoundaryResizeUpdates(cells, range, 'ArrowDown');
+
+  assert.deepEqual(deltasByCell(updates, 'heightDelta'), new Map([[0, 300], [2, -300]]));
+  assert.equal(updates.find(update => update.cellIdx === 0)?.renderHeight, 3300);
 });
