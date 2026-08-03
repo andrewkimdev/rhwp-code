@@ -12198,8 +12198,18 @@ impl TypesetEngine {
                     .first()
                     .zip(para.line_segs.last())
                     .and_then(|(first, last)| {
-                        let has_progressing_vpos =
-                            para.line_segs.len() <= 1 || last.vertical_pos > first.vertical_pos;
+                        // 끝점만 비교하면 **문단 중간에서 리셋되는 사다리**를 놓친다.
+                        // 쪽을 넘나드는 문단은 vpos 가 0 으로 돌아갔다가 다시 오르므로
+                        // 첫↔끝은 증가로 보이지만 span 은 무의미하다 (#3751 · 1170000 입법역량
+                        // pi=1265: 48000 →[line7 리셋]→ 62400, span 208px 인데 실제
+                        // 34줄 1088px — fit 이 208 로 판정해 쪽을 863.9px 넘겼다).
+                        // 사다리 전체가 단조 증가일 때만 span 을 쓴다.
+                        let monotonic = para
+                            .line_segs
+                            .windows(2)
+                            .all(|w| w[1].vertical_pos >= w[0].vertical_pos);
+                        let has_progressing_vpos = para.line_segs.len() <= 1
+                            || (monotonic && last.vertical_pos > first.vertical_pos);
                         if !has_progressing_vpos {
                             return None;
                         }
@@ -17875,7 +17885,14 @@ impl TypesetEngine {
                 && !prev_is_floating_anchor
                 && max_vpos_px <= st.layout.available_body_height()
             {
-                max_vpos_px
+                // 사다리는 **한글의 쪽 경계** 기준이라, 한글이 이미 쪽을 끊은 자리에서는
+                // 직전 문단의 vpos 가 다음 쪽 상단 값이 되어 이 쪽이 실제로 소비한 높이를
+                // 크게 밑돈다. 그러면 아래 Task #853 가드가 "아직 여유 있다" 로 오판해
+                // 새 zone 을 같은 쪽에 얹는다 (2990099 주파수 분배표 115쪽: 사다리 76px
+                // vs 실소비 867.4px — zone 두 개가 1657.3px 로 본문 876.9px 에 겹쳐
+                // 745.7px 이 쪽 밖으로 나갔다). 흐름 누적은 이 쪽에 실제로 놓인 양이므로
+                // 둘 중 큰 값이 이 쪽의 소비량이다.
+                max_vpos_px.max(st.current_height)
             } else {
                 st.current_height
             }
