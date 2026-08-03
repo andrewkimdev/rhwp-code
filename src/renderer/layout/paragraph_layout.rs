@@ -213,6 +213,16 @@ fn authoritative_stored_line_start_px(
     styled_margin_left.max(hwpunit_to_px(line_seg.column_start, dpi))
 }
 
+/// HWP5의 저장 `column_start`를 권위로 해석할 수 있는 출처 경계.
+///
+/// HWP5-origin HWPX는 컨테이너만 HWPX일 뿐 저장 LINE_SEG는 HWP5 원본의 것이므로
+/// 원본 HWP5와 같은 계약을 쓴다. 원본 HWPX까지 넓히면 별도 저장 계약을 침범한다.
+fn uses_hwp5_stored_line_start_profile(
+    profile: crate::model::provenance::LayoutCompatibilityProfile,
+) -> bool {
+    profile.native_hwp5_layout() || profile.hwp5_origin_hwpx()
+}
+
 fn composed_line_char_end(comp: &ComposedParagraph, line_idx: usize) -> usize {
     if let Some(next) = comp.lines.get(line_idx + 1) {
         return next.char_start;
@@ -3187,7 +3197,12 @@ impl LayoutEngine {
                 && !uses_stored_segment_geometry
                 && composed.numbering_text.is_none()
                 && para.map(|p| p.controls.is_empty()).unwrap_or(false)
-                && profile.native_hwp5_layout();
+                // [#3837] rhwp 가 HWP5 원본에서 내보낸 HWPX 도 같은 계약이다 — 저장
+                // LINE_SEG 가 그 HWP5 의 것이라 `column_start` 가 여전히 권위다. 이 조건이
+                // 없으면 왕복만으로 들여쓴 줄이 왼쪽으로 밀린다(1370000-200800015: 저장
+                // cs=22677 = 302.4px 가 무시돼 글리프 595개가 그만큼 이동).
+                // 원본 HWPX 는 건드리지 않는다 — 그쪽 저장 계약은 별개 축이다.
+                && uses_hwp5_stored_line_start_profile(profile);
             // 암호 HWP3의 Square-wrap Picture/Shape 저장 cs/sw는 문단 좌·우 inset까지
             // 포함한 완성 line box다. 여기서 ParaShape margin을 다시 더하거나 빼면
             // 그림과 글자 사이에 여백이 한 번 더 생기고 right edge도 불필요하게 줄어든다.
