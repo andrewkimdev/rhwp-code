@@ -21,6 +21,7 @@ __all__ = [
     "export_text",
     "export_structure",
     "export_tables",
+    "table_to_csv",
     "export_svg",
     "export_pdf",
     "export_markdown",
@@ -31,6 +32,9 @@ __all__ = [
     "search",
     "fields",
     "digest",
+    "extract_data",
+    "inspect",
+    "export_provenance_map",
     "ir_diff",
     "thumbnail",
     "extract_pages",
@@ -38,6 +42,7 @@ __all__ = [
     "fill_fields",
     "replace_text",
     "set_cell",
+    "csv_to_table",
     "batch",
     "capabilities",
 ]
@@ -78,6 +83,23 @@ def export_structure(path: PathLike, *, timeout: Optional[float] = DEFAULT_TIMEO
 def export_tables(path: PathLike, *, timeout: Optional[float] = DEFAULT_TIMEOUT) -> Envelope:
     """표 전량을 셀 좌표와 함께."""
     return Envelope(run_json(["export-tables", path, "--json"], timeout=timeout))
+
+
+def table_to_csv(
+    path: PathLike,
+    *,
+    table: Optional[int] = None,
+    out: Optional[PathLike] = None,
+    bom: bool = False,
+    timeout: Optional[float] = DEFAULT_TIMEOUT,
+) -> Envelope:
+    """본문 최상위 표를 RFC 4180 CSV로 내보낸다."""
+    args: List[Any] = ["table-to-csv", path]
+    _flag(args, "--table", table)
+    _flag(args, "-o", out)
+    _switch(args, "--bom", bom)
+    args.append("--json")
+    return Envelope(run_json(args, timeout=timeout))
 
 
 def fields(path: PathLike, *, timeout: Optional[float] = DEFAULT_TIMEOUT) -> Envelope:
@@ -124,6 +146,21 @@ def digest(
     return Envelope(run_json(args, timeout=timeout))
 
 
+def extract_data(
+    path: PathLike,
+    *,
+    kind: str = "all",
+    limit: Optional[int] = None,
+    timeout: Optional[float] = DEFAULT_TIMEOUT,
+) -> Envelope:
+    """날짜·금액·수량을 문서 주소와 함께 추출한다."""
+    args: List[Any] = ["extract-data", path]
+    _flag(args, "--kind", kind)
+    _flag(args, "--limit", limit)
+    args.append("--json")
+    return Envelope(run_json(args, timeout=timeout))
+
+
 def capabilities(*, mcp: bool = False, timeout: Optional[float] = DEFAULT_TIMEOUT) -> Envelope:
     """도구 자기서술 — 명령 목록·플래그·봉투 필드·종료 코드 사전.
 
@@ -133,6 +170,55 @@ def capabilities(*, mcp: bool = False, timeout: Optional[float] = DEFAULT_TIMEOU
     args: List[Any] = ["capabilities"]
     _switch(args, "--mcp", mcp)
     return Envelope(run_json(args, timeout=timeout))
+
+
+def inspect(
+    path: PathLike,
+    subcommand: str,
+    *,
+    threshold_pt: Optional[float] = None,
+    include_offpage: bool = False,
+    min_confidence: Optional[str] = None,
+    include_fields: bool = False,
+    kind: Optional[str] = None,
+    timeout: Optional[float] = DEFAULT_TIMEOUT,
+) -> Envelope:
+    """읽기 전용 문서 보안 검사.
+
+    subcommand는 "hidden-text", "injection", "unicode" 중 하나다.
+    각 검사에만 유효한 옵션을 다른 검사에 넘기면 조용히 무시하지 않고 거부한다.
+    """
+    args: List[Any] = ["inspect", subcommand, path]
+    if subcommand == "hidden-text":
+        if min_confidence is not None or include_fields or kind is not None:
+            raise ValueError("hidden-text 검사에는 threshold_pt와 include_offpage만 사용할 수 있습니다")
+        _flag(args, "--threshold-pt", threshold_pt)
+        _switch(args, "--include-offpage", include_offpage)
+    elif subcommand == "injection":
+        if threshold_pt is not None or include_offpage or kind is not None:
+            raise ValueError("injection 검사에는 min_confidence와 include_fields만 사용할 수 있습니다")
+        _flag(args, "--min-confidence", min_confidence)
+        _switch(args, "--include-fields", include_fields)
+    elif subcommand == "unicode":
+        if (
+            threshold_pt is not None
+            or include_offpage
+            or min_confidence is not None
+            or include_fields
+        ):
+            raise ValueError("unicode 검사에는 kind만 사용할 수 있습니다")
+        _flag(args, "--kind", kind)
+    else:
+        raise ValueError("subcommand는 hidden-text, injection, unicode 중 하나여야 합니다")
+    args.append("--json")
+    return Envelope(run_json(args, timeout=timeout))
+
+
+def export_provenance_map(
+    *, timeout: Optional[float] = DEFAULT_TIMEOUT
+) -> Envelope:
+    """봉투 필드의 문서 출처·신뢰 표지를 내보낸다."""
+    return Envelope(run_json(["export-provenance-map", "--json"], timeout=timeout))
 
 
 # ── 산출 ────────────────────────────────────────────────────────────────
@@ -366,6 +452,26 @@ def set_cell(
     ]
     _flag(args, "-o", out)
     _switch(args, "--keep-style", keep_style)
+    _switch(args, "--dry-run", dry_run)
+    _switch(args, "--verify", verify)
+    args.append("--json")
+    return Envelope(run_json(args, timeout=timeout, raise_on_verdict=raise_on_verdict))
+
+
+def csv_to_table(
+    path: PathLike,
+    csv: PathLike,
+    table: int,
+    *,
+    out: Optional[PathLike] = None,
+    dry_run: bool = False,
+    verify: bool = False,
+    raise_on_verdict: bool = False,
+    timeout: Optional[float] = DEFAULT_TIMEOUT,
+) -> Envelope:
+    """CSV 내용으로 기존 표의 셀을 덮어쓴다."""
+    args: List[Any] = ["csv-to-table", path, "--csv", csv, "--table", table]
+    _flag(args, "-o", out)
     _switch(args, "--dry-run", dry_run)
     _switch(args, "--verify", verify)
     args.append("--json")

@@ -34,6 +34,7 @@ pub struct ResourceArena {
     font_blob_bytes: Vec<Vec<u8>>,
     font_blob_hashes: Vec<u64>,
     font_blob_fingerprints: Vec<[u8; 16]>,
+    font_blob_resource_keys: Vec<String>,
     font_blob_lookup: HashMap<u64, Vec<FontBlobResourceId>>,
     font_blob_ref_lookup: HashMap<String, FontBlobResourceId>,
     font_resources: FontResourceTable,
@@ -167,6 +168,7 @@ impl ResourceArena {
         self.font_blob_bytes.push(bytes.to_vec());
         self.font_blob_hashes.push(hash);
         self.font_blob_fingerprints.push(fingerprint);
+        self.font_blob_resource_keys.push(resource_key.clone());
         self.font_blob_lookup.entry(hash).or_default().push(id);
         self.font_blob_ref_lookup.insert(resource_key, id);
         id
@@ -186,6 +188,10 @@ impl ResourceArena {
 
     pub fn font_blob_fingerprint(&self, id: FontBlobResourceId) -> Option<[u8; 16]> {
         self.font_blob_fingerprints.get(id.0).copied()
+    }
+
+    pub fn font_blob_resource_key(&self, id: FontBlobResourceId) -> Option<&str> {
+        self.font_blob_resource_keys.get(id.0).map(String::as_str)
     }
 
     pub fn font_blob_resources(&self) -> impl Iterator<Item = (FontBlobResourceId, &[u8])> + '_ {
@@ -406,6 +412,11 @@ mod tests {
         assert_eq!(
             arena.font_blob_fingerprint(font_a),
             Some(resource_fingerprint([5, 6, 7, 8]))
+        );
+        let font_key = font_blob_resource_key(4, &resource_digest_hex([5, 6, 7, 8]));
+        assert_eq!(
+            arena.font_blob_resource_key(font_a),
+            Some(font_key.as_str())
         );
         assert_eq!(
             arena.font_blob_resources().collect::<Vec<_>>(),

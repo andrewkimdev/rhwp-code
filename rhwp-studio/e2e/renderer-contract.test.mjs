@@ -547,6 +547,7 @@ const directReplayOps = [
   ['equation', 'renderEquation'],
   ['footnoteMarker', 'renderTextRun'],
   ['formObject', 'renderFormObject'],
+  ['glyphRun', 'renderGlyphRun'],
   ['image', 'renderImage'],
   ['line', 'renderLine'],
   ['pageBackground', 'renderPageBackground'],
@@ -558,9 +559,7 @@ const directReplayOps = [
   ['textDecoration', 'renderTextDecoration'],
   ['textRun', 'renderTextRun'],
 ];
-const textRunFallbackOps = [
-  'glyphRun',
-];
+const textRunFallbackOps = [];
 const objectFragmentFallbackOps = [
   ['rawSvg', 'rawSvg:unsupportedDirectReplay'],
 ];
@@ -612,7 +611,6 @@ for (const [op, unsupportedReason] of objectFragmentFallbackOps) {
 for (const expectedUnsupportedToken of [
   'equation:unsupportedDirectReplay',
   'rawSvg:unsupportedDirectReplay',
-  'glyphRun',
   'textRunFont',
   'image:dataMissing',
   'image:invalidBounds',
@@ -693,6 +691,7 @@ const renderFormObjectBody = extractMethodBody(canvaskitSource, 'renderFormObjec
 const renderPlaceholderBody = extractMethodBody(canvaskitSource, 'renderPlaceholder');
 const renderTextRunBody = extractMethodBody(canvaskitSource, 'renderTextRun');
 const renderShapedScriptTextBody = extractMethodBody(canvaskitSource, 'renderShapedScriptText');
+const renderGlyphRunBody = extractMethodBody(canvaskitSource, 'renderGlyphRun');
 const renderGlyphOutlineBody = extractMethodBody(canvaskitSource, 'renderGlyphOutline');
 const renderColorPaintGraphNodeBody = extractMethodBody(canvaskitSource, 'renderColorPaintGraphNode');
 const recordTextRunCoverageGapsBody = extractMethodBody(canvaskitSource, 'recordTextRunCoverageGaps');
@@ -1692,6 +1691,7 @@ assert.deepEqual(
   strokeDashReplay.renderer.diagnostics().replayFeatureCounts,
   {
     dashedStrokes: 4,
+    glyphRuns: 0,
     verticalPresentationPunctuation: 0,
     verticalTextRuns: 0,
   },
@@ -1767,6 +1767,16 @@ requireSnippet(
   renderTextRunBody,
   /MAX_TEXT_RUN_CODE_POINTS[\s\S]*?this\.recordTextRunCoverageGaps\(op, replayCodePoints\)[\s\S]*?const primaryGlyphIds = font\.getGlyphIDs[\s\S]*?const drawPass[\s\S]*?const runGlyphIds = new Uint16Array[\s\S]*?canvas\.drawGlyphs\(/,
   'textRun replay should validate coverage once and reuse positioned glyphs across paint passes',
+);
+requireSnippet(
+  canvaskitSource,
+  /this\.currentFontResources = tree\.fontResources;[\s\S]*?this\.glyphRunFonts\.registerResources\(tree\.fontResources, tree\.resources\);[\s\S]*?this\.selectTextVariants\(tree\.root\)/,
+  'GlyphRun font blobs must be verified before text variant selection',
+);
+requireSnippet(
+  renderGlyphRunBody,
+  /this\.glyphRunFonts\.font\(op, this\.currentFontResources\)[\s\S]*?drawCanvasKitGlyphRun\(canvas, op, font, paint\)[\s\S]*?this\.currentReplayFeatureCounts\.glyphRuns \+= 1[\s\S]*?glyphRun:replayFailed[\s\S]*?finally[\s\S]*?paint\.delete/,
+  'strict GlyphRun replay should use the verified exact font and release per-draw paint state',
 );
 requireSnippet(
   renderTextRunBody,
@@ -2092,6 +2102,7 @@ assert.deepEqual(
   verticalPresentationReplay.diagnostics.replayFeatureCounts,
   {
     dashedStrokes: 0,
+    glyphRuns: 0,
     verticalPresentationPunctuation: 1,
     verticalTextRuns: 1,
   },

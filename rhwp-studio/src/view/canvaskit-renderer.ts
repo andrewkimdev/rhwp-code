@@ -25,6 +25,8 @@ import type {
   LayerFormObjectOp,
   LayerAffineTransform,
   LayerGlyphOutlineOp,
+  LayerGlyphRunOp,
+  LayerFontResources,
   LayerImageOp,
   LayerInfo,
   LayerLeafNode,
@@ -67,6 +69,10 @@ import {
   replayableEncodedImageHeader,
 } from './canvaskit/image-header';
 import { canvaskitClipRightPad } from './canvaskit/policy';
+import {
+  CanvasKitGlyphRunFontCache,
+  drawCanvasKitGlyphRun,
+} from './canvaskit/glyph-run-fonts';
 import {
   selectLayerTextVariantsForLeaf,
   staticSvgPathLayersAreReplayable,
@@ -198,6 +204,7 @@ interface EquationRenderBudget {
 
 export interface CanvasKitReplayFeatureCounts {
   dashedStrokes: number;
+  glyphRuns: number;
   verticalPresentationPunctuation: number;
   verticalTextRuns: number;
 }
@@ -231,6 +238,10 @@ export interface CanvasKitRenderDiagnostics {
   localTypefacePendingCount: number;
   bundledTypefaceCount: number;
   bundledTypefaceLoadFailureCount: number;
+  glyphRunFontBlobCount: number;
+  glyphRunFontBlobBytes: number;
+  glyphRunTypefaceCount: number;
+  glyphRunFontCount: number;
   fontSubstitutionLimit: number;
   unregisteredFontFallbacks: number;
   fontSubstitutions: CanvasKitFontSubstitutionDiagnostic[];
@@ -301,6 +312,7 @@ export class CanvasKitLayerRenderer {
   private readonly bundledTypefaceLoadFailures = new Set<string>();
   private readonly currentFontSubstitutions = new Map<string, CanvasKitFontSubstitutionDiagnostic>();
   private readonly bundledFontRequests = new Set<AbortController>();
+  private readonly glyphRunFonts: CanvasKitGlyphRunFontCache;
   private readonly unsupportedOps = new Set<string>();
   private surfaceBackend: 'default' | 'software' | null = null;
   private surfaceFallbackReason: string | null = null;
@@ -314,10 +326,12 @@ export class CanvasKitLayerRenderer {
   private imageFailureCacheHits = 0;
   private imageCachePixels = 0;
   private currentResources: LayerResources | undefined;
+  private currentFontResources: LayerFontResources | undefined;
   private currentShowParagraphMarks = false;
   private currentShowControlCodes = false;
   private currentReplayFeatureCounts: CanvasKitReplayFeatureCounts = {
     dashedStrokes: 0,
+    glyphRuns: 0,
     verticalPresentationPunctuation: 0,
     verticalTextRuns: 0,
   };
@@ -337,7 +351,9 @@ export class CanvasKitLayerRenderer {
     private readonly requirePreparedFontFamilies: boolean = false,
     private readonly oldHangulTypeface: CanvasKitLocalTypeface | null = null,
     private readonly oldHangulFontUrl: string = 'fonts/SourceHanSerifK-OldHangul-subset.woff2',
-  ) {}
+  ) {
+    this.glyphRunFonts = new CanvasKitGlyphRunFontCache(canvasKit);
+  }
 
   static async create(
     renderMode: CanvasKitRenderMode = 'default',
@@ -598,6 +614,8 @@ export class CanvasKitLayerRenderer {
       renderedCanvas = surfaceTarget.canvas;
       const canvas = surface.getCanvas();
       this.currentResources = tree.resources;
+      this.currentFontResources = tree.fontResources;
+      this.glyphRunFonts.registerResources(tree.fontResources, tree.resources);
       this.currentShowParagraphMarks = tree.outputOptions?.showParagraphMarks === true;
       this.currentShowControlCodes = tree.outputOptions?.showControlCodes === true;
       if (this.currentShowControlCodes) {
@@ -651,6 +669,7 @@ export class CanvasKitLayerRenderer {
     } finally {
       surface?.delete();
       this.currentResources = undefined;
+      this.currentFontResources = undefined;
       this.currentShowParagraphMarks = false;
       this.currentShowControlCodes = false;
       this.lastRenderDurationMs = performance.now() - renderStartedAt;
@@ -673,7 +692,9 @@ export class CanvasKitLayerRenderer {
     this.svgGlyphPathCache.clear();
     this.svgGlyphParseFailures.clear();
     this.currentResources = undefined;
+    this.currentFontResources = undefined;
     this.selectedTextVariantOps = new WeakSet<LayerPaintOp>();
+    this.glyphRunFonts.clear();
     for (const { typeface, fontManager } of this.localTypefaces.values()) {
       typeface?.delete?.();
       fontManager?.delete?.();
@@ -715,6 +736,7 @@ export class CanvasKitLayerRenderer {
     const surfaceFallbackReason = this.surfaceFallbackReason ?? this.surfaceRequest.unsupportedReason ?? null;
     const fontSubstitutions = [...this.currentFontSubstitutions.values()]
       .map((substitution) => ({ ...substitution }));
+    const glyphRunFontDiagnostics = this.glyphRunFonts.diagnostics();
     const readinessBlockers: CanvasKitReadinessBlocker[] = [];
     if (!this.lastRenderCompleted) readinessBlockers.push('renderNotCompleted');
     if (this.lastRenderError !== null) readinessBlockers.push('renderError');
@@ -750,6 +772,10 @@ export class CanvasKitLayerRenderer {
       localTypefacePendingCount: this.localTypefacePending.size,
       bundledTypefaceCount: this.bundledTypefaces.size,
       bundledTypefaceLoadFailureCount: this.bundledTypefaceLoadFailures.size,
+      glyphRunFontBlobCount: glyphRunFontDiagnostics.blobs,
+      glyphRunFontBlobBytes: glyphRunFontDiagnostics.bytes,
+      glyphRunTypefaceCount: glyphRunFontDiagnostics.typefaces,
+      glyphRunFontCount: glyphRunFontDiagnostics.fonts,
       fontSubstitutionLimit: CanvasKitLayerRenderer.MAX_FONT_SUBSTITUTION_DIAGNOSTICS,
       unregisteredFontFallbacks: fontSubstitutions.filter(
         (substitution) => substitution.kind === 'unregisteredFallback',
@@ -762,6 +788,7 @@ export class CanvasKitLayerRenderer {
   private resetReplayFeatureCounts(): void {
     this.currentReplayFeatureCounts = {
       dashedStrokes: 0,
+      glyphRuns: 0,
       verticalPresentationPunctuation: 0,
       verticalTextRuns: 0,
     };
@@ -874,10 +901,15 @@ export class CanvasKitLayerRenderer {
     const selected = selectLayerTextVariantsForLeaf(
       node.ops,
       op => this.glyphOutlineVariantReplayable(op),
+      op => this.glyphRunVariantReplayable(op),
     );
     for (const op of selected) {
       this.selectedTextVariantOps.add(op);
     }
+  }
+
+  private glyphRunVariantReplayable(op: LayerGlyphRunOp): boolean {
+    return this.glyphRunFonts.replayStatus(op, this.currentFontResources).replayable;
   }
 
   private glyphOutlineVariantReplayable(op: LayerGlyphOutlineOp): boolean {
@@ -1131,7 +1163,7 @@ export class CanvasKitLayerRenderer {
         this.renderTextDecoration(canvas, op);
         return;
       case 'glyphRun':
-        this.unsupportedOps.add(op.type);
+        this.renderGlyphRun(canvas, op);
         return;
       case 'glyphOutline': {
         const status = glyphOutlinePayloadStatus(op, {
@@ -1278,6 +1310,24 @@ export class CanvasKitLayerRenderer {
     }
     this.recordImageCoverageGaps(op);
     this.withImageTransform(canvas, op.bbox, op.transform, () => this.drawImageOp(canvas, image, op));
+  }
+
+  private renderGlyphRun(canvas: SkCanvas, op: LayerGlyphRunOp): void {
+    const font = this.glyphRunFonts.font(op, this.currentFontResources);
+    if (!font) {
+      this.unsupportedOps.add('glyphRun:replayInvariant');
+      return;
+    }
+    const paint = this.makeFillPaint(op.paintStyle.color ?? '#000000');
+    try {
+      if (drawCanvasKitGlyphRun(canvas, op, font, paint)) {
+        this.currentReplayFeatureCounts.glyphRuns += 1;
+      } else {
+        this.unsupportedOps.add('glyphRun:replayFailed');
+      }
+    } finally {
+      paint.delete?.();
+    }
   }
 
   private renderGlyphOutline(canvas: SkCanvas, op: LayerGlyphOutlineOp): void {

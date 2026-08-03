@@ -16,6 +16,9 @@ struct SearchHit {
     length: usize,
     /// 표 셀 등 중첩 컨텍스트: (parent_para, ctrl_idx, cell_idx, cell_para)
     cell_context: Option<(usize, usize, usize, usize)>,
+    /// `cell_context`가 표 셀이 아니라 글상자 문단을 가리키는지 여부.
+    /// Find/F3의 새 opt-in은 표 셀 좌표만 이동·치환할 수 있으므로 이 둘을 구분한다.
+    is_text_box: bool,
     /// 수식 script 안의 매치이면, 해당 문단 controls 안의 Equation 인덱스.
     /// `cell_context`가 있으면 그 셀/글상자 문단 안의 인덱스이고, 없으면 본문 문단 인덱스다.
     equation_control: Option<usize>,
@@ -98,6 +101,7 @@ fn search_first_body(doc: &DocumentCore, query: &str, case_sensitive: bool) -> O
                     char_offset: offset,
                     length: qlen,
                     cell_context: None,
+                    is_text_box: false,
                     equation_control: None,
                 });
             }
@@ -121,6 +125,7 @@ fn search_all(doc: &DocumentCore, query: &str, case_sensitive: bool) -> Vec<Sear
                     char_offset: offset,
                     length: qlen,
                     cell_context: None,
+                    is_text_box: false,
                     equation_control: None,
                 });
             }
@@ -143,6 +148,7 @@ fn search_all(doc: &DocumentCore, query: &str, case_sensitive: bool) -> Vec<Sear
                                             cell_idx,
                                             cell_para_idx,
                                         )),
+                                        is_text_box: false,
                                         equation_control: None,
                                     });
                                 }
@@ -164,6 +170,7 @@ fn search_all(doc: &DocumentCore, query: &str, case_sensitive: bool) -> Vec<Sear
                                                     cell_idx,
                                                     cell_para_idx,
                                                 )),
+                                                is_text_box: false,
                                                 equation_control: Some(equation_index),
                                             });
                                         }
@@ -182,6 +189,7 @@ fn search_all(doc: &DocumentCore, query: &str, case_sensitive: bool) -> Vec<Sear
                                         char_offset: offset,
                                         length: qlen,
                                         cell_context: Some((para_idx, ctrl_idx, 0, tb_para_idx)),
+                                        is_text_box: true,
                                         equation_control: None,
                                     });
                                 }
@@ -202,6 +210,7 @@ fn search_all(doc: &DocumentCore, query: &str, case_sensitive: bool) -> Vec<Sear
                                                     0,
                                                     tb_para_idx,
                                                 )),
+                                                is_text_box: true,
                                                 equation_control: Some(equation_index),
                                             });
                                         }
@@ -221,6 +230,7 @@ fn search_all(doc: &DocumentCore, query: &str, case_sensitive: bool) -> Vec<Sear
                                 char_offset: offset,
                                 length: qlen,
                                 cell_context: None,
+                                is_text_box: false,
                                 equation_control: Some(ctrl_idx),
                             });
                         }
@@ -250,6 +260,7 @@ impl DocumentCore {
         from_char: usize,
         forward: bool,
         case_sensitive: bool,
+        include_cells: bool,
     ) -> Result<String, HwpError> {
         if query.is_empty() {
             return Ok(r#"{"found":false}"#.to_string());
@@ -260,11 +271,29 @@ impl DocumentCore {
             return Ok(r#"{"found":false}"#.to_string());
         }
 
-        // 본문 결과만 필터 (셀/글상자 내부 제외 — 커서 이동 불가)
-        let body_hits: Vec<&SearchHit> = all_hits
-            .iter()
-            .filter(|h| h.cell_context.is_none() && h.equation_control.is_none())
-            .collect();
+        // [#3865] 표 셀 안에만 있는 단어가 "결과 없음"으로 나오던 원인이 이 필터였다.
+        // 종전 주석의 사유는 "커서 이동 불가"였지만, 그 뒤 편집기가 셀 좌표를 다루게 되어
+        // (getCursorRectInCell·DocumentPosition 의 cellIndex 계열) 더는 성립하지 않는다.
+        // 다만 셀 히트를 받으면 호출자가 셀 좌표로 이동할 수 있어야 하므로, 옵트인으로 연다 —
+        // 기본값은 종전 동작 그대로라 기존 호출자는 무회귀다.
+        //
+        // 셀 히트의 sec·para 는 표가 놓인 **바깥 문단** 좌표이고, 셀 안 위치는 cellContext
+        // (parentPara·ctrlIdx·cellIdx·cellPara)로 따로 실린다. 그래서 아래 전/후 판정은
+        // 셀 히트에서도 그대로 성립한다(표가 놓인 문단 기준으로 정렬된다).
+        let body_hits: Vec<&SearchHit> = if include_cells {
+            // Find/F3가 이동·치환할 수 있는 것은 표 셀의 일반 텍스트뿐이다. 글상자와
+            // 수식은 `cellContext`만으로는 표와 구분하거나 안전하게 편집할 수 없으므로
+            // 기존 제외 범위를 유지한다.
+            all_hits
+                .iter()
+                .filter(|h| !h.is_text_box && h.equation_control.is_none())
+                .collect()
+        } else {
+            all_hits
+                .iter()
+                .filter(|h| h.cell_context.is_none() && h.equation_control.is_none())
+                .collect()
+        };
         if body_hits.is_empty() {
             return Ok(r#"{"found":false}"#.to_string());
         }

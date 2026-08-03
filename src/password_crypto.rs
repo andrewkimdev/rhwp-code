@@ -7,12 +7,12 @@ use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
 use std::io::{Cursor, Read, Write};
 
-use aes::cipher::{
-    block_padding::NoPadding, Block, BlockDecrypt, BlockDecryptMut, BlockEncrypt, BlockEncryptMut,
-    KeyInit, KeyIvInit,
-};
 use aes::{Aes128, Aes256};
 use base64::Engine as _;
+use cbc::cipher::{
+    block_padding::NoPadding, Block, BlockCipherDecrypt, BlockCipherEncrypt, BlockModeDecrypt,
+    BlockModeEncrypt, KeyInit, KeyIvInit,
+};
 use cbc::{Decryptor, Encryptor};
 use crc32fast::Hasher;
 use des::Des;
@@ -146,7 +146,7 @@ fn hwp5_shift_register(register: &mut [u8; 16], feedback_bit: u8) {
 }
 
 fn aes_msb(cipher: &Aes128, register: &[u8; 16]) -> u8 {
-    let mut block = Block::<Aes128>::clone_from_slice(register);
+    let mut block = Block::<Aes128>::from(*register);
     cipher.encrypt_block(&mut block);
     block[0] >> 7
 }
@@ -275,10 +275,12 @@ pub fn derive_hwp3_legacy_des_key(password: &str) -> [u8; 8] {
 fn hwp3_des_ecb(payload: &mut [u8], key: &[u8; 8], encrypt: bool) {
     let cipher = Des::new_from_slice(key).expect("DES key size");
     for block in payload.chunks_exact_mut(8) {
+        let block: &mut [u8; 8] = block.try_into().expect("HWP3 DES block size");
+        let block: &mut Block<Des> = block.into();
         if encrypt {
-            cipher.encrypt_block(Block::<Des>::from_mut_slice(block));
+            cipher.encrypt_block(block);
         } else {
-            cipher.decrypt_block(Block::<Des>::from_mut_slice(block));
+            cipher.decrypt_block(block);
         }
     }
 }
@@ -614,7 +616,7 @@ fn decrypt_hwpx_entry(
         let Ok(cipher) = Decryptor::<Aes256>::new_from_slices(&key, &entry.iv) else {
             continue;
         };
-        let Ok(decrypted) = cipher.decrypt_padded_mut::<NoPadding>(&mut blocks) else {
+        let Ok(decrypted) = cipher.decrypt_padded::<NoPadding>(&mut blocks) else {
             continue;
         };
         let plaintext = match inflate_hwpx_raw_deflate(decrypted, &entry.path) {
@@ -829,7 +831,7 @@ fn encrypt_hwpx_entry(
     let len = compressed.len();
     let ciphertext = Encryptor::<Aes256>::new_from_slices(&key, &iv)
         .map_err(|_| PasswordCryptoError::HwpxUnsupported("AES-256-CBC 초기화 실패".to_string()))?
-        .encrypt_padded_mut::<NoPadding>(&mut compressed, len)
+        .encrypt_padded::<NoPadding>(&mut compressed, len)
         .map_err(|_| PasswordCryptoError::HwpxUnsupported("AES-256-CBC 암호화 실패".to_string()))?
         .to_vec();
     Ok((

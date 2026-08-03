@@ -40,10 +40,11 @@ direct replay.
 
 `TextRun compatibility` remains the replay baseline for normal text. `GlyphRun`
 and `GlyphOutline` are additive sidecars, not a replacement authority by
-themselves. The browser CanvasKit runtime currently keeps `GlyphOutline` direct
-replay behind `glyph-outline-payload-status.ts`; Rust-side replay planning and
-future strict selection work should keep reporting why a sidecar was selected
-or rejected.
+themselves. Browser CanvasKit can directly replay the bounded portable
+`GlyphRun` subset whose exact embedded font blob, face index, glyph geometry,
+and diagnostics all pass verification. `GlyphOutline` direct replay remains
+behind `glyph-outline-payload-status.ts`; both paths keep deterministic reasons
+for selecting a sidecar or retaining `TextRun`.
 
 Schema-v1 text variants are exported as ordinary `glyphRun` and `glyphOutline`
 paint ops with variant metadata plus `text.variantGroups`. Those sidecar ops
@@ -69,6 +70,9 @@ through backend-local browser objects.
   until a phase changes the policy and adds proof fixtures.
 - `GlyphOutline` direct replay must remain guarded by
   `glyph-outline-payload-status.ts` before it reaches CanvasKit drawing code.
+- `GlyphRun` direct replay must remain guarded by verified font resources,
+  strict geometry/diagnostics, and exact face construction in
+  `canvaskit/glyph-run-fonts.ts` before it reaches `drawGlyphs`.
 - The renderer contract guard and render-diff CI should catch drift before a
   PR changes public rendering behavior.
 
@@ -119,11 +123,12 @@ Likely families:
 
 ### 3. Strict Text Variant Replay
 
-Keep `GlyphRun` and `GlyphOutline` behind explicit payload-status and selection
-diagnostics until the payload family has a proof fixture. Do not let CanvasKit
-select glyph ids against an arbitrary local font by family name. Do not allow
-color, bitmap, SVG, and stroke payload families to mix in one strict outline
-payload.
+Keep every `GlyphRun` and `GlyphOutline` subset behind explicit payload-status
+and selection diagnostics. The first portable nominal-glyph `GlyphRun` subset
+uses verified embedded bytes and an exact face; all other glyph runs still fall
+back. Never let CanvasKit select glyph ids against an arbitrary local font by
+family name. Do not allow color, bitmap, SVG, and stroke payload families to mix
+in one strict outline payload.
 
 This batch should widen strict variant replay only when the fallback behavior
 and reject reasons are exact.
@@ -153,10 +158,19 @@ document as an exact sidecar. That requires preserving the OpenType SVG em-box
 and baseline geometry in the paint payload; treating the fragment alone as
 page-positioned output would overstate parity.
 
-The additive JSON contract advances to layer schema `1.19` and resource table
-`1.5`. Bitmap and SVG sidecar IDs are accompanied by the encoded image bytes,
-static SVG fragments, and content-addressed keys in `resources`, so a consumer
-never receives an arena-local reference without its corresponding payload.
+P42 adds the first exact-font direct path for normal layer export. Matching
+embedded faces can produce a bounded horizontal nominal `GlyphRun` alongside
+the existing fallback. Layer resources export content-addressed font bytes;
+CanvasKit verifies BLAKE3 identity, extracts the requested TTC v1/v2 face,
+caches document-scoped native font objects, and draws producer positions with
+`drawGlyphs`. Complex shaping, variation instances, non-horizontal orientation,
+and glyph transforms remain fail-closed.
+
+The cumulative additive JSON contract is layer schema `1.22` and resource
+table `1.6`. Bitmap and SVG sidecar IDs are accompanied by encoded image bytes,
+static SVG fragments, and content-addressed keys in `resources`; portable
+GlyphRun faces additionally reference verified font blob bytes and stable keys.
+No consumer receives an arena-local reference without its corresponding payload.
 CanvasKit validates that key, decodes bitmap headers under the same pixel
 limits as ordinary images, and parses every static SVG path before selecting
 the sidecar. Selection is exclusive per `equivalenceGroup`: a verified sidecar
@@ -487,6 +501,6 @@ work rather than being declared parity-complete.
 - This plan does not make CanvasKit a public default; automatic selection is an
   explicit opt-in and remains fail-closed and document-scoped.
 - This plan does not add a hidden Canvas2D overlay fallback.
-- This plan does not enable CanvasKit `GlyphRun` or `GlyphOutline` selection
+- This plan does not enable any CanvasKit `GlyphRun` or `GlyphOutline` subset
   without proof resources and deterministic diagnostics.
 - This plan does not claim native Skia or PDF export parity is complete.
