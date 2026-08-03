@@ -195,6 +195,70 @@ fn footnote_text(node: &RenderNode, in_footnote: bool, text: &mut String) {
     }
 }
 
+fn footnote_line_count(node: &RenderNode, in_footnote: bool) -> usize {
+    let in_footnote = in_footnote || matches!(node.node_type, RenderNodeType::FootnoteArea);
+    let here = usize::from(in_footnote && matches!(node.node_type, RenderNodeType::TextLine(_)));
+    here + node
+        .children
+        .iter()
+        .map(|child| footnote_line_count(child, in_footnote))
+        .sum::<usize>()
+}
+
+/// Stage 29: fragment queue는 빈 각주 문단도 가상 한 줄로 예약한다. 실제 composer
+/// 결과가 0줄일 때, 번호를 그리는 첫 fragment가 그 가상 범위를 그대로 slice하면
+/// range-end 1이 실제 len 0을 넘어 panic 난다. 빈 문단 fallback line을 보존한다.
+#[test]
+fn empty_footnote_virtual_fragment_uses_fallback_without_slice_panic() {
+    use rhwp::model::control::Control;
+    use rhwp::renderer::composer::compose_paragraph;
+
+    let mut doc = HwpDocument::create_empty();
+    doc.insert_text_native(0, 0, 0, "본문")
+        .expect("seed body text for a footnote marker");
+    doc.insert_footnote_native(0, 0, 2)
+        .expect("insert initially blank footnote");
+
+    // 공개 편집 API가 만든 각주 contract(AutoNumber 포함)는 유지하고, 사용자 편집
+    // 뒤 lineSeg와 표시 텍스트가 모두 비어 있는 실제 renderer 입력만 만든다.
+    let mut document = doc.document().clone();
+    let footnote = document.sections[0].paragraphs[0]
+        .controls
+        .iter_mut()
+        .find_map(|control| match control {
+            Control::Footnote(footnote) => Some(footnote),
+            _ => None,
+        })
+        .expect("inserted body footnote");
+    let empty_para = footnote
+        .paragraphs
+        .first_mut()
+        .expect("inserted footnote paragraph");
+    empty_para.text.clear();
+    empty_para.char_offsets.clear();
+    empty_para.line_segs.clear();
+    empty_para.char_count = 0;
+    empty_para.has_para_text = false;
+    assert!(
+        compose_paragraph(empty_para).lines.is_empty(),
+        "regression setup requires a 0-line composed footnote paragraph"
+    );
+    doc.set_document(document);
+
+    assert!(
+        doc.page_has_footnote_footholds_native(0),
+        "pagination must retain the footnote so the layout path is exercised"
+    );
+    let tree = doc
+        .build_page_render_tree(0)
+        .expect("empty footnote virtual fragment must render without a slice panic");
+    assert_eq!(
+        footnote_line_count(&tree.root, false),
+        1,
+        "the 0-line footnote must keep the one-line fallback reserved by pagination"
+    );
+}
+
 #[test]
 fn rowbreak_table_cell_footnotes_keep_the_pdf_fragment_boundary() {
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(SAMPLE);

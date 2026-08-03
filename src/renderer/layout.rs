@@ -55,6 +55,7 @@ struct ColumnItemCtx<'a> {
 }
 
 const ENDNOTE_BETWEEN_NOTES_BASE_FLOW_HU: i32 = 1984;
+const SINGLE_ROW_DECLARED_TRUST_MAX_RATIO: f64 = 1.5;
 
 #[derive(Debug, Clone, Copy)]
 struct TacReceiptSealLine {
@@ -771,21 +772,125 @@ fn empty_square_sibling_table_saved_top(
     (top >= col_area.y && top <= col_area.y + col_area.height).then_some(top)
 }
 
-/// 단독 empty-host TopAndBottom 표가 native HWP의 raw page vpos와 선언 높이로
-/// 현재 본문 안에 완전히 들어가는 경우의 paint anchor. 이 조건은 table을 일반
-/// block으로 누적해 그림만 다음 쪽으로 보내는 것을 막되, 실제로 이월되어야 할
-/// 단독 float에는 적용되지 않는다.
+/// empty-host TopAndBottom 그림 표 또는 신뢰 가능한 1×1 표가 native HWP의 raw page vpos와 선언 높이로
+/// 현재 본문 안에 완전히 들어가는 경우의 paint anchor. `TopAndBottom`만으로는
+/// CellBreak/RowBreak 데이터 표도 포함하므로, 일반 block/partial-table 분할을 우회할 수
+/// 있는 이 특례는 그림을 담은 1×1, 그림+caption 2×1, 또는 실측 높이를 신뢰할 수 있는
+/// 단순 1×1 RowBreak 표에만 적용한다.
+fn is_single_noninline_picture_table(table: &crate::model::table::Table) -> bool {
+    if table.common.treat_as_char
+        || table.row_count != 1
+        || table.col_count != 1
+        || table.cells.len() != 1
+        || !matches!(table.page_break, TablePageBreak::RowBreak)
+    {
+        return false;
+    }
+
+    let Some(cell) = table.cells.first() else {
+        return false;
+    };
+    cell.row == 0
+        && cell.col == 0
+        && cell.row_span == 1
+        && cell.col_span == 1
+        && cell.paragraphs.len() == 1
+        && cell.paragraphs.first().is_some_and(|cell_para| {
+            cell_para.text.trim().is_empty()
+                && cell_para.controls.len() == 1
+                && matches!(
+                    cell_para.controls.first(),
+                    Some(Control::Picture(picture)) if !picture.common.treat_as_char
+                )
+        })
+}
+
+fn is_two_row_picture_caption_rowbreak_table(table: &crate::model::table::Table) -> bool {
+    if table.row_count != 2
+        || table.col_count != 1
+        || table.cells.len() != 2
+        || table
+            .cells
+            .iter()
+            .any(|cell| cell.col != 0 || cell.row > 1 || cell.row_span != 1 || cell.col_span != 1)
+    {
+        return false;
+    }
+
+    let has_picture = table.cells.iter().any(|cell| {
+        cell.row == 0
+            && cell.paragraphs.iter().any(|para| {
+                para.controls
+                    .iter()
+                    .any(|control| matches!(control, Control::Picture(_)))
+            })
+    });
+    let has_caption_text = table
+        .cells
+        .iter()
+        .any(|cell| cell.row == 1 && cell.paragraphs.iter().any(para_has_visible_text));
+    has_picture && has_caption_text
+}
+
+/// 일반 RowBreak 데이터 표가 raw page anchor 특례를 타지 않도록, 저장 좌표를
+/// 신뢰할 수 있는 그림 표 구조만 통과시킨다.
+fn is_stored_anchor_picture_table(table: &crate::model::table::Table) -> bool {
+    !table.common.treat_as_char
+        && matches!(table.page_break, TablePageBreak::RowBreak)
+        && (is_single_noninline_picture_table(table)
+            || is_two_row_picture_caption_rowbreak_table(table))
+}
+
+/// 그림이 아닌 1×1 RowBreak 표도 실측 높이가 선언 객체 높이와 같은 범위면 한컴의
+/// empty-host raw anchor를 따른다. 셀 내용이 크게 팽창한 표는 일반 fragment 경로로
+/// 보내야 하므로, 선언 높이의 1.5배 이내만 허용한다.
+fn is_single_rowbreak_table_with_trustworthy_declared_height(
+    table: &crate::model::table::Table,
+    effective_height: Option<f64>,
+    dpi: f64,
+) -> bool {
+    if table.common.treat_as_char
+        || table.row_count != 1
+        || table.col_count != 1
+        || table.cells.len() != 1
+        || !matches!(table.page_break, TablePageBreak::RowBreak)
+    {
+        return false;
+    }
+
+    let Some(cell) = table.cells.first() else {
+        return false;
+    };
+    if cell.row != 0 || cell.col != 0 || cell.row_span != 1 || cell.col_span != 1 {
+        return false;
+    }
+
+    let declared_height = hwpunit_to_px(table.common.height as i32, dpi).max(0.0);
+    declared_height > 0.0
+        && effective_height
+            .is_some_and(|height| height <= declared_height * SINGLE_ROW_DECLARED_TRUST_MAX_RATIO)
+}
+
+/// empty-host TopAndBottom 그림 표가 native HWP의 raw page vpos와 선언 높이로
+/// 현재 본문 안에 완전히 들어가는 경우의 paint anchor.
 fn native_empty_single_topbottom_table_saved_top(
     native_hwp5_layout: bool,
     para: &Paragraph,
     next_para: Option<&Paragraph>,
     table: &crate::model::table::Table,
+    effective_height: Option<f64>,
     col_area: &LayoutRect,
     dpi: f64,
 ) -> Option<f64> {
     if !native_hwp5_layout
         || para_has_visible_text(para)
         || !is_para_topbottom_float(&table.common)
+        || !(is_stored_anchor_picture_table(table)
+            || is_single_rowbreak_table_with_trustworthy_declared_height(
+                table,
+                effective_height,
+                dpi,
+            ))
         || para
             .controls
             .iter()
@@ -7010,6 +7115,7 @@ impl LayoutEngine {
                         para,
                         paragraphs.get(para_index + 1),
                         t,
+                        mt.map(|measured| measured.total_height),
                         col_area,
                         self.dpi,
                     ) {

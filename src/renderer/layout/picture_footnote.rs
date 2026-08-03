@@ -1079,6 +1079,11 @@ impl LayoutEngine {
         is_last_selected_line: bool,
     ) -> f64 {
         let mut y = y_start;
+        // 분할 큐는 빈 각주 문단도 한 줄의 virtual fragment로 센다. 실제 composed
+        // 줄은 0개이므로 그 범위를 그대로 slice하면 panic 난다. 기존 비분할 경로처럼
+        // 빈 문단 fallback까지 흘려보내 번호/높이 계약을 보존한다.
+        let line_start = line_start.min(composed.lines.len());
+        let line_end = line_end.min(composed.lines.len()).max(line_start);
 
         for (offset, comp_line) in composed.lines[line_start..line_end].iter().enumerate() {
             // LineSeg.line_height는 HWP에서 줄간격이 이미 반영된 값

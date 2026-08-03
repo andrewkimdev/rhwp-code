@@ -2332,7 +2332,7 @@ fn native_hwp5_existing_footnote_reset_overlap_break_line(
         })
 }
 
-/// native HWP5의 2행 그림+caption RowBreak 표인지 판별한다.
+/// native HWP5/HWPX의 2행 그림+caption RowBreak 표인지 판별한다.
 ///
 /// 그림을 첫 행에, caption을 둘째 행에 저장한 표는 현재 페이지의 기존 각주 위에
 /// 실제로 들어가도 일반 다행 표와 같은 clean-defer gate를 타기 쉽다. 일반 요구사항
@@ -2363,6 +2363,93 @@ fn is_two_row_picture_caption_rowbreak_table(table: &crate::model::table::Table)
         .iter()
         .any(|cell| cell.row == 1 && cell.paragraphs.iter().any(para_has_visible_text));
     has_picture && has_caption_text
+}
+
+/// 빈 host의 저장 좌표를 그대로 쓸 수 있는 단일 그림 표인지 판별한다.
+///
+/// `TopAndBottom` 자체는 일반 CellBreak/RowBreak 데이터 표에도 사용된다. 선언 높이만
+/// 예약하면 그 표의 실제 행·셀 조각을 건너뛰므로, raw page anchor 특례는 non-TAC 그림만
+/// 담은 1×1 RowBreak 표로만 제한한다.
+fn is_single_noninline_picture_table(table: &crate::model::table::Table) -> bool {
+    if table.common.treat_as_char
+        || table.row_count != 1
+        || table.col_count != 1
+        || table.cells.len() != 1
+        || !matches!(
+            table.page_break,
+            crate::model::table::TablePageBreak::RowBreak
+        )
+    {
+        return false;
+    }
+
+    let Some(cell) = table.cells.first() else {
+        return false;
+    };
+    cell.row == 0
+        && cell.col == 0
+        && cell.row_span == 1
+        && cell.col_span == 1
+        && cell.paragraphs.len() == 1
+        && cell.paragraphs.first().is_some_and(|cell_para| {
+            cell_para.text.trim().is_empty()
+                && cell_para.controls.len() == 1
+                && matches!(
+                    cell_para.controls.first(),
+                    Some(Control::Picture(picture)) if !picture.common.treat_as_char
+                )
+        })
+}
+
+/// 일반 RowBreak 데이터 표가 raw page anchor 특례를 타지 않도록, 저장 좌표를
+/// 신뢰할 수 있는 그림 표 구조만 통과시킨다.
+///
+/// 1×1 비-TAC 그림 표와 그림·caption을 행으로 분리한 2×1 표는 한컴이 empty host의
+/// `LINE_SEG`에 물리 페이지 좌표를 남기는 형상이다. 후자의 내부 그림은 TAC여도
+/// 표 자체가 비-TAC float이므로 허용한다. 그림이 아닌 단순 1×1 표는 별도의 선언
+/// 높이 신뢰 판정을 통과한 native HWP5에서만 raw anchor를 허용한다.
+fn is_stored_anchor_picture_table(table: &crate::model::table::Table) -> bool {
+    !table.common.treat_as_char
+        && matches!(
+            table.page_break,
+            crate::model::table::TablePageBreak::RowBreak
+        )
+        && (is_single_noninline_picture_table(table)
+            || is_two_row_picture_caption_rowbreak_table(table))
+}
+
+/// 1×1 RowBreak 표의 실측 높이가 선언 객체 높이와 같은 범위인지 판별한다.
+///
+/// 그림 표가 아니더라도 이 형상은 한컴이 empty host의 raw vpos에 직접 배치할 수
+/// 있다. 단, 실제 셀 내용이 선언 높이보다 크게 팽창한 표는 이 경로에서 행 fragment가
+/// 사라지므로, 선언 높이의 1.5배 이내일 때만 허용한다.
+fn is_single_rowbreak_table_with_trustworthy_declared_height(
+    table: &crate::model::table::Table,
+    effective_height: f64,
+    dpi: f64,
+) -> bool {
+    if table.common.treat_as_char
+        || table.row_count != 1
+        || table.col_count != 1
+        || table.cells.len() != 1
+        || !matches!(
+            table.page_break,
+            crate::model::table::TablePageBreak::RowBreak
+        )
+    {
+        return false;
+    }
+
+    let Some(cell) = table.cells.first() else {
+        return false;
+    };
+    if cell.row != 0 || cell.col != 0 || cell.row_span != 1 || cell.col_span != 1 {
+        return false;
+    }
+
+    let declared_height = hwpunit_to_px(table.common.height as i32, dpi).max(0.0);
+    declared_height > 0.0
+        && effective_height <= declared_height * SINGLE_ROW_DECLARED_TRUST_MAX_RATIO
 }
 
 /// native HWP5 RowBreak 표 셀 안에 저장된 vpos reset이 있는지 판별한다.
@@ -15610,14 +15697,27 @@ impl TypesetEngine {
                     .filter(|top| *top >= 0.0 && *top <= available)
             })
             .flatten();
-        // 단독 empty-host TopAndBottom 표는 다음 문단의 저장 vpos까지 증가할 때만
+        // empty-host TopAndBottom 그림 표(두 프로필) 또는 선언 높이를 신뢰할 수 있는
+        // 1×1 표(native HWP5)는 다음 문단의 저장 vpos까지 증가할 때만
         // raw vpos를 물리 page anchor로 해석한다. 다음 vpos가 되감기는 p14 그림 8
         // 같은 page-boundary 형상은 이전 anchor가 남아 있을 수 있으므로 기존 flow를
         // 보존한다. native HWP5와 원본 HWPX가 모두 이 저장 형상을 제공한다. HWPX를
         // 일반 block fit으로 보내면 각주 안전 여유 수 px 때문에 실제로는 들어가는
         // 그림 11이 다음 쪽으로 이월된다 (#3738).
+        let single_rowbreak_declared_height_is_trustworthy =
+            is_single_rowbreak_table_with_trustworthy_declared_height(
+                table,
+                ft.effective_height,
+                self.dpi,
+            );
+        // HWPX 원본의 일반 1×1 텍스트 표까지 raw anchor로 보내면 뒤의 다행 표
+        // fragment가 흔들린다(#1891). 그림 구조는 두 원본에서 같은 저장 계약을
+        // 따르지만, 선언 높이 신뢰 특례는 native HWP5에서만 허용한다.
+        let is_stored_anchor_table = is_stored_anchor_picture_table(table)
+            || (st.profile.native_hwp5_layout() && single_rowbreak_declared_height_is_trustworthy);
         let stored_single_topbottom_top = (is_topbottom_para_float
             && topbottom_float_count == 1
+            && is_stored_anchor_table
             && (st.profile.native_hwp5_layout() || st.profile.hwpx_stored_layout()))
         .then(|| {
             let current = para
@@ -15664,11 +15764,7 @@ impl TypesetEngine {
                 table.page_break,
                 crate::model::table::TablePageBreak::RowBreak
             )
-            || {
-                let declared_height = hwpunit_to_px(table.common.height as i32, self.dpi).max(0.0);
-                declared_height > 0.0
-                    && ft.effective_height <= declared_height * SINGLE_ROW_DECLARED_TRUST_MAX_RATIO
-            };
+            || single_rowbreak_declared_height_is_trustworthy;
         if !stored_single_rowbreak_declared_height_is_trustworthy {
             return false;
         }
