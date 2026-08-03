@@ -9,3 +9,11 @@ tests/golden_svg/**/*.svg text eol=lf
 
 # Lawful HML corpus — preserve provenance bytes (BOM/CRLF/trailing spaces) and verify by SHA
 samples/hml/*.hml -text -diff
+
+# POC TSV는 마지막 빈 열을 tab으로 표현한다. 이 필드는 데이터 스키마의 일부이므로
+# trailing-whitespace 오류로 취급하지 않는다.
+output/poc/**/*.tsv -whitespace
+
+# 이 파일은 재현용 unified diff 자체다. 내부 hunk의 공백 문맥은 패치 문법이므로
+# Git의 일반 source-whitespace 검사를 적용하지 않는다.
+mydocs/report/task3798/trimcap_experiment.patch -whitespace

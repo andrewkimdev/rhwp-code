@@ -28,8 +28,12 @@ PAGENUM = re.compile(r"(\d+)")
 
 def render(exe: str, path: str, out_dir: str) -> dict[int, list[tuple]]:
     os.makedirs(out_dir, exist_ok=True)
-    subprocess.run([exe, "export-svg", path, "-o", out_dir], capture_output=True,
-                   text=True, encoding="utf-8", errors="replace", timeout=1800)
+    proc = subprocess.run([exe, "export-svg", path, "-o", out_dir], capture_output=True,
+                          text=True, encoding="utf-8", errors="replace", timeout=1800)
+    if proc.returncode:
+        raise RuntimeError(
+            f"export-svg failed for {path} (exit {proc.returncode}): {proc.stderr.strip()}"
+        )
     # 쪽 키는 **파일 순서**로 만든다. 파일명에서 숫자를 뽑으면 단일 쪽 문서(쪽번호 접미사가
     # 없다)에서 문서 제목 속 숫자를 쪽번호로 오독해, 두 산출물의 쪽이 어긋나 전량 불일치로
     # 보인다(20160897 "[별지 제11호서식]" → 11쪽으로 오독).
@@ -37,6 +41,8 @@ def render(exe: str, path: str, out_dir: str) -> dict[int, list[tuple]]:
     files = sorted(glob.glob(os.path.join(out_dir, "*.svg")),
                    key=lambda p: [int(t) if t.isdigit() else t
                                   for t in re.split(r"(\d+)", os.path.basename(p))])
+    if not files:
+        raise RuntimeError(f"export-svg produced no SVG pages for {path}")
     for pg, f in enumerate(files, start=1):
         svg = open(f, encoding="utf-8", errors="replace").read()
         res = []
@@ -59,9 +65,13 @@ def main() -> int:
     a = ap.parse_args()
     exe = os.path.abspath(a.exe)
 
-    with tempfile.TemporaryDirectory() as td:
-        gs = render(exe, a.src, os.path.join(td, "src"))
-        gr = render(exe, a.rt, os.path.join(td, "rt"))
+    try:
+        with tempfile.TemporaryDirectory() as td:
+            gs = render(exe, a.src, os.path.join(td, "src"))
+            gr = render(exe, a.rt, os.path.join(td, "rt"))
+    except (OSError, RuntimeError, subprocess.TimeoutExpired) as exc:
+        print(f"비교 실패: {exc}", file=sys.stderr)
+        return 2
     print(f"쪽수  원본 {len(gs)} · 왕복 {len(gr)}")
 
     total = diff = shown = 0

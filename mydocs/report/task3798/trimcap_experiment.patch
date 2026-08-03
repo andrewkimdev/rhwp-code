@@ -5,7 +5,7 @@ index 53f172f2d..20e7f38ee 100644
 @@ -900,16 +900,49 @@ fn take_strict_plain_text_fit_after_empty_host_float_once(
      true
  }
- 
+
 +/// 쪽 끝 문단이 본문 하단 밖으로 흘려도 되는 폭 [#3798].
 +///
 +/// 쪽 마지막 문단의 적합 판정은 말미 줄간격을 뺀 높이(`height_for_fit`)로 한다
@@ -53,7 +53,7 @@ index 53f172f2d..20e7f38ee 100644
 +        .unwrap_or(PAGE_END_SPILL_LIMIT_PX);
 +    total_height.min(height_for_fit.max(total_height - limit))
  }
- 
+
  fn para_line_spacing_px(para: &Paragraph, dpi: f64) -> f64 {
 @@ -12592,6 +12625,8 @@ impl TypesetEngine {
              fmt.total_height,
@@ -67,7 +67,7 @@ index 53f172f2d..20e7f38ee 100644
 @@ -18841,8 +18876,31 @@ mod tests {
              &plain,
          ));
- 
+
 -        assert_eq!(paragraph_page_end_fit_height(21.3, 13.3, false), 13.3);
 -        assert_eq!(paragraph_page_end_fit_height(21.3, 13.3, true), 21.3);
 +        // [#3798] 한 줄 문단은 말미 줄간격 트림에 한도가 있다 — 8.0px 를 빼려 해도 6.0 까지다.
@@ -96,5 +96,5 @@ index 53f172f2d..20e7f38ee 100644
 +            21.3
 +        );
      }
- 
+
      fn issue2439_cut_paragraph(line_count: usize, line_height: i32) -> Paragraph {

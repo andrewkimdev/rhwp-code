@@ -63,7 +63,7 @@ def ir_pages(src, work):
     d = os.path.join(work, "txt")
     subprocess.run([a.exe, "export-text", src, "-o", d],
                    capture_output=True, timeout=a.timeout)
-    files = sorted(glob.glob(d + r"\**\*.txt", recursive=True))
+    files = sorted(glob.glob(os.path.join(d, "**", "*.txt"), recursive=True))
     pages = []
     for f in files:
         try:

@@ -99,7 +99,7 @@ def scan(src):
         d = os.path.join(work, "svg")
         subprocess.run([a.exe, "export-svg", src, "-o", d],
                        capture_output=True, timeout=a.timeout)
-        files = sorted(glob.glob(d + r"\*.svg"))
+        files = sorted(glob.glob(os.path.join(d, "*.svg")))
         if not files:
             return {"status": "NOSVG"}
         tp = to = tc = 0
