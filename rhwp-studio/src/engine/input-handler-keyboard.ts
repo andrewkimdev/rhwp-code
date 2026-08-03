@@ -1026,7 +1026,9 @@ export function onKeyDown(this: any, e: KeyboardEvent): void {
       } else {
         // phase 1: 단일 셀 이동
         this.cursor.moveCellSelection(dr, dc);
-        this.updateCaret();
+        // 문서 입력 위치는 CursorState가 새 셀로 갱신하지만, F5 셀 선택 중에는
+        // 한컴처럼 텍스트 캐럿을 노출하지 않는다.
+        this.caret.hide();
       }
       this.updateCellSelection();
       return;

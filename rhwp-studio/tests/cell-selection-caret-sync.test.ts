@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -106,4 +106,18 @@ assert.equal(result.nested.position.cellPath.at(-1).cellIndex, 2);
 assert.equal(result.nested.position.cellPath.at(-1).cellParaIndex, 0);
 assert.equal(result.nested.position.charOffset, 0);
 
-test('F5 단일 셀 선택 이동은 평면·중첩 표의 캐럿 위치를 동기화한다', () => {});
+test('F5 단일 셀 선택 이동은 평면·중첩 표의 문서 위치를 동기화한다', () => {});
+
+test('F5 단일 셀 선택 이동은 화면 캐럿을 숨긴다', () => {
+  const keyboardPath = path.join(studioRoot, 'src/engine/input-handler-keyboard.ts');
+  const keyboard = readFileSync(keyboardPath, 'utf8');
+  const start = keyboard.indexOf('// phase 1: 단일 셀 이동');
+  const end = keyboard.indexOf('this.updateCellSelection();', start);
+
+  assert.notEqual(start, -1, 'F5 phase 1 셀 이동 블록을 찾을 수 없습니다');
+  assert.notEqual(end, -1, 'F5 phase 1 뒤의 셀 선택 렌더 갱신을 찾을 수 없습니다');
+
+  const phaseOne = keyboard.slice(start, end);
+  assert.match(phaseOne, /this\.cursor\.moveCellSelection\(dr, dc\);\s*[\s\S]*this\.caret\.hide\(\);/);
+  assert.doesNotMatch(phaseOne, /this\.updateCaret\(\)/);
+});
