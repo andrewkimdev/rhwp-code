@@ -1147,6 +1147,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "rhwp-native-ffi"
+version = "0.1.0"
+dependencies = [
+ "rhwp",
+]
+
+[[package]]
 name = "rhwp-subsecond"
 version = "0.0.0"
 dependencies = [
