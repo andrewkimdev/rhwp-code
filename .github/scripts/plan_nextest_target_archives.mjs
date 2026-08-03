@@ -4,9 +4,9 @@ import fs from "node:fs";
 import path from "node:path";
 
 const SLOW_LABEL = "slow";
-const REGULAR_LABELS = ["1", "2", "3", "4", "5", "6", "7"];
-const BUILDER_A_LABELS = ["1", "2", "3"];
-const BUILDER_B_LABELS = ["4", "5", "6", "7"];
+const REGULAR_LABELS = ["1", "2", "3"];
+const BUILDER_A_LABELS = ["1", "2"];
+const BUILDER_B_LABELS = ["3"];
 
 function fail(message) {
   throw new Error(message);
@@ -118,9 +118,9 @@ if (regularTargets.length < REGULAR_LABELS.length) {
   fail(`need at least ${REGULAR_LABELS.length} regular targets, found ${regularTargets.length}`);
 }
 
-// worker 실행량은 archive별 target 수가 비슷해야 하므로 먼저 7개 archive의 capacity를 정한다.
-// builder는 네 archive(A)와 세 archive(B)를 맡으므로 target 수는 달라도, source 크기 큰 target부터
-// least-loaded builder에 나눠 공통 의존성 외의 compile load를 가능한 한 고르게 만든다.
+// worker 실행량은 archive별 target 수가 비슷해야 하므로 먼저 세 regular archive의 capacity를 정한다.
+// A는 두 archive, B는 한 archive를 빌드한다. slow archive는 전용 builder가 만들므로 regular compile
+// 경로와 분리되고, source 크기 큰 target부터 least-loaded builder에 배정한다.
 regularTargets.sort((left, right) => (
   right.sourceBytes - left.sourceBytes || left.identity.localeCompare(right.identity)
 ));
@@ -143,7 +143,7 @@ if (builderGroups.some((builder) => builder.targets.length !== builder.capacity)
 const archives = new Map();
 archives.set(SLOW_LABEL, {
   label: SLOW_LABEL,
-  builder: "a",
+  builder: "slow",
   capacity: 1,
   targets: slowTargets,
   sourceBytes: slowTargets[0].sourceBytes,

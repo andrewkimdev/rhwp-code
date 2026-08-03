@@ -587,16 +587,11 @@ jobs:
             printf '| reason | %s |\n' "${SHADOW_REASON}"
           } >> "${GITHUB_STEP_SUMMARY}"
 
-  # [#2393] 기본 테스트 병렬화 — Cargo test target을 A/B builder로 나눠 별도 compile한다.
-  # 각 builder는 자기 target에서 만든 archive만 upload하고, 여덟 test worker는 자신의 archive 하나만
-  # 내려받아 실행한다. Native Skia와 builder matrix는 lint/frontend gate 뒤 병렬로 시작한다. Native
-  # 실패 시 builder가 끝날 수는 있어도 shard는 두 job 성공 뒤에만 시작하므로 #3064의 실행 차단은 유지한다.
+  # [#3888] 느린 overflow baseline은 전용 builder에서 만들어 Native Skia 완료 직후 실행한다.
+  # 정규 target은 세 archive로 재배정하고, 네 worker는 정확히 자기 archive 하나만 내려받는다.
   # required check 는 집계 job "Build & Test" 로 불변이다.
-  build-test-archive:
-    name: Build test archive (${{ matrix.builder }})
-    runs-on: ubuntu-latest
-    # [#3284] 러너 hang 을 실패로 드러내는 상한 (성능 목표 아님) — 실험 종료 후에도 유지
-    timeout-minutes: 30
+  build-test-archive-slow:
+    uses: ./.github/workflows/build-nextest-archives.yml
     needs: [preflight, lint, frontend-package-gates]
     if: >-
       ${{
@@ -614,295 +609,123 @@ jobs:
       }}
     permissions:
       contents: read
-    strategy:
-      fail-fast: true
-      matrix:
-        include:
-          # 일반 archive target 수 차이는 1 이하로 맞추고, A/B의 compile source bytes는 planner가 균형화한다.
-          - builder: a
-            archive_labels: "slow 1 2 3"
-          - builder: b
-            archive_labels: "4 5 6 7"
+    with:
+      builder: slow
+      archive_labels: slow
+      expected_count_suffix: slow
 
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+  build-test-archive-a:
+    uses: ./.github/workflows/build-nextest-archives.yml
+    needs: [preflight, lint, frontend-package-gates]
+    if: >-
+      ${{
+        always()
+        && needs.preflight.result == 'success'
+        && needs.preflight.outputs.fast_pass != 'true'
+        && needs.lint.result == 'success'
+        && (
+          needs['frontend-package-gates'].result == 'success'
+          || (
+            needs.preflight.outputs.frontend_required != 'true'
+            && needs['frontend-package-gates'].result == 'skipped'
+          )
+        )
+      }}
+    permissions:
+      contents: read
+    with:
+      builder: a
+      archive_labels: "1 2"
+      expected_count_suffix: a
 
-      # [Task #1109 / #1192 C] ubuntu-latest runner 의 미사용 사전 설치 toolchain 제거하여
-      # 테스트 빌드 시 디스크 한도 초과를 줄인다.
-      - name: Free disk space (remove unused pre-installed toolchains)
-        run: |
-          sudo rm -rf /usr/local/lib/android
-          sudo rm -rf /usr/share/dotnet
-          df -h
+  build-test-archive-b:
+    uses: ./.github/workflows/build-nextest-archives.yml
+    needs: [preflight, lint, frontend-package-gates]
+    if: >-
+      ${{
+        always()
+        && needs.preflight.result == 'success'
+        && needs.preflight.outputs.fast_pass != 'true'
+        && needs.lint.result == 'success'
+        && (
+          needs['frontend-package-gates'].result == 'success'
+          || (
+            needs.preflight.outputs.frontend_required != 'true'
+            && needs['frontend-package-gates'].result == 'skipped'
+          )
+        )
+      }}
+    permissions:
+      contents: read
+    with:
+      builder: b
+      archive_labels: "3"
+      expected_count_suffix: b
 
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable 브랜치 (2026-08-01 시점)
-        with:
-          toolchain: 1.93.1
-
-      - name: Install cargo-nextest
-        uses: taiki-e/install-action@6a1bd70eaac3c8bdf093356838d7ee09fda951cf # v2.85.5
-        with:
-          tool: nextest
-
-      # [#2393] 수동 restore/save 캐시 → rust-cache (적중률·정리 자동화).
-      # 저장 정책은 종전과 동일하게 devel/main push 로 한정.
-      - name: Rust build cache
-        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2.9.1
-        with:
-          shared-key: test-archive
-          save-if: ${{ github.event_name == 'push' && (github.ref == 'refs/heads/devel' || github.ref == 'refs/heads/main') }}
-
-      # [Task #1849] PR/devel push 는 release-test 전체 회귀, main/tag/manual 은 release.
-      - name: Select cargo profile
-        id: profile
-        run: |
-          if [[ "${GITHUB_EVENT_NAME}" == "pull_request" ]] || [[ "${GITHUB_EVENT_NAME}" == "push" && "${GITHUB_REF}" == "refs/heads/devel" ]]; then
-            echo "cargo_profile=release-test" >> "$GITHUB_OUTPUT"
-          else
-            echo "cargo_profile=release" >> "$GITHUB_OUTPUT"
-          fi
-
-      # [#3888] `cargo nextest list`로 전체 binary를 선빌드하지 않는다. Cargo metadata의 test target을
-      # A/B builder와 slow + regular 7개 archive에 독점 배정한다. `--test`/`--lib`/`--bin` selector가
-      # archive 생성과 동시에 해당 target만 compile하므로 두 GitHub-hosted runner가 실제 build를 나눈다.
-      - name: Build and allocate default-feature test archives
-        env:
-          BUILDER: ${{ matrix.builder }}
-          ARCHIVE_LABELS: ${{ matrix.archive_labels }}
-        run: |
-          echo "profile=${{ steps.profile.outputs.cargo_profile }} event=${GITHUB_EVENT_NAME} ref=${GITHUB_REF}"
-          cargo metadata --format-version 1 --no-deps > cargo-metadata.json
-          node .github/scripts/plan_nextest_target_archives.mjs \
-            --input cargo-metadata.json \
-            --output-dir ci-target-archives \
-            --package rhwp \
-            --slow-test-target overflow_cell_baseline
-
-          for label in ${ARCHIVE_LABELS}; do
-            owner=$(jq -r ".archives[\"${label}\"].builder" ci-target-archives/assignment.json)
-            if [[ "$owner" != "$BUILDER" ]]; then
-              echo "::error::archive ${label} belongs to builder ${owner}, not ${BUILDER}"
-              exit 1
-            fi
-            mapfile -t target_args < "ci-target-archives/${label}.args"
-            if [[ "${#target_args[@]}" == "0" ]]; then
-              echo "::error::archive ${label} has no Cargo target selector"
-              exit 1
-            fi
-            archive="tests-${label}.tar.zst"
-            cargo nextest archive \
-              --package rhwp \
-              --cargo-profile "${{ steps.profile.outputs.cargo_profile }}" \
-              "${target_args[@]}" \
-              --archive-file "$archive"
-            stat --printf='archive=%n bytes=%s\n' "$archive"
-
-            cargo nextest list \
-              --package rhwp \
-              --cargo-profile "${{ steps.profile.outputs.cargo_profile }}" \
-              "${target_args[@]}" \
-              --message-format json > "nextest-list-${label}.json"
-            runnable=$(node .github/scripts/count_nextest_runnable.mjs --input "nextest-list-${label}.json")
-            if ! [[ "$runnable" =~ ^[0-9]+$ ]]; then
-              echo "::error::archive ${label} runnable count is invalid: ${runnable}"
-              exit 1
-            fi
-            printf '%s\n' "$runnable" > "archive-expected-${label}.txt"
-            echo "archive=${label} expected_runnable=${runnable}"
-          done
-
-      - name: Upload slow test archive
-        if: ${{ matrix.builder == 'a' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: test-archive-${{ github.run_id }}-slow
-          path: tests-slow.tar.zst
-          # nextest archive는 이미 압축한 파일이므로 ZIP 재압축 CPU를 쓰지 않는다. (#3266)
-          compression-level: 0
-          retention-days: 1
-          if-no-files-found: error
-
-      - name: Upload test archive 1
-        if: ${{ matrix.builder == 'a' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: test-archive-${{ github.run_id }}-1
-          path: tests-1.tar.zst
-          compression-level: 0
-          retention-days: 1
-          if-no-files-found: error
-
-      - name: Upload test archive 2
-        if: ${{ matrix.builder == 'a' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: test-archive-${{ github.run_id }}-2
-          path: tests-2.tar.zst
-          compression-level: 0
-          retention-days: 1
-          if-no-files-found: error
-
-      - name: Upload test archive 3
-        if: ${{ matrix.builder == 'a' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: test-archive-${{ github.run_id }}-3
-          path: tests-3.tar.zst
-          compression-level: 0
-          retention-days: 1
-          if-no-files-found: error
-
-      - name: Upload test archive 4
-        if: ${{ matrix.builder == 'b' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: test-archive-${{ github.run_id }}-4
-          path: tests-4.tar.zst
-          compression-level: 0
-          retention-days: 1
-          if-no-files-found: error
-
-      - name: Upload test archive 5
-        if: ${{ matrix.builder == 'b' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: test-archive-${{ github.run_id }}-5
-          path: tests-5.tar.zst
-          compression-level: 0
-          retention-days: 1
-          if-no-files-found: error
-
-      - name: Upload test archive 6
-        if: ${{ matrix.builder == 'b' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: test-archive-${{ github.run_id }}-6
-          path: tests-6.tar.zst
-          compression-level: 0
-          retention-days: 1
-          if-no-files-found: error
-
-      - name: Upload test archive 7
-        if: ${{ matrix.builder == 'b' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: test-archive-${{ github.run_id }}-7
-          path: tests-7.tar.zst
-          compression-level: 0
-          retention-days: 1
-          if-no-files-found: error
-
-      - name: Upload archive expected counts
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: archive-expected-${{ github.run_id }}-${{ matrix.builder }}
-          path: archive-expected-*.txt
-          retention-days: 1
-          if-no-files-found: error
-
-  test-shard:
-    name: Default-feature tests (${{ matrix.label }})
-    runs-on: ubuntu-latest
-    # [#3284] 러너 hang 을 실패로 드러내는 상한 (성능 목표 아님) — 실험 종료 후에도 유지
-    timeout-minutes: 30
-    needs: [preflight, native-skia-tests, build-test-archive]
-    # [#3266] archive와 Native Skia를 병렬화하되, 두 필수 worker가 모두 성공한
-    # 뒤에만 기본 테스트를 실행한다. 따라서 Native 실패 시 archive가 완료돼도 shard는 skip된다.
+  test-slow-shard:
+    uses: ./.github/workflows/run-nextest-archives.yml
+    needs: [preflight, native-skia-tests, build-test-archive-slow]
     if: >-
       ${{
         always()
         && needs.preflight.result == 'success'
         && needs.preflight.outputs.fast_pass != 'true'
         && needs['native-skia-tests'].result == 'success'
-        && needs['build-test-archive'].result == 'success'
+        && needs['build-test-archive-slow'].result == 'success'
+      }}
+    permissions:
+      contents: read
+    with:
+      label: slow shard
+      count_label: slow
+      archive_label: slow
+
+  test-regular-shard-a:
+    uses: ./.github/workflows/run-nextest-archives.yml
+    needs: [preflight, native-skia-tests, build-test-archive-a]
+    if: >-
+      ${{
+        always()
+        && needs.preflight.result == 'success'
+        && needs.preflight.outputs.fast_pass != 'true'
+        && needs['native-skia-tests'].result == 'success'
+        && needs['build-test-archive-a'].result == 'success'
       }}
     permissions:
       contents: read
     strategy:
-      # [#3888] slow worker 1개와 일반 worker 7개를 같은 matrix로 유지해, 하나가 실패하면
-      # 나머지 일곱 worker도 즉시 취소한다. 총 러너 수는 기존과 같이 8개다.
       fail-fast: true
       matrix:
         include:
-          - label: slow shard
-            count_label: slow
-            archive_label: slow
-          - label: shard 1/7
+          - label: shard 1/3
             count_label: 1
-            archive_label: 1
-          - label: shard 2/7
+            archive_label: "1"
+          - label: shard 2/3
             count_label: 2
-            archive_label: 2
-          - label: shard 3/7
-            count_label: 3
-            archive_label: 3
-          - label: shard 4/7
-            count_label: 4
-            archive_label: 4
-          - label: shard 5/7
-            count_label: 5
-            archive_label: 5
-          - label: shard 6/7
-            count_label: 6
-            archive_label: 6
-          - label: shard 7/7
-            count_label: 7
-            archive_label: 7
+            archive_label: "2"
+    with:
+      label: ${{ matrix.label }}
+      count_label: ${{ matrix.count_label }}
+      archive_label: ${{ matrix.archive_label }}
 
-    steps:
-      # 테스트가 samples/ pdf/ 등 저장소 픽스처를 읽으므로 checkout 필요.
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+  test-regular-shard-b:
+    uses: ./.github/workflows/run-nextest-archives.yml
+    needs: [preflight, native-skia-tests, build-test-archive-b]
+    if: >-
+      ${{
+        always()
+        && needs.preflight.result == 'success'
+        && needs.preflight.outputs.fast_pass != 'true'
+        && needs['native-skia-tests'].result == 'success'
+        && needs['build-test-archive-b'].result == 'success'
+      }}
+    permissions:
+      contents: read
+    with:
+      label: shard 3/3
+      count_label: "3"
+      archive_label: "3"
 
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable 브랜치 (2026-08-01 시점)
-        with:
-          toolchain: 1.93.1
-
-      - name: Install cargo-nextest
-        uses: taiki-e/install-action@6a1bd70eaac3c8bdf093356838d7ee09fda951cf # v2.85.5
-        with:
-          tool: nextest
-
-      - name: Download test archive
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: test-archive-${{ github.run_id }}-${{ matrix.archive_label }}
-
-      # [#2393] 공허 통과 방지: Summary의 run을 shard별 artifact로 남긴다.
-      # 집계 job이 8개 archive shard의 합계 = 전체 runnable 테스트 수를 대조한다.
-      - name: Run ${{ matrix.label }}
-        env:
-          COUNT_LABEL: ${{ matrix.count_label }}
-        run: |
-          set -o pipefail
-          # --extract-to . : CLI 테스트의 env!("CARGO_BIN_EXE_rhwp") 는 빌드
-          # 러너 절대 경로가 컴파일 타임에 박힌다. GitHub 러너는 job 간
-          # workspace 경로가 동일하므로 워크스페이스에 풀어 target/ 경로를
-          # 그대로 복원한다 (임시 디렉터리 추출 시 NotFound — PR CI 실측).
-          cargo nextest run \
-            --archive-file "tests-${COUNT_LABEL}.tar.zst" \
-            --workspace-remap . \
-            --extract-to . \
-            2>&1 | tee nextest-shard.log
-          # CARGO_TERM_COLOR=always 로 Summary 라인에 ANSI 색코드가 섞이므로
-          # 스트립 후 파싱한다 (2차 PR CI 실측 — 376 run green 인데 파싱 실패).
-          summary=$(sed 's/\x1b\[[0-9;]*m//g' nextest-shard.log | grep -E "Summary \[" | tail -1)
-          # slow shard는 정확히 한 테스트를 실행하므로 nextest의 단수형 `1 test run`도 수용한다.
-          run=$(echo "$summary" | grep -oE "[0-9]+ tests? run" | grep -oE "^[0-9]+")
-          if [[ -z "$run" ]]; then
-            echo "::error::shard summary parse failed"; exit 1
-          fi
-          echo "$run" > "shard-count-${COUNT_LABEL}.txt"
-          cat "shard-count-${COUNT_LABEL}.txt"
-
-      - name: Upload ${{ matrix.label }} count
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: shard-count-${{ matrix.count_label }}
-          path: shard-count-${{ matrix.count_label }}.txt
-          retention-days: 1
-          if-no-files-found: error
 
   lint:
     name: Lint (fmt, clippy, WASM check)
@@ -1141,8 +964,12 @@ jobs:
     timeout-minutes: 45
     needs:
       - preflight
-      - build-test-archive
-      - test-shard
+      - build-test-archive-slow
+      - build-test-archive-a
+      - build-test-archive-b
+      - test-slow-shard
+      - test-regular-shard-a
+      - test-regular-shard-b
       - lint
       - native-skia-tests
       - frontend-package-gates
@@ -1151,33 +978,51 @@ jobs:
       contents: read
 
     steps:
-      # [#2393] 샤드 합계 대조 — archive 생성 시 실제 target selector로 얻은 runnable 수와
-      # 여덟 worker의 Summary run 합계가 일치해야 한다 (fast-pass 시 샤드 미실행이라 생략).
+      # [#2393] 네 archive의 target selector별 runnable 수와 네 worker Summary run 합계가
+      # 일치해야 한다 (fast-pass 시 worker 미실행이라 생략).
       - name: Download shard counts
-        if: ${{ needs.preflight.outputs.fast_pass != 'true' && needs['test-shard'].result == 'success' }}
+        if: >-
+          ${{
+            needs.preflight.outputs.fast_pass != 'true'
+            && needs['test-slow-shard'].result == 'success'
+            && needs['test-regular-shard-a'].result == 'success'
+            && needs['test-regular-shard-b'].result == 'success'
+          }}
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           pattern: shard-count-*
           merge-multiple: true
 
       - name: Download archive expected counts
-        if: ${{ needs.preflight.outputs.fast_pass != 'true' && needs['test-shard'].result == 'success' }}
+        if: >-
+          ${{
+            needs.preflight.outputs.fast_pass != 'true'
+            && needs['test-slow-shard'].result == 'success'
+            && needs['test-regular-shard-a'].result == 'success'
+            && needs['test-regular-shard-b'].result == 'success'
+          }}
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           pattern: archive-expected-*
           merge-multiple: true
 
       - name: Verify shard totals
-        if: ${{ needs.preflight.outputs.fast_pass != 'true' && needs['test-shard'].result == 'success' }}
+        if: >-
+          ${{
+            needs.preflight.outputs.fast_pass != 'true'
+            && needs['test-slow-shard'].result == 'success'
+            && needs['test-regular-shard-a'].result == 'success'
+            && needs['test-regular-shard-b'].result == 'success'
+          }}
         run: |
           shards=$(find . -maxdepth 1 -type f -name 'shard-count-*.txt' | wc -l | tr -d ' ')
-          if [[ "$shards" != "8" ]]; then
-            echo "::error::expected 8 shard count files, found ${shards}"
+          if [[ "$shards" != "4" ]]; then
+            echo "::error::expected 4 shard count files, found ${shards}"
             exit 1
           fi
           expected_files=$(find . -maxdepth 1 -type f -name 'archive-expected-*.txt' | wc -l | tr -d ' ')
-          if [[ "$expected_files" != "8" ]]; then
-            echo "::error::expected 8 archive expected count files, found ${expected_files}"
+          if [[ "$expected_files" != "4" ]]; then
+            echo "::error::expected 4 archive expected count files, found ${expected_files}"
             exit 1
           fi
           expected=0
@@ -1212,8 +1057,12 @@ jobs:
           FAST_PASS: ${{ needs.preflight.outputs.fast_pass }}
           FRONTEND_REQUIRED: ${{ needs.preflight.outputs.frontend_required }}
           FRONTEND_REASON: ${{ needs.preflight.outputs.frontend_reason }}
-          BUILD_ARCHIVE_RESULT: ${{ needs['build-test-archive'].result }}
-          TEST_SHARD_RESULT: ${{ needs['test-shard'].result }}
+          BUILD_SLOW_RESULT: ${{ needs['build-test-archive-slow'].result }}
+          BUILD_A_RESULT: ${{ needs['build-test-archive-a'].result }}
+          BUILD_B_RESULT: ${{ needs['build-test-archive-b'].result }}
+          TEST_SLOW_RESULT: ${{ needs['test-slow-shard'].result }}
+          TEST_REGULAR_A_RESULT: ${{ needs['test-regular-shard-a'].result }}
+          TEST_REGULAR_B_RESULT: ${{ needs['test-regular-shard-b'].result }}
           LINT_RESULT: ${{ needs['lint'].result }}
           NATIVE_SKIA_RESULT: ${{ needs['native-skia-tests'].result }}
           FRONTEND_RESULT: ${{ needs['frontend-package-gates'].result }}
@@ -1222,8 +1071,12 @@ jobs:
           printf 'fast_pass=%s\n' "${FAST_PASS}"
           printf 'frontend_required=%s\n' "${FRONTEND_REQUIRED}"
           printf 'frontend_reason=%s\n' "${FRONTEND_REASON}"
-          printf 'build_archive=%s\n' "${BUILD_ARCHIVE_RESULT}"
-          printf 'test_shard=%s\n' "${TEST_SHARD_RESULT}"
+          printf 'build_slow=%s\n' "${BUILD_SLOW_RESULT}"
+          printf 'build_a=%s\n' "${BUILD_A_RESULT}"
+          printf 'build_b=%s\n' "${BUILD_B_RESULT}"
+          printf 'test_slow=%s\n' "${TEST_SLOW_RESULT}"
+          printf 'test_regular_a=%s\n' "${TEST_REGULAR_A_RESULT}"
+          printf 'test_regular_b=%s\n' "${TEST_REGULAR_B_RESULT}"
           printf 'lint=%s\n' "${LINT_RESULT}"
           printf 'native_skia=%s\n' "${NATIVE_SKIA_RESULT}"
           printf 'frontend=%s\n' "${FRONTEND_RESULT}"
@@ -1239,12 +1092,28 @@ jobs:
           fi
 
           failed=0
-          if [[ "${BUILD_ARCHIVE_RESULT}" != "success" ]]; then
-            echo "::error::Build test archive result: ${BUILD_ARCHIVE_RESULT}"
+          if [[ "${BUILD_SLOW_RESULT}" != "success" ]]; then
+            echo "::error::Build slow test archive result: ${BUILD_SLOW_RESULT}"
             failed=1
           fi
-          if [[ "${TEST_SHARD_RESULT}" != "success" ]]; then
-            echo "::error::Default-feature test shards result: ${TEST_SHARD_RESULT}"
+          if [[ "${BUILD_A_RESULT}" != "success" ]]; then
+            echo "::error::Build regular test archives 1/2 result: ${BUILD_A_RESULT}"
+            failed=1
+          fi
+          if [[ "${BUILD_B_RESULT}" != "success" ]]; then
+            echo "::error::Build regular test archive 3 result: ${BUILD_B_RESULT}"
+            failed=1
+          fi
+          if [[ "${TEST_SLOW_RESULT}" != "success" ]]; then
+            echo "::error::Default-feature slow shard result: ${TEST_SLOW_RESULT}"
+            failed=1
+          fi
+          if [[ "${TEST_REGULAR_A_RESULT}" != "success" ]]; then
+            echo "::error::Default-feature regular shards 1/3 and 2/3 result: ${TEST_REGULAR_A_RESULT}"
+            failed=1
+          fi
+          if [[ "${TEST_REGULAR_B_RESULT}" != "success" ]]; then
+            echo "::error::Default-feature regular shard 3/3 result: ${TEST_REGULAR_B_RESULT}"
             failed=1
           fi
           if [[ "${LINT_RESULT}" != "success" ]]; then
