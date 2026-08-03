@@ -146,7 +146,12 @@ const glyphRunOp = {
   },
   paintStyle: { fontFamily: 'RHWP Exact Face One', fontSize: 32, color: '#000000' },
   shapeKey: {
-    fontInstance: { faceKey: `${exactFaceResourceKey}:face:1`, sizePx: 32 },
+    fontInstance: {
+      faceKey: `${exactFaceResourceKey}:face:1`,
+      sizePx: 32,
+      syntheticBold: false,
+      syntheticItalic: false,
+    },
     direction: 'ltr',
     writingMode: 'horizontal-tb',
     shapingEngine: 'ttf-parser-nominal-v1',
@@ -163,6 +168,7 @@ const glyphRunOp = {
     glyphRange: { start: 0, end: 1 },
   }],
   direction: 'ltr',
+  bidiLevel: 0,
   writingMode: 'horizontal-tb',
   orientation: 'horizontal',
   diagnostics: {
@@ -200,6 +206,60 @@ const oversizedResourceTableStatus = glyphRunFontCache.replayStatus(glyphRunOp, 
 });
 assert.equal(oversizedResourceTableStatus.replayable, false);
 assert.equal(oversizedResourceTableStatus.reason, 'fontResourceTableTooLarge');
+
+for (const [name, mutate, expectedReason] of [
+  [
+    'synthetic',
+    op => ({
+      ...op,
+      shapeKey: {
+        ...op.shapeKey,
+        fontInstance: { ...op.shapeKey.fontInstance, syntheticBold: true },
+      },
+    }),
+    'syntheticStyleAuthorityPending',
+  ],
+  [
+    'bidi-direction',
+    op => ({ ...op, direction: 'rtl' }),
+    'bidiDirectionAuthorityPending',
+  ],
+  [
+    'bidi-level',
+    op => ({ ...op, bidiLevel: 1 }),
+    'bidiLevelAuthorityPending',
+  ],
+  [
+    'writing-mode',
+    op => ({ ...op, writingMode: 'vertical-rl' }),
+    'writingModeAuthorityPending',
+  ],
+]) {
+  const rejectedRun = mutate({
+    ...glyphRunOp,
+    variant: { ...glyphRunOp.variant, equivalenceGroup: `exact-face-${name}` },
+  });
+  const status = glyphRunFontCache.replayStatus(rejectedRun, glyphRunFontResources);
+  assert.equal(status.replayable, false, `${name} strict GlyphRun은 direct replay하면 안 된다`);
+  assert.equal(status.reason, expectedReason);
+  const fallback = {
+    type: 'textRun',
+    bbox: glyphRunOp.bbox,
+    text: '\uE104',
+    variant: {
+      equivalenceGroup: `exact-face-${name}`,
+      variantId: 'textRun',
+      variantKind: 'textRun',
+      isDefaultFallback: true,
+    },
+  };
+  const selected = selectLayerTextVariantsForLeaf(
+    [fallback, rejectedRun],
+    () => false,
+    op => glyphRunFontCache.replayStatus(op, glyphRunFontResources).replayable,
+  );
+  assert.deepEqual([...selected], [fallback], `${name} strict GlyphRun은 TextRun으로 fallback해야 한다`);
+}
 
 const glyphSurface = CanvasKit.MakeSurface(64, 64);
 assert.ok(glyphSurface, 'exact-face GlyphRun smoke surface를 만들 수 있어야 한다');

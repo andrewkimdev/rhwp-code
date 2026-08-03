@@ -3807,7 +3807,7 @@ mod tests {
                     flags: Vec::new(),
                 }],
                 direction: TextDirection::Ltr,
-                bidi_level: None,
+                bidi_level: Some(0),
                 writing_mode: WritingMode::HorizontalTb,
                 orientation: GlyphRunOrientation::Horizontal,
                 glyph_transforms: None,

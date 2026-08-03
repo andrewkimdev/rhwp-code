@@ -3,8 +3,8 @@ use crate::model::ColorRef;
 use crate::paint::{
     GlyphOutlinePayloadKind, GlyphRunOrientation, GlyphRunReplayEligibility,
     LayerGlyphOutlinePaint, LayerGlyphRunPaint, LayerNode, LayerNodeKind, PageLayerTree, PaintOp,
-    ResourceArena, TextVariantKind, TextVariantQuality, MAX_PORTABLE_FONT_BLOB_BYTES,
-    MAX_PORTABLE_GLYPHS_PER_RUN,
+    ResourceArena, TextDirection, TextVariantKind, TextVariantQuality, WritingMode,
+    MAX_PORTABLE_FONT_BLOB_BYTES, MAX_PORTABLE_GLYPHS_PER_RUN,
 };
 use crate::renderer::static_svg::static_svg_fragment_has_path_layer;
 use image::{ImageReader, Limits};
@@ -152,6 +152,10 @@ pub enum VariantRejectReason {
     FontBlobTooLarge,
     FaceIndexUnsupported,
     VariationUnsupported,
+    SyntheticStyleAuthorityPending,
+    BidiDirectionAuthorityPending,
+    BidiLevelAuthorityPending,
+    WritingModeAuthorityPending,
     GlyphIdOutOfRange,
     PlacementNotFinite,
     PositionNotFinite,
@@ -200,6 +204,10 @@ impl VariantRejectReason {
             Self::FontBlobTooLarge => "fontBlobTooLarge",
             Self::FaceIndexUnsupported => "faceIndexUnsupported",
             Self::VariationUnsupported => "variationUnsupported",
+            Self::SyntheticStyleAuthorityPending => "syntheticStyleAuthorityPending",
+            Self::BidiDirectionAuthorityPending => "bidiDirectionAuthorityPending",
+            Self::BidiLevelAuthorityPending => "bidiLevelAuthorityPending",
+            Self::WritingModeAuthorityPending => "writingModeAuthorityPending",
             Self::GlyphIdOutOfRange => "glyphIdOutOfRange",
             Self::PlacementNotFinite => "placementNotFinite",
             Self::PositionNotFinite => "positionNotFinite",
@@ -596,6 +604,22 @@ fn collect_glyph_run_reject_reasons(
     }
     if !run.paint_style.is_fill_only_glyph_replay() {
         reasons.insert(VariantRejectReason::UnsupportedPaintEffect);
+    }
+    if run.shape_key.font_instance.synthetic_bold || run.shape_key.font_instance.synthetic_italic {
+        reasons.insert(VariantRejectReason::SyntheticStyleAuthorityPending);
+    }
+    if !matches!(run.direction, TextDirection::Ltr)
+        || !matches!(run.shape_key.direction, TextDirection::Ltr)
+    {
+        reasons.insert(VariantRejectReason::BidiDirectionAuthorityPending);
+    }
+    if run.bidi_level != Some(0) {
+        reasons.insert(VariantRejectReason::BidiLevelAuthorityPending);
+    }
+    if !matches!(run.writing_mode, WritingMode::HorizontalTb)
+        || !matches!(run.shape_key.writing_mode, WritingMode::HorizontalTb)
+    {
+        reasons.insert(VariantRejectReason::WritingModeAuthorityPending);
     }
     if run.glyph_transforms.is_some() {
         reasons.insert(VariantRejectReason::GlyphTransformAuthorityPending);
@@ -1055,7 +1079,7 @@ mod tests {
                     flags: Vec::new(),
                 }],
                 direction: TextDirection::Ltr,
-                bidi_level: None,
+                bidi_level: Some(0),
                 writing_mode: WritingMode::HorizontalTb,
                 orientation: GlyphRunOrientation::Horizontal,
                 glyph_transforms: None,
@@ -1536,6 +1560,54 @@ mod tests {
         assert!(oversized.rejected_variants[0]
             .reasons
             .contains(&VariantRejectReason::GlyphRunTooLarge));
+    }
+
+    #[test]
+    fn canvaskit_browser_rejects_strict_glyph_run_authority_outside_p42_subset() {
+        let cases = [
+            (
+                report_for_mutated_glyph_run(|run| {
+                    run.shape_key.font_instance.synthetic_bold = true;
+                }),
+                VariantRejectReason::SyntheticStyleAuthorityPending,
+            ),
+            (
+                report_for_mutated_glyph_run(|run| {
+                    run.direction = TextDirection::Rtl;
+                }),
+                VariantRejectReason::BidiDirectionAuthorityPending,
+            ),
+            (
+                report_for_mutated_glyph_run(|run| {
+                    run.shape_key.direction = TextDirection::Auto;
+                }),
+                VariantRejectReason::BidiDirectionAuthorityPending,
+            ),
+            (
+                report_for_mutated_glyph_run(|run| run.bidi_level = Some(1)),
+                VariantRejectReason::BidiLevelAuthorityPending,
+            ),
+            (
+                report_for_mutated_glyph_run(|run| {
+                    run.writing_mode = WritingMode::VerticalRl;
+                }),
+                VariantRejectReason::WritingModeAuthorityPending,
+            ),
+            (
+                report_for_mutated_glyph_run(|run| {
+                    run.shape_key.writing_mode = WritingMode::VerticalLr;
+                }),
+                VariantRejectReason::WritingModeAuthorityPending,
+            ),
+        ];
+
+        for (report, expected_reason) in cases {
+            assert_eq!(report.selected_variant_kind, Some(TextVariantKind::TextRun));
+            assert!(report.fallback_required);
+            assert!(report.rejected_variants[0]
+                .reasons
+                .contains(&expected_reason));
+        }
     }
 
     #[test]

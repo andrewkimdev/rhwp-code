@@ -49,7 +49,12 @@ function glyphRun(group: string, partIndex = 0, partCount = 1): LayerGlyphRunOp 
     },
     paintStyle: { fontSize: 16, color: '#000000' },
     shapeKey: {
-      fontInstance: { faceKey: 'face-0', sizePx: 16 },
+      fontInstance: {
+        faceKey: 'face-0',
+        sizePx: 16,
+        syntheticBold: false,
+        syntheticItalic: false,
+      },
       direction: 'ltr',
       writingMode: 'horizontal-tb',
       shapingEngine: 'test',
@@ -60,6 +65,7 @@ function glyphRun(group: string, partIndex = 0, partCount = 1): LayerGlyphRunOp 
     positions: [{ x: 0, y: 0 }],
     clusters: [],
     direction: 'ltr',
+    bidiLevel: 0,
     writingMode: 'horizontal-tb',
     orientation: 'horizontal',
     diagnostics: {

@@ -125,6 +125,7 @@ export class CanvasKitGlyphRunFontCache {
       || typeof run.placement?.runToPage !== 'object'
       || run.placement.runToPage === null
     ) return reject('glyphRunMalformed');
+    const instance = run.shapeKey.fontInstance;
     if (run.diagnostics.replayEligibility !== 'portable') return reject('nonPortableGlyphRun');
     if (!run.diagnostics.strictVisualEligible) return reject('strictVisualIneligible');
     if (run.diagnostics.quality !== 'exact' && run.diagnostics.quality !== 'positionAdjusted') {
@@ -140,6 +141,16 @@ export class CanvasKitGlyphRunFontCache {
     if (run.diagnostics.usedFallbackFontCount !== 0) return reject('fontNotPortable');
     if (run.orientation !== 'horizontal') return reject('verticalGlyphOrientationAuthorityPending');
     if (run.glyphTransforms?.length) return reject('glyphTransformAuthorityPending');
+    if (instance.syntheticBold !== false || instance.syntheticItalic !== false) {
+      return reject('syntheticStyleAuthorityPending');
+    }
+    if (run.direction !== 'ltr' || run.shapeKey.direction !== 'ltr') {
+      return reject('bidiDirectionAuthorityPending');
+    }
+    if (run.bidiLevel !== 0) return reject('bidiLevelAuthorityPending');
+    if (run.writingMode !== 'horizontal-tb' || run.shapeKey.writingMode !== 'horizontal-tb') {
+      return reject('writingModeAuthorityPending');
+    }
     if (!run.glyphIds.length) return reject('emptyGlyphRun');
     if (
       run.glyphIds.length > MAX_GLYPHS_PER_RUN
@@ -250,11 +261,11 @@ export class CanvasKitGlyphRunFontCache {
     if (!status.replayable) return null;
     const typeface = this.typefaceFor(status.face, status.blob);
     if (!typeface) return null;
-    const instance = run.shapeKey.fontInstance;
     const key = this.fontCacheKey(run, status.face, status.blob);
     const cached = this.glyphRunFonts.get(key);
     if (cached) return cached;
     if (this.glyphRunFonts.size >= MAX_GLYPH_RUN_FONTS) return null;
+    const instance = run.shapeKey.fontInstance;
     const font = new this.canvasKit.Font(typeface, instance.sizePx);
     font.setSubpixel(true);
     font.setEmbolden(instance.syntheticBold === true);
