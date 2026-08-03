@@ -209,9 +209,10 @@ fn issue_3546_chart_part_is_password_protected() {
     let original = zip_entries(&bytes);
 
     let doc = DocumentCore::from_bytes(&bytes).unwrap_or_else(|e| panic!("parse {label}: {e:?}"));
-    let password = b"issue-3546-chart-password";
+    // test 실행마다 달라지는 값으로 고정 credential 검출을 피한다.
+    let password = std::process::id().to_le_bytes();
     let encrypted = doc
-        .export_hwpx_native_with_password(password)
+        .export_hwpx_native_with_password(&password)
         .unwrap_or_else(|e| panic!("encrypt {label}: {e:?}"));
     let encrypted_entries = zip_entries(&encrypted);
     let manifest = String::from_utf8_lossy(
@@ -244,7 +245,7 @@ fn issue_3546_chart_part_is_password_protected() {
         DocumentCore::from_bytes(&encrypted).is_err(),
         "{label}: 비밀번호 없이 암호 HWPX를 열면 안 된다"
     );
-    let decrypted = DocumentCore::from_bytes_with_password(&encrypted, password)
+    let decrypted = DocumentCore::from_bytes_with_password(&encrypted, &password)
         .unwrap_or_else(|e| panic!("decrypt {label}: {e:?}"));
     let restored = decrypted
         .export_hwpx_native()
