@@ -802,7 +802,8 @@ jobs:
           # CARGO_TERM_COLOR=always 로 Summary 라인에 ANSI 색코드가 섞이므로
           # 스트립 후 파싱한다 (2차 PR CI 실측 — 376 run green 인데 파싱 실패).
           summary=$(sed 's/\x1b\[[0-9;]*m//g' nextest-shard.log | grep -E "Summary \[" | tail -1)
-          run=$(echo "$summary" | grep -oE "[0-9]+ tests run" | grep -oE "^[0-9]+")
+          # slow shard는 정확히 한 테스트를 실행하므로 nextest의 단수형 `1 test run`도 수용한다.
+          run=$(echo "$summary" | grep -oE "[0-9]+ tests? run" | grep -oE "^[0-9]+")
           skipped=$(echo "$summary" | grep -oE "[0-9]+ skipped" | grep -oE "^[0-9]+" || echo 0)
           if [[ -z "$run" ]]; then
             echo "::error::shard summary parse failed"; exit 1
