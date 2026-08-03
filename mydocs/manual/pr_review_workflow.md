@@ -81,7 +81,7 @@ CI preflight
        (영향 있음: success, 영향 없음: skipped) │
                          ┌────────────────────┴───────────────────┐
                          │                                        │
-                    Build test archive                     Native Skia tests
+                 Build test archive A/B                    Native Skia tests
                          └────────────────────┬───────────────────┘
                                               │
                      Default-feature tests: slow shard 1 + 일반 shard 7 병렬
@@ -90,11 +90,11 @@ CI preflight
 ~~~
 
 - Lint와 Frontend package gates는 preflight 뒤 병렬이다.
-- Build test archive와 Native Skia tests는 Lint가 성공하고, Frontend가 필요한 경우 success이거나
-  영향이 없어 skipped인 뒤 병렬이다.
-- default-feature worker는 archive와 Native Skia가 모두 성공한 뒤 병렬이다. `slow shard`는
-  `overflow_cell_lines_do_not_grow`만 실행하고, 일반 7개 shard는 이를 제외한 테스트를 hash
-  분배한다. 총 worker 수는 8개이며, 하나가 실패하면 `fail-fast`로 나머지를 취소할 수 있다.
+- Build test archive A/B와 Native Skia tests는 Lint가 성공하고, Frontend가 필요한 경우 success이거나
+  영향이 없어 skipped인 뒤 병렬이다. A/B는 Cargo test target을 독립 빌드해 각자의 archive를 upload한다.
+- default-feature worker는 두 archive builder와 Native Skia가 모두 성공한 뒤 병렬이다. `slow shard`는
+  `overflow_cell_baseline` target만 실행하고, 일반 7개 shard는 서로 다른 Cargo test target archive를
+  실행한다. 총 worker 수는 8개이며, 하나가 실패하면 `fail-fast`로 나머지를 취소할 수 있다.
 - review-only fast-pass는 heavy job이 skipped일 수 있다. 이때도 preflight와 branch protection이
   요구하는 집계 상태를 최신 PR head 기준으로 확인한다.
 

@@ -587,14 +587,13 @@ jobs:
             printf '| reason | %s |\n' "${SHADOW_REASON}"
           } >> "${GITHUB_STEP_SUMMARY}"
 
-  # [#2393] 기본 테스트 병렬화 — 테스트 바이너리를 한 번 빌드한 뒤, 바이너리 경계로
-  # 8개 archive를 만들어 각 shard가 자기 archive만 내려받아 실행한다. [#3266] Native Skia와 archive는 같은
-  # lint/frontend gate 뒤 병렬로 시작한다. [#3268] Lint와 Frontend도 preflight 뒤
-  # 병렬이지만, Native/archive는 두 gate 성공 뒤에만 시작한다. Native 실패 시 archive가
-  # 끝날 수는 있어도 shard는 두 job 성공 뒤에만 시작하므로 #3064의 테스트 실행 차단은 유지된다.
+  # [#2393] 기본 테스트 병렬화 — Cargo test target을 A/B builder로 나눠 별도 compile한다.
+  # 각 builder는 자기 target에서 만든 archive만 upload하고, 여덟 test worker는 자신의 archive 하나만
+  # 내려받아 실행한다. Native Skia와 builder matrix는 lint/frontend gate 뒤 병렬로 시작한다. Native
+  # 실패 시 builder가 끝날 수는 있어도 shard는 두 job 성공 뒤에만 시작하므로 #3064의 실행 차단은 유지한다.
   # required check 는 집계 job "Build & Test" 로 불변이다.
   build-test-archive:
-    name: Build test archive
+    name: Build test archive (${{ matrix.builder }})
     runs-on: ubuntu-latest
     # [#3284] 러너 hang 을 실패로 드러내는 상한 (성능 목표 아님) — 실험 종료 후에도 유지
     timeout-minutes: 30
@@ -615,9 +614,15 @@ jobs:
       }}
     permissions:
       contents: read
-    outputs:
-      cargo_profile: ${{ steps.profile.outputs.cargo_profile }}
-      runnable_tests: ${{ steps.archive_plan.outputs.runnable_tests }}
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          # 일반 archive는 63~64 target으로 맞추고, A/B의 compile source bytes는 planner가 균형화한다.
+          - builder: a
+            archive_labels: "slow 1 2 3 4"
+          - builder: b
+            archive_labels: "5 6 7"
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -658,41 +663,57 @@ jobs:
             echo "cargo_profile=release" >> "$GITHUB_OUTPUT"
           fi
 
-      # [#3888] archive filterset은 test() predicate를 받을 수 없고 binary_id 단위만
-      # 선택한다. 먼저 전체 test list를 만들고, runnable 수가 큰 바이너리부터 가장 가벼운
-      # regular shard에 배정한다. slow test의 바이너리는 slow archive와 한 regular archive에
-      # 중복 포함하되 실행 filterset으로 그 한 test를 정확히 한 번만 실행한다.
+      # [#3888] `cargo nextest list`로 전체 binary를 선빌드하지 않는다. Cargo metadata의 test target을
+      # A/B builder와 slow + regular 7개 archive에 독점 배정한다. `--test`/`--lib`/`--bin` selector가
+      # archive 생성과 동시에 해당 target만 compile하므로 두 GitHub-hosted runner가 실제 build를 나눈다.
       - name: Build and allocate default-feature test archives
-        id: archive_plan
+        env:
+          BUILDER: ${{ matrix.builder }}
+          ARCHIVE_LABELS: ${{ matrix.archive_labels }}
         run: |
           echo "profile=${{ steps.profile.outputs.cargo_profile }} event=${GITHUB_EVENT_NAME} ref=${GITHUB_REF}"
-          cargo nextest list \
-            --cargo-profile "${{ steps.profile.outputs.cargo_profile }}" \
-            --message-format json > nextest-list.json
-          node .github/scripts/allocate_nextest_archive_shards.mjs \
-            --input nextest-list.json \
-            --output-dir ci-archive-shards \
-            --regular-shards 7 \
-            --slow-binary-id rhwp::overflow_cell_baseline \
-            --slow-test overflow_cell_lines_do_not_grow
-          runnable=$(jq -r '.runnable_tests' ci-archive-shards/assignment.json)
-          if [[ -z "$runnable" || "$runnable" == "0" ]]; then
-            echo "::error::runnable test count unavailable"; exit 1
-          fi
-          echo "runnable_tests=$runnable" >> "$GITHUB_OUTPUT"
-          echo "runnable_tests=$runnable"
+          cargo metadata --format-version 1 --no-deps > cargo-metadata.json
+          node .github/scripts/plan_nextest_target_archives.mjs \
+            --input cargo-metadata.json \
+            --output-dir ci-target-archives \
+            --package rhwp \
+            --slow-test-target overflow_cell_baseline
 
-          for label in slow 1 2 3 4 5 6 7; do
-            filter=$(<"ci-archive-shards/${label}.filter")
+          for label in ${ARCHIVE_LABELS}; do
+            owner=$(jq -r ".archives[\"${label}\"].builder" ci-target-archives/assignment.json)
+            if [[ "$owner" != "$BUILDER" ]]; then
+              echo "::error::archive ${label} belongs to builder ${owner}, not ${BUILDER}"
+              exit 1
+            fi
+            mapfile -t target_args < "ci-target-archives/${label}.args"
+            if [[ "${#target_args[@]}" == "0" ]]; then
+              echo "::error::archive ${label} has no Cargo target selector"
+              exit 1
+            fi
             archive="tests-${label}.tar.zst"
             cargo nextest archive \
+              --package rhwp \
               --cargo-profile "${{ steps.profile.outputs.cargo_profile }}" \
-              --filterset "$filter" \
+              "${target_args[@]}" \
               --archive-file "$archive"
             stat --printf='archive=%n bytes=%s\n' "$archive"
+
+            cargo nextest list \
+              --package rhwp \
+              --cargo-profile "${{ steps.profile.outputs.cargo_profile }}" \
+              "${target_args[@]}" \
+              --message-format json > "nextest-list-${label}.json"
+            runnable=$(node .github/scripts/count_nextest_runnable.mjs --input "nextest-list-${label}.json")
+            if ! [[ "$runnable" =~ ^[0-9]+$ ]]; then
+              echo "::error::archive ${label} runnable count is invalid: ${runnable}"
+              exit 1
+            fi
+            printf '%s\n' "$runnable" > "archive-expected-${label}.txt"
+            echo "archive=${label} expected_runnable=${runnable}"
           done
 
       - name: Upload slow test archive
+        if: ${{ matrix.builder == 'a' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: test-archive-${{ github.run_id }}-slow
@@ -703,6 +724,7 @@ jobs:
           if-no-files-found: error
 
       - name: Upload test archive 1
+        if: ${{ matrix.builder == 'a' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: test-archive-${{ github.run_id }}-1
@@ -712,6 +734,7 @@ jobs:
           if-no-files-found: error
 
       - name: Upload test archive 2
+        if: ${{ matrix.builder == 'a' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: test-archive-${{ github.run_id }}-2
@@ -721,6 +744,7 @@ jobs:
           if-no-files-found: error
 
       - name: Upload test archive 3
+        if: ${{ matrix.builder == 'a' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: test-archive-${{ github.run_id }}-3
@@ -730,6 +754,7 @@ jobs:
           if-no-files-found: error
 
       - name: Upload test archive 4
+        if: ${{ matrix.builder == 'a' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: test-archive-${{ github.run_id }}-4
@@ -739,6 +764,7 @@ jobs:
           if-no-files-found: error
 
       - name: Upload test archive 5
+        if: ${{ matrix.builder == 'b' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: test-archive-${{ github.run_id }}-5
@@ -748,6 +774,7 @@ jobs:
           if-no-files-found: error
 
       - name: Upload test archive 6
+        if: ${{ matrix.builder == 'b' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: test-archive-${{ github.run_id }}-6
@@ -757,11 +784,20 @@ jobs:
           if-no-files-found: error
 
       - name: Upload test archive 7
+        if: ${{ matrix.builder == 'b' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: test-archive-${{ github.run_id }}-7
           path: tests-7.tar.zst
           compression-level: 0
+          retention-days: 1
+          if-no-files-found: error
+
+      - name: Upload archive expected counts
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: archive-expected-${{ github.run_id }}-${{ matrix.builder }}
+          path: archive-expected-*.txt
           retention-days: 1
           if-no-files-found: error
 
@@ -790,35 +826,27 @@ jobs:
       matrix:
         include:
           - label: slow shard
-            kind: slow
             count_label: slow
             archive_label: slow
           - label: shard 1/7
-            kind: regular
             count_label: 1
             archive_label: 1
           - label: shard 2/7
-            kind: regular
             count_label: 2
             archive_label: 2
           - label: shard 3/7
-            kind: regular
             count_label: 3
             archive_label: 3
           - label: shard 4/7
-            kind: regular
             count_label: 4
             archive_label: 4
           - label: shard 5/7
-            kind: regular
             count_label: 5
             archive_label: 5
           - label: shard 6/7
-            kind: regular
             count_label: 6
             archive_label: 6
           - label: shard 7/7
-            kind: regular
             count_label: 7
             archive_label: 7
 
@@ -845,7 +873,6 @@ jobs:
       # 집계 job이 8개 archive shard의 합계 = 전체 runnable 테스트 수를 대조한다.
       - name: Run ${{ matrix.label }}
         env:
-          SHARD_KIND: ${{ matrix.kind }}
           COUNT_LABEL: ${{ matrix.count_label }}
         run: |
           set -o pipefail
@@ -853,21 +880,11 @@ jobs:
           # 러너 절대 경로가 컴파일 타임에 박힌다. GitHub 러너는 job 간
           # workspace 경로가 동일하므로 워크스페이스에 풀어 target/ 경로를
           # 그대로 복원한다 (임시 디렉터리 추출 시 NotFound — PR CI 실측).
-          if [[ "${SHARD_KIND}" == "slow" ]]; then
-            cargo nextest run \
-              --archive-file "tests-${COUNT_LABEL}.tar.zst" \
-              --workspace-remap . \
-              --extract-to . \
-              -E 'binary_id(=rhwp::overflow_cell_baseline) & test(=overflow_cell_lines_do_not_grow)' \
-              2>&1 | tee nextest-shard.log
-          else
-            cargo nextest run \
-              --archive-file "tests-${COUNT_LABEL}.tar.zst" \
-              --workspace-remap . \
-              --extract-to . \
-              -E 'not (binary_id(=rhwp::overflow_cell_baseline) & test(=overflow_cell_lines_do_not_grow))' \
-              2>&1 | tee nextest-shard.log
-          fi
+          cargo nextest run \
+            --archive-file "tests-${COUNT_LABEL}.tar.zst" \
+            --workspace-remap . \
+            --extract-to . \
+            2>&1 | tee nextest-shard.log
           # CARGO_TERM_COLOR=always 로 Summary 라인에 ANSI 색코드가 섞이므로
           # 스트립 후 파싱한다 (2차 PR CI 실측 — 376 run green 인데 파싱 실패).
           summary=$(sed 's/\x1b\[[0-9;]*m//g' nextest-shard.log | grep -E "Summary \[" | tail -1)
@@ -1131,8 +1148,8 @@ jobs:
       contents: read
 
     steps:
-      # [#2393] 샤드 합계 대조 — 8개 binary-affine archive의 run 합계가 전체
-      # runnable 테스트 수와 일치하는지 검증한다 (fast-pass 시 샤드 미실행이라 생략).
+      # [#2393] 샤드 합계 대조 — archive 생성 시 실제 target selector로 얻은 runnable 수와
+      # 여덟 worker의 Summary run 합계가 일치해야 한다 (fast-pass 시 샤드 미실행이라 생략).
       - name: Download shard counts
         if: ${{ needs.preflight.outputs.fast_pass != 'true' && needs['test-shard'].result == 'success' }}
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
@@ -1140,20 +1157,36 @@ jobs:
           pattern: shard-count-*
           merge-multiple: true
 
+      - name: Download archive expected counts
+        if: ${{ needs.preflight.outputs.fast_pass != 'true' && needs['test-shard'].result == 'success' }}
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: archive-expected-*
+          merge-multiple: true
+
       - name: Verify shard totals
         if: ${{ needs.preflight.outputs.fast_pass != 'true' && needs['test-shard'].result == 'success' }}
-        env:
-          EXPECTED_RUNNABLE: ${{ needs['build-test-archive'].outputs.runnable_tests }}
         run: |
           shards=$(find . -maxdepth 1 -type f -name 'shard-count-*.txt' | wc -l | tr -d ' ')
           if [[ "$shards" != "8" ]]; then
             echo "::error::expected 8 shard count files, found ${shards}"
             exit 1
           fi
-          if [[ -z "${EXPECTED_RUNNABLE}" ]]; then
-            echo "::error::expected runnable test count missing from build-test-archive"
+          expected_files=$(find . -maxdepth 1 -type f -name 'archive-expected-*.txt' | wc -l | tr -d ' ')
+          if [[ "$expected_files" != "8" ]]; then
+            echo "::error::expected 8 archive expected count files, found ${expected_files}"
             exit 1
           fi
+          expected=0
+          for f in archive-expected-*.txt; do
+            read -r run < "$f"
+            if ! [[ "$run" =~ ^[0-9]+$ ]]; then
+              echo "::error::invalid archive expected count in ${f}: ${run}"
+              exit 1
+            fi
+            expected=$((expected + run))
+            echo "${f}: expected=${run}"
+          done
           sum=0
           for f in shard-count-*.txt; do
             read -r run < "$f"
@@ -1164,11 +1197,9 @@ jobs:
             sum=$((sum + run))
             echo "${f}: run=${run}"
           done
-          # 기대치는 nextest list의 비-ignored(runnable) 수다. binary-affine archive는
-          # shard마다 자체 목록만 가지므로 total이 아닌 run 합계로만 대조한다.
-          echo "sum(run)=${sum} expected runnable=${EXPECTED_RUNNABLE}"
-          if [[ "$sum" != "${EXPECTED_RUNNABLE}" ]]; then
-            echo "::error::shard run sum ${sum} != runnable tests ${EXPECTED_RUNNABLE} (누락 또는 중복)"
+          echo "sum(run)=${sum} expected runnable=${expected}"
+          if [[ "$sum" != "${expected}" ]]; then
+            echo "::error::shard run sum ${sum} != runnable tests ${expected} (누락 또는 중복)"
             exit 1
           fi
 
