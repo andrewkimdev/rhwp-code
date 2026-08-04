@@ -4,7 +4,7 @@
 - **수행계획서**: `mydocs/plans/task_m100_3790.md`
 - **브랜치**: Stage 1 `codex/issue-3790-ci-impact-shadow`, Stage 2·2.5
   `codex/issue-3790-shadow-observation`, Stage 3 `codex/issue-3790-stage3-frontend`
-- **절차 상태**: Stage 2.5 merge 완료, Stage 2.6 enforcement 분리 결정 및 Stage 3 로컬 구현 완료
+- **절차 상태**: Stage 2.5 merge 완료, Stage 2.6 enforcement 분리 결정 및 Stage 3 PR #3943 리뷰 보정 완료
 
 ## Stage 1 — shadow classifier
 
@@ -87,6 +87,9 @@ policy를 미채택하기로 결정할 때까지 보존한다. 이후 재사용�
     `src/view/**`, `src/ui/**`, 그 밖의 Studio runtime은 package+render에서 시작해 canary 근거 뒤에만 넓힌다.
 
 ## Stage 4 — Rust·Native Skia 조건화
+
+Stage 3 merge 직후 frontend-only canary에서 unit/package/render 진리표와 수동 full 대조군을 먼저
+확인한 뒤 착수한다.
 
 1. Rust 비영향 PR에서 lint와 #3892의 `build-test-archive-slow`, `build-test-archive-a`,
    `build-test-archive-b` 세 builder를 생략한다.
