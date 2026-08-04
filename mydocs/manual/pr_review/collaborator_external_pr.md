@@ -114,7 +114,10 @@ git rev-parse HEAD
 
 가시성 branch의 첫 source commit SHA는 fetch한 PR head와 같아야 하며, 이후 collaborator commit은 그 위에만
 추가한다. 세 SHA가 다르면 보정을 시작하지 않는다. contributor가 새 commit을 push했으면 새 head를 fetch해
-같은 가시성 branch의 기준을 다시 확인하고, contributor commit을 rebase, amend, reset, force-push하지 않는다.
+같은 가시성 branch의 기준을 다시 확인한다. 이때 기존 reviewer 기록 위로 새 source를 일반 merge하지 않는다.
+아직 원격에 push하지 않은 collaborator commit만 새 source 위로 replay할 수 있으며, 정확한 선행조건과 명령은
+[2.6.1 외부 PR review 기록의 source head 정렬](multi_pr_update_branch.md#261-외부-pr-review-기록의-source-head-정렬)을
+따른다. contributor commit은 rebase, amend, reset, force-push하지 않는다.
 
 #### 9.3.1.2 commit 분리와 LFS dry-run
 
@@ -156,6 +159,9 @@ review-only fast-pass를 적용하지 않고 최신 head full CI를 기다린다
 [공용 review-only fast-pass](review_only_fast_pass.md)를 함께 읽는다. collaborator가 contributor의
 current code head를 local 검증한 뒤 review 문서·오늘할일·허용된 신규 기준 자료만 source branch에 추가하면
 공용 가이드의 **A 경로**다. 직전 code candidate의 녹색 Build & Test와 최신 head aggregate를 모두 확인한다.
+최종 묶음 직전에 contributor가 새 source를 push했다면, 먼저
+[2.6.1 외부 PR review 기록의 source head 정렬](multi_pr_update_branch.md#261-외부-pr-review-기록의-source-head-정렬)을
+완료한다.
 
 code 또는 test 보정이 하나라도 있으면 fast-pass가 아니며 최신 head full CI를 기다린다. 이미 완료된 원 PR의
 기록만 담는 별도 후속 PR은 공용 가이드의 **B 경로**이며, 이 외부 PR 문서가 아니라 collaborator self 경로와

@@ -112,6 +112,39 @@ git rev-parse HEAD
 재작성하지 않는다. 새 PR head가 force-push된 경우에는 최초 검토 branch를 보존하고, 새 head에서 만든
 별도 visibility review branch와 전용 target으로 검증을 다시 시작한다.
 
+### 2.6.1 외부 PR review 기록의 source head 정렬
+
+collaborator가 외부 contributor PR의 source branch에 archive review·오늘할일·허용된 증적을 직접 push할
+경우에는, contributor가 검토 중 새 commit을 push한 시점부터 최종 review 묶음을 만들기 전까지 아래
+정렬 규칙을 적용한다. 목적은 contributor code head 뒤에 collaborator 기록만 이어지는 단순 history를
+만들어 review-only fast-pass의 후보 탐색이 code 변경을 숨기지 않으면서 동작하게 하는 것이다.
+
+1. 이전 source SHA와 새로 fetch한 source SHA를 각각 기록한다. 원격 PR head와 `git ls-remote`가 새 SHA와
+   일치하는지 확인하기 전에는 archive review, 오늘할일, 증적 commit을 만들거나 push하지 않는다.
+2. 이전 source 위에 만든 collaborator commit이 아직 contributor source branch에 push되지 않았고,
+   `old_source..HEAD`가 collaborator 소유의 single-parent commit만으로 구성됐으면 같은 visibility branch에서
+   그 commit만 새 source 위로 replay한다. contributor commit은 rebase, amend, reset, force-push하지 않는다.
+
+   ~~~bash
+   old_source_sha=<이전 fetch source SHA>
+   new_source_sha=<새 fetch source SHA>
+   git log --format='%H %P %s' "$old_source_sha..HEAD"
+   git rev-list --merges "$old_source_sha..HEAD"
+   # merge 출력이 없고 위 범위가 collaborator의 미공개 commit일 때만 실행
+   git rebase --onto "$new_source_sha" "$old_source_sha"
+   git merge-base --is-ancestor "$new_source_sha" HEAD
+   ~~~
+
+3. collaborator commit 위로 `git merge <new-contributor-head>`를 실행하지 않는다. 그 merge는 대개
+   current `devel`을 직접 parent로 갖지 않아 fast-pass가 `mydocs-only-merge-not-reusable`로 거부한다.
+   VS Code 그래프의 가시성은 같은 branch에서 contributor head를 조상으로 두는 선형 history로 유지한다.
+4. collaborator commit이 이미 contributor source branch에 push됐거나, replay 범위에 merge·미확인 commit이
+   있으면 history를 억지로 정리하거나 contributor branch를 force-push하지 않는다. 최신 source에서 full CI를
+   받거나, 작업지시자의 명시 승인을 받아 별도 처리 경로를 선택한다.
+5. 새 source가 local `HEAD`의 조상이고 `new_source..HEAD`에 collaborator commit만 남았음을 확인한 뒤에
+   archive review·오늘할일·증적을 하나의 최종 review 묶음으로 commit한다. 그 직후 9.3.0의 LFS 판독과
+   remote SHA 재확인을 수행한다.
+
 ## 4.2.1 여러 PR 체리픽 누적 검토
 
 여러 PR이 같은 영역을 단계적으로 수정하고 오래된 순서로 merge해야 하면, upstream/devel 기준의 별도
