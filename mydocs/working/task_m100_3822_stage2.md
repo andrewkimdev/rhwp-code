@@ -2,8 +2,8 @@
 
 - 이슈: [#3822](https://github.com/edwardkim/rhwp/issues/3822)
 - 브랜치: stack/issue-3822-overlong-token-wrap
-- 최신 기준: upstream/devel 8d7bc622e
-- code candidate: e4cf29df1
+- 최신 기준: upstream/devel ec1b21096
+- code candidate: 7d6c5d625
 - 작성일: 2026-08-04
 
 ## 최신 기준 focused 결과
@@ -12,8 +12,9 @@
 - #3822 전용 Latin·숫자·잔여 폭·hanging indent: 4 / 4 통과
 - git diff --check: 통과
 
-최종 검증 뒤 추가된 devel 19커밋은 composer 파일과 겹치지 않았다. 8d7bc622e로
-다시 rebase한 최상단에서 composer focused spot-check를 반복한다.
+최종 검증 뒤 devel이 ec1b21096로 전진했다. composer 파일과 직접 겹치지 않았지만
+typeset 쪽 경계 수정이 실제 문서의 page count에 영향을 줄 수 있어 composer 52 / 52와
+#3822 전용 4건을 다시 실행해 모두 통과했다.
 
 ## 기존 실제 문서 증적
 
@@ -36,5 +37,10 @@ glyph outline의 실제 가로 비율을 직접 증명하지 않았다. 따라�
 - #3822: token 재분할과 overflow 해결
 - #3937: Canvas/SVG 영문·숫자 glyph outline 확대 해결
 
-최신 최상단 stack에서 같은 combined E2E를 한 번 실행해 두 정확성 수정과 #3815 scheduler의
-조합을 확인한다.
+최신 최상단 stack의 production WASM에서 같은 combined E2E를 재실행했다. HWP/HWPX 모두
+숫자 줄 전환 11 / 69, 최종 숫자 73, 최종 쪽수 116과 synchronous flush 0으로 GREEN이었다.
+두 정확성 수정과 #3815 scheduler의 조합이 최신 typeset 변경 뒤에도 유지됐다.
+
+Draft PR은 [#3945](https://github.com/edwardkim/rhwp/pull/3945)이며 부모는
+[#3944](https://github.com/edwardkim/rhwp/pull/3944), 자식은
+[#3946](https://github.com/edwardkim/rhwp/pull/3946)이다.
