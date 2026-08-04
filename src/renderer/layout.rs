@@ -86,6 +86,67 @@ fn effective_tac_segment_width_hu(para: &Paragraph, fallback_width_hu: i32) -> i
     }
 }
 
+/// native HWP5 page-tail Square picture가 다음 physical page의 시작으로 defer된 경우인지
+/// 판별한다.
+///
+/// typeset은 deferred picture를 column 첫 `Shape`로 materialize하고, 같은 page의 narrow
+/// successor에만 wrap anchor를 전달한다. source host paragraph는 그 page에 Full/Partial item으로
+/// 존재하지 않는다. 이 세 가지는 일반 Square item과 구별되는 renderer 내부 contract다.
+///
+/// successor가 첫 `vpos=0` narrow band로 시작하면 source host의 positive para offset은 이전
+/// physical page 좌표다. 새 page에서 다시 적용하면 그림이 body top 아래로 이중 이동한다.
+/// full-width tail 뒤 reset되는 deferred picture는 별도의 source owner 계약을 가지므로 제외한다.
+fn deferred_page_start_square_picture_uses_body_top(
+    col_content: &ColumnContent,
+    item_ordinal: usize,
+    paragraphs: &[Paragraph],
+    para_index: usize,
+    control_index: usize,
+) -> bool {
+    if item_ordinal != 0
+        || col_content.items.iter().any(|item| {
+            matches!(
+                item,
+                PageItem::FullParagraph { para_index: item_pi }
+                    | PageItem::PartialParagraph { para_index: item_pi, .. }
+                    if *item_pi == para_index
+            )
+        })
+        || !col_content
+            .wrap_anchors
+            .values()
+            .any(|anchor| anchor.anchor_para_index == para_index)
+    {
+        return false;
+    }
+
+    let Some(para) = paragraphs.get(para_index) else {
+        return false;
+    };
+    let Some(Control::Picture(picture)) = para.controls.get(control_index) else {
+        return false;
+    };
+    let common = &picture.common;
+    if common.treat_as_char
+        || !common.flow_with_text
+        || !matches!(common.text_wrap, TextWrap::Square)
+        || !matches!(common.vert_rel_to, VertRelTo::Para)
+        || !matches!(common.vert_align, VertAlign::Top)
+    {
+        return false;
+    }
+
+    paragraphs
+        .get(para_index + 1)
+        .and_then(|next| next.line_segs.first())
+        .is_some_and(|seg| {
+            seg.vertical_pos == 0
+                && seg.column_start == 0
+                && seg.segment_width > 0
+                && (seg.segment_width as i32 - common.horizontal_offset as i32).abs() <= 200
+        })
+}
+
 #[derive(Clone)]
 struct PagePreviewImage {
     mime: &'static str,
@@ -8519,6 +8580,7 @@ impl LayoutEngine {
             layout,
             col_area,
             wrap_around_paras,
+            wrap_anchors,
             ..
         } = ctx;
         // Task #402: 같은 paragraph 안에 TAC 컨트롤(표/그림/도형) 2개 이상이 서로 다른 line에
@@ -9032,8 +9094,36 @@ impl LayoutEngine {
                                 .get(para_style_id)
                                 .map(|s| s.alignment)
                                 .unwrap_or(Alignment::Left);
+                            let deferred_page_start_square = wrap_anchors
+                                .values()
+                                .any(|anchor| anchor.anchor_para_index == para_index)
+                                && page_content.column_contents.iter().any(|column| {
+                                    matches!(
+                                        column.items.first(),
+                                        Some(PageItem::Shape {
+                                            para_index: item_pi,
+                                            control_index: item_ci,
+                                        }) if *item_pi == para_index && *item_ci == control_index
+                                    ) && deferred_page_start_square_picture_uses_body_top(
+                                        column,
+                                        0,
+                                        paragraphs,
+                                        para_index,
+                                        control_index,
+                                    )
+                                });
                             let para_base_y =
                                 para_start_y.get(&para_index).copied().unwrap_or(y_offset);
+                            let para_base_y = if deferred_page_start_square {
+                                // next-page owner의 `vpos=0` narrow band는 새 physical
+                                // page의 body top을 가리킨다. layout_body_picture가
+                                // para-relative offset을 한 번 적용하므로 source offset을
+                                // 여기서 상쇄한다 (#3820 p127 Figure 56).
+                                para_base_y
+                                    - hwpunit_to_px(pic.common.vertical_offset as i32, self.dpi)
+                            } else {
+                                para_base_y
+                            };
                             let pic_y = if matches!(
                                 pic.common.text_wrap,
                                 crate::model::shape::TextWrap::Square

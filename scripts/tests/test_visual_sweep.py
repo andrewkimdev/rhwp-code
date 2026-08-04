@@ -208,6 +208,40 @@ class FidelityLayoutBridgeTests(unittest.TestCase):
             ],
         }
 
+    @staticmethod
+    def deferred_square_top_drift_tree() -> dict[str, object]:
+        return {
+            "type": "Page",
+            "bbox": {"x": 0, "y": 0, "w": 400, "h": 500},
+            "children": [
+                {
+                    "type": "Body",
+                    "bbox": {"x": 20, "y": 20, "w": 360, "h": 420},
+                    "children": [
+                        {
+                            "type": "Column",
+                            "bbox": {"x": 20, "y": 20, "w": 360, "h": 420},
+                            "children": [
+                                {
+                                    "type": "Image",
+                                    "pi": 1355,
+                                    "ci": 0,
+                                    "textWrap": "Square",
+                                    "bbox": {"x": 180, "y": 70, "w": 120, "h": 180},
+                                },
+                                {
+                                    "type": "TextLine",
+                                    "pi": 1356,
+                                    "bbox": {"x": 40, "y": 20, "w": 120, "h": 14},
+                                    "children": [{"type": "TextRun", "text": "본문"}],
+                                },
+                            ],
+                        }
+                    ],
+                }
+            ],
+        }
+
     def test_uses_fidelity_square_wrap_detector(self) -> None:
         for text_wrap in ("Square", "Tight", "Through"):
             with self.subTest(text_wrap=text_wrap):
@@ -230,6 +264,15 @@ class FidelityLayoutBridgeTests(unittest.TestCase):
         self.assertEqual(len(candidates), 1)
         self.assertEqual(candidates[0]["candidate_kind"], "edge_clearance_loss")
         self.assertEqual(candidates[0]["edge_contact_line_count"], 3)
+
+    def test_uses_fidelity_deferred_square_page_top_detector(self) -> None:
+        candidates = SWEEP.render_tree_deferred_square_picture_top_drift_candidates(
+            self.deferred_square_top_drift_tree()
+        )
+
+        self.assertEqual(len(candidates), 1)
+        self.assertEqual(candidates[0]["pi"], 1355)
+        self.assertEqual(candidates[0]["image_top_drift_px"], 50.0)
 
     def test_rejects_missing_or_malformed_render_tree(self) -> None:
         for tree in (None, {}, {"type": "Page"}):
@@ -268,6 +311,37 @@ class FidelityLayoutBridgeTests(unittest.TestCase):
         self.assertIn("square_wrap_text_overlap", result["flags"])
         self.assertEqual(result["square_wrap_text_overlap_candidates"][0]["pi"], 1355)
 
+    def test_analyze_page_flags_deferred_square_page_top_drift(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            rhwp_path = root / "rhwp.png"
+            pdf_path = root / "pdf.png"
+            tree_path = root / "tree.json"
+            svg_path = root / "page.svg"
+            analysis_dir = root / "analysis"
+            Image.new("RGB", (400, 500), "white").save(rhwp_path)
+            Image.new("RGB", (400, 500), "white").save(pdf_path)
+            svg_path.write_text("<svg/>", encoding="utf-8")
+            tree_path.write_text(
+                json.dumps(self.deferred_square_top_drift_tree()), encoding="utf-8"
+            )
+
+            result = SWEEP.analyze_page(
+                rhwp_path,
+                pdf_path,
+                svg_path,
+                tree_path,
+                analysis_dir,
+                "fixture",
+                0,
+                [],
+                {},
+                32,
+            )
+
+        self.assertIn("deferred_square_picture_top_drift", result["flags"])
+        self.assertEqual(result["deferred_square_picture_top_drift_candidates"][0]["pi"], 1355)
+
     def test_summary_includes_fidelity_square_wrap_flag(self) -> None:
         summary, flagged = SWEEP.visual_summary_for_pages(
             [{"page": 127, "flags": ["square_wrap_text_overlap"]}],
@@ -276,6 +350,16 @@ class FidelityLayoutBridgeTests(unittest.TestCase):
         )
 
         self.assertEqual(summary["square_wrap_text_overlap_pages"], [127])
+        self.assertEqual(flagged[0]["page"], 127)
+
+    def test_summary_includes_deferred_square_page_top_flag(self) -> None:
+        summary, flagged = SWEEP.visual_summary_for_pages(
+            [{"page": 127, "flags": ["deferred_square_picture_top_drift"]}],
+            Path("metrics.json"),
+            Path("question_flow.json"),
+        )
+
+        self.assertEqual(summary["deferred_square_picture_top_drift_pages"], [127])
         self.assertEqual(flagged[0]["page"], 127)
 
 

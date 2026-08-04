@@ -810,6 +810,7 @@ def visual_summary_for_pages(
         "between_notes_marker_gap_pages": [page.get("page") for page in pages if paired_marker_gap(page)],
         "equation_text_overlap_pages": flagged_numbers("equation_text_overlap"),
         "square_wrap_text_overlap_pages": flagged_numbers("square_wrap_text_overlap"),
+        "deferred_square_picture_top_drift_pages": flagged_numbers("deferred_square_picture_top_drift"),
         "question_title_text_overlap_pages": flagged_numbers("question_title_text_overlap"),
         "line_order_overlap_pages": flagged_numbers("line_order_overlap"),
         "render_tree_frame_tail_overflow_pages": flagged_numbers("render_tree_frame_tail_overflow"),
@@ -2549,6 +2550,32 @@ def render_tree_square_wrap_text_overlap_candidates(
     return raw_candidates
 
 
+def render_tree_deferred_square_picture_top_drift_candidates(
+    tree: dict[str, object] | None,
+) -> list[dict[str, object]]:
+    """Return native deferred Square picture page-top offset candidates.
+
+    The detector lives in ``fidelity_compare`` so both the fast layout ledger
+    and the raster review path classify the same HWP5 ownership geometry.
+    """
+    if (
+        tree is None
+        or tree.get("type") != "Page"
+        or not isinstance(tree.get("children"), list)
+    ):
+        raise RuntimeError("fidelity deferred Square 검출에 유효한 render tree가 필요합니다")
+    module = fidelity_compare_layout_module()
+    detector = getattr(module, "deferred_square_picture_page_top_drift_candidates", None)
+    if not callable(detector):
+        raise RuntimeError("fidelity layout detector에 deferred Square 후보 함수가 없습니다")
+    raw_candidates = detector(tree)
+    if not isinstance(raw_candidates, list) or not all(
+        isinstance(candidate, dict) for candidate in raw_candidates
+    ):
+        raise RuntimeError("fidelity deferred Square 후보 형식이 올바르지 않습니다")
+    return raw_candidates
+
+
 def mm_to_px(mm: object, dpi: int = 96) -> float | None:
     if not isinstance(mm, (int, float)) or mm <= 0:
         return None
@@ -3318,6 +3345,9 @@ def analyze_page(
     line_drift = compare_ordered_y(rhwp_bands, pdf_bands)
     page_tree = load_render_tree(tree_path)
     square_wrap_text_overlaps = render_tree_square_wrap_text_overlap_candidates(page_tree)
+    deferred_square_picture_top_drifts = (
+        render_tree_deferred_square_picture_top_drift_candidates(page_tree)
+    )
     column_line_drifts = column_line_band_drifts(rhwp, pdf, rhwp_frame, pdf_frame)
     column_line_drift_candidates = column_line_band_drift_candidates(column_line_drifts)
     rhwp_table_masks = render_tree_body_table_masks(page_tree, rhwp)
@@ -3515,6 +3545,8 @@ def analyze_page(
         flags.append("equation_text_overlap")
     if square_wrap_text_overlaps:
         flags.append("square_wrap_text_overlap")
+    if deferred_square_picture_top_drifts:
+        flags.append("deferred_square_picture_top_drift")
     if (
         expected_separator
         and separator_gap_delta is not None
@@ -3535,6 +3567,7 @@ def analyze_page(
     semantic_flow_flags = bool(
         equation_overlaps
         or square_wrap_text_overlaps
+        or deferred_square_picture_top_drifts
         or question_title_overlaps
         or line_order_overlaps
         or frame_tail_flow_overflow
@@ -3570,6 +3603,7 @@ def analyze_page(
             {
                 "equation_text_overlap": equation_overlaps,
                 "square_wrap_text_overlap": square_wrap_text_overlaps,
+                "deferred_square_picture_top_drift": deferred_square_picture_top_drifts,
                 "question_title_text_overlap": question_title_overlaps,
                 "line_order_overlap": line_order_overlaps,
                 "render_tree_frame_tail_overflow": frame_tail_overflows,
@@ -3630,6 +3664,7 @@ def analyze_page(
         "render_tree_json": str(tree_path),
         "equation_text_overlap_candidates": equation_overlaps,
         "square_wrap_text_overlap_candidates": square_wrap_text_overlaps,
+        "deferred_square_picture_top_drift_candidates": deferred_square_picture_top_drifts,
         "question_title_text_overlap_candidates": question_title_overlaps,
         "line_order_overlap_candidates": line_order_overlaps,
         "render_tree_frame_tail_overflow_candidates": frame_tail_overflows,
@@ -3786,6 +3821,16 @@ def draw_render_tree_overlays(
                 f"c{item.get('ci')} lines={item.get('overlap_line_count')}"
             )
             draw.text((x, max(label_h + 2, y - 18)), label, fill=(220, 0, 0), font=font)
+    for item in render_overlays.get("deferred_square_picture_top_drift", [])[:4]:
+        anchor = draw_bbox(item.get("image_bbox"), (180, 0, 180), 3)
+        draw_bbox(item.get("first_wrap_line_bbox"), (110, 0, 180), 2)
+        if anchor is not None:
+            x, y = anchor
+            label = (
+                f"deferred Square pi {item.get('pi')} c{item.get('ci')} "
+                f"+{item.get('image_top_drift_px')}px"
+            )
+            draw.text((x, max(label_h + 2, y - 18)), label, fill=(180, 0, 180), font=font)
     for item in render_overlays.get("question_title_text_overlap", [])[:4]:
         anchor = draw_bbox(item.get("title_bbox"), (0, 150, 180), 2)
         draw_bbox(item.get("next_bbox"), (220, 60, 0), 2)
@@ -3913,6 +3958,11 @@ def analyze_pages(
         "square_wrap_text_overlap_pages": [
             page["page"] for page in flagged_pages if "square_wrap_text_overlap" in page["flags"]
         ],
+        "deferred_square_picture_top_drift_pages": [
+            page["page"]
+            for page in flagged_pages
+            if "deferred_square_picture_top_drift" in page["flags"]
+        ],
         "question_title_text_overlap_pages": [
             page["page"] for page in flagged_pages if "question_title_text_overlap" in page["flags"]
         ],
@@ -3940,6 +3990,7 @@ def analyze_pages(
         f"sep={summary['endnote_separator_gap_drift_pages']} "
         f"eq={summary['equation_text_overlap_pages']} "
         f"wrap={summary['square_wrap_text_overlap_pages']} "
+        f"deferred={summary['deferred_square_picture_top_drift_pages']} "
         f"title={summary['question_title_text_overlap_pages']} "
         f"order={summary['line_order_overlap_pages']} "
         f"tail={summary['render_tree_frame_tail_overflow_pages']} "

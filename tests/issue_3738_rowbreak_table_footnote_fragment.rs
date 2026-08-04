@@ -1025,6 +1025,11 @@ fn native_hwp5_square_picture_uses_the_next_page_wrap_owner() {
         "그림 64는 PDF처럼 p156 우측 Square band에 있어야 함: {:?}",
         p156_images[0]
     );
+    assert!(
+        (p156_images[0].1 - 90.1).abs() <= 1.0,
+        "p156 그림 64는 full-width tail 뒤 reset contract의 518HU offset을 유지해야 함: {:?}",
+        p156_images[0]
+    );
 
     let mut p156_image_boxes = Vec::new();
     let mut p156_pi1693_lines = Vec::new();
@@ -1137,6 +1142,11 @@ fn native_hwp5_square_picture_figure_56_uses_the_same_next_page_owner_contract()
     assert!(
         p127_images[0].0 > 390.0,
         "그림 56은 PDF처럼 p127 우측 Square band에 있어야 함: {:?}",
+        p127_images[0]
+    );
+    assert!(
+        (p127_images[0].1 - 83.2).abs() <= 1.0,
+        "p127 그림 56은 next-page owner body top에서 시작해야 함: {:?}",
         p127_images[0]
     );
 

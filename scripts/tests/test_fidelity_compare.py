@@ -640,6 +640,47 @@ class LayoutCandidateTests(unittest.TestCase):
 
         self.assertEqual(FIDELITY.square_wrap_text_overlap_candidates(tree), [])
 
+    def test_deferred_square_picture_below_body_top_is_a_candidate(self) -> None:
+        tree = {
+            "type": "Page",
+            "bbox": {"x": 0, "y": 0, "w": 800, "h": 1100},
+            "children": [
+                {
+                    "type": "Body",
+                    "bbox": {"x": 50, "y": 80, "w": 700, "h": 900},
+                    "children": [
+                        {
+                            "type": "Column",
+                            "bbox": {"x": 50, "y": 80, "w": 700, "h": 900},
+                            "children": [
+                                {
+                                    "type": "Image",
+                                    "pi": 1355,
+                                    "ci": 0,
+                                    "textWrap": "Square",
+                                    "bbox": {"x": 440, "y": 128, "w": 220, "h": 260},
+                                },
+                                {
+                                    "type": "TextLine",
+                                    "pi": 1356,
+                                    "bbox": {"x": 90, "y": 80, "w": 320, "h": 16},
+                                    "children": [{"type": "TextRun", "text": "본문"}],
+                                },
+                            ],
+                        }
+                    ],
+                }
+            ],
+        }
+
+        candidates = FIDELITY.deferred_square_picture_page_top_drift_candidates(tree)
+
+        self.assertEqual(len(candidates), 1)
+        self.assertEqual(candidates[0]["pi"], 1355)
+        self.assertEqual(candidates[0]["candidate_kind"], "deferred_page_start_offset_drift")
+        self.assertEqual(candidates[0]["image_top_drift_px"], 48.0)
+        self.assertEqual(FIDELITY.layout_candidates(tree)[5], 1)
+
     def test_square_wrap_ignores_empty_full_width_guide_lines(self) -> None:
         tree = {
             "type": "Page",

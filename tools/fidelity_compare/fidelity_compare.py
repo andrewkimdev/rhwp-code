@@ -814,8 +814,100 @@ def square_wrap_text_overlap_candidates(
     return candidates
 
 
-def layout_candidates(tree: Mapping[str, object]) -> tuple[int, int, int, int, int]:
-    """(body↔각주, table↔footer, table/frame, image/frame, square-wrap/text) 후보 수."""
+def deferred_square_picture_page_top_drift_candidates(
+    tree: Mapping[str, object],
+) -> list[dict[str, object]]:
+    """Find a deferred Square picture that consumes a previous-page Y offset twice.
+
+    A native HWP5 Square picture can be materialized as the first item of the
+    next physical page while its successor text begins at the new page's body
+    top.  Its frame must then also start at the body top.  If the frame begins
+    materially lower, the source paragraph's positive vertical offset has
+    leaked into the new owner page.  This is a candidate-only structural rule:
+    it intentionally requires the characteristic first-column image and a
+    side-wrap text line at the body top, so ordinary positioned pictures are
+    not reported.
+    """
+    minimum_top_drift_px = 20.0
+    candidates: list[dict[str, object]] = []
+
+    def visible_text_lines(node: Mapping[str, object]) -> list[tuple[float, float, float, float]]:
+        lines: list[tuple[float, float, float, float]] = []
+
+        def walk(child: Mapping[str, object]) -> None:
+            if child.get("type") == "TextLine" and text_line_has_visible_paint(child):
+                box = bbox_from_node(child)
+                if box is not None:
+                    lines.append(box)
+            nested = child.get("children")
+            if isinstance(nested, list):
+                for grandchild in nested:
+                    if isinstance(grandchild, Mapping):
+                        walk(grandchild)
+
+        walk(node)
+        return lines
+
+    children = tree.get("children")
+    if not isinstance(children, list):
+        return candidates
+    for body in children:
+        if not isinstance(body, Mapping) or body.get("type") != "Body":
+            continue
+        body_box = bbox_from_node(body)
+        body_children = body.get("children")
+        if body_box is None or not isinstance(body_children, list):
+            continue
+        body_y = body_box[1]
+        for column in body_children:
+            if not isinstance(column, Mapping) or column.get("type") != "Column":
+                continue
+            column_children = column.get("children")
+            if not isinstance(column_children, list):
+                continue
+            first_item = next(
+                (child for child in column_children if isinstance(child, Mapping)),
+                None,
+            )
+            if not isinstance(first_item, Mapping) or first_item.get("type") != "Image":
+                continue
+            if first_item.get("textWrap") != "Square":
+                continue
+            image_box = bbox_from_node(first_item)
+            if image_box is None or image_box[2] < 80.0 or image_box[3] < 80.0:
+                continue
+            image_x, image_y, image_width, _ = image_box
+            top_drift = image_y - body_y
+            if top_drift < minimum_top_drift_px:
+                continue
+            first_wrap_line = next(
+                (
+                    line
+                    for line in visible_text_lines(column)
+                    if line[1] <= body_y + min(24.0, line[3] + 4.0)
+                    and (line[0] + line[2] <= image_x + 1.0 or line[0] >= image_x + image_width - 1.0)
+                ),
+                None,
+            )
+            if first_wrap_line is None:
+                continue
+            candidates.append(
+                {
+                    "pi": first_item.get("pi"),
+                    "ci": first_item.get("ci"),
+                    "text_wrap": "Square",
+                    "candidate_kind": "deferred_page_start_offset_drift",
+                    "image_bbox": [round(value, 1) for value in image_box],
+                    "body_top_y": round(body_y, 1),
+                    "image_top_drift_px": round(top_drift, 1),
+                    "first_wrap_line_bbox": [round(value, 1) for value in first_wrap_line],
+                }
+            )
+    return candidates
+
+
+def layout_candidates(tree: Mapping[str, object]) -> tuple[int, int, int, int, int, int]:
+    """(body↔각주, table↔footer, table/frame, image/frame, Square/text, deferred Square) 후보 수."""
     page_bbox = bbox_from_node(tree)
     if page_bbox is None:
         return (0, 0, 0, 0, 0)
@@ -868,12 +960,14 @@ def layout_candidates(tree: Mapping[str, object]) -> tuple[int, int, int, int, i
     table_outside_frame = sum(outside_page(table) for table in body_tables)
     image_outside_frame = sum(outside_page(image) for image in body_images)
     square_wrap_text_overlap = len(square_wrap_text_overlap_candidates(tree))
+    deferred_square_page_top_drift = len(deferred_square_picture_page_top_drift_candidates(tree))
     return (
         body_footnote_lines,
         table_footer,
         table_outside_frame,
         image_outside_frame,
         square_wrap_text_overlap,
+        deferred_square_page_top_drift,
     )
 
 
@@ -1285,13 +1379,14 @@ def write_layout_ledger(
     with report_path.open("w", encoding="utf-8") as report:
         report.write(
             "page\tbody_footnote_lines\ttable_footer\ttable_outside_frame\t"
-            "image_outside_frame\tsquare_wrap_text_overlap\tnote\n"
+            "image_outside_frame\tsquare_wrap_text_overlap\t"
+            "deferred_square_page_top_drift\tnote\n"
         )
         for page_index in requested_pages:
             tree_path = tree_path_for_page(tree_dir, page_index)
             if tree_path is None:
                 missing_pages.append(page_index)
-                report.write(f"{page_index + 1}\t0\t0\t0\t0\t0\trender tree 없음\n")
+                report.write(f"{page_index + 1}\t0\t0\t0\t0\t0\t0\trender tree 없음\n")
                 continue
             try:
                 tree = json.loads(tree_path.read_text(encoding="utf-8"))
@@ -1300,11 +1395,11 @@ def write_layout_ledger(
                 candidates = layout_candidates(tree)
             except (OSError, ValueError, json.JSONDecodeError) as error:
                 missing_pages.append(page_index)
-                report.write(f"{page_index + 1}\t0\t0\t0\t0\t0\trender tree 읽기 실패: {error}\n")
+                report.write(f"{page_index + 1}\t0\t0\t0\t0\t0\t0\trender tree 읽기 실패: {error}\n")
                 continue
             report.write(
                 f"{page_index + 1}\t{candidates[0]}\t{candidates[1]}\t"
-                f"{candidates[2]}\t{candidates[3]}\t{candidates[4]}\t-\n"
+                f"{candidates[2]}\t{candidates[3]}\t{candidates[4]}\t{candidates[5]}\t-\n"
             )
     return missing_pages
 

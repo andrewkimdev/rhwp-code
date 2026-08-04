@@ -8,25 +8,28 @@ last_verified: 2026-08-04
 # Task #3820·#3821 — HWP 215쪽 전수 결함 종합 보고서
 
 - **이슈**: #3820, #3821
-- **기준 커밋**: `18cc01dae` (`task/3820-3821-fidelity`)
+- **기준 브랜치**: `task/3820-3821-fidelity` (2026-08-04 Stage 9 검증)
 - **판정 대상**: `samples/정책연구용역사업 중간진도보고서(살아있는 간장 기증자의 의학적 선별기준 연구).hwp`
 - **정답지**: `pdf/pr3740/hwp/정책연구용역사업 중간진도보고서(살아있는 간장 기증자의 의학적 선별기준 연구)-2020.pdf` (한컴 2020 기준 PDF)
 
 ## 1. 결론
 
 215쪽 전수 raster·overlay 검증은 **완료**했다. 비교 대상 PDF는 215쪽이고, 요청한 215쪽은 모두
-SVG·PDF raster·compare·overlay·review PNG까지 생성됐다. 다만 rhwp 전체 export는 219쪽으로,
-기준 PDF보다 **4쪽 많다**. 이 차이는 전역 보정의 근거가 아니라, 뒤쪽의 페이지 경계/float/표 분할
-원인을 조사해야 한다는 강한 신호다.
+SVG·PDF raster·compare·overlay·review PNG까지 생성됐다. 최초 inventory의 rhwp 전체 export는
+219쪽으로 기준 PDF보다 4쪽 많았고, 이후 p168 표 fragment와 p118 그림 앞 본문 owner를 보정해 현재는
+**218쪽(+3)** 이다. 이 차이는 전역 보정의 근거가 아니라, 뒤쪽의 페이지 경계/float/표 분할 원인을
+계속 조사해야 한다는 강한 신호다.
 
 이번 전수 결과는 다음 세 가지를 분명히 한다.
 
-1. p118→p119의 `TopAndBottom` 그림 앞 본문 owner 이동은 여전히 재현된다.
+1. p118→p119의 `TopAndBottom` 그림 앞 본문 owner 이동과 p127 그림 56의 page-top geometry는
+   Stage 8·9에서 해소했고 각각 focused PDF review와 회귀로 고정했다.
 2. p168 부근부터 페이지 경계가 달라지고, p170 이후에는 같은 쪽번호에서 서로 다른 논리 내용이
    대조되는 **연쇄 pagination divergence**가 나타난다. p171~215의 대량 후보는 45개의 독립 결함이
    아니라 이 상류 결함의 연쇄 신호로 우선 다뤄야 한다.
-3. p127의 본문/그림 관계 차이는 사용자가 직접 확인했지만 이번 자동 visual sweep은 flag를 남기지
-   않았다. 따라서 현재 자동 판정은 결함 후보를 넓히는 도구이지, 무결함 증명 도구가 아니다.
+3. p127의 이전 false negative 형상은 이제 `fidelity_compare`와 visual sweep의
+   `deferred_square_picture_top_drift` 후보로 잡는다. 다만 자동 판정은 후보를 넓히는 도구이며,
+   무결함 증명 도구는 아니다.
 
 이 보고서는 현 상태의 inventory다. 이 단계에서는 renderer 동작을 바꾸지 않았다.
 
@@ -61,9 +64,9 @@ anti-aliasing, 링크색 차이도 ink score를 크게 바꾸므로 이 숫자�
 
 ## 3. 확정·고우선순위 결함
 
-### D-01 — p118→p119 그림 앞 본문 owner가 한 쪽 이르게 확정됨
+### D-01 — p118→p119 그림 앞 본문 owner가 한 쪽 이르게 확정됨 — 해소
 
-**확정.** p119에서 rhwp는 절차 그림으로 바로 시작하지만, 한컴 PDF는 p118의 본문 뒷부분을 p119
+초기 inventory에서는 p119에서 rhwp가 절차 그림으로 바로 시작하지만, 한컴 PDF는 p118의 본문 뒷부분을 p119
 상단에 먼저 배치한 뒤 그림을 둔다. `fidelity_compare`도 p118→p119에서
 `rhwp_earlier_than_reference`, shared text 72자, 양쪽 coverage 1.000을 기록했다. 다음 p119 상단에는
 Body `TopAndBottom` 그림(`pi=1276`, `bbox=94.5,83.2,448.5,359.0`)이 있어, 그림 앞 paragraph owner
@@ -76,9 +79,12 @@ Body `TopAndBottom` 그림(`pi=1276`, `bbox=94.5,83.2,448.5,359.0`)이 있어, �
 - `output/task-3820-3821-fidelity/stage7-full-sweep/stage7-full-215/compare/compare_118.png`, `compare_119.png`
 - `output/task-3820-3821-fidelity/stage6-full-ledger/float-owner-shift-candidates.tsv`의 p118→p119 행
 
-### D-02 — p127 본문과 그림 56의 폭/배치 관계가 PDF와 다름
+**해소 상태:** `309c5f123`가 p118의 `pi=1275`를 lines `0..8`, p119를 lines `9..10`과 그림 55로
+분할해 PDF owner를 복원했다. 직접 증적은 [Stage 8 visual sweep](../working/task_m100_3820_stage8_visual_sweep.md)에 있다.
 
-**사용자 직접 확인 결함, 이번 자동판정 false negative.** p127에서 rhwp와 기준 PDF의 그림 56 주변
+### D-02 — p127 본문과 그림 56의 폭/배치 관계가 PDF와 다름 — 해소
+
+초기에는 **사용자 직접 확인 결함이자 자동판정 false negative**였다. p127에서 rhwp와 기준 PDF의 그림 56 주변
 본문 행폭·완충 관계가 다르다. 이번 visual sweep의 `page_127.json`은 flag와
 `square_wrap_text_overlap_candidates`를 모두 0건으로 기록했다. 즉 현 규칙은 실제 그림-본문 관계의
 fidelity 저하를 아직 충분히 검출하지 못한다.
@@ -88,6 +94,11 @@ fidelity 저하를 아직 충분히 검출하지 못한다.
 - `output/task-3820-3821-fidelity/stage7-full-sweep/stage7-full-215/review/review_127.png`
 - `output/task-3820-3821-fidelity/stage7-full-sweep/stage7-full-215/compare/compare_127.png`
 - `output/task-3820-3821-fidelity/stage7-full-sweep/stage7-full-215/overlay/overlay_127.png`
+
+**해소 상태:** Stage 9는 deferred page-start Square 그림의 source `vertical_offset` 이중 적용을
+제거해 frame top을 `130.7px`에서 body top `83.2px`로 복원했다. 이전 형상은 새
+`deferred_square_picture_top_drift` detector가 후보화하고, 수정 후 p127/p156 직접 PDF review와
+focused Rust·Python 회귀는 [Stage 9 visual sweep](../working/task_m100_3820_stage9_visual_sweep.md)에 있다.
 
 ### D-03 — p168 이후의 연쇄 pagination divergence
 
@@ -149,17 +160,11 @@ p170은 `(라) 심혈관계 검사` 본문으로 다시 정렬됐고 rhwp 전체
 
 ## 5. 자동 판정의 한계와 다음 수정 순서
 
-1. **D-03의 최초 divergence를 p168~170에서 분석한다.** p171 이후 46개 flow flag를 개별
+1. **D-03의 최초 잔존 divergence를 최신 218쪽 renderer에서 다시 분석한다.** p171 이후 flow flag를 개별
    해결하지 않는다. 먼저 표/그림 float와 다음 본문 block의 owner·page-break 결정이 PDF와
    갈라지는 최초 지점을 확정한다.
-2. **D-01을 별도 focused fixture로 고친다.** p118→p119의 TopAndBottom 그림 앞 문단 owner를
-   고정해, p119 상단에 기준 PDF와 같은 본문 tail이 남도록 한다.
-3. **p127 false negative를 자동 검출 보강의 acceptance fixture로 삼는다.** 현재의 물리 box
-   overlap/edge-contact만으로는 부족하므로, PDF 대비 본문 행폭·그림 side-wrap 관계의 변화도
-   candidate로 내야 한다. 단, 글꼴 raster 차이를 오류로 과장하지 않도록 text-flow/geometry와
-   결합해야 한다.
-4. 각 수정은 분석 문서 → 코드 → focused PDF review → 동일 215쪽 전수 재실행 순으로 분리한다.
-   page count +4를 전역 강제 break로 상쇄하지 않는다.
+2. 각 수정은 분석 문서 → 코드 → focused PDF review → 동일 215쪽 전수 재실행 순으로 분리한다.
+   page count +3을 전역 강제 break로 상쇄하지 않는다.
 
 ## 6. 해소로 재분류한 과거 항목
 
@@ -170,14 +175,14 @@ p170은 `(라) 심혈관계 검사` 본문으로 다시 정렬됐고 rhwp 전체
 ## 7. 검증 도구 상태
 
 이번 inventory를 생성한 `scripts/visual_sweep.py`와 `tools/fidelity_compare/fidelity_compare.py`는
-이미 p118→p119 owner shift를 상단 float와 연결하는 triage를 갖고 있다. 관련 Python 회귀는 직전
-단계에서 다음으로 확인했다.
+이미 p118→p119 owner shift를 상단 float와 연결하는 triage를 갖고 있고, Stage 9는 deferred Square
+page-top offset drift도 공통 후보로 추가했다. 관련 Python 회귀는 다음으로 확인했다.
 
 ```text
 python3 -m py_compile tools/fidelity_compare/fidelity_compare.py
 python3 -m unittest scripts/tests/test_fidelity_compare.py scripts/tests/test_visual_sweep.py
-# Ran 55 tests ... OK
+# Ran 59 tests ... OK
 ```
 
-그러나 p127 및 p170 같은 false negative가 남아 있으므로, 이 통과는 검출기 구현 회귀 부재를 뜻할
-뿐 이 215쪽 문서의 layout fidelity 보증은 뜻하지 않는다.
+수정 전 p127 geometry의 재발은 후보화하지만, D-03의 잔존 페이지 경계 결함을 포함해 이 통과는
+검출기 구현 회귀 부재를 뜻할 뿐 이 215쪽 문서의 layout fidelity 보증은 뜻하지 않는다.
