@@ -18064,45 +18064,10 @@ impl TypesetEngine {
             // (2572521 pi36: 앵커 11000HU=146.7px == cur_h, 선언 839.8px 로 하단
             // 986px 초과 — 저장 p3 만충 914.7px 실측, 이월 시 7쪽으로 +1). 이
             // 형상은 선언-기준 이월을 건너뛰고 분할 경로로 보낸다.
-            // [#3674] 두 번째 저장-증거 형상: 다음 문단의 저장 vpos 가 이 표 앵커보다
-            // **되감겨** 있고 그 크기가 표 전체보다 작으면, 원본 한글은 표를 이 지점에서
-            // 행 분할해 꼬리만 다음 쪽에 뒀다는 뜻이다 (편람 재저장본 sec10 pi=14:
-            // 앵커 545.5px·다음 문단 376.0px < declared 175.2px 초과 여부와 무관 —
-            // 통짜 이월이면 다음 문단은 표 전체 높이 아래(≥554px)나 새 쪽 상단에서
-            // 시작하고, 앵커 자신도 쪽 상단으로 이동해 이 형상이 성립하지 않는다).
-            // 1×1 그림 표(#874·#2439)는 row_count>1 로 배제. 앵커 정합 허용치는 흐름
-            // 누적 드리프트(호스트 줄간격 ~8.4px×n)를 감안해 기존 16px 보다 넓힌다.
-            const SAVED_REWIND_ANCHOR_FLOW_TOLERANCE_PX: f64 = 48.0;
-            const SAVED_REWIND_ANCHOR_MIN_DEPTH_PX: f64 = 100.0;
-            let saved_next_para_rewind_tail = table.row_count > 1
-                && matches!(
-                    table.page_break,
-                    crate::model::table::TablePageBreak::RowBreak
-                )
-                && para
-                    .line_segs
-                    .iter()
-                    .find(|seg| !is_synthetic_line_seg(seg))
-                    .zip(paragraphs_all.get(para_idx + 1).and_then(|next| {
-                        next.line_segs
-                            .iter()
-                            .find(|seg| !is_synthetic_line_seg(seg))
-                    }))
-                    .is_some_and(|(current, next)| {
-                        // 꼬리 크기는 실측 표 전체(table_total)와 비교한다 — declared
-                        // (최소 셀합)는 실제 높이보다 훨씬 작아 항상 탈락시킨다(실측:
-                        // pi=14 꼬리 376px vs declared 175.2px vs 실높이 554.6px).
-                        next.vertical_pos < current.vertical_pos
-                            && hwpunit_to_px(next.vertical_pos, self.dpi) < table_total
-                    });
             let saved_anchor_splits_here = st.has_stored_line_segs
                 && saved_span.is_some_and(|(top_px, bottom_px)| {
-                    ((top_px - st.current_height).abs() <= 16.0
-                        && bottom_px > available + DECLARED_FLOAT_FIT_TOLERANCE_PX)
-                        || (saved_next_para_rewind_tail
-                            && top_px > SAVED_REWIND_ANCHOR_MIN_DEPTH_PX
-                            && (top_px - st.current_height).abs()
-                                <= SAVED_REWIND_ANCHOR_FLOW_TOLERANCE_PX)
+                    (top_px - st.current_height).abs() <= 16.0
+                        && bottom_px > available + DECLARED_FLOAT_FIT_TOLERANCE_PX
                 });
             if std::env::var("RHWP_DIAG_SCAN").is_ok() {
                 eprintln!(
