@@ -1176,8 +1176,8 @@ function assertFocusedTrace(format, runNumber, trace) {
     `${prefix}: mutation result must precede resumable begin`,
   );
   assert.ok(
-    boundaryBegin.sequence < firstCursorAfterBoundary.sequence,
-    `${prefix}: resumable begin must precede cursor query`,
+    firstCursorAfterBoundary.sequence < boundaryBegin.sequence,
+    `${prefix}: cursor query and input paint must precede async resumable begin`,
   );
 
   const operationDurations = operations.map((event) => event.durationMs);
@@ -1379,7 +1379,10 @@ function assertRawBoundaryTrace(format, kind, trace) {
   const firstCursorQuery = cursorQueries.find((event) => event.sequence > inserts[0].sequence);
   assert.ok(firstCursorQuery, `${prefix}: cursor query after mutation`);
   assert.ok(inserts[0].sequence < begins[0].sequence, `${prefix}: mutation must precede resumable begin`);
-  assert.ok(begins[0].sequence < firstCursorQuery.sequence, `${prefix}: begin must precede cursor query`);
+  assert.ok(
+    firstCursorQuery.sequence < begins[0].sequence,
+    `${prefix}: cursor query and input paint must precede async resumable begin`,
+  );
 }
 
 function assertRawStableTrace(format, kind, trace) {

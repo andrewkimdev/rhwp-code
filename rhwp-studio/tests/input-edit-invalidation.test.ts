@@ -208,7 +208,7 @@ test('deferred pending이 실제로 있을 때만 page-local idle flush를 예�
   );
   assert.match(
     inputHandlerSource,
-    /this\.deferredPaginationRunner\.requestStart\(DOCUMENT_PAGINATION_RESTART_COALESCE_DELAY_MS\);/,
+    /this\.deferredPaginationRunner\.requestStart\(\s*DOCUMENT_PAGINATION_RESTART_COALESCE_DELAY_MS,\s*DOCUMENT_PAGINATION_INITIAL_START_DELAY_MS,\s*DOCUMENT_PAGINATION_POST_FIRST_STEP_DELAY_MS,\s*\);/,
     'cell-flow 경계는 input stack 밖에서 latest-only resumable begin을 요청해야 한다',
   );
 });
@@ -237,8 +237,18 @@ test('document pagination은 작은 문서의 120ms idle과 명시 boundary에�
   );
   assert.match(
     inputHandlerSource,
+    /const DOCUMENT_PAGINATION_INITIAL_START_DELAY_MS = 100;/,
+    '최초 begin은 입력 paint를 위한 고정 100ms timer target을 둔다',
+  );
+  assert.match(
+    inputHandlerSource,
     /const DOCUMENT_PAGINATION_RESTART_COALESCE_DELAY_MS = 200;/,
     'active restart만 마지막 입력 뒤 200ms까지 합친다',
+  );
+  assert.match(
+    inputHandlerSource,
+    /const DOCUMENT_PAGINATION_POST_FIRST_STEP_DELAY_MS = 25;/,
+    '첫 fragment 뒤 후속 step은 25ms settle gap 뒤 실행한다',
   );
   assert.match(
     inputHandlerSource,

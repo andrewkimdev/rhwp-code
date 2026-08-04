@@ -49,8 +49,12 @@ const DRAG_SCROLL_MAX_STEP_PX = 20;
 const PX_TO_RAW_2X = 150;
 const PX_TO_HWPUNIT = 75;
 const DOCUMENT_PAGINATION_IDLE_FLUSH_DELAY_MS = 120;
+// 최초 입력의 paint 기회를 확보하고 반복 입력이 이 추가 예약 지연을 연장하지 않게 한다.
+const DOCUMENT_PAGINATION_INITIAL_START_DELAY_MS = 100;
 // #3794: 250ms cadence의 obsolete work를 줄이되 최신 job 완료의 10% 회귀 상한 안에 둔다.
 const DOCUMENT_PAGINATION_RESTART_COALESCE_DELAY_MS = 200;
+// 첫 fragment 하나 뒤 다음 입력과 후속 step이 겹치지 않게 하는 짧은 settle gap.
+const DOCUMENT_PAGINATION_POST_FIRST_STEP_DELAY_MS = 25;
 /**
  * [#3412] idle 자동 flush 대상 문서 크기 상한.
  *
@@ -2555,8 +2559,12 @@ export class InputHandler {
     this.deferredPaginationPending = true;
     if (!effects.flowChanged && !replacesPendingJob) return false;
 
-    // 최초 admission은 다음 task에서 바로 확인하고 active restart만 마지막 입력까지 합친다.
-    this.deferredPaginationRunner.requestStart(DOCUMENT_PAGINATION_RESTART_COALESCE_DELAY_MS);
+    // 최초 admission은 고정 timer target을 유지하고, active restart만 마지막 입력까지 합친다.
+    this.deferredPaginationRunner.requestStart(
+      DOCUMENT_PAGINATION_RESTART_COALESCE_DELAY_MS,
+      DOCUMENT_PAGINATION_INITIAL_START_DELAY_MS,
+      DOCUMENT_PAGINATION_POST_FIRST_STEP_DELAY_MS,
+    );
     return true;
   }
 

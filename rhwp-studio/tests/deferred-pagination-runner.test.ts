@@ -80,6 +80,12 @@ class ManualTasks {
     assert.ok(entry, 'scheduled continuation task');
     return entry[1];
   }
+
+  firstId() {
+    const entry = this.tasks.entries().next().value;
+    assert.ok(entry, 'scheduled continuation task');
+    return entry[0];
+  }
 }
 
 class FakeClient {
@@ -125,23 +131,26 @@ test('최초 begin은 input stack 밖에서 실행하고 이후 한 macrotask당
     (task) => tasks.cancel(task),
   );
 
-  runner.requestStart(200);
+  runner.requestStart(200, 100, 25);
   assert.equal(runner.isActive(), false);
   assert.equal(runner.hasPendingWork(), true);
   assert.deepEqual(client.calls, [['cancel']], 'begin must not run in the input call stack');
-  assert.equal(tasks.first().delayMs, 0, 'first admission runs in the next task without debounce');
+  assert.equal(tasks.first().delayMs, 100, 'first admission has a fixed paint timer target');
 
   tasks.runOne();
   assert.deepEqual(client.calls.at(-1), ['begin', 1, 1]);
   assert.equal(runner.isActive(), true);
+  assert.equal(tasks.first().delayMs, 0, 'first fragment step starts on the regular task cadence');
 
   tasks.runOne();
   assert.deepEqual(client.calls.at(-1), ['step', 1]);
   assert.equal(runner.isActive(), true);
   assert.equal(completed.length, 0);
+  assert.equal(tasks.first().delayMs, 25, 'the first fragment yields through the settle gap');
 
   tasks.runOne();
   assert.equal(runner.isActive(), true);
+  assert.equal(tasks.first().delayMs, 0, 'later fragment steps keep the regular task cadence');
   tasks.runOne();
   assert.equal(runner.isActive(), false);
   assert.equal(completed.length, 1);
@@ -169,7 +178,7 @@ test('공개 페이지 수는 async begin과 pending step 동안 유지되고 co
     (task) => tasks.cancel(task),
   );
 
-  runner.requestStart(200);
+  runner.requestStart(200, 100, 20);
   assert.equal(publicPageCount, 115);
   assert.deepEqual(published, []);
 
@@ -186,7 +195,7 @@ test('공개 페이지 수는 async begin과 pending step 동안 유지되고 co
   assert.deepEqual(published, [116], 'final page count must publish once');
 });
 
-test('begin 전 반복 요청은 pending task 하나와 최신 revision begin 하나만 남긴다', () => {
+test('begin 전 반복 요청은 최초 timer target을 유지하고 최신 revision begin 하나만 남긴다', () => {
   const tasks = new ManualTasks();
   const client = new FakeClient([result('complete', 2, 1)]);
   const completed = [];
@@ -199,17 +208,19 @@ test('begin 전 반복 요청은 pending task 하나와 최신 revision begin �
     (task) => tasks.cancel(task),
   );
 
-  runner.requestStart(200);
+  runner.requestStart(200, 100, 20);
   assert.equal(tasks.tasks.size, 1);
-  assert.equal(tasks.first().delayMs, 0);
+  assert.equal(tasks.first().delayMs, 100);
+  const initialTaskId = tasks.firstId();
   client.beginRevision = 2;
-  runner.requestStart(200);
-  assert.equal(tasks.tasks.size, 1, 'old scheduled begin must be replaced');
-  assert.equal(tasks.first().delayMs, 0, 'unproven admission must not inherit restart debounce');
+  runner.requestStart(200, 100, 20);
+  assert.equal(tasks.tasks.size, 1, 'initial timer must keep one scheduled begin');
+  assert.equal(tasks.firstId(), initialTaskId, 'repeated input must not move the initial timer');
+  assert.equal(tasks.first().delayMs, 100, 'unproven admission keeps the fixed initial timer target');
   assert.equal(client.calls.some(([name]) => name === 'begin'), false);
   assert.deepEqual(
     client.calls.filter(([name]) => name === 'cancel'),
-    [['cancel'], ['cancel']],
+    [['cancel']],
   );
 
   tasks.runOne();
@@ -232,16 +243,18 @@ test('active restart와 그 후 요청은 old step을 버리고 coalescing windo
     (task) => tasks.cancel(task),
   );
 
-  runner.requestStart(200);
+  runner.requestStart(200, 100, 20);
   tasks.runOne();
   assert.equal(runner.isActive(), true);
   const staleStep = tasks.first().callback;
 
   client.beginRevision = 2;
-  runner.requestStart(200);
+  runner.requestStart(200, 100, 20);
   assert.equal(runner.isActive(), false);
   assert.equal(tasks.tasks.size, 1);
   assert.equal(tasks.first().delayMs, 200);
+  const staleRestartBegin = tasks.first().callback;
+  const firstRestartTaskId = tasks.firstId();
   staleStep();
   assert.equal(
     client.calls.some(([name]) => name === 'step'),
@@ -250,14 +263,59 @@ test('active restart와 그 후 요청은 old step을 버리고 coalescing windo
   );
 
   client.beginRevision = 3;
-  runner.requestStart(200);
+  runner.requestStart(200, 100, 20);
   assert.equal(tasks.tasks.size, 1);
+  assert.notEqual(tasks.firstId(), firstRestartTaskId, 'restart window must move to the latest input');
   assert.equal(tasks.first().delayMs, 200, 'latest input must restart the coalescing window');
+  staleRestartBegin();
+  assert.equal(
+    client.calls.some(([name, , revision]) => name === 'begin' && revision === 2),
+    false,
+    'a superseded restart callback must not begin its revision',
+  );
   tasks.runOne();
   assert.deepEqual(client.calls.at(-1), ['begin', 1, 3]);
   tasks.runOne();
   assert.equal(completed.length, 1);
   assert.equal(completed[0].revision, 3);
+});
+
+test('post-first settle task는 restart 뒤 core step을 실행할 수 없다', () => {
+  const tasks = new ManualTasks();
+  const client = new FakeClient([
+    result('pending', 1, 1),
+    result('complete', 2, 1),
+  ]);
+  const completed = [];
+  const runner = new DeferredPaginationRunner(
+    client,
+    (value) => completed.push(value),
+    () => assert.fail('fallback must not run'),
+    1,
+    (callback, delayMs) => tasks.schedule(callback, delayMs),
+    (task) => tasks.cancel(task),
+  );
+
+  runner.requestStart(200, 100, 25);
+  tasks.runOne();
+  tasks.runOne();
+  assert.equal(tasks.first().delayMs, 25);
+  const staleSettledStep = tasks.first().callback;
+
+  client.beginRevision = 2;
+  runner.requestStart(200, 100, 25);
+  assert.equal(tasks.first().delayMs, 200);
+  staleSettledStep();
+  assert.equal(
+    client.calls.filter(([name]) => name === 'step').length,
+    1,
+    'superseded settle callback must not enter the old core job',
+  );
+
+  tasks.runOne();
+  tasks.runOne();
+  assert.equal(completed.length, 1);
+  assert.equal(completed[0].revision, 2);
 });
 
 test('cancel은 queued begin과 이미 dequeue된 stale callback을 모두 무효화한다', () => {
@@ -274,7 +332,7 @@ test('cancel은 queued begin과 이미 dequeue된 stale callback을 모두 무�
     (task) => tasks.cancel(task),
   );
 
-  runner.requestStart(200);
+  runner.requestStart(200, 100);
   const staleBegin = tasks.first().callback;
   runner.cancel();
   assert.equal(runner.hasPendingWork(), false);
@@ -302,7 +360,7 @@ test('unsupported async begin은 step 없이 fallback callback으로 전달한�
     (task) => tasks.cancel(task),
   );
 
-  runner.requestStart(200);
+  runner.requestStart(200, 100);
   assert.equal(fallbacks.length, 0, 'fallback must not run in the input call stack');
   tasks.runOne();
   assert.equal(runner.isActive(), false);
@@ -335,7 +393,7 @@ test('begin과 step 예외는 각각 fallback을 정확히 한 번 게시한다'
       (task) => tasks.cancel(task),
     );
 
-    runner.requestStart(200);
+    runner.requestStart(200, 100);
     tasks.runOne();
     if (failure === 'step') tasks.runOne();
     assert.equal(fallbacks.length, 1, `${failure} fallback count`);
