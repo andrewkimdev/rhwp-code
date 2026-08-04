@@ -117,6 +117,10 @@ CI가 끝난 뒤 또는 contributor가 새 commit을 push한 뒤에는 head SHA,
 `devel` 병합 또는 update branch를 포함하면 로컬 `devel`과 visibility review branch도 같은 기준선으로
 갱신하고, PR 고유 diff와 재실행할 검증 범위를 다시 판정한다. 상세 절차는
 [다수 PR과 update branch](pr_review/multi_pr_update_branch.md)의 "2.6 검토 중 기준선 갱신"을 따른다.
+collaborator가 contributor PR head에 review-only 기록을 직접 push할 예정이면, 최종 archive review·오늘할일·
+증적 commit은 새 head를 fetch하고 reviewer 기록을 그 위의 단순 trailing commit으로 정렬한 뒤에만 만든다.
+기존 reviewer 기록 위로 새 contributor head를 일반 merge하면 fast-pass의 안전한 current-base merge 조건을
+충족하지 못해 full CI로 분기한다.
 
 ### 3.3 순차로 유지할 일
 

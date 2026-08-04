@@ -41,6 +41,12 @@ contributor code PR의 뒤에 review 문서·오늘할일·허용된 신규 기�
 6. push 뒤 최신 head의 preflight와 branch protection이 요구하는 Build & Test aggregate를 확인한다.
    heavy worker가 skipped인 것은 정상이나 aggregate가 pending 또는 failing이면 merge하지 않는다.
 
+trailing range에 reviewer가 만든 일반 merge commit이 있으면 fast-pass는 이를 재사용하지 않는다. current
+`devel`을 직접 parent로 둔 review-only update merge만 제한적으로 허용하며, 그 외 merge는 code 변경을 숨길 수
+있다. contributor가 review 도중 source를 갱신한 경우에는 새 source를 기존 reviewer 기록에 merge하지 말고
+[2.6.1 외부 PR review 기록의 source head 정렬](multi_pr_update_branch.md#261-외부-pr-review-기록의-source-head-정렬)을
+적용해 reviewer 기록만 새 source 위로 replay한다.
+
 local Cargo 성공만으로 candidate의 GitHub Actions를 대체하지 않는다. current base 불일치, 가장 최근 완료
 candidate check의 failed, 허용되지 않은 merge 형태, 허용 경로 밖 변경은 full CI fallback이다. 후보가 전부
 missing 또는 진행 중이면 green 검증을 찾지 못한 것이므로 역시 full CI를 실행한다.

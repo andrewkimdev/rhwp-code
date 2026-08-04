@@ -3717,6 +3717,12 @@ impl LayoutEngine {
                         } else {
                             inner_area.y
                         };
+                        // [#3637] 중첩 표는 부모 셀 안에서 시작해야 한다. 앞 텍스트가 셀
+                        // 밖으로 밀린 `para_y` 를 그대로 쓰면 컨테이너가 통째로 셀 아래에
+                        // 놓여 쪽 밖으로 나간다(80550 29쪽: 셀 310~889 인데 중첩2가
+                        // 889~1193). PR #3666 이 문단에 건 상한과 같은 계열의 한 단계 깊은
+                        // 경로다.
+                        let nested_y = nested_y.min(inner_area.y + inner_area.height);
                         let nested_ctx = cell_context.as_ref().map(|ctx| {
                             let mut new_ctx = ctx.clone();
                             new_ctx.path.push(CellPathEntry {
