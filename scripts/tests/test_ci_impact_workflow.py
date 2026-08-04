@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import unittest
 from pathlib import Path
 
@@ -8,34 +9,44 @@ WORKFLOW_PATH = Path(__file__).resolve().parents[2] / ".github/workflows/ci.yml"
 WORKER_MARKER = "  # [#2393] 기본 테스트 병렬화"
 
 
-class CiImpactShadowWorkflowTests(unittest.TestCase):
+class CiImpactWorkflowTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
         cls.preflight, cls.workers = cls.workflow.split(WORKER_MARKER, maxsplit=1)
 
-    def test_preflight_exposes_every_shadow_axis_with_fail_closed_defaults(self) -> None:
+    def _step(self, name: str, source: str | None = None) -> str:
+        workflow = source or self.workflow
+        step = workflow.split(f"      - name: {name}", maxsplit=1)[1]
+        return step.split("\n      - name:", maxsplit=1)[0]
+
+    def _job(self, name: str) -> str:
+        match = re.search(
+            rf"(?ms)^  {re.escape(name)}:\n.*?(?=^  [A-Za-z0-9_-]+:\n|\Z)",
+            self.workflow,
+        )
+        self.assertIsNotNone(match, name)
+        return match.group(0) if match else ""
+
+    def test_preflight_exposes_every_axis_with_fail_closed_defaults(self) -> None:
         expected_defaults = {
-            "shadow_rust_required": "'true'",
-            "shadow_frontend_mode": "'package'",
-            "shadow_render_required": "'true'",
-            "shadow_native_skia_required": "'true'",
-            "shadow_codeql_languages": "'javascript-typescript,python,rust'",
-            "shadow_classification_status": "'full'",
-            "shadow_classifier_version": "'unavailable'",
-            "shadow_reason": "'fail-closed:shadow-unavailable'",
-            "shadow_authority": "'unavailable-advisory'",
+            "rust_required": "'true'",
+            "frontend_mode": "'package'",
+            "render_required": "'true'",
+            "native_skia_required": "'true'",
+            "codeql_languages": "'javascript-typescript,python,rust'",
+            "classification_status": "'full'",
+            "classifier_version": "'unavailable'",
+            "impact_reason": "'fail-closed:impact-unavailable'",
+            "impact_authority": "'unavailable'",
         }
         for output, default in expected_defaults.items():
             with self.subTest(output=output):
                 self.assertIn(f"      {output}:", self.preflight)
                 self.assertIn(default, self.preflight)
 
-    def test_shadow_classifier_uses_pr_base_sha_without_checkout_credentials(self) -> None:
-        step_name = "Check out trusted CI impact classifier"
-        self.assertIn(step_name, self.preflight)
-        step = self.preflight.split(f"      - name: {step_name}", maxsplit=1)[1]
-        step = step.split("\n      - name:", maxsplit=1)[0]
+    def test_classifier_uses_pr_base_sha_without_checkout_credentials(self) -> None:
+        step = self._step("Check out trusted CI impact classifier", self.preflight)
         self.assertIn(
             "ref: ${{ github.event_name == 'pull_request' "
             "&& github.event.pull_request.base.sha || github.sha }}",
@@ -45,16 +56,10 @@ class CiImpactShadowWorkflowTests(unittest.TestCase):
         self.assertIn("sparse-checkout: scripts/ci-impact-classifier.cjs", step)
         self.assertIn("sparse-checkout-cone-mode: false", step)
         self.assertIn("id: checkout-impact-classifier", step)
-        self.assertIn("Classify CI impact in shadow mode", self.preflight)
-        self.assertIn("Advisory only: existing worker conditions are unchanged", self.preflight)
-        self.assertIn("Pull requests classify with the base SHA classifier", self.preflight)
-        self.assertIn(
-            "CLASSIFIER_CHECKOUT_OUTCOME: "
-            "${{ steps.checkout-impact-classifier.outcome }}",
-            self.preflight,
-        )
-        self.assertIn("pr-base-trusted-shadow", self.preflight)
-        self.assertNotIn("pr-merge-advisory", self.preflight)
+        self.assertIn("Classify CI impact", self.preflight)
+        self.assertIn("Stage 3 activates frontend_mode and render_required", self.preflight)
+        self.assertIn("pr-base-trusted", self.preflight)
+        self.assertNotIn("pr-base-trusted-shadow", self.preflight)
 
     def test_missing_classifier_checkout_cannot_claim_trusted_authority(self) -> None:
         self.assertIn(
@@ -72,54 +77,86 @@ class CiImpactShadowWorkflowTests(unittest.TestCase):
         )
         self.assertIn(
             "const authority = !checkoutSucceeded\n"
-            "              ? 'unavailable-advisory'",
+            "              ? 'unavailable'",
             self.preflight,
         )
 
-    def test_review_only_fast_pass_does_not_pay_shadow_checkout_cost(self) -> None:
+    def test_review_only_fast_pass_does_not_pay_classifier_cost(self) -> None:
         for step_name in (
             "Check out trusted CI impact classifier",
-            "Collect shadow CI impact input",
-            "Classify CI impact in shadow mode",
+            "Collect CI impact input",
+            "Classify CI impact",
         ):
             with self.subTest(step=step_name):
-                step = self.preflight.split(f"      - name: {step_name}", maxsplit=1)[1]
-                step = step.split("\n      - name:", maxsplit=1)[0]
                 self.assertIn(
                     "if: ${{ steps.detect.outputs.fast_pass != 'true' }}",
-                    step,
+                    self._step(step_name, self.preflight),
                 )
 
-    def test_existing_worker_conditions_do_not_consume_shadow_outputs(self) -> None:
-        self.assertNotIn("shadow_", self.workers)
-        for reference in (
-            "needs.preflight.outputs.shadow_",
-            "needs.preflight.outputs['shadow_",
-            'needs.preflight.outputs["shadow_',
-        ):
-            with self.subTest(reference=reference):
-                self.assertNotIn(reference, self.workflow)
+    def test_ci_full_label_and_label_events_force_a_same_sha_full_lane(self) -> None:
         self.assertIn(
-            "needs.preflight.outputs.frontend_required == 'true'",
-            self.workers,
+            "types: [opened, reopened, synchronize, labeled, unlabeled]",
+            self.workflow,
         )
-        self.assertIn(
-            "needs.preflight.outputs.frontend_required != 'true'",
-            self.workers,
-        )
-        self.assertIn("needs.preflight.outputs.fast_pass != 'true'", self.workers)
+        collect = self._step("Collect CI impact input", self.preflight)
+        self.assertIn("label.name === 'ci:full'", collect)
+        self.assertIn("? 'label-ci-full' : ''", collect)
 
-    def test_shadow_failures_cannot_fail_preflight(self) -> None:
+    def test_stage3_consumes_only_frontend_axis(self) -> None:
+        self.assertIn("needs.preflight.outputs.frontend_mode", self.workers)
+        for deferred_axis in (
+            "needs.preflight.outputs.rust_required",
+            "needs.preflight.outputs.native_skia_required",
+            "needs.preflight.outputs.codeql_languages",
+        ):
+            with self.subTest(axis=deferred_axis):
+                self.assertNotIn(deferred_axis, self.workers)
+
+    def test_unit_and_package_jobs_are_mutually_exclusive(self) -> None:
+        unit = self._job("frontend-unit-gates")
+        package = self._job("frontend-package-gates")
+        self.assertIn("needs.preflight.outputs.frontend_mode == 'unit'", unit)
+        self.assertIn("npx tsc --project tsconfig.ci-unit.json --noEmit", unit)
+        self.assertIn("npm --prefix rhwp-studio run test", unit)
+        self.assertNotIn("wasm-pack build", unit)
+        self.assertIn("needs.preflight.outputs.frontend_mode == 'package'", package)
+        self.assertIn("wasm-pack build --target web --dev", package)
+        self.assertIn("npm --prefix rhwp-studio run test", package)
+        self.assertIn("npm --prefix rhwp-studio run build", package)
+
+    def test_rust_workers_require_the_frontend_truth_table(self) -> None:
+        for job_name in (
+            "build-test-archive-slow",
+            "build-test-archive-a",
+            "build-test-archive-b",
+            "native-skia-tests",
+        ):
+            with self.subTest(job=job_name):
+                job = self._job(job_name)
+                self.assertIn("frontend-unit-gates", job)
+                self.assertIn("frontend-package-gates", job)
+                self.assertIn("frontend_mode == 'none'", job)
+                self.assertIn("frontend_mode == 'unit'", job)
+                self.assertIn("frontend_mode == 'package'", job)
+
+    def test_aggregate_validates_expected_success_and_skipped_states(self) -> None:
+        aggregate = self._job("build-and-test")
+        self.assertIn("- frontend-unit-gates", aggregate)
+        self.assertIn("- frontend-package-gates", aggregate)
+        self.assertIn("Frontend none lane expected skipped/skipped", aggregate)
+        self.assertIn("Frontend unit lane expected success/skipped", aggregate)
+        self.assertIn("Frontend package lane expected skipped/success", aggregate)
+        self.assertIn("Unknown frontend mode", aggregate)
+
+    def test_classifier_failures_remain_fail_closed_without_failing_preflight(self) -> None:
         for step_name in (
             "Check out trusted CI impact classifier",
-            "Collect shadow CI impact input",
-            "Classify CI impact in shadow mode",
-            "Summarize shadow CI impact classification",
+            "Collect CI impact input",
+            "Classify CI impact",
+            "Summarize CI impact classification",
         ):
             with self.subTest(step=step_name):
-                step = self.preflight.split(f"      - name: {step_name}", maxsplit=1)[1]
-                step = step.split("\n      - name:", maxsplit=1)[0]
-                self.assertIn("continue-on-error: true", step)
+                self.assertIn("continue-on-error: true", self._step(step_name, self.preflight))
 
 
 if __name__ == "__main__":

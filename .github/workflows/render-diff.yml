@@ -3,6 +3,7 @@ name: Render Diff
 on:
   pull_request:
     branches: [main, devel]
+    types: [opened, reopened, synchronize, labeled, unlabeled]
     paths:
       - 'Cargo.toml'
       - 'Cargo.lock'
@@ -16,6 +17,7 @@ on:
       - 'ttfs/**'
       - 'scripts/renderer_baseline.py'
       - 'scripts/renderer_baseline_manifest.json'
+      - 'scripts/ci-impact-classifier.cjs'
       - 'scripts/generate_font_glyph_payload_fixture.py'
       - 'scripts/generate_exact_face_collection_fixture.py'
       - 'scripts/generate_font_native_hwpx_fixture.py'
@@ -72,6 +74,8 @@ jobs:
       fast_pass: ${{ steps.detect.outputs.fast_pass || 'false' }}
       reason: ${{ steps.detect.outputs.reason || 'preflight-unavailable' }}
       candidate_sha: ${{ steps.detect.outputs.candidate_sha || '' }}
+      render_required: ${{ steps.impact.outputs.render_required || 'true' }}
+      impact_reason: ${{ steps.impact.outputs.reason || 'fail-closed:impact-unavailable' }}
 
     steps:
       - name: Detect review-only fast pass
@@ -332,12 +336,99 @@ jobs:
               setResult(false, 'preflight-error');
             }
 
+      # The workflow keeps the broad rhwp-studio/** trigger so the trusted base classifier,
+      # rather than a second path heuristic, decides whether the heavy Canvas job is needed.
+      - name: Check out trusted CI impact classifier
+        id: checkout-impact-classifier
+        if: ${{ steps.detect.outputs.fast_pass != 'true' }}
+        continue-on-error: true
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.sha }}
+          persist-credentials: false
+          sparse-checkout: scripts/ci-impact-classifier.cjs
+          sparse-checkout-cone-mode: false
+
+      - name: Collect Render Diff impact input
+        id: collect-impact
+        if: ${{ steps.detect.outputs.fast_pass != 'true' }}
+        continue-on-error: true
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          retries: 3
+          script: |
+            const fs = require('node:fs');
+            const path = require('node:path');
+            const inputPath = path.join(
+              process.env.GITHUB_WORKSPACE || process.cwd(),
+              '.render-diff-impact-input.json',
+            );
+
+            function writeInput(input) {
+              fs.writeFileSync(inputPath, `${JSON.stringify(input)}\n`, 'utf8');
+            }
+
+            try {
+              if (context.eventName !== 'pull_request') {
+                writeInput({
+                  eventName: context.eventName,
+                  files: [],
+                  forceFullReason: 'manual-or-unsupported-event',
+                });
+                return;
+              }
+              const files = await github.paginate(github.rest.pulls.listFiles, {
+                ...context.repo,
+                pull_number: context.payload.pull_request.number,
+                per_page: 100,
+              });
+              writeInput({
+                eventName: context.eventName,
+                files: files.map((file) => ({
+                  filename: file.filename,
+                  previous_filename: file.previous_filename || '',
+                  status: file.status || 'modified',
+                })),
+                forceFullReason: (context.payload.pull_request.labels || []).some(
+                  (label) => label.name === 'ci:full',
+                ) ? 'label-ci-full' : '',
+              });
+            } catch (error) {
+              core.warning(`Render Diff impact collection failed; running full. ${error.message}`);
+              writeInput({
+                eventName: context.eventName,
+                files: [],
+                forceFullReason: 'collection-error',
+              });
+            }
+
+      - name: Classify Render Diff impact
+        id: impact
+        if: ${{ steps.detect.outputs.fast_pass != 'true' }}
+        continue-on-error: true
+        run: >-
+          node scripts/ci-impact-classifier.cjs
+          --input .render-diff-impact-input.json
+          --github-output "$GITHUB_OUTPUT"
+
+      - name: Summarize Render Diff impact
+        if: ${{ always() }}
+        env:
+          RENDER_REQUIRED: ${{ steps.impact.outputs.render_required || 'true' }}
+          IMPACT_REASON: ${{ steps.impact.outputs.reason || 'fail-closed:impact-unavailable' }}
+        run: |
+          {
+            echo '### Render Diff impact'
+            printf -- '- render_required: %s\n' "${RENDER_REQUIRED}"
+            printf -- '- reason: %s\n' "${IMPACT_REASON}"
+          } >> "${GITHUB_STEP_SUMMARY}"
+
   canvas-visual-diff:
     name: Canvas visual diff
     runs-on: ubuntu-latest
     timeout-minutes: 45
     needs: preflight
-    if: ${{ always() && needs.preflight.outputs.fast_pass != 'true' }}
+    if: ${{ always() && needs.preflight.outputs.fast_pass != 'true' && needs.preflight.outputs.render_required == 'true' }}
     permissions:
       contents: read
     env:
@@ -410,7 +501,7 @@ jobs:
       - name: Install Chromium
         working-directory: rhwp-studio
         run: |
-          browser_path=$(npx @puppeteer/browsers install chromium@${RHWP_CHROMIUM_BUILD_ID} --path .cache/puppeteer --format '{{path}}' | tail -n 1)
+          browser_path=$(npx @puppeteer/browsers install chromium@"${RHWP_CHROMIUM_BUILD_ID}" --path .cache/puppeteer --format '{{path}}' | tail -n 1)
           browser_path=$(realpath "$browser_path")
           echo "CHROME_PATH=$browser_path" >> "$GITHUB_ENV"
 

@@ -4,7 +4,7 @@
 - **수행계획서**: `mydocs/plans/task_m100_3790.md`
 - **브랜치**: Stage 1 `codex/issue-3790-ci-impact-shadow`, Stage 2·2.5
   `codex/issue-3790-shadow-observation`, Stage 3 `codex/issue-3790-stage3-frontend`
-- **절차 상태**: Stage 2.5 merge 완료, Stage 2.6 enforcement 분리 결정 및 Stage 3 착수
+- **절차 상태**: Stage 2.5 merge 완료, Stage 2.6 enforcement 분리 결정 및 Stage 3 로컬 구현 완료
 
 ## Stage 1 — shadow classifier
 
@@ -68,7 +68,8 @@ policy를 미채택하기로 결정할 때까지 보존한다. 이후 재사용�
 
 ## Stage 3 — frontend unit/package/render 활성화
 
-1. `unit`은 Studio 전체 `src`의 `tsc --noEmit`과 전체 Studio unit test를 실행한다.
+1. `unit`은 Studio 전체 `src`의 `tsc --noEmit`과 전체 Studio unit test를 실행한다. fresh WASM build는
+   생략하며 CI 전용 tsconfig가 `@wasm/rhwp.js`만 최소 stub으로 치환한다.
 2. `package`는 `unit` 계약에 Vite·extension·package build를 추가한다.
 3. Render Diff의 Canvas visual diff와 CanvasKit readiness가 실제로 소비하는 경로를 각각 도출한다.
    영향축을 분리하지 않으면 두 gate 의존성의 보수적 합집합만 `render_required`에 연결한다.
@@ -80,6 +81,8 @@ policy를 미채택하기로 결정할 때까지 보존한다. 이후 재사용�
    두 번 실행할 수 있게 하고, canary에서는 full 완료 뒤 selective를 실행한다.
 8. 작성자 association은 선택 실행 조건으로 사용하지 않는다. 외부 fork의 정상 frontend-only PR도 같은
    영향축을 사용하며, workflow 변경은 author와 무관하게 full이다.
+9. WASM binding을 직접 소비하는 `src/core/**`, `src/embed/**`, `src/main.ts`, `public/**`, `src/hwpctl/**`은
+   package lane으로 승격한다. CI 전용 tsconfig·stub 자체 변경도 full로 닫는다.
 
 ## Stage 4 — Rust·Native Skia 조건화
 
@@ -112,4 +115,5 @@ git diff --check
 ```
 
 Stage 1 검증 결과는 `mydocs/working/task_m100_3790_stage1.md`, Stage 2·2.5 결과는
-`mydocs/working/task_m100_3790_stage2.md`에 명령과 종료 상태를 기록한다.
+`mydocs/working/task_m100_3790_stage2.md`, Stage 3 결과는
+`mydocs/working/task_m100_3790_stage3.md`에 명령과 종료 상태를 기록한다.
