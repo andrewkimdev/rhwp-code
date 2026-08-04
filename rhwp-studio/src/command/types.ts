@@ -83,6 +83,8 @@ export interface CommandServices {
   getInputHandler: () => InputHandler | null;
   /** ViewportManager 접근 (문서 미로드 시 null) */
   getViewportManager: () => ViewportManager | null;
+  /** 지정한 전역 쪽을 화면에 표시한다. 성공하면 true. */
+  gotoPage: (globalPage: number) => boolean;
   /** 에디터 편집 모드 변경 */
   setEditMode: (mode: EditorEditMode) => void;
 }

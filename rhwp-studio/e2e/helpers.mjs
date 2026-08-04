@@ -35,6 +35,7 @@ function resolveChromePath() {
     '/usr/bin/google-chrome',
     '/usr/bin/chromium-browser',
     '/usr/bin/chromium',
+    '/snap/bin/chromium',
   ].find((candidate) => existsSync(candidate));
   if (systemChrome) return systemChrome;
 
