@@ -136,10 +136,11 @@ rhwp-agent pii-scan <파일> [--json] [--kind ssn,card,phone,email|all]
 rhwp-agent chunk-plan <파일> --max-chars <N> [--json]
 ```
 
-쪽별 문자 수로 연속 구간을 예산까지 탐욕으로 묶는다. 각 구간에 실행 힌트
-(`rhwp digest <파일> --pages a..b --json`)가 붙는다. 예산보다 큰 단일 쪽은 제
-구간이 되고 `oversize` 로 표시한다. 봉투에 문서 본문이 한 글자도 실리지 않는다
-(`untrustedContent: false` 가 계약이고 테스트가 고정한다).
+쪽별 문자 수로 연속 구간을 예산까지 탐욕으로 묶는다. 각 구간에 다음 실행을 위한
+`command.program`/`command.args` 구조화된 argv 힌트가 붙는다. 셸 문자열을 만들지
+않으므로 경로의 공백·인용부호·메타문자가 다른 인자로 해석되지 않는다. 예산보다 큰
+단일 쪽은 제 구간이 되고 `oversize` 로 표시한다. 봉투에 문서 본문이 한 글자도
+실리지 않는다(`untrustedContent: false` 가 계약이고 테스트가 고정한다).
 
 ### evidence — 전/후 증빙 번들
 
@@ -170,5 +171,6 @@ rhwp-agent evidence 계약서.hwp 계약서-수정.hwp -o 증빙.md
 rhwp-agent pii-scan 보도자료.hwp && echo "배포 가능"
 
 # 4) 큰 문서 요약을 예산 안에서
-rhwp-agent chunk-plan 백서.hwp --max-chars 20000 --json | jq -r '.chunks[].run'
+rhwp-agent chunk-plan 백서.hwp --max-chars 20000 --json \
+  | jq -c '.chunks[].command'
 ```

@@ -24,8 +24,7 @@ fn repo(rel: &str) -> PathBuf {
 
 /// nextest archive가 런타임에 주입하는 binary 경로를 우선한다(#3289).
 fn rhwp_bin() -> String {
-    std::env::var("CARGO_BIN_EXE_rhwp")
-        .unwrap_or_else(|_| env!("CARGO_BIN_EXE_rhwp").to_string())
+    std::env::var("CARGO_BIN_EXE_rhwp").unwrap_or_else(|_| env!("CARGO_BIN_EXE_rhwp").to_string())
 }
 
 fn export(sample: &str, out: &Path, flags: &[&str]) -> Output {

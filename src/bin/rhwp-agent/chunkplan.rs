@@ -3,8 +3,9 @@
 //! 큰 문서를 한 번에 못 싣는 에이전트는 지금 "일단 digest 를 불러 보고, 넘치면
 //! 쪼개서 다시" 식으로 시행착오한다. 이 명령은 쪽별 문자 수만으로 **실행 전에**
 //! 연속 쪽 구간 계획을 준다. 실행 수단은 기존 명령이다: `rhwp digest <파일>
-//! --pages a..b`. 봉투에는 문서 텍스트가 한 글자도 실리지 않는다(숫자만) —
-//! 계획 단계는 안전한 봉투로 두는 것이 요점이다.
+//! --pages a..b`. 실행 힌트는 셸 문자열이 아닌 구조화된 argv 로 싣고, 봉투에는
+//! 문서 텍스트가 한 글자도 실리지 않는다(숫자만) — 계획 단계는 안전한 봉투로
+//! 두는 것이 요점이다.
 
 use crate::envelope::{
     envelope, load_core, page_texts, print_json, read_file, EXIT_OK, EXIT_RUNTIME, EXIT_USAGE,
@@ -145,7 +146,19 @@ pub fn run(args: &[String]) -> i32 {
                     "pageTo": c.to,
                     "chars": c.chars,
                     "oversize": c.oversize,
-                    "run": format!("rhwp digest {path} --pages {}..{} --json", c.from, c.to),
+                    // 경로를 셸 문자열에 합치지 않는다. 소비자는 program/args 를
+                    // 그대로 process argv 로 넘기므로 공백·인용부호·메타문자가
+                    // 있어도 다른 인자로 해석될 여지가 없다.
+                    "command": {
+                        "program": "rhwp",
+                        "args": [
+                            "digest",
+                            path,
+                            "--pages",
+                            format!("{}..{}", c.from, c.to),
+                            "--json",
+                        ],
+                    },
                 })
             })
             .collect();
@@ -158,7 +171,8 @@ pub fn run(args: &[String]) -> i32 {
             "oversizeCount": oversize_count,
             "chunks": items,
         });
-        // 숫자·경로·실행 힌트뿐 — 문서 본문이 실리지 않는 안전한 봉투다.
+        // 숫자·호출자가 지정한 경로·구조화된 실행 힌트뿐 — 문서 본문이 실리지
+        // 않는 안전한 봉투다.
         print_json(&envelope("chunk-plan", payload, &[]));
     } else {
         crate::outln!("rhwp-agent chunk-plan — {path}");

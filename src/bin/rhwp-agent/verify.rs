@@ -102,12 +102,16 @@ pub fn run(args: &[String]) -> i32 {
             }
             "--expect-table-count" => parse_u64(args, i, flag).map(|n| Some(Expect::TableCount(n))),
             "--expect-min-tables" => parse_u64(args, i, flag).map(|n| Some(Expect::MinTables(n))),
-            "--expect-field" => parse_text(args, i, flag).map(|v| {
+            "--expect-field" => parse_text(args, i, flag).and_then(|v| {
                 let (name, value) = match v.split_once('=') {
                     Some((n, val)) => (n.to_string(), Some(val.to_string())),
                     None => (v, None),
                 };
-                Some(Expect::Field(name, value))
+                if name.is_empty() {
+                    Err("--expect-field 이름은 비어 있을 수 없습니다.".to_string())
+                } else {
+                    Ok(Some(Expect::Field(name, value)))
+                }
             }),
             other if other.starts_with('-') => Err(format!("알 수 없는 옵션입니다 - {other}")),
             positional => {

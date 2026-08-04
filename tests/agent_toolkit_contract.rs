@@ -393,6 +393,9 @@ fn verify_pass_fail_and_usage_contracts() {
     // 포맷 토큰 오타도 조용히 넘어가지 않는다.
     let output = run(&["verify", sample, "--expect-format", "hwp"]);
     assert_eq!(output.status.code(), Some(2));
+    // 빈 필드명은 존재 여부 검사로 의미가 없으므로 사용법 오류여야 한다.
+    let output = run(&["verify", sample, "--expect-field", "=value"]);
+    assert_eq!(output.status.code(), Some(2));
 }
 
 // ── 6. pii-scan — 원문 비노출 기본 ────────────────────────────────────────
@@ -458,6 +461,20 @@ fn chunk_plan_covers_all_pages_with_safe_envelope() {
     let chunk = &v["chunks"][0];
     assert_eq!(chunk["pageFrom"], 1, "{v}");
     assert_eq!(chunk["pageTo"], v["pageCount"], "{v}");
+    // 다음 실행은 셸 문자열이 아니라 구조화된 argv 다. 경로가 하나의 인자로
+    // 유지돼 소비자가 shell eval 을 할 필요가 없어야 한다.
+    assert_eq!(chunk["command"]["program"], "rhwp", "{v}");
+    assert_eq!(
+        chunk["command"]["args"],
+        serde_json::json!([
+            "digest",
+            sample,
+            "--pages",
+            format!("1..{}", v["pageCount"].as_u64().unwrap()),
+            "--json",
+        ]),
+        "{v}"
+    );
 
     // 작은 예산: 구간들이 빈틈·겹침 없이 1..pageCount 를 잇는다.
     let args = ["chunk-plan", sample, "--max-chars", "2000", "--json"];
