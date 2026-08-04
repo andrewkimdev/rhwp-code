@@ -101,3 +101,23 @@ render-diff/native-skia 게이트로 갈음 여부 판단) → PR.
   — 커밋할 파일을 명시 경로로 지정할 것.
 - 게이트 조정(작업지시자): 로컬 10k 대신 **PR CI 의 render-diff·native-skia 게이트로
   갈음** 승인.
+
+### 6. release-test 게이트 — #3738 회귀 3건 미해결 (WIP, 2026-08-04)
+
+- red-check 왕복은 **통과**(철회 393 ↔ 복원 391, 각각 빌드 실측).
+- `issue_3738_rowbreak_table_footnote_fragment` 3건 실패(마커쪽 218→219 등).
+  수정 전 worktree 는 18/18 통과 — **인과는 내 되감김 형상**.
+- 가드 4종 추가(각주 3종 + 저장 앵커+table_total 쪽 초과 증거)에도 잔존.
+  발동 7건 중 4건은 구형상(#2097)과 공통(237·250·728·749 — wtpre 에서도 발동하며
+  테스트 통과), 잔여 3건이 신형상 전용 용의: `scratchpad/fires_tail.txt` 에 보존.
+- **프로브 캡처 함정**: cargo test 는 라이브러리 stderr 를 캡처해 stdout 실패
+  리포트로 내보냄 — `-- --nocapture` + stdout 수집이 정답 (2>파일 은 0건 오판).
+
+### 다음 회전 진입점 (PR 은 suite green 전 불가)
+
+1. fires_tail 3건의 (pi, top, total, avail) 로 신형상 전용 발동 확정 —
+   구형상 A·B 식으로 4건과 분리.
+2. 해당 pi 를 fixture dump 로 열어 편람 pi=14 와의 **구조적 판별자**(다단?
+   랩? 각주 마커 위치?)를 찾아 형상 정밀화 — 관용 48px 재검토(구형 16px 와
+   pi=14 의 21.2px 사이).
+3. suite green → 391 재확인 → PR (승인 기수령 상태).
