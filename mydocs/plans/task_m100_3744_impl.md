@@ -5,8 +5,8 @@
 - **브랜치**: `codex/issue-3744-clause-context-confidence`
 - **수행계획서**: `mydocs/plans/task_m100_3744.md`
 - **기준 commit**: `upstream/devel` `0889974a01db3585df8ad2c1f13203e3cb9f51f8`
-- **절차 상태**: Stage 2 red·정책 비교 완료, 구현 미승인
-- **다음 승인 경계**: 승인 B — 선택 정책의 Stage 3 구현 승인
+- **절차 상태**: Stage 3 구현·focused 검증 완료, Stage 4 승인 대기
+- **다음 승인 경계**: 승인 C — corpus 영향·전체 release 검증 승인
 
 ## 1. 변경 경계
 
@@ -80,7 +80,7 @@
 
 세부 실측과 잔여 trade-off는 `mydocs/working/task_m100_3744_stage2.md`가 canonical 근거다.
 
-## 3. Stage 3 — 구현
+## 3. Stage 3 — 구현 (완료)
 
 ### 3.1 context 전달
 
@@ -94,6 +94,10 @@
 
 context는 `build_structure()` 내부 순회에서 갱신하고 section 전환, strong heading 채택, weak 후보 거부
 시점의 상태 전이를 단위 테스트로 고정한다.
+
+구현은 공개 context 구조를 추가하지 않고 `ClauseGateState`가 nearest `조|항`의 `(section,
+paragraph)` 식별자별 만료 상태만 보관하도록 제한했다. 새 strong anchor는 새 식별자를 사용하므로 이전
+anchor의 만료가 전파되지 않는다.
 
 ### 3.2 날짜 gate
 
@@ -114,7 +118,7 @@ context는 `build_structure()` 내부 순회에서 갱신하고 section 전환, 
   `margin_left=0`, `indent>=-1280`, `para_level=0`일 때만 허용한다.
 - 거부 문단은 삭제하지 않고 현재 node body 또는 preamble에 그대로 보존한다.
 
-## 4. Stage 3 focused 검증
+## 4. Stage 3 focused 검증 (완료)
 
 - `CARGO_INCREMENTAL=0 cargo test --lib document_core::queries::structure -- --nocapture`
 - `CARGO_INCREMENTAL=0 cargo test --test issue_3744_structure_clause_confidence -- --nocapture`
@@ -122,14 +126,16 @@ context는 `build_structure()` 내부 순회에서 갱신하고 section 전환, 
 - `CARGO_INCREMENTAL=0 cargo test --test issue_3695_structure_auto_policy -- --nocapture`
 - `CARGO_INCREMENTAL=0 cargo test --test cli_json_contract export_structure_ -- --nocapture`
 
-red→green 결과와 정책별 실측을 `mydocs/working/task_m100_3744_stage2.md` 이후 단계 보고서에 기록한다.
+red→green 결과와 focused 실측은 `mydocs/working/task_m100_3744_stage3.md`에 기록했다. Stage 4의
+전체 corpus·release 측정은 아직 실행하지 않았다.
 
 ## 5. Stage 4 corpus·release 검증
 
-1. 동일 입력을 기준/보정 evaluator로 비교해 top-level 351개와 recursive 668개 영향표를 만든다.
-2. mode, node_count, kind별 증감, 대표 좌표를 기록하고 각 변화에 의도 근거를 붙인다.
-3. 공개 JSON key와 CLI 정상/오류 exit code가 바뀌지 않았음을 기존 계약 테스트로 확인한다.
-4. 다음 게이트를 순차 실행한다.
+1. Stage 3 도중 갱신된 최신 `upstream/devel`에 작업 커밋을 동기화하고 focused green을 재확인한다.
+2. 동일 입력을 기준/보정 evaluator로 비교해 top-level 351개와 recursive 668개 영향표를 만든다.
+3. mode, node_count, kind별 증감, 대표 좌표를 기록하고 각 변화에 의도 근거를 붙인다.
+4. 공개 JSON key와 CLI 정상/오류 exit code가 바뀌지 않았음을 기존 계약 테스트로 확인한다.
+5. 다음 게이트를 순차 실행한다.
 
 - `CARGO_INCREMENTAL=0 cargo test --profile release-test --tests`
 - `CARGO_INCREMENTAL=0 cargo fmt --check`
@@ -144,4 +150,4 @@ red→green 결과와 정책별 실측을 `mydocs/working/task_m100_3744_stage2.
 - sample 하나의 44건을 맞추기 위한 임의 threshold를 채택하지 않는다.
 - #3695 auto selector와 explicit outline 동작을 함께 리팩터링하지 않는다.
 - parser/render/serializer 변경과 시각 fixture 추가를 이 이슈에 섞지 않는다.
-- 승인 B 전 제품 소스를 구현하지 않고, 승인 C 전 push·PR·GitHub comment를 수행하지 않는다.
+- 승인 B 전 제품 소스를 구현하지 않고, 승인 D 전 push·PR·GitHub comment를 수행하지 않는다.

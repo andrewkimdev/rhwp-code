@@ -138,10 +138,20 @@ fn compound_number_boundary_expires_only_the_current_weak_anchor() {
 
 #[test]
 fn revision_date_inside_article_remains_body_text() {
-    let structure = synthetic_structure(&["제1조(목적)", "2022. 1. 1. 일부개정", "적용한다."]);
+    let structure = synthetic_structure(&[
+        "제1조(목적)",
+        "2022. 1. 1. 일부개정",
+        "1. 정상 후속 호",
+        "적용한다.",
+    ]);
 
-    assert_eq!(structure.node_count, 1);
+    assert_eq!(structure.node_count, 2);
     assert!(find_at(&structure.roots, 0, 1).is_none());
+    assert_eq!(
+        find_at(&structure.roots, 0, 2).map(|node| (node.kind, node.marker.as_str())),
+        Some(("호", "1.")),
+        "날짜 거부는 현재 조 anchor를 만료하지 않아야 한다"
+    );
     assert!(all_text(&structure)
         .iter()
         .any(|text| text == "2022. 1. 1. 일부개정"));
@@ -185,7 +195,7 @@ fn real_market_report_keeps_matching_direct_mok_heading() {
         find_at(&structure.roots, 0, 355).map(|node| (
             node.kind,
             node.marker.as_str(),
-            node.heading.as_str()
+            node.heading.trim()
         )),
         Some(("목", "가.", "가. 표준산업분류"))
     );

@@ -6,12 +6,14 @@
 //!
 //! 파서/렌더 무변경의 읽기 전용 질의(추가 기능). 자기 라운드트립·시각 충실도와 무관.
 
+use std::collections::BTreeSet;
+
 use serde::Serialize;
 
 use crate::document_core::DocumentCore;
 use crate::error::HwpError;
 use crate::model::document::Document;
-use crate::model::style::HeadType;
+use crate::model::style::{HeadType, ParaShape};
 
 /// 분류 방식.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -200,6 +202,59 @@ fn has_toc_page_number_tail(text: &str) -> bool {
     })
 }
 
+/// 문자열 선두의 ASCII 숫자를 지정 길이 안에서 읽는다.
+fn parse_ascii_number_prefix(input: &str, min_len: usize, max_len: usize) -> Option<(u32, &str)> {
+    let digit_len = input.bytes().take_while(u8::is_ascii_digit).count();
+    if !(min_len..=max_len).contains(&digit_len) {
+        return None;
+    }
+
+    let value = input[..digit_len].parse().ok()?;
+    Some((value, &input[digit_len..]))
+}
+
+/// 선두 `YYYY. M. D.` 달력 날짜인지 판정한다.
+///
+/// 개정연혁 suffix에는 의존하지 않는다. 마지막 점 바로 뒤에 숫자가 이어지는 버전 번호
+/// (`2022.1.1.5`)는 날짜로 보지 않는다.
+fn starts_with_calendar_date(text: &str) -> bool {
+    let input = text.trim_start();
+    let Some((_year, rest)) = parse_ascii_number_prefix(input, 4, 4) else {
+        return false;
+    };
+    let Some(rest) = rest.strip_prefix('.') else {
+        return false;
+    };
+
+    let Some((month, rest)) = parse_ascii_number_prefix(rest.trim_start(), 1, 2) else {
+        return false;
+    };
+    let Some(rest) = rest.strip_prefix('.') else {
+        return false;
+    };
+
+    let Some((day, rest)) = parse_ascii_number_prefix(rest.trim_start(), 1, 2) else {
+        return false;
+    };
+    let Some(rest) = rest.strip_prefix('.') else {
+        return false;
+    };
+
+    (1..=12).contains(&month)
+        && (1..=31).contains(&day)
+        && !rest.chars().next().is_some_and(|c| c.is_ascii_digit())
+}
+
+/// `호` marker의 점 바로 뒤에 숫자가 이어지는 `N.N` 복합 번호인지 판정한다.
+fn starts_with_compound_number(text: &str, heading: &Heading) -> bool {
+    heading.marker.ends_with('.')
+        && text
+            .trim_start()
+            .strip_prefix(&heading.marker)
+            .and_then(|tail| tail.chars().next())
+            .is_some_and(|c| c.is_ascii_digit())
+}
+
 /// 조 marker 뒤의 조사형 본문 상호참조인지 판정한다.
 fn starts_with_reference_particle(after_marker: &str) -> bool {
     const PARTICLES: &[&str] = &[
@@ -301,17 +356,64 @@ fn select_auto_mode(doc: &Document) -> StructureMode {
     }
 }
 
+#[derive(Default)]
+struct ClauseGateState {
+    /// `N.N` 경계를 만난 nearest `조|항`의 위치 식별자.
+    expired_ho_anchors: BTreeSet<(usize, usize)>,
+}
+
+fn nearest_ho_anchor(stack: &[StructureNode]) -> Option<&StructureNode> {
+    stack
+        .iter()
+        .rev()
+        .find(|ancestor| matches!(ancestor.kind, "조" | "항"))
+}
+
 /// 텍스트만으로 모호한 호/목 후보를 현재 법령 계층 문맥에서 수용할지 판정한다.
 ///
 /// standalone `2022. 1.`이나 목차 `1. 개요`는 법령 marker와 같은 모양이므로, 부모 증거 없이
-/// `호`/`목`으로 만들면 일반 문서를 과검출한다. strong marker는 그대로 수용하고, `호`는 열린
-/// `조|항`, `목`은 열린 `호`가 있을 때만 구조 노드로 채택한다.
-fn clause_heading_allowed(heading: &Heading, stack: &[StructureNode]) -> bool {
+/// `호`/`목`으로 만들면 일반 문서를 과검출한다. strong marker는 그대로 수용한다. weak marker는
+/// 열린 계층, 달력/복합 번호 문법과 문단 모양을 함께 만족할 때만 구조 노드로 채택한다.
+fn clause_heading_allowed(
+    text: &str,
+    heading: &Heading,
+    para_shape: Option<&ParaShape>,
+    stack: &[StructureNode],
+    state: &mut ClauseGateState,
+) -> bool {
     match heading.kind {
-        "호" => stack
-            .iter()
-            .any(|ancestor| matches!(ancestor.kind, "조" | "항")),
-        "목" => stack.iter().any(|ancestor| ancestor.kind == "호"),
+        "호" => {
+            let Some(anchor) = nearest_ho_anchor(stack) else {
+                return false;
+            };
+            let anchor_id = (anchor.section, anchor.paragraph);
+
+            // 날짜는 body에 남기되 정상 후속 호까지 막지 않는다.
+            if starts_with_calendar_date(text) {
+                return false;
+            }
+            if state.expired_ho_anchors.contains(&anchor_id) {
+                return false;
+            }
+            if starts_with_compound_number(text, heading) {
+                state.expired_ho_anchors.insert(anchor_id);
+                return false;
+            }
+            true
+        }
+        "목" => {
+            if stack.iter().any(|ancestor| ancestor.kind == "호") {
+                return true;
+            }
+
+            stack
+                .iter()
+                .any(|ancestor| matches!(ancestor.kind, "장" | "절"))
+                && !has_toc_page_number_tail(text)
+                && para_shape.is_some_and(|shape| {
+                    shape.margin_left == 0 && shape.indent >= -1280 && shape.para_level == 0
+                })
+        }
         _ => true,
     }
 }
@@ -327,6 +429,7 @@ pub fn build_structure(doc: &Document, mode: StructureMode) -> StructureDoc {
     let mut stack: Vec<StructureNode> = Vec::new();
     let mut preamble: Vec<String> = Vec::new();
     let mut node_count = 0usize;
+    let mut clause_gate_state = ClauseGateState::default();
 
     // 스택 top(=부모)에 노드를 귀속.
     fn attach(node: StructureNode, stack: &mut Vec<StructureNode>, roots: &mut Vec<StructureNode>) {
@@ -345,8 +448,18 @@ pub fn build_structure(doc: &Document, mode: StructureMode) -> StructureDoc {
             let para_text = super::rendering::paragraph_text_with_equations(para);
             let heading = match effective {
                 StructureMode::Outline => classify_outline(doc, para.para_shape_id),
-                StructureMode::Clause => classify_clause(&para_text)
-                    .filter(|candidate| clause_heading_allowed(candidate, &stack)),
+                StructureMode::Clause => {
+                    let para_shape = doc.doc_info.para_shapes.get(para.para_shape_id as usize);
+                    classify_clause(&para_text).filter(|candidate| {
+                        clause_heading_allowed(
+                            &para_text,
+                            candidate,
+                            para_shape,
+                            &stack,
+                            &mut clause_gate_state,
+                        )
+                    })
+                }
                 StructureMode::Auto => unreachable!(),
             };
 
@@ -530,5 +643,33 @@ mod tests {
             structure.preamble,
             vec!["2022. 1.", "1. 일반 번호 목록", "가) 일반 하위 목록"]
         );
+    }
+
+    #[test]
+    fn calendar_date_gate_checks_shape_and_ranges() {
+        for text in ["2022. 1. 1. 일부개정", "2022.1.1.일부개정"] {
+            assert!(starts_with_calendar_date(text), "미검출: {text}");
+        }
+
+        for text in [
+            "2022. 13. 1. 일부개정",
+            "2022. 1. 32. 일부개정",
+            "2022.1.1.5",
+            "22. 1. 1. 일부개정",
+        ] {
+            assert!(!starts_with_calendar_date(text), "과검출: {text}");
+        }
+    }
+
+    #[test]
+    fn compound_number_gate_requires_a_dotted_marker() {
+        let dotted = classify_clause("20.1 일반 문서 번호").unwrap();
+        let parenthesized = classify_clause("1)1920년 항목").unwrap();
+
+        assert!(starts_with_compound_number("20.1 일반 문서 번호", &dotted));
+        assert!(!starts_with_compound_number(
+            "1)1920년 항목",
+            &parenthesized
+        ));
     }
 }
