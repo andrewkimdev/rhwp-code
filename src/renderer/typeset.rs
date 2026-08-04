@@ -18079,6 +18079,16 @@ impl TypesetEngine {
                     table.page_break,
                     crate::model::table::TablePageBreak::RowBreak
                 )
+                // 각주 상황은 제외 — 표 각주든 본체 각주든 각주 라우팅이 쪽 배정을
+                // 함께 결정하므로(#3738 한컴 검증 고정) 되감김 증거만으로 분할을
+                // 강제하면 회귀한다(실측 218→219).
+                && ft.table_footnotes.is_empty()
+                && st.current_footnote_height <= 0.0
+                && total_footnote <= 0.0
+                // 증거 형상 그대로 — 편람 Q&A host 는 텍스트 없는 표 전용 문단이다.
+                // 텍스트 host(캡션·본문 동반)는 줄 배치가 함께 움직여 되감김 해석이
+                // 다층적이므로(#3738 회귀 실측) 이 형상에서 제외한다.
+                && !para_has_visible_text(para)
                 && para
                     .line_segs
                     .iter()
@@ -18102,7 +18112,14 @@ impl TypesetEngine {
                         || (saved_next_para_rewind_tail
                             && top_px > SAVED_REWIND_ANCHOR_MIN_DEPTH_PX
                             && (top_px - st.current_height).abs()
-                                <= SAVED_REWIND_ANCHOR_FLOW_TOLERANCE_PX)
+                                <= SAVED_REWIND_ANCHOR_FLOW_TOLERANCE_PX
+                            // 저장 앵커 + 실측 표 높이가 쪽을 넘어야 한다 — 한컴도
+                            // 통째로 못 넣었다는 증거. 이것 없이 되감김만 보면 다단·
+                            // 랩 등 vpos 비단조 문서에서 오발동한다(#3738 실측:
+                            // pi=1136 586+317<956, pi=1778 611+333<957 — 한컴은
+                            // 통째 배치했는데 분할로 오판해 218→219 회귀).
+                            && top_px + table_total
+                                > available + DECLARED_FLOAT_FIT_TOLERANCE_PX)
                 });
             if std::env::var("RHWP_DIAG_SCAN").is_ok() {
                 eprintln!(
