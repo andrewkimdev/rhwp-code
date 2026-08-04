@@ -18,9 +18,9 @@ loaded documents: pr_review_workflow.md, pr_review/README.md,
                   local_validation.md, visual_fixture_evidence.md,
                   multi_pr_update_branch.md
 remote head before correction: 07e775092d1c08a69a8b71b523a0648eb0d6e7a5
-reviewed local layer head: f5c423a93c25d84c291e17a0b7462b29ec153585
-parent layer head: 8a2a6b65052130d6b3849565db0662c71a9105f7
-upstream/devel: aeb5805cb93c92b8c44036f4c1fe1f2df420119f
+reviewed local layer head: 056b9a6d5
+parent layer head: d6eb26204
+upstream/devel: cf5d462dcda1b5ab71160033e1d454b42198ad18
 ```
 
 ## 메타데이터
@@ -33,9 +33,9 @@ upstream/devel: aeb5805cb93c92b8c44036f4c1fe1f2df420119f
 | 대상 / head | `stack/issue-3822-overlong-token-wrap` / `stack/issue-3815-pagination-coalescing` |
 | 작성 시점 원격 상태 | draft, `MERGEABLE`; 보정 restack·push 뒤 재확인 필요 |
 | 보정 전 원격 head | `07e775092d1c08a69a8b71b523a0648eb0d6e7a5` |
-| 리뷰 보정 layer head | `f5c423a93c25d84c291e17a0b7462b29ec153585` |
-| 부모 레이어 head | `8a2a6b65052130d6b3849565db0662c71a9105f7` |
-| 최신 기준 | `upstream/devel` `aeb5805cb93c92b8c44036f4c1fe1f2df420119f` |
+| 리뷰 보정 layer head | `056b9a6d5` |
+| 부모 레이어 head | `d6eb26204` |
+| 최신 기준 | `upstream/devel` `cf5d462dcda1b5ab71160033e1d454b42198ad18` |
 | review 문서 작성 전 PR 고유 규모 | 10 files, +895 / -80 |
 | 관련 issue | [#3815](https://github.com/edwardkim/rhwp/issues/3815) |
 
@@ -138,6 +138,10 @@ step은 공개 쪽수를 바꾸지 않고 complete에서만 115 → 116을 한 �
 Stack 전체 Studio unit 763 / 763도 이전 최신 기준 검증에서 통과했다. 이번 correction은 계획·작업 기록,
 MANIFEST, E2E header와 npm 진입점만 바꾸며 scheduler 제품 코드는 변경하지 않는다.
 
+검토 CI 중 `devel`이 중첩 표 배치 수정 #3949를 포함한 `cf5d462dc`로 전진해 Stack을 다시
+정렬했다. 제품 충돌은 없었으며 spacing 42 / 42, `issue_2189_cell_text_clip` 1 / 1,
+composer 53 / 53, fmt·diff와 production WASM을 제한 재검증했다.
+
 ## production WASM + Chrome 증적
 
 최신 devel 기준 production WASM과 새 headless Chrome에서 HWP/HWPX `--continuous-only`를 각 한 번
@@ -145,13 +149,13 @@ MANIFEST, E2E header와 npm 진입점만 바꾸며 scheduler 제품 코드는 �
 
 | 형식 | 숫자 줄 전환 | 최종 숫자 | pending operation p95 | 최종 쪽수 | 결과 |
 | --- | --- | ---: | ---: | ---: | --- |
-| HWP | 11 / 69 | 73 | 49.0ms | 116 | GREEN |
-| HWPX | 11 / 69 | 73 | 49.2ms | 116 | GREEN |
+| HWP | 11 / 69 | 73 | 49.6ms | 116 | GREEN |
+| HWPX | 11 / 69 | 73 | 49.7ms | 116 | GREEN |
 
 두 형식 모두 IME `ㅎ → 하 → 한` 뒤 긴 숫자가 pending 중 두 번 줄바꿈됐다. caret, model text,
 visible ink와 layer tree가 최신 revision으로 일치했고 latest begin/final step revision은 132 / 132,
-superseded publication과 synchronous flow flush는 0이었다. 이전 smoke의 50.2ms / 49.7ms 대비 -2.4% /
--1.0%로 ±10% gate 안이어서 형식별 current·80ms·250ms 3회 전체 측정은 반복하지 않았다.
+superseded publication과 synchronous flow flush는 0이었다. 이전 smoke의 50.2ms / 49.7ms 대비 -1.2% /
+0.0%로 ±10% gate 안이어서 형식별 current·80ms·250ms 3회 전체 측정은 반복하지 않았다.
 
 이 수치는 로컬 production WASM + Chrome의 역사·회귀 근거다. Render Diff CI는 E2E의
 `node --check`만 수행하므로 최신 PR head CI와 별도로 해석한다.

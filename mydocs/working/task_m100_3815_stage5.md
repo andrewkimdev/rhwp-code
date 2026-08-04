@@ -2,8 +2,8 @@
 
 - 이슈: [#3815](https://github.com/edwardkim/rhwp/issues/3815)
 - 브랜치: stack/issue-3815-pagination-coalescing
-- 최신 기준: upstream/devel aeb5805cb
-- code candidate: e2ec99228
+- 최신 기준: upstream/devel cf5d462dc
+- code candidate: 416eb37a1
 - 작성일: 2026-08-04
 
 ## Stack
@@ -33,18 +33,24 @@ production WASM과 새 headless Chrome에서 continuous-only 시나리오를 각
 
 | 형식 | 숫자 줄 전환 | 최종 숫자 | pending operation p95 | 결과 |
 | --- | --- | ---: | ---: | --- |
-| HWP | 11 / 69 | 73 | 49.0ms | GREEN |
-| HWPX | 11 / 69 | 73 | 49.2ms | GREEN |
+| HWP | 11 / 69 | 73 | 49.6ms | GREEN |
+| HWPX | 11 / 69 | 73 | 49.7ms | GREEN |
 
 두 형식 모두 IME 조합 뒤 숫자가 두 번 줄바꿈되고 overflow 없이 최종 revision까지 게시됐다.
 최종 쪽수는 116, latest begin/final step revision은 132 / 132이며 synchronous flush는 0이다.
-이전 동일 smoke의 50.2ms / 49.7ms 대비 변화는 각각 -2.4% / -1.0%로 ±10% gate 안이다.
+이전 동일 smoke의 50.2ms / 49.7ms 대비 변화는 각각 -1.2% / 0.0%로 ±10% gate 안이다.
 따라서 2026-08-03에 완료한 current, 80ms, 250ms 형식별 3회 전체 측정은 반복하지 않았다.
 
-이후 devel이 aeb5805cb로 전진했다. 추가 변경은 Stack 제품 파일과 직접 겹치지 않았지만
+첫 최종 검증 뒤 devel이 aeb5805cb로 전진했다. 추가 변경은 Stack 제품 파일과 직접 겹치지 않았지만
 typeset 쪽 경계 수정이 실제 HWP/HWPX 쪽수에 영향을 줄 수 있어 production WASM과 combined
 smoke까지 다시 실행했다. spacing 42 / 42, SVG 41 / 41, composer 53 / 53, Studio focused
 23 / 23, TypeScript와 production WASM을 모두 통과했고 두 형식의 115 → 116 결과도 유지됐다.
+
+검토 CI 중 devel이 중첩 표 배치 수정 #3949를 포함한 cf5d462dc로 다시 전진했다. 공용 오늘할일
+충돌은 양쪽 기록을 보존해 해소했고 제품 코드는 충돌하지 않았다. spacing 42 / 42,
+`issue_2189_cell_text_clip` 1 / 1, composer 53 / 53, fmt·diff와 production WASM을 제한
+재검증했다. HWP/HWPX는 11 / 69, 숫자 73, 116쪽, p95 49.6 / 49.7ms로 GREEN이며 대표
+HWP crop의 SHA-256도 기존 보존 asset과 일치했다.
 
 ## 기존 성능 근거
 
