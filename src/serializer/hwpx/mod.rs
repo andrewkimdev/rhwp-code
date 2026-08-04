@@ -161,6 +161,24 @@ pub fn serialize_hwpx(doc: &Document) -> Result<Vec<u8>, SerializeError> {
         zip_bin_entries.insert(entry.href.clone());
     }
 
+    // 8-1. [#3546] OOXML 차트 파트 — Chart/chartN.xml 바이트 원형 방출.
+    //      원본 content.hpf 가 Chart 파트를 나열하지 않으므로 manifest·3-way
+    //      단언 대상 밖이며(collect_from_document 에서 분리), BinData 로 옮기면
+    //      한컴이 차트 XML 을 OLE 복합문서로 해석한다.
+    for entry in &ctx.chart_entries {
+        let data = doc
+            .bin_data_content
+            .iter()
+            .find(|b| b.id == entry.bin_data_id)
+            .ok_or_else(|| {
+                SerializeError::XmlError(format!(
+                    "차트 BinDataContent 누락: bin_data_id={}",
+                    entry.bin_data_id
+                ))
+            })?;
+        z.write_deflated(&entry.href, &data.data.load())?;
+    }
+
     // 9. Contents/content.hpf — 항상 동적 경로 + BinData 매니페스트 엔트리
     let content_bin_entries: Vec<ContentBinDataEntry> = bin_entries
         .iter()

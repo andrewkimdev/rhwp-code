@@ -3,7 +3,7 @@
 //! HWP3/HWP5/HWPX 비밀번호 암호 알고리즘은 `crate::password_crypto`가 단일
 //! 소유한다. 이 파일은 배포용 ViewText의 별도 계약과 parser 오류형만 유지한다.
 
-use aes::cipher::{Block, BlockDecrypt, KeyInit};
+use aes::cipher::{Block, BlockCipherDecrypt, KeyInit};
 use aes::Aes128;
 
 use super::cfb_reader::{decompress_stream, decompress_stream_limited, CfbError};

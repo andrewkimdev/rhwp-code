@@ -32,13 +32,28 @@ fn run_with_stdin(args: &[&str], stdin_body: &str) -> Output {
         .stderr(Stdio::piped())
         .spawn()
         .expect("rhwp 실행 실패");
-    child
+    write_stdin_ignoring_early_exit(&mut child, stdin_body);
+    child.wait_with_output().expect("rhwp 종료 대기 실패")
+}
+
+/// stdin 에 본문을 쓰되, 자식이 stdin 을 읽기 전에 종료한 경우의 BrokenPipe 는
+/// 무시한다. 인자 검증 거부 계열 테스트는 프로세스가 입력을 소비하기 전에
+/// 종료하는 것이 정상 경로라, 쓰기 완료 여부는 검증 대상(종료 코드·출력)이
+/// 아니다 (#3763 — batch_axes_contract.rs 와 같은 처리).
+fn write_stdin_ignoring_early_exit(child: &mut std::process::Child, stdin_body: &str) {
+    use std::io::ErrorKind;
+    if let Err(err) = child
         .stdin
         .as_mut()
         .expect("stdin")
         .write_all(stdin_body.as_bytes())
-        .expect("stdin 쓰기 실패");
-    child.wait_with_output().expect("rhwp 종료 대기 실패")
+    {
+        assert_eq!(
+            err.kind(),
+            ErrorKind::BrokenPipe,
+            "stdin 쓰기 실패: {err:?}"
+        );
+    }
 }
 
 fn describe(args: &[&str], output: &Output) -> String {
@@ -291,6 +306,121 @@ fn capabilities_json_contract() {
     }
     let batch_subs = v["batch"]["subcommands"].as_array().expect("batch");
     assert!(batch_subs.iter().any(|s| s == "export-structure"), "{v}");
+}
+
+#[test]
+fn capabilities_search_finds_table_commands() {
+    // [#3828 B1] 처음 오는 에이전트가 정확한 명령 이름을 모를 때 "표" 로 관련 명령을
+    // 훑을 수 있어야 한다. 부분 문자열 매칭이라 export-tables·table-to-csv·
+    // csv-to-table 모두 걸린다.
+    let args = ["capabilities", "--search", "표", "--json"];
+    let output = run(&args);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{}",
+        describe(&args, &output)
+    );
+    let v = parse_stdout_json(&args, &output);
+    assert_eq!(v["schemaVersion"], "1.0", "{v}");
+    assert_eq!(v["search"], "표", "{v}");
+    let commands = v["commands"].as_array().expect("commands 배열");
+    assert!(!commands.is_empty(), "{v}");
+    for name in ["export-tables", "table-to-csv", "csv-to-table"] {
+        assert!(
+            commands.iter().any(|c| c["name"] == name),
+            "{name} 이 '표' 검색 결과에 없음: {v}"
+        );
+    }
+    // 매치하지 않는 명령은 결과에 없어야 한다 (test-shape 요약 "도형 왕복 테스트" 에는
+    // '표'가 없다 — '테스트'와 혼동하기 쉬워 일부러 고른 반례).
+    assert!(
+        !commands.iter().any(|c| c["name"] == "test-shape"),
+        "무관한 명령이 섞임: {v}"
+    );
+}
+
+#[test]
+fn capabilities_search_no_match_is_empty_not_error() {
+    // 매치 0건은 에러가 아니라 빈 commands 배열, exit 0.
+    let args = ["capabilities", "--search", "없는단어999", "--json"];
+    let output = run(&args);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{}",
+        describe(&args, &output)
+    );
+    let v = parse_stdout_json(&args, &output);
+    let commands = v["commands"].as_array().expect("commands 배열");
+    assert!(commands.is_empty(), "{v}");
+}
+
+#[test]
+fn capabilities_search_multi_keyword_is_and() {
+    // 여러 키워드는 AND — "표"만으로는 여러 건이지만 "표 병합" 은 병합을 다루는
+    // 명령(export-tables: 병합 rowSpan/colSpan 보존)으로 더 좁혀져야 한다.
+    let args = ["capabilities", "--search", "표", "--json"];
+    let output = run(&args);
+    let v = parse_stdout_json(&args, &output);
+    let broad = v["commands"].as_array().expect("commands 배열").len();
+
+    let args2 = ["capabilities", "--search", "표 병합", "--json"];
+    let output2 = run(&args2);
+    assert_eq!(
+        output2.status.code(),
+        Some(0),
+        "{}",
+        describe(&args2, &output2)
+    );
+    let v2 = parse_stdout_json(&args2, &output2);
+    let narrow = v2["commands"].as_array().expect("commands 배열");
+    assert!(
+        narrow.len() < broad,
+        "AND 조건이면 키워드 추가로 결과가 줄어들어야 함: 표={broad}건, 표+병합={}건",
+        narrow.len()
+    );
+    assert!(!narrow.is_empty(), "{v2}");
+    assert!(narrow.iter().any(|c| c["name"] == "export-tables"), "{v2}");
+}
+
+#[test]
+fn capabilities_search_human_mode_is_not_json() {
+    // --json 없이도 사람이 읽는 출력을 지원한다(다른 명령과 일관).
+    let args = ["capabilities", "--search", "표"];
+    let output = run(&args);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{}",
+        describe(&args, &output)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        serde_json::from_str::<serde_json::Value>(&stdout).is_err(),
+        "human 모드인데 순수 JSON 이 나옴: {stdout}"
+    );
+    assert!(stdout.contains("export-tables"), "{stdout}");
+}
+
+#[test]
+fn capabilities_base_output_unchanged_by_search_flag_addition() {
+    // 드리프트 가드: 인자 없는 기본 `capabilities` 의 출력은 --search 도입으로도
+    // 절대 바뀌지 않는다.
+    let args = ["capabilities"];
+    let output = run(&args);
+    let v = parse_stdout_json(&args, &output);
+    assert!(v.get("search").is_none(), "{v}");
+    let commands = v["commands"].as_array().expect("commands 배열");
+    let cap_entry = commands
+        .iter()
+        .find(|c| c["name"] == "capabilities")
+        .expect("capabilities 자기 항목");
+    let flags = cap_entry["flags"].as_array().expect("flags");
+    assert!(
+        flags.iter().any(|f| f == "--search"),
+        "commands[capabilities].flags 에 --search 미등재: {cap_entry}"
+    );
 }
 
 #[test]

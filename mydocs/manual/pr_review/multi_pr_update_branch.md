@@ -68,6 +68,50 @@ PR close/reopen만으로는 GitHub의 merge ref가 항상 재계산된다고 가
 merge ref 또는 required check가 갱신되지 않으면, head SHA가 바뀌는 push의 `synchronize` 이벤트로
 재계산한다.
 
+## 2.6 검토 중 기준선 갱신
+
+검토를 시작한 뒤 contributor가 새 commit을 push하거나, feature branch에 최신 `devel`을 merge하면 이전
+review branch와 검증 결과는 자동으로 최신 head에 귀속되지 않는다. 특히 최신 `devel` merge commit만
+그래프 맨 위에 보이는 경우에도, PR의 기능 commit은 그 아래 history에 남아 있으므로 local checkout을
+최신 PR head와 동일하게 만든 뒤 PR 고유 diff를 다시 분리한다.
+
+1. 진행 중인 Cargo, wasm-pack, npm 빌드가 있으면 먼저 종료 결과를 수집하거나 더 이상 최신 head에
+   해당하지 않는 실행임을 기록하고 중단한다. 같은 target/cache를 공유하는 새 빌드를 겹쳐 실행하지 않는다.
+2. 현재 review branch, worktree 상태, 기존 검증 head SHA를 기록한다. review 문서 초안처럼 보존해야 할
+   uncommitted 파일이 있으면 그대로 유지하되, 소스 변경과 섞이지 않게 구분한다.
+3. `upstream/devel`과 PR head를 모두 fetch한다. `devel`이 fast-forward 가능한지 확인한 뒤 최신
+   `upstream/devel`로 동기화한다. local `devel`에 local-only commit이나 미확인 변경이 있으면 임의 rebase,
+   reset, branch 강제 이동을 하지 말고 상태를 보고한다.
+4. 기존 visibility review branch가 최신 PR head의 조상이면 그 branch를 `git merge --ff-only`로 갱신한다.
+   이 방식은 VS Code graph에서 `devel` 기준선, feature commit, contributor의 merge commit을 모두 보존한다.
+   contributor가 rebase 또는 force-push하여 fast-forward할 수 없으면 기존 branch를 PR head로 보정하지
+   않는다. 이전 SHA와 새 SHA, 변경 이유를 기록하고 최신 head 전용 review branch를 새로 만든다.
+5. 새 branch와 `upstream/devel`의 관계, PR 고유 변경 범위, whitespace 오류를 재확인한다. `devel` merge
+   자체를 contributor 기능 변경으로 오인하지 않도록 diff 기준은 항상 최신 `upstream/devel...<review-branch>`다.
+6. 새 head에서 바뀐 파일과 의존성 갱신 범위에 맞춰 focused test, 통합 test, package install/build, fixture
+   검증을 재실행한다. 새 head가 단순 `devel` merge여도 lockfile 또는 shared runtime이 바뀌면 그 영향을
+   받는 검증은 이전 결과를 재사용하지 않는다.
+7. review 문서에는 이전 head 결과를 역사 기록으로만 남기고, 최종 판정에는 새 head SHA와 새 실행 결과만
+   쓴다. CI도 최신 head의 required check만 수용하며 이전 SHA run은 2.5절의 stale-run 절차로 정리한다.
+
+~~~bash
+# 모든 명령은 clean한 review worktree에서 순차 실행한다.
+git fetch upstream devel
+git fetch upstream pull/N/head:refs/remotes/upstream/prN-head
+git switch devel
+git merge --ff-only upstream/devel
+git switch review/<contributor>-<YYYYMMDD>
+git merge --ff-only upstream/prN-head
+git merge-base --is-ancestor upstream/devel HEAD
+git diff --stat upstream/devel...HEAD
+git diff --check upstream/devel...HEAD
+git rev-parse HEAD
+~~~
+
+위 예시의 `git merge --ff-only`가 실패하면 마지막 두 `switch`/`merge`를 억지로 재시도하거나 history를
+재작성하지 않는다. 새 PR head가 force-push된 경우에는 최초 검토 branch를 보존하고, 새 head에서 만든
+별도 visibility review branch와 전용 target으로 검증을 다시 시작한다.
+
 ## 4.2.1 여러 PR 체리픽 누적 검토
 
 여러 PR이 같은 영역을 단계적으로 수정하고 오래된 순서로 merge해야 하면, upstream/devel 기준의 별도

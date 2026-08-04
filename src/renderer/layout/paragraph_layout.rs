@@ -213,6 +213,16 @@ fn authoritative_stored_line_start_px(
     styled_margin_left.max(hwpunit_to_px(line_seg.column_start, dpi))
 }
 
+/// HWP5의 저장 `column_start`를 권위로 해석할 수 있는 출처 경계.
+///
+/// HWP5-origin HWPX는 컨테이너만 HWPX일 뿐 저장 LINE_SEG는 HWP5 원본의 것이므로
+/// 원본 HWP5와 같은 계약을 쓴다. 원본 HWPX까지 넓히면 별도 저장 계약을 침범한다.
+fn uses_hwp5_stored_line_start_profile(
+    profile: crate::model::provenance::LayoutCompatibilityProfile,
+) -> bool {
+    profile.native_hwp5_layout() || profile.hwp5_origin_hwpx()
+}
+
 fn composed_line_char_end(comp: &ComposedParagraph, line_idx: usize) -> usize {
     if let Some(next) = comp.lines.get(line_idx + 1) {
         return next.char_start;
@@ -519,12 +529,19 @@ fn repeated_empty_tac_line_offset(
         .collect::<Vec<_>>();
 
     // 텍스트 없는 HWP 문단은 LINE_SEG 여러 줄이 같은 text_start 를 가질 수 있다.
-    // 이때 TAC 개수와 빈 줄 수가 정확히 맞으면 한 줄에 하나씩 순서대로 배정한다.
-    if line_tac_sequence.len() == repeated_empty_line_count {
-        line_tac_sequence
-            .get(line_ordinal)
-            .copied()
-            .map(|offset| vec![offset])
+    // TAC가 빈 줄보다 적으면 앞 줄부터 하나씩만 귀속하고, 나머지 guide 줄에는
+    // 이미 귀속한 개체를 되풀이해 그리지 않는다. TAC 수와 빈 줄 수가 정확히
+    // 같은 기존 사례도 같은 순서 배정으로 보존된다.
+    if !line_tac_sequence.is_empty() && line_tac_sequence.len() <= repeated_empty_line_count {
+        // 후보가 모자란 뒤쪽 guide 줄도 `Some(vec![])`으로 명시해야 한다. `None`을
+        // 반환하면 호출자가 기본 줄-범위 집합으로 되돌아가 같은 TAC를 재배정한다.
+        Some(
+            line_tac_sequence
+                .get(line_ordinal)
+                .copied()
+                .into_iter()
+                .collect(),
+        )
     } else {
         None
     }
@@ -1865,6 +1882,7 @@ impl LayoutEngine {
                     Some(inline_x + om_left),
                     None,
                     table_para_y,
+                    None,
                     false,
                     false,
                 );
@@ -1917,6 +1935,7 @@ impl LayoutEngine {
                 Some(inline_x + om_left),
                 None,
                 table_para_y,
+                None,
                 false,
                 false,
             );
@@ -3178,7 +3197,12 @@ impl LayoutEngine {
                 && !uses_stored_segment_geometry
                 && composed.numbering_text.is_none()
                 && para.map(|p| p.controls.is_empty()).unwrap_or(false)
-                && profile.native_hwp5_layout();
+                // [#3837] rhwp 가 HWP5 원본에서 내보낸 HWPX 도 같은 계약이다 — 저장
+                // LINE_SEG 가 그 HWP5 의 것이라 `column_start` 가 여전히 권위다. 이 조건이
+                // 없으면 왕복만으로 들여쓴 줄이 왼쪽으로 밀린다(1370000-200800015: 저장
+                // cs=22677 = 302.4px 가 무시돼 글리프 595개가 그만큼 이동).
+                // 원본 HWPX 는 건드리지 않는다 — 그쪽 저장 계약은 별개 축이다.
+                && uses_hwp5_stored_line_start_profile(profile);
             // 암호 HWP3의 Square-wrap Picture/Shape 저장 cs/sw는 문단 좌·우 inset까지
             // 포함한 완성 line box다. 여기서 ParaShape margin을 다시 더하거나 빼면
             // 그림과 글자 사이에 여백이 한 번 더 생기고 right edge도 불필요하게 줄어든다.
@@ -3298,6 +3322,11 @@ impl LayoutEngine {
             // [Task #722] inter-image-text gap 보정 — 한컴 viewer 는 anchor image 의
             // outer margin_right (HU) 만큼 cs 에 더해 text 시작 x 결정. sw 에서 동일량
             // 차감하여 가용 폭 정합. WrapAnchorRef.anchor_image_margin_right 활용.
+            //
+            // `LineSeg.sw`는 문단의 left/right margin을 포함한 source line box 폭이다.
+            // 따라서 일반 stored-segment 경로와 마찬가지로 TextLine bbox의 usable width에서는
+            // margin을 빼야 한다. wrap-anchor 경로가 `sw`를 그대로 override하면 hanging
+            // indent가 image 쪽으로 한 번 더 돌출한다(HWP5 p127 그림 56 / p156 그림 64).
             let (line_cs_offset, line_avail_w_override) = if let Some(anchor) = wrap_anchor {
                 let seg = para.and_then(|p| p.line_segs.get(line_idx));
                 let cs = seg.map(|s| s.column_start as i32).unwrap_or(0);
@@ -3305,7 +3334,12 @@ impl LayoutEngine {
                 let mr = anchor.anchor_image_margin_right;
                 let cs_px = crate::renderer::hwpunit_to_px(cs + mr, self.dpi);
                 let sw_px = if sw > 0 {
-                    Some(crate::renderer::hwpunit_to_px((sw - mr).max(0), self.dpi))
+                    Some(
+                        (crate::renderer::hwpunit_to_px((sw - mr).max(0), self.dpi)
+                            - effective_margin_left
+                            - effective_margin_right)
+                            .max(0.0),
+                    )
                 } else {
                     None
                 };
@@ -5286,6 +5320,7 @@ impl LayoutEngine {
                                     0.0,
                                     0.0,
                                     Some(x + tac_table_om.0),
+                                    None,
                                     None,
                                     None,
                                     false,

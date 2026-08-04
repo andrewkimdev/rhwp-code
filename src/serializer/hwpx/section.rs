@@ -2029,7 +2029,9 @@ fn render_shape(shape: &ShapeObject, ctx: &mut SerializeContext) -> String {
         }
         ShapeObject::Chart(ch) => ("chart", &ch.common, &ch.caption, None, NO_PTS),
         ShapeObject::Ole(o) => {
-            return match writer_to_string(|w| super::shape::write_ole(w, o, ctx)) {
+            // [#3546] hp:chart 출신(chart_id_ref 표식)은 hp:ole 이 아니라 원형
+            // hp:chart(+switch) 구조로 재방출한다.
+            return match writer_to_string(|w| super::shape::write_ole_or_chart(w, o, ctx)) {
                 Ok(xml) => xml,
                 Err(e) => {
                     eprintln!("[hwpx] Shape::Ole 직렬화 실패: {e}");

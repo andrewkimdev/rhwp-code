@@ -6,7 +6,6 @@ const EXPECTED_CANVASKIT_UNSUPPORTED_OPS = new Set([
   'glyphOutline:unsupportedColorGlyph',
   'glyphOutline:unsupportedOutlinePayload',
   'glyphOutline:unsupportedSvgGlyph',
-  'glyphRun',
   'image:dataMissing',
   'image:dimensionUnavailable',
   'image:invalidBounds',

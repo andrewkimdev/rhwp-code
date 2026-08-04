@@ -61,6 +61,13 @@ def test_export_tables_builds_command(captured: List[List[Any]]) -> None:
     assert _as_strings(captured[0]) == ["export-tables", "a.hwpx", "--json"]
 
 
+def test_table_to_csv_builds_command(captured: List[List[Any]]) -> None:
+    rhwp.table_to_csv("a.hwpx", table=7, out="table.csv", bom=True)
+    assert _as_strings(captured[0]) == [
+        "table-to-csv", "a.hwpx", "--table", "7", "-o", "table.csv", "--bom", "--json",
+    ]
+
+
 def test_fields_builds_command(captured: List[List[Any]]) -> None:
     rhwp.fields("a.hwp")
     assert _as_strings(captured[0]) == ["fields", "a.hwp", "--json"]
@@ -99,11 +106,43 @@ def test_digest_without_options(captured: List[List[Any]]) -> None:
     assert "--pages" not in args
 
 
+def test_extract_data_flags(captured: List[List[Any]]) -> None:
+    rhwp.extract_data("a.hwp", kind="amount", limit=5)
+    assert _as_strings(captured[0]) == [
+        "extract-data", "a.hwp", "--kind", "amount", "--limit", "5", "--json",
+    ]
+
+
 def test_capabilities_mcp_flag(captured: List[List[Any]]) -> None:
     rhwp.capabilities()
     assert _as_strings(captured[0]) == ["capabilities"]
     rhwp.capabilities(mcp=True)
     assert _as_strings(captured[1]) == ["capabilities", "--mcp"]
+
+
+def test_export_provenance_map_builds_command(captured: List[List[Any]]) -> None:
+    rhwp.export_provenance_map()
+    assert _as_strings(captured[0]) == ["export-provenance-map", "--json"]
+
+
+def test_inspect_builds_each_supported_command(captured: List[List[Any]]) -> None:
+    rhwp.inspect("a.hwp", "hidden-text", threshold_pt=0.5, include_offpage=True)
+    rhwp.inspect("a.hwp", "injection", min_confidence="high", include_fields=True)
+    rhwp.inspect("a.hwp", "unicode", kind="bidi")
+    assert _as_strings(captured[0]) == [
+        "inspect", "hidden-text", "a.hwp", "--threshold-pt", "0.5", "--include-offpage", "--json",
+    ]
+    assert _as_strings(captured[1]) == [
+        "inspect", "injection", "a.hwp", "--min-confidence", "high", "--include-fields", "--json",
+    ]
+    assert _as_strings(captured[2]) == [
+        "inspect", "unicode", "a.hwp", "--kind", "bidi", "--json",
+    ]
+
+
+def test_inspect_rejects_options_for_another_subcommand(captured: List[List[Any]]) -> None:
+    with pytest.raises(ValueError, match="hidden-text"):
+        rhwp.inspect("a.hwp", "hidden-text", kind="bidi")
 
 
 # ── 산출 ────────────────────────────────────────────────────────────────
@@ -227,6 +266,16 @@ def test_set_cell_coordinates(captured: List[List[Any]]) -> None:
 def test_set_cell_keep_style(captured: List[List[Any]]) -> None:
     rhwp.set_cell("a.hwpx", 0, 0, 0, "값", keep_style=True)
     assert "--keep-style" in _as_strings(captured[0])
+
+
+def test_csv_to_table_builds_command(captured: List[List[Any]]) -> None:
+    rhwp.csv_to_table(
+        "a.hwpx", "values.csv", 7, out="edited.hwpx", dry_run=True, verify=True
+    )
+    assert _as_strings(captured[0]) == [
+        "csv-to-table", "a.hwpx", "--csv", "values.csv", "--table", "7",
+        "-o", "edited.hwpx", "--dry-run", "--verify", "--json",
+    ]
 
 
 # ── 대량 ────────────────────────────────────────────────────────────────
