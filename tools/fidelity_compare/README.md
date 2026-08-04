@@ -122,10 +122,12 @@ ledger를 합친 뒤에만 pixel diff와 visual sweep으로 확정한다.
 경우다. `*_outside_frame`은 Body 표/그림이 page frame 밖에 나간 경우다. 표 fragment ledger는 source `(pi, ci)`가
 인접 render-tree 쪽에 연속한 것, 표/footer·frame 충돌, 또는 page 높이의 하단 15%에 걸친 표와 24자 이상
 PDF↔SVG text delta를 함께 기록한다. 이것은 rhwp 쪽의 source-table 연속성 및 위험 신호일 뿐 PDF의 행 owner나
-올바른 분할을 판정하지 않는다. `square_wrap_text_overlap`은 Square/Tight/Through 그림의 물리 box를 그 폭의 절반 이상
-가로지르는 Body `TextLine`이 3행 이상인 경우다. BehindText/InFrontOfText 그림은 의도된 overlay일 수 있어 이
-후보에서 제외한다. stroke 반올림과 문서 고유 overlay도 후보가 될 수 있으므로, 0이 아닌 값은 곧바로 결함이 아니라
-visual review 대상으로 해석한다.
+올바른 분할을 판정하지 않는다. `square_wrap_text_overlap`은 Square/Tight/Through 그림에 대해 두 종류의 Body
+`TextLine` 후보를 센다. 그림 물리 box를 폭의 절반 이상 가로지르는 3행 이상은 `physical_overlap`이고, 그림 바로
+왼쪽/오른쪽의 3행 이상이 edge에서 `≤1px`로 맞닿거나 얕게 침범하면 `edge_clearance_loss`다. 후자는 HWP outer
+margin 유실처럼 glyph가 그림 테두리와 접촉하는 결함을 빠르게 후보화한다. BehindText/InFrontOfText 그림은 의도된
+overlay일 수 있어 제외한다. stroke 반올림과 zero-margin source도 후보가 될 수 있으므로, 0이 아닌 값은 곧바로 결함이
+아니라 PDF visual review 대상으로 해석한다.
 
 `scripts/visual_sweep.py`는 자신의 render tree 분석에서 이 Square/Tight/Through 후보 함수를
 재사용해 `square_wrap_text_overlap` flag와 annotation을 남긴다. 따라서 sweep의 `flagged=0`이 이 특정

@@ -41,10 +41,43 @@ sweep metrics에 남긴다. 1px는 render-tree stroke/rounding noise를 넘기�
 
 ## 수용 기준
 
-- p156 보정 전 tree는 `edge_clearance_loss`, `pi=1692`, `ci=1`, 9개의 contact line 후보가 된다.
+- p156 보정 전 tree는 `edge_clearance_loss`, `pi=1692`, `ci=1`, 11개의 contact line 후보가 된다.
 - 5px 이상 clearance를 둔 동일 synthetic tree는 후보가 아니다.
 - 기존 physical overlap positive와 `InFrontOfText` negative, visual sweep bridge의 기존 API가
   계속 통과한다.
 - Stage 3 post-fix p156 tree는 candidate 0이다. (수정 후 gap `6.8px`)
 
 이 분석 문서를 커밋한 뒤에만 detector·test·README를 수정한다.
+
+## 결과 (2026-08-04)
+
+canonical detector를 확장했다. 보정 전 Stage 3 tree의 실제 결과는 아래와 같고, 그림 anchor
+문단과 p1697까지 같은 vertical band에 있던 11개 visible Body line을 한 후보로 묶는다.
+
+```json
+{
+  "pi": 1692,
+  "ci": 1,
+  "candidate_kind": "edge_clearance_loss",
+  "edge": "left",
+  "edge_contact_line_count": 11,
+  "min_clearance_px": -0.0
+}
+```
+
+Stage 3 post-fix tree(6.8px gap)는 `[]`다. 따라서 같은 문제를 자동 후보화하면서,
+PDF와 일치하는 p156 수정본을 false positive로 남기지 않는다. 기존 physical overlap /
+InFrontOfText negative와 새 edge-contact / 6px-clearance negative를 Python unit으로
+고정했고, visual sweep의 bridge import도 edge candidate를 그대로 수신하는 회귀를 추가했다.
+
+수정본 binary로 p156 one-page sweep도 다시 실행했다. `svg_pages=1`, `pdf_pages=1`,
+`flagged_page_count=0`, `square_wrap_text_overlap_pages=[]`이며 페이지 metrics의
+`square_wrap_text_overlap_candidates=[]`다. 결과는
+`output/task-3820-3821-fidelity/stage4-p156-sweep/stage4-p156-clearance/analysis/page_156.json`에
+보관했다.
+
+```text
+python3 -m py_compile tools/fidelity_compare/fidelity_compare.py scripts/visual_sweep.py
+python3 -m unittest scripts/tests/test_fidelity_compare.py scripts/tests/test_visual_sweep.py
+Ran 53 tests ... OK
+```

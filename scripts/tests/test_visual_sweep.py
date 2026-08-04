@@ -219,6 +219,18 @@ class FidelityLayoutBridgeTests(unittest.TestCase):
                 self.assertEqual(candidates[0]["pi"], 1355)
                 self.assertEqual(candidates[0]["overlap_line_count"], 3)
 
+    def test_uses_fidelity_square_wrap_edge_clearance_detector(self) -> None:
+        tree = self.square_wrap_overlap_tree()
+        body_children = tree["children"][0]["children"]
+        for node in body_children[1:]:
+            node["bbox"]["w"] = 140  # x=40 + w=140: image left x=180에 접촉
+
+        candidates = SWEEP.render_tree_square_wrap_text_overlap_candidates(tree)
+
+        self.assertEqual(len(candidates), 1)
+        self.assertEqual(candidates[0]["candidate_kind"], "edge_clearance_loss")
+        self.assertEqual(candidates[0]["edge_contact_line_count"], 3)
+
     def test_rejects_missing_or_malformed_render_tree(self) -> None:
         for tree in (None, {}, {"type": "Page"}):
             with self.subTest(tree=tree):

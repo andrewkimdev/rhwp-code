@@ -711,14 +711,19 @@ def text_line_has_visible_paint(node: Mapping[str, object]) -> bool:
 def square_wrap_text_overlap_candidates(
     tree: Mapping[str, object],
 ) -> list[dict[str, object]]:
-    """Find Body text crossing a flow-wrapped image's physical box.
+    """Find Body text that crosses or loses clearance against a flow-wrapped image.
 
     Square/Tight/Through images reserve a text-flow band.  Three or more Body
-    lines crossing at least half of a substantial image width is therefore a
-    strong layout candidate, unlike BehindText/InFrontOfText which may overlap
-    intentionally.  The render-tree JSON exposes the source wrap mode so this
-    low-cost ledger works without PDF raster dependencies.
+    lines crossing at least half of a substantial image width is a strong
+    physical-overlap candidate.  A separate edge-contact candidate catches the
+    equally harmful case where three Body lines meet or only slightly enter the
+    image edge, which is how a lost HWP outer margin appears in the render tree.
+    BehindText/InFrontOfText may overlap intentionally and are excluded.  The
+    render-tree JSON exposes the source wrap mode so this low-cost ledger works
+    without PDF raster dependencies.
     """
+    minimum_line_count = 3
+    edge_contact_tolerance_px = 1.0
     body_lines: list[tuple[float, float, float, float]] = []
     images: list[tuple[tuple[float, float, float, float], object, object, str]] = []
 
@@ -748,22 +753,62 @@ def square_wrap_text_overlap_candidates(
         if iw < 80.0 or ih < 80.0:
             continue
         overlap_lines: list[tuple[float, float, float, float]] = []
+        edge_contacts: list[tuple[tuple[float, float, float, float], str, float]] = []
         for line in body_lines:
             lx, ly, lw, lh = line
             overlap_x = min(ix + iw, lx + lw) - max(ix, lx)
             overlap_y = min(iy + ih, ly + lh) - max(iy, ly)
             if overlap_x >= iw * 0.5 and overlap_y >= min(5.0, lh * 0.5):
                 overlap_lines.append(line)
-        if len(overlap_lines) >= 3:
+                continue
+            if overlap_y < min(5.0, lh * 0.5):
+                continue
+
+            line_right = lx + lw
+            image_right = ix + iw
+            # A Body line originating left/right of the image may legitimately
+            # approach its edge, but contact (or a shallow intrusion) over
+            # three lines means the Square exclusion's outer clearance may
+            # have vanished.  Large intrusions are reported by the stronger
+            # physical-overlap branch above.
+            if lx < ix and line_right >= ix - edge_contact_tolerance_px:
+                edge_contacts.append((line, "left", ix - line_right))
+            elif line_right > image_right and lx <= image_right + edge_contact_tolerance_px:
+                edge_contacts.append((line, "right", lx - image_right))
+
+        if len(overlap_lines) >= minimum_line_count:
             candidates.append(
                 {
                     "pi": para_index,
                     "ci": control_index,
                     "text_wrap": text_wrap,
+                    "candidate_kind": "physical_overlap",
                     "overlap_line_count": len(overlap_lines),
                     "image_bbox": [round(value, 1) for value in image],
                     "first_line_bbox": [round(value, 1) for value in overlap_lines[0]],
                     "last_line_bbox": [round(value, 1) for value in overlap_lines[-1]],
+                }
+            )
+        elif len(edge_contacts) >= minimum_line_count:
+            edges = {edge for _, edge, _ in edge_contacts}
+            candidates.append(
+                {
+                    "pi": para_index,
+                    "ci": control_index,
+                    "text_wrap": text_wrap,
+                    "candidate_kind": "edge_clearance_loss",
+                    "edge": next(iter(edges)) if len(edges) == 1 else "mixed",
+                    "edge_contact_line_count": len(edge_contacts),
+                    "min_clearance_px": round(
+                        min(clearance for _, _, clearance in edge_contacts), 1
+                    ),
+                    "image_bbox": [round(value, 1) for value in image],
+                    "first_line_bbox": [
+                        round(value, 1) for value in edge_contacts[0][0]
+                    ],
+                    "last_line_bbox": [
+                        round(value, 1) for value in edge_contacts[-1][0]
+                    ],
                 }
             )
     return candidates

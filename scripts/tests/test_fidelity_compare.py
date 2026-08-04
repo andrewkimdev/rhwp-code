@@ -488,6 +488,74 @@ class LayoutCandidateTests(unittest.TestCase):
         self.assertEqual(candidates[0]["overlap_line_count"], 3)
         self.assertEqual(FIDELITY.layout_candidates(tree)[4], 1)
 
+    def test_square_wrapped_image_edge_contact_is_a_candidate(self) -> None:
+        tree = {
+            "type": "Page",
+            "bbox": {"x": 0, "y": 0, "w": 800, "h": 1100},
+            "children": [
+                {
+                    "type": "Body",
+                    "bbox": {"x": 50, "y": 50, "w": 700, "h": 900},
+                    "children": [
+                        {
+                            "type": "Image",
+                            "pi": 1692,
+                            "ci": 1,
+                            "textWrap": "Square",
+                            "bbox": {"x": 400, "y": 120, "w": 220, "h": 260},
+                        },
+                        *[
+                            {
+                                "type": "TextLine",
+                                "bbox": {"x": 100, "y": y, "w": 300, "h": 16},
+                                "children": [{"type": "TextRun", "text": "본문"}],
+                            }
+                            for y in (150, 180, 210)
+                        ],
+                    ],
+                }
+            ],
+        }
+
+        candidates = FIDELITY.square_wrap_text_overlap_candidates(tree)
+
+        self.assertEqual(len(candidates), 1)
+        self.assertEqual(candidates[0]["pi"], 1692)
+        self.assertEqual(candidates[0]["candidate_kind"], "edge_clearance_loss")
+        self.assertEqual(candidates[0]["edge"], "left")
+        self.assertEqual(candidates[0]["edge_contact_line_count"], 3)
+        self.assertEqual(candidates[0]["min_clearance_px"], 0.0)
+        self.assertEqual(FIDELITY.layout_candidates(tree)[4], 1)
+
+    def test_square_wrapped_image_with_pdf_like_edge_clearance_is_not_a_candidate(self) -> None:
+        tree = {
+            "type": "Page",
+            "bbox": {"x": 0, "y": 0, "w": 800, "h": 1100},
+            "children": [
+                {
+                    "type": "Body",
+                    "bbox": {"x": 50, "y": 50, "w": 700, "h": 900},
+                    "children": [
+                        {
+                            "type": "Image",
+                            "textWrap": "Square",
+                            "bbox": {"x": 400, "y": 120, "w": 220, "h": 260},
+                        },
+                        *[
+                            {
+                                "type": "TextLine",
+                                "bbox": {"x": 100, "y": y, "w": 294, "h": 16},
+                                "children": [{"type": "TextRun", "text": "본문"}],
+                            }
+                            for y in (150, 180, 210)
+                        ],
+                    ],
+                }
+            ],
+        }
+
+        self.assertEqual(FIDELITY.square_wrap_text_overlap_candidates(tree), [])
+
     def test_square_wrap_ignores_empty_full_width_guide_lines(self) -> None:
         tree = {
             "type": "Page",

@@ -2527,7 +2527,7 @@ def fidelity_compare_layout_module() -> object:
 def render_tree_square_wrap_text_overlap_candidates(
     tree: dict[str, object] | None,
 ) -> list[dict[str, object]]:
-    """Return the canonical fidelity Square/Tight/Through overlap candidates."""
+    """Return canonical Square/Tight/Through overlap and edge-clearance candidates."""
     if (
         tree is None
         or tree.get("type") != "Page"
