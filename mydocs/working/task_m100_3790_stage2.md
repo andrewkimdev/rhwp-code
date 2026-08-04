@@ -4,7 +4,8 @@
 - **Stage 1 PR**: [#3792](https://github.com/edwardkim/rhwp/pull/3792)
 - **Stage 2.5 PR**: [#3823](https://github.com/edwardkim/rhwp/pull/3823) (draft)
 - **브랜치**: `codex/issue-3790-shadow-observation`
-- **기준**: `upstream/devel` `91f513181`
+- **기준**: `upstream/devel` `91f5131815dc`
+- **최신 동기화 기준**: `upstream/devel` `2971a1d9a6ca` (#3892 포함)
 - **live 관찰 시작**: 2026-08-02 17:28:53 UTC, #3792 merge 직후
 - **기록 시각**: 2026-08-03 KST
 - **상태**: 1차 실측 및 Stage 2.5 구현 완료, draft PR 원격 검증 중, Stage 3 활성화 보류
@@ -168,12 +169,26 @@ Stage 3 전에 classifier 구현의 신뢰 경계를 먼저 고정한다.
 - push·manual 실행은 기존처럼 해당 실행의 `github.sha`를 사용한다.
 - checkout credential은 저장하지 않고, classifier 실행 step에는 토큰을 전달하지 않는다.
 - PR 판정 authority는 `pr-base-trusted-shadow`로 기록해 기존 `pr-merge-advisory` 표본과 구분한다.
-- checkout 실패는 authority도 `unavailable-advisory`로 낮추며, checkout·수집·분류 실패는 기존
-  기본값인 모든 영향축 `full`로 남는다.
+- checkout 실패 또는 base에 classifier 파일이 없는 sparse checkout 성공은 authority도
+  `unavailable-advisory`로 낮추며, checkout·수집·분류 실패는 기존 기본값인 모든 영향축 `full`로 남는다.
 - 기존 `frontend_required` 및 Rust·frontend·Native Skia worker `if`는 shadow output을 참조하지 않는다.
 
 이 단계는 신뢰된 classifier 버전을 운영 표본에 적용하기 위한 관찰 단계다. 실제 skip 활성화는 아니며,
 Stage 2.5 merge 이후 새 authority로 누적된 표본만 Stage 3 활성화 게이트에 사용한다.
+
+여기서 authority는 base SHA에서 읽은 classifier 파일의 provenance만 뜻한다. workflow YAML, 인라인 수집
+script, classifier 호출부와 미래 worker `if`는 PR merge ref의 제어를 받으므로 Stage 2.5만으로 trusted
+execution이 완성되지는 않는다. Stage 3 전에 trusted controller/policy check를 두거나 신뢰되지 않은 PR을
+full로 유지하는 Stage 2.6 경계를 별도로 확정한다.
+
+## 6.1 #3892 이후 topology 반영
+
+#3892가 legacy 단일 archive·8 shard를 세 builder와 `slow/1/2/3` 네 archive·네 worker로 바꿨다. 이 변경은
+full CI wall time을 줄였지만 frontend-only PR에서 Rust worker를 실행하는 영향축 문제는 남긴다. 따라서
+Stage 2의 8-shard runner-minute는 historical 수치로 보존하고, Stage 4 조건화는 세 builder·네 worker와
+aggregate 진리표를 함께 다룬다. Stage 6 artifact retry도 논리 label별 test archive, archive expected
+count와 worker run count를 기준으로 다시 설계한다. cache 비교는 #3810의 정리 직후 4.73GB와 임의 시점
+총량을 직접 비교하지 않고 Stage 4 이후 다음 sweep 직후 snapshot을 사용한다.
 
 ## 7. Stage 2.5 로컬 검증
 
@@ -196,6 +211,12 @@ git diff --check
 Rust·Studio 소스와 worker 실행 계약은 바꾸지 않았으므로 장시간 Rust 전체 테스트는 로컬 범위에서
 제외한다. 원격 PR에서는 기존 full CI가 그대로 실행되어 shadow 변경이 worker 결과를 바꾸지 않는지
 확인한다.
+
+2026-08-04 KST에는 리뷰 F1 보정과 최신 `upstream/devel` 동기화 뒤 같은 집중 검증을 다시 실행했다.
+classifier 파일 존재 검사를 포함한 workflow 계약 테스트 7건, classifier 단위 테스트 20건이 통과했고,
+`actionlint`는 `.github/workflows/ci.yml`, `.github/workflows/build-nextest-archives.yml`,
+`.github/workflows/run-nextest-archives.yml` 모두 진단이 없었다. `git diff --check`도 통과했다. 최신
+GitHub Actions는 이 보정 commit이 push된 head에서 다시 확인한다.
 
 2026-08-03 KST에 [draft PR #3823](https://github.com/edwardkim/rhwp/pull/3823)을 `devel` 대상으로
 생성했다. review request는 보내지 않았으며, 원격 CI 통과와 trusted authority summary 확인 전에는

@@ -463,11 +463,15 @@ jobs:
             const fs = require('node:fs');
             const path = require('node:path');
             const { owner, repo } = context.repo;
-            const inputPath = path.join(
-              process.env.GITHUB_WORKSPACE || process.cwd(),
-              '.ci-impact-input.json',
+            const workspace = process.env.GITHUB_WORKSPACE || process.cwd();
+            const inputPath = path.join(workspace, '.ci-impact-input.json');
+            const classifierPath = path.join(
+              workspace,
+              'scripts',
+              'ci-impact-classifier.cjs',
             );
-            const checkoutSucceeded = process.env.CLASSIFIER_CHECKOUT_OUTCOME === 'success';
+            const checkoutSucceeded = process.env.CLASSIFIER_CHECKOUT_OUTCOME === 'success'
+              && fs.existsSync(classifierPath);
             const authority = !checkoutSucceeded
               ? 'unavailable-advisory'
               : context.eventName === 'pull_request'

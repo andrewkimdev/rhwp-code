@@ -56,10 +56,18 @@ class CiImpactShadowWorkflowTests(unittest.TestCase):
         self.assertIn("pr-base-trusted-shadow", self.preflight)
         self.assertNotIn("pr-merge-advisory", self.preflight)
 
-    def test_failed_classifier_checkout_cannot_claim_trusted_authority(self) -> None:
+    def test_missing_classifier_checkout_cannot_claim_trusted_authority(self) -> None:
+        self.assertIn(
+            "const classifierPath = path.join(\n"
+            "              workspace,\n"
+            "              'scripts',\n"
+            "              'ci-impact-classifier.cjs',",
+            self.preflight,
+        )
         self.assertIn(
             "const checkoutSucceeded = "
-            "process.env.CLASSIFIER_CHECKOUT_OUTCOME === 'success';",
+            "process.env.CLASSIFIER_CHECKOUT_OUTCOME === 'success'\n"
+            "              && fs.existsSync(classifierPath);",
             self.preflight,
         )
         self.assertIn(
