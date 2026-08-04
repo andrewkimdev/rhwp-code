@@ -1,0 +1,149 @@
+//! Issue #3637: 셀 안 중첩 표가 부모 셀 밖에서 시작해 쪽을 벗어난다.
+//!
+//! ## 근인
+//!
+//! `table_layout.rs` 는 셀 안 중첩 표의 시작 y 를 `para_y`(그 셀에서 앞 텍스트가 끝난
+//! 자리)로 잡는다. 그 텍스트가 이미 셀 밖으로 밀려 있으면 **중첩 표 컨테이너가 통째로
+//! 셀 아래에 놓여** 쪽 밖으로 나간다. 셀 바닥으로 상한을 두어 막는다.
+//!
+//! [`issue_3637_split_cell_nested_table_vpos`] 가 거는 상한은 `table_partial.rs` 의 셀
+//! 경로에만 있다. 그 경로를 지나는 중첩1 은 이미 셀 안에 있고, 탈출하는 것은 **중첩1 의
+//! 셀 안에 있는 중첩2** 라 일반 표 경로(`table_layout.rs`)를 지난다. 그래서 형제 테스트로는
+//! 이 변경의 회귀를 잡지 못한다.
+//!
+//! ## 계약
+//!
+//! 컨테이너가 쪽 아래로 흘러내린 **깊이**를 계약한다. 클램프가 풀리면 중첩 표가 통째로
+//! 셀 밑으로 내려가므로 이 값이 곧바로 되돌아간다.
+//!
+//! ## 임계값 근거
+//!
+//! 표본을 수정 전후로 재서 그 사이에 둔다(쪽 높이 1,122.5px).
+//!
+//! ```text
+//!                              수정 전    수정 후
+//!   문서 최하단 렌더 y          2,416.1    2,073.6
+//!   쪽 아래로 넘어간 깊이        1,293.6      951.1
+//!   시작 y 가 셀 밖인 중첩 표       46건       42건
+//! ```
+//!
+//! 수정 후에도 42건이 남는 것은 **다른 축**이다 — 중첩 표가 부모 셀보다 큰 형상으로,
+//! 쪼개려면 쪽보다 큰 행의 분할 정책을 넓혀야 하는데 그 축은 3회 반증됐다(이슈 #3637 ·
+//! #3932 코멘트). 0 을 요구하면 이 테스트가 그 축의 결함까지 지게 되므로 두 상태 사이의
+//! 값으로 계약한다. 같은 이유로 "최대 이탈"(2,717.9px, 전후 불변)은 계약에 넣지 않는다 —
+//! 그 값은 이 수정이 건드리는 양이 아니다.
+//!
+//! 건수(46→42)도 계약하지 않는다. 밴드가 ±2건뿐이라 폰트 환경에 따라 뒤집힐 수 있다
+//! (#3458 에서 박은 좌표가 CI 전용 실패를 냈다). 깊이는 342.5px 밴드라 그 위험이 없다.
+//! 대신 실패 메시지에 건수를 함께 실어 진단에 쓴다.
+#![cfg(not(target_arch = "wasm32"))]
+
+use rhwp::renderer::render_tree::{RenderNode, RenderNodeType};
+
+/// 농림축산식품부 규제영향분석서. 표 안에 표가 2단으로 겹쳐 있고, 그 안쪽 표가 부모 셀
+/// 아래로 나간다.
+///
+/// 국민참여입법센터 입법예고 공개 자료다.
+const SAMPLE: &str = "samples/issue3637/regulatory_impact_nested_table_escape.hwpx";
+
+/// 쪽 아래로 넘어가도 되는 깊이의 상한 — 수정 전 1,293.6 · 수정 후 951.1 의 사이.
+///
+/// 쪽 높이에 상대적인 값이라 용지 크기가 달라져도 뜻이 유지된다.
+const MAX_OVERFLOW_BELOW_PAGE_PX: f64 = 1_100.0;
+
+/// 부모 셀 경계를 벗어난 것으로 셀 때 무시할 오차.
+const TOLERANCE_PX: f64 = 0.5;
+
+fn sample_path() -> std::path::PathBuf {
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(SAMPLE)
+}
+
+/// 시작 y 가 부모 셀 밖인 중첩 표를 모은다 — `(시작 y, 부모 셀 상단, 부모 셀 하단)`.
+fn nested_tables_starting_outside_cell(
+    node: &RenderNode,
+    cell: Option<&RenderNode>,
+    found: &mut Vec<(f64, f64, f64)>,
+) {
+    if let (RenderNodeType::Table(_), Some(parent)) = (&node.node_type, cell) {
+        let top = parent.bbox.y;
+        let bottom = parent.bbox.y + parent.bbox.height;
+        let start = node.bbox.y;
+        if start > bottom + TOLERANCE_PX || start < top - TOLERANCE_PX {
+            found.push((start, top, bottom));
+        }
+    }
+    let inner = match node.node_type {
+        RenderNodeType::TableCell(_) => Some(node),
+        _ => cell,
+    };
+    for child in &node.children {
+        nested_tables_starting_outside_cell(child, inner, found);
+    }
+}
+
+/// 그 노드 아래에서 가장 깊이 내려간 y.
+fn deepest_bottom(node: &RenderNode) -> f64 {
+    let own = node.bbox.y + node.bbox.height;
+    node.children
+        .iter()
+        .map(deepest_bottom)
+        .fold(own, |a, b| if b > a { b } else { a })
+}
+
+/// 중첩 표가 부모 셀 안에서 시작해, 쪽 아래로 컨테이너째 흘러내리지 않는다.
+#[test]
+fn nested_table_starts_inside_its_parent_cell() {
+    let bytes = std::fs::read(sample_path()).expect("표본 읽기");
+    let doc = rhwp::wasm_api::HwpDocument::from_bytes(&bytes).expect("파싱");
+    let page_count = doc.page_count();
+    assert!(
+        page_count >= 30,
+        "쪽이 너무 적다({page_count}) — 중첩 표가 걸치는 뒷쪽들이 있어야 이 경로를 탄다. \
+         표본이 바뀌었는지 확인하라"
+    );
+
+    let mut escapes = Vec::new();
+    let mut deepest_overflow = 0.0_f64;
+    let mut deepest_page = 0;
+    let mut deepest_y = 0.0_f64;
+    let mut page_height = 0.0_f64;
+    for page in 0..page_count {
+        let tree = doc
+            .build_page_render_tree(page)
+            .unwrap_or_else(|e| panic!("{}쪽 render tree: {e:?}", page + 1));
+        let mut page_escapes = Vec::new();
+        nested_tables_starting_outside_cell(&tree.root, None, &mut page_escapes);
+        for (start, top, bottom) in page_escapes {
+            escapes.push(format!(
+                "{}쪽 중첩 표 시작 y={start:.1} 부모 셀=[{top:.1}..{bottom:.1}]",
+                page + 1
+            ));
+        }
+        let height = tree.root.bbox.height;
+        let bottom = deepest_bottom(&tree.root);
+        let overflow = bottom - height;
+        if overflow > deepest_overflow {
+            deepest_overflow = overflow;
+            deepest_page = page + 1;
+            deepest_y = bottom;
+            page_height = height;
+        }
+    }
+
+    assert!(
+        deepest_overflow <= MAX_OVERFLOW_BELOW_PAGE_PX,
+        "렌더 트리가 쪽 아래로 {deepest_overflow:.1}px 넘어갔다(상한 \
+         {MAX_OVERFLOW_BELOW_PAGE_PX}, {deepest_page}쪽 y={deepest_y:.1} / 쪽 높이 \
+         {page_height:.1}). 셀 안 중첩 표의 시작 y 를 부모 셀 바닥으로 상한하지 않으면 \
+         컨테이너가 통째로 셀 아래에 놓여 흘러내린다(수정 전 1,293.6px).\n\
+         참고 — 시작 y 가 부모 셀 밖인 중첩 표 {}건(수정 전 46 · 수정 후 42, 이 값은 \
+         계약이 아니다):\n  {}",
+        escapes.len(),
+        escapes
+            .iter()
+            .take(5)
+            .cloned()
+            .collect::<Vec<_>>()
+            .join("\n  ")
+    );
+}
