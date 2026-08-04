@@ -31,8 +31,12 @@ fn load_structure(relative: &str) -> StructureDoc {
 }
 
 fn synthetic_structure(texts: &[&str]) -> StructureDoc {
+    synthetic_structure_with_shape(texts, ParaShape::default())
+}
+
+fn synthetic_structure_with_shape(texts: &[&str], para_shape: ParaShape) -> StructureDoc {
     let mut document = Document::default();
-    document.doc_info.para_shapes.push(ParaShape::default());
+    document.doc_info.para_shapes.push(para_shape);
     document.sections.push(Section {
         paragraphs: texts
             .iter()
@@ -137,6 +141,41 @@ fn compound_number_boundary_expires_only_the_current_weak_anchor() {
 }
 
 #[test]
+fn compound_number_boundary_recovers_a_continuing_ho_sequence() {
+    for compound_body in [
+        "3.5퍼센트를 곱한 금액으로 한다.",
+        "0.5퍼센트를 가산한다.",
+        "3.14 이하인 경우",
+        "2.1항의 규정에 따른다.",
+    ] {
+        let structure = synthetic_structure(&[
+            "제12조(보험료율)",
+            "1. 일반요율",
+            "2. 특별요율",
+            compound_body,
+            "3. 할인요율",
+            "4. 할증요율",
+        ]);
+
+        assert!(
+            find_at(&structure.roots, 0, 3).is_none(),
+            "복합 번호처럼 보이는 본문은 호 node가 아니어야 한다: {compound_body}"
+        );
+        for (paragraph, marker) in [(4, "3."), (5, "4.")] {
+            assert_eq!(
+                find_at(&structure.roots, 0, paragraph)
+                    .map(|node| (node.kind, node.marker.as_str())),
+                Some(("호", marker)),
+                "복합 번호 본문 뒤 정상 호는 회복되어야 한다: {compound_body}"
+            );
+        }
+        assert!(all_text(&structure)
+            .iter()
+            .any(|text| text == compound_body));
+    }
+}
+
+#[test]
 fn revision_date_inside_article_remains_body_text() {
     let structure = synthetic_structure(&[
         "제1조(목적)",
@@ -210,6 +249,60 @@ fn toc_mok_with_page_tail_remains_body_text() {
     assert!(all_text(&structure)
         .iter()
         .any(|text| text == "가. 개요\t9"));
+}
+
+#[test]
+fn toc_mok_with_dotted_leader_remains_body_text() {
+    for toc_line in [
+        "가. 개요 ·········· 9",
+        "가. 개요 .......... 9",
+        "가. 개요 …… 9",
+    ] {
+        let structure = synthetic_structure(&["제1장 총칙", "제1절 일반", toc_line]);
+
+        assert_eq!(structure.node_count, 2, "점선 목차: {toc_line}");
+        assert!(find_at(&structure.roots, 0, 2).is_none());
+        assert!(all_text(&structure).iter().any(|text| text == toc_line));
+    }
+}
+
+#[test]
+fn direct_mok_shape_gate_rejects_indented_or_nested_paragraphs() {
+    let mut accepted_boundary = ParaShape::default();
+    accepted_boundary.indent = -1280;
+    let accepted = synthetic_structure_with_shape(
+        &["제1장 총칙", "제1절 일반", "가. 본문 제목"],
+        accepted_boundary,
+    );
+    assert_eq!(
+        find_at(&accepted.roots, 0, 2).map(|node| (node.kind, node.marker.as_str())),
+        Some(("목", "가."))
+    );
+
+    let mut shapes = Vec::new();
+    let mut margin = ParaShape::default();
+    margin.margin_left = 1000;
+    shapes.push(("margin_left", margin));
+
+    let mut indent = ParaShape::default();
+    indent.indent = -1281;
+    shapes.push(("indent", indent));
+
+    let mut level = ParaShape::default();
+    level.para_level = 1;
+    shapes.push(("para_level", level));
+
+    for (axis, shape) in shapes {
+        let structure = synthetic_structure_with_shape(
+            &["제1장 총칙", "제1절 일반", "가. 일반 하위 목록"],
+            shape,
+        );
+        assert_eq!(structure.node_count, 2, "shape negative axis: {axis}");
+        assert!(find_at(&structure.roots, 0, 2).is_none());
+        assert!(all_text(&structure)
+            .iter()
+            .any(|text| text == "가. 일반 하위 목록"));
+    }
 }
 
 #[test]

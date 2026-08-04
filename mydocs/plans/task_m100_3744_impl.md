@@ -6,9 +6,9 @@
 - **Draft PR**: [#3933](https://github.com/edwardkim/rhwp/pull/3933)
 - **수행계획서**: `mydocs/plans/task_m100_3744.md`
 - **기준 commit**: `upstream/devel` `0889974a01db3585df8ad2c1f13203e3cb9f51f8`
-- **최종 동기화 기준**: `upstream/devel` `2971a1d9a`
-- **절차 상태**: draft PR 생성·self-merge review 기록 완료, 최신 CI·code review·merge 승인 대기
-- **다음 승인 경계**: 승인 E — ready 전환·merge 승인
+- **최종 동기화 기준**: `upstream/devel` `301d0fe5f`
+- **절차 상태**: review 보정·최신 devel 결합·로컬 검증 완료, review 기록 갱신·push 진행 중
+- **다음 승인 경계**: 승인 E — 최신 head CI 통과 뒤 작업지시자 merge
 
 ## 1. 변경 경계
 
@@ -103,7 +103,7 @@ anchor의 만료가 전파되지 않는다.
 
 ### 3.2 날짜 gate
 
-- 선두 연도 4자리, 월·일 1~2자리와 점 구분자를 파싱한다.
+- 선두 연도 4자리, 월·일 1~2자리와 점 구분자를 파싱하며 마지막 점은 선택 사항이다.
 - 월 1~12, 일 1~31 범위를 확인해 일반 `1. 항목`과 분리한다.
 - 열린 `조|항`이 있어도 날짜 후보는 heading으로 채택하지 않고 기존 body 경로로 보낸다.
 - `일부개정` 같은 특정 suffix가 없어도 같은 날짜 문법은 일관되게 판정한다.
@@ -112,11 +112,13 @@ anchor의 만료가 전파되지 않는다.
 
 - marker가 `.`으로 끝나고 marker 직후 숫자가 이어지는 `N.N` 후보를 거부하고 현재 nearest
   `조|항`의 weak-`호` 상태를 만료한다.
-- 만료는 같은 anchor 아래 후속 weak `호`에만 적용하고 새 `조|항`에서 초기화한다.
+- 만료 경계 바로 다음 문단에서 경계 앞 번호 또는 직전 정상 번호의 다음 번호가 나타나면 같은
+  section의 정상 목록 재개로 회복한다. 비인접 후보에는 이 예외를 적용하지 않는다.
+- 그 밖의 만료는 같은 anchor 아래 후속 weak `호`에만 적용하고 새 `조|항`에서 초기화한다.
 - `)` marker 뒤 본문 숫자, 날짜 거부, 일반 body는 anchor를 만료하지 않는다.
 - strong 편·장·절·관·조와 원문자 항 분류를 바꾸지 않는다.
 - 기존 열린 `호` 아래 `목`은 보존한다.
-- `장|절` 아래 `목`은 열린 `호`가 없고 TOC tail이 없으며 ParaShape가
+- `장|절` 아래 `목`은 열린 `호`가 없고 탭 또는 dotted leader의 TOC tail이 없으며 ParaShape가
   `margin_left=0`, `indent>=-1280`, `para_level=0`일 때만 허용한다.
 - 거부 문단은 삭제하지 않고 현재 node body 또는 preamble에 그대로 보존한다.
 
@@ -154,12 +156,28 @@ red→green 결과와 focused 실측은 `mydocs/working/task_m100_3744_stage3.md
 
 1. 원본 저장소의 `task_m100_3744` branch로 push하고 `devel` 대상 draft PR #3933을 생성했다.
 2. `mydocs/pr/archives/pr_3933_review.md`에 역할·규모·검증·visual 판정·merge 조건을 기록했다.
-3. 기존 수행·구현계획서가 승인부터 merge 전 경계를 충분히 정의하므로 별도
-   `pr_3933_review_impl.md`는 만들지 않았다.
+3. 최초 review 뒤 제품 보정이 추가되어 `pr_3933_review_impl.md`를 만들고 구현·기각안·검증을
+   독립 기록한다.
 4. 최신 PR head의 GitHub Actions와 별도 code review를 확인하고 승인 E에서 ready·merge 여부를
    결정한다.
 
-## 7. 금지 사항
+## 7. Stage 6 review 보정 (완료)
+
+1. 보정 전 새 회귀 3개 축 중 복합 번호 뒤 정상 목록 회복과 dotted-leader TOC가 실패하는
+   9 passed / 2 failed red를 확인했다. ParaShape 경계는 `indent=-1280` positive와 `-1281`,
+   nonzero margin, nested level negative로 확대했다.
+2. 만료 상태에 번호만으로 복귀시키는 최초 안은 sample10 세 변형에서 node 8→1,145,
+   `호` 4→1,141로 회귀해 기각했다. 경계의 바로 다음 문단·같은 section 조건을 추가한 최종 안은
+   기준/보정 recursive 673개(670 parse)의 파일별 kind 결과가 동일했다.
+3. dotted leader는 `.`, `·`, `‥`, `…`를 점수화해 3점 이상이고 뒤에 쪽번호가 있을 때만 TOC
+   tail로 본다. direct `목` indent 하한은 HWPUNIT 단위의 명명 상수로 문서화했다.
+4. latest `upstream/devel` `301d0fe5f` 결합 후 structure 8, #3744 11, #3693 3, #3695 13,
+   CLI 4 tests를 통과했다. 결합 직전 보정 후보에서는 전체 release tests, fmt, diff check,
+   all-targets clippy를 통과했고 최신 결합 head는 GitHub CI를 최종 merge gate로 둔다.
+5. 구현·task 문서를 보정 커밋으로, `pr_3933_review.md` 갱신과 새 review_impl을 별도 문서 커밋으로
+   분리한다. push 뒤 GitHub comment/review/ready/merge 없이 승인 E에서 중지한다.
+
+## 8. 금지 사항
 
 - 파일명·section/paragraph 좌표·para shape ID를 제품 판정에 하드코딩하지 않는다.
 - sample 하나의 44건을 맞추기 위한 임의 threshold를 채택하지 않는다.

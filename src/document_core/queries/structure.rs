@@ -6,7 +6,7 @@
 //!
 //! 파서/렌더 무변경의 읽기 전용 질의(추가 기능). 자기 라운드트립·시각 충실도와 무관.
 
-use std::collections::BTreeSet;
+use std::collections::HashMap;
 
 use serde::Serialize;
 
@@ -196,10 +196,38 @@ fn classify_clause(text: &str) -> Option<Heading> {
 
 /// 탭 뒤의 쪽번호로 끝나는 목차 행인지 판정한다.
 fn has_toc_page_number_tail(text: &str) -> bool {
-    text.trim_end().rsplit_once('\t').is_some_and(|(_, tail)| {
+    let trimmed = text.trim_end();
+    if trimmed.rsplit_once('\t').is_some_and(|(_, tail)| {
         let page = tail.trim();
         !page.is_empty() && page.chars().all(|c| c.is_ascii_digit())
-    })
+    }) {
+        return true;
+    }
+
+    // HWP 목차는 탭 대신 사용자가 직접 입력한 점선 leader 뒤에 쪽번호를 둘 수도 있다.
+    // 최소 점 3개를 요구해 일반 문장 끝의 마침표나 소수와 구분한다.
+    let page_digit_bytes = trimmed
+        .as_bytes()
+        .iter()
+        .rev()
+        .take_while(|byte| byte.is_ascii_digit())
+        .count();
+    if page_digit_bytes == 0 {
+        return false;
+    }
+
+    let before_page = trimmed[..trimmed.len() - page_digit_bytes].trim_end();
+    let mut leader_score = 0usize;
+    for c in before_page.chars().rev() {
+        match c {
+            '.' | '·' => leader_score += 1,
+            '‥' => leader_score += 2,
+            '…' => leader_score += 3,
+            c if c.is_whitespace() && leader_score > 0 => {}
+            _ => break,
+        }
+    }
+    leader_score >= 3
 }
 
 /// 문자열 선두의 ASCII 숫자를 지정 길이 안에서 읽는다.
@@ -253,6 +281,15 @@ fn starts_with_compound_number(text: &str, heading: &Heading) -> bool {
             .strip_prefix(&heading.marker)
             .and_then(|tail| tail.chars().next())
             .is_some_and(|c| c.is_ascii_digit())
+}
+
+fn ho_number(heading: &Heading) -> Option<u32> {
+    heading
+        .marker
+        .strip_suffix('.')
+        .or_else(|| heading.marker.strip_suffix(')'))?
+        .parse()
+        .ok()
 }
 
 /// 조 marker 뒤의 조사형 본문 상호참조인지 판정한다.
@@ -356,11 +393,35 @@ fn select_auto_mode(doc: &Document) -> StructureMode {
     }
 }
 
+#[derive(Clone, Copy)]
+struct ExpiredHoAnchor {
+    /// `3.5`라면 3. 같은 level 번호가 다시 등장할 때 정상 목록으로 복귀할 수 있다.
+    boundary_number: u32,
+    /// 경계 전 마지막 정상 호가 2.라면 3.도 복귀 신호다. Oracle `4.1 → 1)`은 일치하지 않는다.
+    next_expected_number: Option<u32>,
+    /// 멀리 떨어진 같은 번호가 stale anchor를 다시 열지 않도록 인접 문단에서만 복귀한다.
+    boundary_location: (usize, usize),
+}
+
+impl ExpiredHoAnchor {
+    fn accepts(self, candidate: u32, location: (usize, usize)) -> bool {
+        location.0 == self.boundary_location.0
+            && self.boundary_location.1.checked_add(1) == Some(location.1)
+            && (candidate == self.boundary_number || self.next_expected_number == Some(candidate))
+    }
+}
+
 #[derive(Default)]
 struct ClauseGateState {
-    /// `N.N` 경계를 만난 nearest `조|항`의 위치 식별자.
-    expired_ho_anchors: BTreeSet<(usize, usize)>,
+    /// nearest `조|항`별 마지막 정상 호 번호.
+    last_accepted_ho: HashMap<(usize, usize), u32>,
+    /// `N.N` 경계를 만난 anchor와 좁은 복귀 조건.
+    expired_ho_anchors: HashMap<(usize, usize), ExpiredHoAnchor>,
 }
+
+/// 편람에서 확인한 direct `목`의 최대 내어쓰기(-1280 HWPUNIT, 약 -4.52mm).
+/// 왼쪽 여백 0은 direct lane을 뜻하고 제한된 hanging indent만 허용해 더 깊은 일반 목록을 제외한다.
+const DIRECT_MOK_MIN_INDENT_HWPUNIT: i32 = -1280;
 
 fn nearest_ho_anchor(stack: &[StructureNode]) -> Option<&StructureNode> {
     stack
@@ -378,6 +439,7 @@ fn clause_heading_allowed(
     text: &str,
     heading: &Heading,
     para_shape: Option<&ParaShape>,
+    location: (usize, usize),
     stack: &[StructureNode],
     state: &mut ClauseGateState,
 ) -> bool {
@@ -392,12 +454,39 @@ fn clause_heading_allowed(
             if starts_with_calendar_date(text) {
                 return false;
             }
-            if state.expired_ho_anchors.contains(&anchor_id) {
+
+            let candidate_number = ho_number(heading);
+            let compound_number = starts_with_compound_number(text, heading);
+            if let Some(expired) = state.expired_ho_anchors.get(&anchor_id).copied() {
+                if !compound_number
+                    && candidate_number.is_some_and(|number| expired.accepts(number, location))
+                {
+                    state.expired_ho_anchors.remove(&anchor_id);
+                    if let Some(number) = candidate_number {
+                        state.last_accepted_ho.insert(anchor_id, number);
+                    }
+                    return true;
+                }
                 return false;
             }
-            if starts_with_compound_number(text, heading) {
-                state.expired_ho_anchors.insert(anchor_id);
+            if compound_number {
+                if let Some(boundary_number) = candidate_number {
+                    state.expired_ho_anchors.insert(
+                        anchor_id,
+                        ExpiredHoAnchor {
+                            boundary_number,
+                            next_expected_number: state
+                                .last_accepted_ho
+                                .get(&anchor_id)
+                                .and_then(|number| number.checked_add(1)),
+                            boundary_location: location,
+                        },
+                    );
+                }
                 return false;
+            }
+            if let Some(number) = candidate_number {
+                state.last_accepted_ho.insert(anchor_id, number);
             }
             true
         }
@@ -411,7 +500,9 @@ fn clause_heading_allowed(
                 .any(|ancestor| matches!(ancestor.kind, "장" | "절"))
                 && !has_toc_page_number_tail(text)
                 && para_shape.is_some_and(|shape| {
-                    shape.margin_left == 0 && shape.indent >= -1280 && shape.para_level == 0
+                    shape.margin_left == 0
+                        && shape.indent >= DIRECT_MOK_MIN_INDENT_HWPUNIT
+                        && shape.para_level == 0
                 })
         }
         _ => true,
@@ -455,6 +546,7 @@ pub fn build_structure(doc: &Document, mode: StructureMode) -> StructureDoc {
                             &para_text,
                             candidate,
                             para_shape,
+                            (sec_idx, para_idx),
                             &stack,
                             &mut clause_gate_state,
                         )
