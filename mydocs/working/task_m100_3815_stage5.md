@@ -33,12 +33,12 @@ production WASM과 새 headless Chrome에서 continuous-only 시나리오를 각
 
 | 형식 | 숫자 줄 전환 | 최종 숫자 | pending operation p95 | 결과 |
 | --- | --- | ---: | ---: | --- |
-| HWP | 11 / 69 | 73 | 50.1ms | GREEN |
-| HWPX | 11 / 69 | 73 | 50.9ms | GREEN |
+| HWP | 11 / 69 | 73 | 49.0ms | GREEN |
+| HWPX | 11 / 69 | 73 | 49.2ms | GREEN |
 
 두 형식 모두 IME 조합 뒤 숫자가 두 번 줄바꿈되고 overflow 없이 최종 revision까지 게시됐다.
 최종 쪽수는 116, latest begin/final step revision은 132 / 132이며 synchronous flush는 0이다.
-이전 동일 smoke의 50.2ms / 49.7ms 대비 변화는 각각 -0.2% / +2.4%로 ±10% gate 안이다.
+이전 동일 smoke의 50.2ms / 49.7ms 대비 변화는 각각 -2.4% / -1.0%로 ±10% gate 안이다.
 따라서 2026-08-03에 완료한 current, 80ms, 250ms 형식별 3회 전체 측정은 반복하지 않았다.
 
 이후 devel이 aeb5805cb로 전진했다. 추가 변경은 Stack 제품 파일과 직접 겹치지 않았지만

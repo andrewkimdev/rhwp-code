@@ -145,13 +145,13 @@ MANIFEST, E2E header와 npm 진입점만 바꾸며 scheduler 제품 코드는 �
 
 | 형식 | 숫자 줄 전환 | 최종 숫자 | pending operation p95 | 최종 쪽수 | 결과 |
 | --- | --- | ---: | ---: | ---: | --- |
-| HWP | 11 / 69 | 73 | 50.1ms | 116 | GREEN |
-| HWPX | 11 / 69 | 73 | 50.9ms | 116 | GREEN |
+| HWP | 11 / 69 | 73 | 49.0ms | 116 | GREEN |
+| HWPX | 11 / 69 | 73 | 49.2ms | 116 | GREEN |
 
 두 형식 모두 IME `ㅎ → 하 → 한` 뒤 긴 숫자가 pending 중 두 번 줄바꿈됐다. caret, model text,
 visible ink와 layer tree가 최신 revision으로 일치했고 latest begin/final step revision은 132 / 132,
-superseded publication과 synchronous flow flush는 0이었다. 이전 smoke의 50.2ms / 49.7ms 대비 -0.2% /
-+2.4%로 ±10% gate 안이어서 형식별 current·80ms·250ms 3회 전체 측정은 반복하지 않았다.
+superseded publication과 synchronous flow flush는 0이었다. 이전 smoke의 50.2ms / 49.7ms 대비 -2.4% /
+-1.0%로 ±10% gate 안이어서 형식별 current·80ms·250ms 3회 전체 측정은 반복하지 않았다.
 
 이 수치는 로컬 production WASM + Chrome의 역사·회귀 근거다. Render Diff CI는 E2E의
 `node --check`만 수행하므로 최신 PR head CI와 별도로 해석한다.
