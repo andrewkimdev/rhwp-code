@@ -593,6 +593,10 @@ fn condensed_line_width_hwp(width_hwp: i32, space_savings_hwp: i32) -> i32 {
     width_hwp - space_savings_hwp
 }
 
+// 한컴은 HWPUNIT 정수 양자화 시 미세한 반올림 차이를 허용한다.
+// 15 HU 이내의 초과는 줄에 포함한다.
+const LINE_BREAK_TOLERANCE: i32 = 15;
+
 fn condense_fit_can_pull_next_token(
     current_width_hwp: i32,
     current_space_savings_hwp: i32,
@@ -607,6 +611,28 @@ fn condense_fit_can_pull_next_token(
     // line. The p03 PDF preface is sensitive to that distinction.
     let min_remaining_hwp = to_hwp((max_font_size * 2.5).max(20.0));
     remaining_hwp >= min_remaining_hwp
+}
+
+fn text_token_fits_line_hwp(
+    current_width_hwp: i32,
+    token_width_hwp: i32,
+    space_savings_hwp: i32,
+    effective_width_hwp: i32,
+    max_font_size: f64,
+) -> bool {
+    let natural_candidate = current_width_hwp + token_width_hwp;
+    let condensed_candidate = condensed_line_width_hwp(natural_candidate, space_savings_hwp);
+    let needs_condense_to_fit = natural_candidate > effective_width_hwp + LINE_BREAK_TOLERANCE
+        && condensed_candidate <= effective_width_hwp + LINE_BREAK_TOLERANCE;
+    let condense_pull_allowed = !needs_condense_to_fit
+        || condense_fit_can_pull_next_token(
+            current_width_hwp,
+            space_savings_hwp,
+            effective_width_hwp,
+            max_font_size,
+        );
+
+    condensed_candidate <= effective_width_hwp + LINE_BREAK_TOLERANCE && condense_pull_allowed
 }
 
 /// 토큰을 줄에 배치하는 Greedy 알고리즘
@@ -786,28 +812,16 @@ fn fill_lines(
                         fs_at_last_break = line_max_fs;
                     }
                 }
-                // 한컴은 HWPUNIT 정수 양자화 시 미세한 반올림 차이를 허용
-                // 12 HU(~0.17mm) 이내의 초과는 줄에 포함 (경험적 허용 오차)
-                const LINE_BREAK_TOLERANCE: i32 = 15;
                 let effective_width = eff_w(is_first_line);
-                let natural_candidate = lw + w_hwp;
-                let condensed_candidate =
-                    condensed_line_width_hwp(natural_candidate, line_space_savings);
-                let needs_condense_to_fit = natural_candidate
-                    > effective_width + LINE_BREAK_TOLERANCE
-                    && condensed_candidate <= effective_width + LINE_BREAK_TOLERANCE;
-                let condense_pull_allowed = !needs_condense_to_fit
-                    || condense_fit_can_pull_next_token(
-                        lw,
-                        line_space_savings,
-                        effective_width,
-                        *max_font_size,
-                    );
-                if condensed_candidate > effective_width + LINE_BREAK_TOLERANCE
-                    || !condense_pull_allowed
-                {
+                if !text_token_fits_line_hwp(
+                    lw,
+                    w_hwp,
+                    line_space_savings,
+                    effective_width,
+                    *max_font_size,
+                ) {
                     if *start_idx > line_start_idx {
-                        if let Some(_) = last_break_token_idx {
+                        if let Some(break_token_idx) = last_break_token_idx {
                             results.push(LineBreakResult {
                                 start_idx: line_start_idx,
                                 end_idx: last_break_char_idx,
@@ -826,11 +840,31 @@ fn fill_lines(
                                 next_start,
                                 condense_min_space,
                             );
-                            lw += w_hwp;
                             line_max_fs = *max_font_size;
                             is_first_line = false;
                             last_break_token_idx = None;
-                            continue;
+
+                            // 현재 단일 CJK/한글 토큰 자체가 break point였던 기존 경로는
+                            // 이미 위 결과에 포함됐으므로 동작을 바꾸지 않는다.
+                            if break_token_idx == ti {
+                                lw += w_hwp;
+                                continue;
+                            }
+
+                            // [#3822] 이전 break 뒤로 옮긴 현재 토큰이 새 줄에도
+                            // 들어가는지 다시 확인한다. 종전에는 토큰 전체 폭을 무조건
+                            // 더하고 continue하여, 긴 영문·숫자 토큰의 글자 단위 fallback을
+                            // 건너뛰었다.
+                            if text_token_fits_line_hwp(
+                                lw,
+                                w_hwp,
+                                line_space_savings,
+                                eff_w(false),
+                                *max_font_size,
+                            ) {
+                                lw += w_hwp;
+                                continue;
+                            }
                         }
                     }
                     // 토큰에 저장된 개별 글자 폭을 HWPUNIT로 변환

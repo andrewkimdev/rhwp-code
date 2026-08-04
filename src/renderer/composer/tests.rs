@@ -863,6 +863,73 @@ fn test_reflow_english_word_wrap() {
     assert_eq!(para.line_segs[1].text_start, 6); // "World" 시작
 }
 
+fn reflow_after_prior_break_line_starts(text: &str, indent_px: f64) -> Vec<u32> {
+    let mut styles = make_styles_with_font_size(16.0);
+    styles.para_styles[0].indent = indent_px;
+    let mut utf16_len = 0u32;
+    let char_offsets = text
+        .chars()
+        .map(|ch| {
+            let offset = utf16_len;
+            utf16_len += ch.len_utf16() as u32;
+            offset
+        })
+        .collect();
+    let mut para = Paragraph {
+        text: text.to_string(),
+        char_offsets,
+        char_count: utf16_len + 1,
+        char_shapes: vec![CharShapeRef {
+            start_pos: 0,
+            char_shape_id: 0,
+        }],
+        line_segs: vec![LineSeg {
+            text_start: 0,
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+
+    reflow_line_segs(&mut para, 40.0, &styles, 96.0);
+    para.line_segs.iter().map(|seg| seg.text_start).collect()
+}
+
+#[test]
+fn issue_3822_reflow_overlong_latin_token_after_prior_break() {
+    assert_eq!(
+        reflow_after_prior_break_line_starts("가 ABCDEFGHIJKL", 0.0),
+        vec![0, 2, 7, 12],
+        "이전 공백 뒤 긴 Latin 토큰도 새 줄 폭을 넘을 때 계속 글자 단위로 분할해야 함"
+    );
+}
+
+#[test]
+fn issue_3822_reflow_overlong_digit_token_after_prior_break() {
+    assert_eq!(
+        reflow_after_prior_break_line_starts("A 123456789012", 0.0),
+        vec![0, 2, 7, 12],
+        "이전 공백 뒤 긴 숫자 토큰도 새 줄 폭을 넘을 때 계속 글자 단위로 분할해야 함"
+    );
+}
+
+#[test]
+fn issue_3822_reflow_overlong_digit_preserves_nonempty_post_break_width() {
+    assert_eq!(
+        reflow_after_prior_break_line_starts("A 가.123456789012", 0.0),
+        vec![0, 2, 6, 11],
+        "이전 break 뒤 잔여 글자 폭을 보존한 상태에서 긴 숫자를 분할해야 함"
+    );
+}
+
+#[test]
+fn issue_3822_reflow_overlong_token_uses_subsequent_line_indent_width() {
+    assert_eq!(
+        reflow_after_prior_break_line_starts("A ABCDEFGHIJKL", -8.0),
+        vec![0, 2, 6, 10],
+        "첫 줄 뒤에는 hanging indent가 적용된 후속 줄 폭으로 긴 토큰을 분할해야 함"
+    );
+}
+
 #[test]
 fn test_reflow_condense_shrinks_measured_space_width() {
     let mut styles = make_styles_with_font_size(10.0);
