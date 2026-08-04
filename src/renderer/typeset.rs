@@ -17990,7 +17990,10 @@ impl TypesetEngine {
             if std::env::var("RHWP_DIAG_SPLITSCAN").is_ok() {
                 eprintln!(
                     "DIAG_2439_DEFER pi={} cur_h={:.1} total={:.1} avail={:.1} coanchor={}",
-                    para_idx, st.current_height, table_total, available,
+                    para_idx,
+                    st.current_height,
+                    table_total,
+                    available,
                     has_preceding_coanchored_float,
                 );
             }
@@ -18064,62 +18067,10 @@ impl TypesetEngine {
             // (2572521 pi36: 앵커 11000HU=146.7px == cur_h, 선언 839.8px 로 하단
             // 986px 초과 — 저장 p3 만충 914.7px 실측, 이월 시 7쪽으로 +1). 이
             // 형상은 선언-기준 이월을 건너뛰고 분할 경로로 보낸다.
-            // [#3674] 두 번째 저장-증거 형상: 다음 문단의 저장 vpos 가 이 표 앵커보다
-            // **되감겨** 있고 그 크기가 표 전체보다 작으면, 원본 한글은 표를 이 지점에서
-            // 행 분할해 꼬리만 다음 쪽에 뒀다는 뜻이다 (편람 재저장본 sec10 pi=14:
-            // 앵커 545.5px·다음 문단 376.0px < declared 175.2px 초과 여부와 무관 —
-            // 통짜 이월이면 다음 문단은 표 전체 높이 아래(≥554px)나 새 쪽 상단에서
-            // 시작하고, 앵커 자신도 쪽 상단으로 이동해 이 형상이 성립하지 않는다).
-            // 1×1 그림 표(#874·#2439)는 row_count>1 로 배제. 앵커 정합 허용치는 흐름
-            // 누적 드리프트(호스트 줄간격 ~8.4px×n)를 감안해 기존 16px 보다 넓힌다.
-            const SAVED_REWIND_ANCHOR_FLOW_TOLERANCE_PX: f64 = 48.0;
-            const SAVED_REWIND_ANCHOR_MIN_DEPTH_PX: f64 = 100.0;
-            let saved_next_para_rewind_tail = table.row_count > 1
-                && matches!(
-                    table.page_break,
-                    crate::model::table::TablePageBreak::RowBreak
-                )
-                // 각주 상황은 제외 — 표 각주든 본체 각주든 각주 라우팅이 쪽 배정을
-                // 함께 결정하므로(#3738 한컴 검증 고정) 되감김 증거만으로 분할을
-                // 강제하면 회귀한다(실측 218→219).
-                && ft.table_footnotes.is_empty()
-                && st.current_footnote_height <= 0.0
-                && total_footnote <= 0.0
-                // 증거 형상 그대로 — 편람 Q&A host 는 텍스트 없는 표 전용 문단이다.
-                // 텍스트 host(캡션·본문 동반)는 줄 배치가 함께 움직여 되감김 해석이
-                // 다층적이므로(#3738 회귀 실측) 이 형상에서 제외한다.
-                && !para_has_visible_text(para)
-                && para
-                    .line_segs
-                    .iter()
-                    .find(|seg| !is_synthetic_line_seg(seg))
-                    .zip(paragraphs_all.get(para_idx + 1).and_then(|next| {
-                        next.line_segs
-                            .iter()
-                            .find(|seg| !is_synthetic_line_seg(seg))
-                    }))
-                    .is_some_and(|(current, next)| {
-                        // 꼬리 크기는 실측 표 전체(table_total)와 비교한다 — declared
-                        // (최소 셀합)는 실제 높이보다 훨씬 작아 항상 탈락시킨다(실측:
-                        // pi=14 꼬리 376px vs declared 175.2px vs 실높이 554.6px).
-                        next.vertical_pos < current.vertical_pos
-                            && hwpunit_to_px(next.vertical_pos, self.dpi) < table_total
-                    });
             let saved_anchor_splits_here = st.has_stored_line_segs
                 && saved_span.is_some_and(|(top_px, bottom_px)| {
-                    ((top_px - st.current_height).abs() <= 16.0
-                        && bottom_px > available + DECLARED_FLOAT_FIT_TOLERANCE_PX)
-                        || (saved_next_para_rewind_tail
-                            && top_px > SAVED_REWIND_ANCHOR_MIN_DEPTH_PX
-                            && (top_px - st.current_height).abs()
-                                <= SAVED_REWIND_ANCHOR_FLOW_TOLERANCE_PX
-                            // 저장 앵커 + 실측 표 높이가 쪽을 넘어야 한다 — 한컴도
-                            // 통째로 못 넣었다는 증거. 이것 없이 되감김만 보면 다단·
-                            // 랩 등 vpos 비단조 문서에서 오발동한다(#3738 실측:
-                            // pi=1136 586+317<956, pi=1778 611+333<957 — 한컴은
-                            // 통째 배치했는데 분할로 오판해 218→219 회귀).
-                            && top_px + table_total
-                                > available + DECLARED_FLOAT_FIT_TOLERANCE_PX)
+                    (top_px - st.current_height).abs() <= 16.0
+                        && bottom_px > available + DECLARED_FLOAT_FIT_TOLERANCE_PX
                 });
             if std::env::var("RHWP_DIAG_SCAN").is_ok() {
                 eprintln!(
@@ -18634,8 +18585,12 @@ impl TypesetEngine {
         if std::env::var("RHWP_DIAG_SPLITSCAN").is_ok() {
             eprintln!(
                 "DIAG_PRESPLIT pi={} remaining={:.1} unit_h={:.1} blk=({},{},{:.1}) items={}",
-                para_idx, remaining_on_page, split_unit_h,
-                first_block_start, first_block_end, first_block_h,
+                para_idx,
+                remaining_on_page,
+                split_unit_h,
+                first_block_start,
+                first_block_end,
+                first_block_h,
                 st.current_items.len(),
             );
         }
