@@ -2408,14 +2408,14 @@ fn is_single_noninline_picture_table(table: &crate::model::table::Table) -> bool
 /// `LINE_SEG`에 물리 페이지 좌표를 남기는 형상이다. 후자의 내부 그림은 TAC여도
 /// 표 자체가 비-TAC float이므로 허용한다. 그림이 아닌 단순 1×1 표는 별도의 선언
 /// 높이 신뢰 판정을 통과한 native HWP5에서만 raw anchor를 허용한다.
-/// 호스트 문단의 저장 줄이 이 개체 높이를 실제로 담는가 [#3925].
+/// 다음 저장 `vpos` 사다리가 이 개체 높이를 실제로 비우는가 [#3925].
 ///
-/// 담지 않는 호스트의 raw `vpos` 를 물리 anchor 로 해석하면 개체가 저장 사다리보다 훨씬
+/// 비우지 않는 호스트의 raw `vpos` 를 물리 anchor 로 해석하면 개체가 저장 사다리보다 훨씬
 /// 아래에 놓여 쪽 소비가 부풀고 뒤 문단이 다음 쪽으로 밀린다 —
 /// `36324768_결재문서본문.hwpx` pi=11 은 호스트 `lh` 가 14.7px 인데 표는 253.1px 라
-/// 쪽 소비가 187px 늘어 2→3쪽이 됐다. 판정 기준은 `lh ≥ 표높이 + outMargin 상하` 로
-/// 같은 파일의 사다리 연속 가드와 맞춘다.
-fn stored_host_line_covers_object(
+/// 쪽 소비가 187px 늘어 2→3쪽이 됐다. host 줄 높이만으로는 #3738 표적을 223쪽으로
+/// 악화시키므로, 다음 문단과의 `vpos` 간격만 저장 사다리 증거로 쓴다.
+fn stored_ladder_leaves_object_room(
     para: &Paragraph,
     next_para: Option<&Paragraph>,
     table: &crate::model::table::Table,
@@ -2429,18 +2429,12 @@ fn stored_host_line_covers_object(
             .find(|seg| !is_synthetic_line_seg(seg))
             .map(|seg| seg.vertical_pos as i64)
     };
-    // 호스트 줄 자체가 개체를 담거나, 다음 문단의 저장 vpos 가 개체 자리를 비워 뒀어야
-    // 사다리가 그 anchor 를 뒷받침한다.
-    let host_covers = para
-        .line_segs
-        .iter()
-        .filter(|seg| !is_synthetic_line_seg(seg))
-        .any(|seg| seg.line_height as i64 >= need);
-    let ladder_leaves_room = match (first(para), next_para.and_then(first)) {
+    // 다음 문단의 저장 vpos가 개체와 바깥 여백만큼 진행했을 때만 raw anchor를
+    // 물리 page anchor로 믿는다. host 줄 높이는 이 형상에서 독립 증거가 아니다.
+    match (first(para), next_para.and_then(first)) {
         (Some(cur), Some(next)) => next - cur >= need,
         _ => false,
-    };
-    host_covers || ladder_leaves_room
+    }
 }
 
 fn is_stored_anchor_picture_table(table: &crate::model::table::Table) -> bool {
@@ -2609,7 +2603,12 @@ const STORED_VPOS_REWIND_MIN_FILL: f64 = 0.90;
 /// 판별력 실측(r29 `PI_MISMATCH` n=1 코호트 66건): 어긋난 항목의 36% 가 되돌아감인데,
 /// 같은 문서 **다른 쪽**의 마지막 항목은 1,134개 중 2개(0.2%)뿐이다 — 180배 농축.
 fn stored_vpos_rewinds(prev_vpos: Option<i32>, para: &Paragraph) -> bool {
-    let Some(nv) = para.line_segs.first().map(|s| s.vertical_pos) else {
+    let Some(nv) = para
+        .line_segs
+        .iter()
+        .find(|s| !is_synthetic_line_seg(s))
+        .map(|s| s.vertical_pos)
+    else {
         return false;
     };
     // `cl > 5000` 은 기존 vpos-reset 가드와 같은 하한 — 쪽 상단 근처에서 시작한 항목을
@@ -2623,7 +2622,13 @@ fn preceding_stored_vpos(paragraphs: &[Paragraph], para_idx: usize) -> Option<i3
     paragraphs[..para_idx.min(paragraphs.len())]
         .iter()
         .rev()
-        .find_map(|p| p.line_segs.last().map(|s| s.vertical_pos))
+        .find_map(|p| {
+            p.line_segs
+                .iter()
+                .rev()
+                .find(|s| !is_synthetic_line_seg(s))
+                .map(|s| s.vertical_pos)
+        })
 }
 
 fn paragraph_forces_page_boundary_after(
@@ -15812,12 +15817,12 @@ impl TypesetEngine {
         let stored_single_topbottom_top = (is_topbottom_para_float
             && topbottom_float_count == 1
             && is_stored_anchor_table
-            // [#3925] HWPX 원본은 호스트 줄이 개체 높이를 실제로 담을 때만 raw anchor 를
-            // 믿는다. 담지 않는 호스트(36324768: lh 14.7px 인데 표 253.1px)를 raw anchor
+            // [#3925] HWPX 원본은 다음 저장 사다리가 개체 높이를 실제로 비울 때만 raw anchor 를
+            // 믿는다. 비우지 않는 호스트(36324768: lh 14.7px 인데 표 253.1px)를 raw anchor
             // 로 보내면 쪽 소비가 187px 부풀어 뒤 문단이 다음 쪽으로 밀린다(2->3쪽).
             && (st.profile.native_hwp5_layout()
                 || (st.profile.hwpx_stored_layout()
-                    && stored_host_line_covers_object(para, next_para, table))))
+                    && stored_ladder_leaves_object_room(para, next_para, table))))
         .then(|| {
             let current = para
                 .line_segs
@@ -20770,6 +20775,106 @@ mod tests {
             }],
             ..Default::default()
         }
+    }
+
+    /// [#3925] HWPX empty-host 그림 표의 raw anchor는 다음 저장 사다리가 개체 높이를
+    /// 실제로 비운 경우에만 쓸 수 있다. 작은 일반 줄의 vpos를 그대로 쓰면
+    /// 36324768처럼 표 높이를 이중 소비해 뒤 본문을 다음 쪽으로 민다.
+    #[test]
+    fn stored_host_anchor_requires_next_ladder_room() {
+        let table = Table {
+            common: CommonObjAttr {
+                height: 18_000,
+                ..Default::default()
+            },
+            outer_margin_top: 500,
+            outer_margin_bottom: 300,
+            ..Default::default()
+        };
+        let host = Paragraph {
+            line_segs: vec![LineSeg {
+                vertical_pos: 1_000,
+                line_height: 1_100,
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let short_ladder = Paragraph {
+            line_segs: vec![LineSeg {
+                vertical_pos: 2_500,
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        assert!(
+            !stored_ladder_leaves_object_room(&host, Some(&short_ladder), &table),
+            "짧은 다음-vpos 간격은 raw anchor의 저장 증거가 아니다"
+        );
+
+        let full_ladder = Paragraph {
+            line_segs: vec![LineSeg {
+                vertical_pos: 19_800,
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        assert!(
+            stored_ladder_leaves_object_room(&host, Some(&full_ladder), &table),
+            "다음 저장 vpos가 표 높이와 바깥 여백을 모두 비우면 사다리 증거다"
+        );
+
+        let covered_host = Paragraph {
+            line_segs: vec![LineSeg {
+                vertical_pos: 1_000,
+                line_height: 18_800,
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        assert!(
+            !stored_ladder_leaves_object_room(&covered_host, None, &table),
+            "host 줄 높이는 #3738 표적을 되살릴 수 있어 다음-vpos 사다리 없이 raw anchor의 증거가 아니다"
+        );
+    }
+
+    /// [#3900] 합성 LineSeg는 serializer가 만든 placeholder라 물리 페이지 경계의
+    /// 저장 증거가 아니다. 앞·뒤 양쪽 모두 실제 저장 줄만 보아야 한다.
+    #[test]
+    fn stored_vpos_rewind_ignores_synthetic_line_segments() {
+        let previous = Paragraph {
+            line_segs: vec![
+                LineSeg {
+                    vertical_pos: 41_645,
+                    ..Default::default()
+                },
+                LineSeg {
+                    vertical_pos: 0,
+                    tag: LineSeg::TAG_IMPLEMENTATION_PROPERTY,
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+        let current = Paragraph {
+            line_segs: vec![
+                LineSeg {
+                    vertical_pos: 0,
+                    tag: LineSeg::TAG_IMPLEMENTATION_PROPERTY,
+                    ..Default::default()
+                },
+                LineSeg {
+                    vertical_pos: 1_000,
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+        let paragraphs = vec![previous, current.clone()];
+
+        let previous_vpos = preceding_stored_vpos(&paragraphs, 1);
+        assert_eq!(previous_vpos, Some(41_645));
+        assert!(stored_vpos_rewinds(previous_vpos, &current));
     }
 
     #[test]
