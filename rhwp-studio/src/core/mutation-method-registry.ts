@@ -31,7 +31,7 @@ export const MUTATING_METHODS: readonly string[] = [
   'splitParagraphInCell', 'mergeParagraphInCell', 'splitParagraphInCellByPath',
   'mergeParagraphInCellByPath',
   // 표 구조/속성
-  'createTable', 'createTableEx', 'deleteTableControl', 'insertTableRow',
+  'createTable', 'createTableEx', 'deleteTableControl', 'insertTableRow', 'splitTable', 'mergeTableWithNext',
   'insertTableColumn', 'deleteTableRow', 'deleteTableColumn', 'mergeTableCells',
   'splitTableCell', 'splitTableCellInto', 'splitTableCellsInRange', 'resizeTableCells',
   'moveTableOffset', 'setTableProperties', 'setCellProperties', 'setCellZoneProperties',
