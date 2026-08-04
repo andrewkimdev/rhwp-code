@@ -73,13 +73,13 @@
     ],
     "expected": {
       "rust_required": "false",
-      "frontend_mode": "unit",
+      "frontend_mode": "package",
       "render_required": "true",
       "native_skia_required": "false",
       "codeql_languages": "javascript-typescript",
       "classification_status": "classified",
       "classifier_version": "1",
-      "reason": "classified:studio-render+studio-render-test"
+      "reason": "classified:studio-render-package+studio-unit"
     }
   },
   {

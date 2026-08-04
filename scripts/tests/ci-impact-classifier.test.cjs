@@ -85,6 +85,43 @@ test('Rust renderer changes require Rust, Native Skia, Canvas, and Rust CodeQL',
   assert.equal(result.classification_status, 'classified');
 });
 
+test('Studio package configuration and broad runtime sources remain render-impacting', () => {
+  for (const filename of [
+    'rhwp-studio/package.json',
+    'rhwp-studio/vite.config.ts',
+    'rhwp-studio/src/style.css',
+    'rhwp-studio/src/core/wasm-bridge.ts',
+    'rhwp-studio/src/view/page-renderer.ts',
+    'rhwp-studio/src/ui/hwp-password-dialog.ts',
+    'rhwp-studio/src/engine/input-handler-keyboard.ts',
+  ]) {
+    const result = classifyChanges({
+      eventName: 'pull_request',
+      files: [{ filename, status: 'modified' }],
+    });
+    assert.equal(result.render_required, 'true', filename);
+    assert.equal(result.classification_status, 'classified', filename);
+    assert.equal(result.frontend_mode, 'package', filename);
+  }
+});
+
+test('known command sources and non-render tests stay on the unit lane', () => {
+  for (const filename of [
+    'rhwp-studio/src/command/shortcut-map.ts',
+    'rhwp-studio/src/engine/command.ts',
+    'rhwp-studio/tests/shortcut-map.test.ts',
+    'rhwp-studio/tests/canvaskit-readiness.test.ts',
+    'rhwp-studio/tests/render-page.test.ts',
+  ]) {
+    const result = classifyChanges({
+      eventName: 'pull_request',
+      files: [{ filename, status: 'modified' }],
+    });
+    assert.equal(result.frontend_mode, 'unit', filename);
+    assert.equal(result.render_required, 'false', filename);
+  }
+});
+
 test('rename evaluates fail-closed before either path can be skipped', () => {
   const result = classifyChanges({
     eventName: 'pull_request',
@@ -105,6 +142,8 @@ for (const [filename, expectedReason] of [
   ['src/main.rs', 'fail-closed:main-render-boundary'],
   ['src/wasm_api.rs', 'fail-closed:wasm-contract'],
   ['scripts/ci-impact-classifier.cjs', 'fail-closed:classifier-contract'],
+  ['rhwp-studio/tsconfig.ci-unit.json', 'fail-closed:frontend-unit-contract'],
+  ['rhwp-studio/types/wasm-ci-unit-stub.d.ts', 'fail-closed:frontend-unit-contract'],
   ['web/new-entry.ts', 'fail-closed:unclassified-path'],
   ['unclassified/new-format.schema', 'fail-closed:unclassified-path'],
 ]) {
