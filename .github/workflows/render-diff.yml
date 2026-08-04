@@ -3,7 +3,7 @@ name: Render Diff
 on:
   pull_request:
     branches: [main, devel]
-    types: [opened, reopened, synchronize, labeled, unlabeled]
+    types: [opened, reopened, synchronize]
     paths:
       - 'Cargo.toml'
       - 'Cargo.lock'
@@ -389,9 +389,6 @@ jobs:
                   previous_filename: file.previous_filename || '',
                   status: file.status || 'modified',
                 })),
-                forceFullReason: (context.payload.pull_request.labels || []).some(
-                  (label) => label.name === 'ci:full',
-                ) ? 'label-ci-full' : '',
               });
             } catch (error) {
               core.warning(`Render Diff impact collection failed; running full. ${error.message}`);

@@ -93,14 +93,16 @@ class CiImpactWorkflowTests(unittest.TestCase):
                     self._step(step_name, self.preflight),
                 )
 
-    def test_ci_full_label_and_label_events_force_a_same_sha_full_lane(self) -> None:
+    def test_label_events_do_not_restart_ci_and_manual_dispatch_forces_full(self) -> None:
         self.assertIn(
-            "types: [opened, reopened, synchronize, labeled, unlabeled]",
+            "types: [opened, reopened, synchronize]",
             self.workflow,
         )
+        self.assertNotIn("labeled, unlabeled", self.workflow)
         collect = self._step("Collect CI impact input", self.preflight)
-        self.assertIn("label.name === 'ci:full'", collect)
-        self.assertIn("? 'label-ci-full' : ''", collect)
+        self.assertNotIn("label.name === 'ci:full'", collect)
+        self.assertIn("context.eventName === 'workflow_dispatch'", collect)
+        self.assertIn("? 'manual-or-tag'", collect)
 
     def test_stage3_consumes_only_frontend_axis(self) -> None:
         self.assertIn("needs.preflight.outputs.frontend_mode", self.workers)

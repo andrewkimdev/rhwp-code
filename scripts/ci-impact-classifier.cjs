@@ -210,12 +210,6 @@ function classifyChanges(input = {}) {
       continue;
     }
 
-    if (filename.startsWith('rhwp-studio/src/view/')) {
-      requireFrontend('unit', 'studio-render');
-      renderRequired = true;
-      continue;
-    }
-
     if (filename.startsWith('rhwp-studio/src/hwpctl/')) {
       requireFrontend('package', 'studio-package');
       continue;
@@ -238,8 +232,7 @@ function classifyChanges(input = {}) {
     }
 
     if (filename.startsWith('rhwp-studio/')) {
-      const mode = filename.startsWith('rhwp-studio/src/') ? 'unit' : 'package';
-      requireFrontend(mode, mode === 'unit' ? 'studio-render' : 'studio-render-package');
+      requireFrontend('package', 'studio-render-package');
       renderRequired = true;
       continue;
     }

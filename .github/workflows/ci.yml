@@ -23,7 +23,7 @@ on:
       - 'rhwp-logo.*'
   pull_request:
     branches: [main, devel]
-    types: [opened, reopened, synchronize, labeled, unlabeled]
+    types: [opened, reopened, synchronize]
     paths-ignore:
       - 'docs/**'
       - 'samples/**'
@@ -394,9 +394,6 @@ jobs:
                 writeInput({
                   eventName: context.eventName,
                   files: normalizedFiles(files),
-                  forceFullReason: (context.payload.pull_request.labels || []).some(
-                    (label) => label.name === 'ci:full',
-                  ) ? 'label-ci-full' : '',
                 });
                 return;
               }
@@ -477,7 +474,7 @@ jobs:
             echo '### CI impact classification'
             echo
             echo '> Stage 3 activates frontend_mode and render_required. Rust, Native Skia, and CodeQL remain unchanged.'
-            echo '> Pull requests classify with the base SHA classifier; ci:full and all failures select the full lane.'
+            echo '> Pull requests classify with the base SHA classifier; workflow_dispatch and all failures select the full lane.'
             echo
             echo '| Axis | Value |'
             echo '| --- | --- |'

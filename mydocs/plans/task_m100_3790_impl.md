@@ -76,13 +76,15 @@ policy를 미채택하기로 결정할 때까지 보존한다. 이후 재사용�
 4. `canvaskit` 파일명 heuristic처럼 피시험 코드와 테스트를 다르게 분류하는 규칙을 제거하고 계약
    fixture로 고정한다.
 5. aggregate는 필요한 worker `success`, 불필요 worker `skipped`만 허용한다.
-6. #3785/#3656은 unit, #3670은 package, #3672는 unit+render 경로를 실측한다.
-7. `ci:full` label은 모든 축을 full로 승격한다. `labeled|unlabeled` 이벤트로 같은 SHA를 full/selective
-   두 번 실행할 수 있게 하고, canary에서는 full 완료 뒤 selective를 실행한다.
+6. #3785/#3656은 unit, #3670과 #3672는 package, #3672는 추가로 render 경로를 실측한다.
+7. label 변경은 workflow를 재시작하지 않는다. canary의 full 대조군은 같은 SHA에 대한 수동
+   `workflow_dispatch`로 만들며, label 기반 강제 full은 post-main trusted controller 단계로 미룬다.
 8. 작성자 association은 선택 실행 조건으로 사용하지 않는다. 외부 fork의 정상 frontend-only PR도 같은
    영향축을 사용하며, workflow 변경은 author와 무관하게 full이다.
 9. WASM binding을 직접 소비하는 `src/core/**`, `src/embed/**`, `src/main.ts`, `public/**`, `src/hwpctl/**`은
    package lane으로 승격한다. CI 전용 tsconfig·stub 자체 변경도 full로 닫는다.
+10. 최초 unit 소스 범위는 historical fixture로 검증한 `src/command/**`, `src/engine/command.ts`로 제한한다.
+    `src/view/**`, `src/ui/**`, 그 밖의 Studio runtime은 package+render에서 시작해 canary 근거 뒤에만 넓힌다.
 
 ## Stage 4 — Rust·Native Skia 조건화
 
@@ -99,7 +101,8 @@ policy를 미채택하기로 결정할 때까지 보존한다. 이후 재사용�
 ## Stage 5 이후
 
 - #3810의 4.73GB cache 기준선 회귀 여부를 확인하며 CodeQL 언어별 matrix를 활성화한다.
-- Stage 3·4 merge 뒤 첫 canary, Stage 5 merge 뒤 두 번째 canary에서 동일 SHA full/selective를 대조한다.
+- Stage 3 merge 직후 첫 canary, Stage 5 merge 뒤 두 번째 canary에서 동일 SHA의 수동 full/selective를
+  대조한다.
 - default-branch controller는 Stage 3~5 진리표가 확정된 뒤 축소 구현하고 정상 릴리즈로 main에 등록한다.
 - artifact 재시도는 #3892의 논리 label `slow/1/2/3`별 test archive, archive expected count와 worker run
   count를 함께 다루고, draft 경량화와 별도 PR로 진행한다.

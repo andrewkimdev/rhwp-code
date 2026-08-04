@@ -91,6 +91,9 @@ test('Studio package configuration and broad runtime sources remain render-impac
     'rhwp-studio/vite.config.ts',
     'rhwp-studio/src/style.css',
     'rhwp-studio/src/core/wasm-bridge.ts',
+    'rhwp-studio/src/view/page-renderer.ts',
+    'rhwp-studio/src/ui/hwp-password-dialog.ts',
+    'rhwp-studio/src/engine/input-handler-keyboard.ts',
   ]) {
     const result = classifyChanges({
       eventName: 'pull_request',
@@ -98,11 +101,7 @@ test('Studio package configuration and broad runtime sources remain render-impac
     });
     assert.equal(result.render_required, 'true', filename);
     assert.equal(result.classification_status, 'classified', filename);
-    assert.equal(
-      result.frontend_mode,
-      filename === 'rhwp-studio/src/style.css' ? 'unit' : 'package',
-      filename,
-    );
+    assert.equal(result.frontend_mode, 'package', filename);
   }
 });
 

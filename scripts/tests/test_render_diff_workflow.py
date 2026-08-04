@@ -38,13 +38,14 @@ class RenderDiffTriggerPolicyTests(unittest.TestCase):
             self.workflow,
         )
 
-    def test_ci_full_label_restarts_render_diff_on_the_same_sha(self) -> None:
+    def test_label_events_do_not_restart_render_diff_and_manual_dispatch_is_full(self) -> None:
         self.assertIn(
-            "types: [opened, reopened, synchronize, labeled, unlabeled]",
+            "types: [opened, reopened, synchronize]",
             self.workflow,
         )
-        self.assertIn("label.name === 'ci:full'", self.workflow)
-        self.assertIn("? 'label-ci-full' : ''", self.workflow)
+        self.assertNotIn("labeled, unlabeled", self.workflow)
+        self.assertNotIn("label.name === 'ci:full'", self.workflow)
+        self.assertIn("forceFullReason: 'manual-or-unsupported-event'", self.workflow)
 
     def test_render_classifier_failures_default_to_full(self) -> None:
         self.assertIn("continue-on-error: true", self.workflow)
