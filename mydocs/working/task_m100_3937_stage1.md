@@ -2,8 +2,8 @@
 
 - 이슈: [#3937](https://github.com/edwardkim/rhwp/issues/3937)
 - 브랜치: stack/issue-3937-distribution-glyph-width
-- 최신 기준: upstream/devel aeb5805cb
-- code candidate: 1e8741a2f
+- 최신 기준: upstream/devel cf5d462dc
+- code candidate: 4ca011cd5
 - 작성일: 2026-08-04
 
 ## 원인과 수정
@@ -37,6 +37,11 @@ PR 리뷰에서 음수 `extra_char_spacing`이 #2189 셀 오버플로우 보정�
 최상단 stack revision에서 production WASM을 다시 만들고 HWP/HWPX 연속 IME→숫자 E2E
 2 / 2를 재실행했다. 두 형식 모두 숫자 줄 전환 11 / 69, 최종 숫자 73, 최종 쪽수 116,
 synchronous flush 0으로 GREEN이었다. 사용자 브라우저 시각 판정도 보존한다.
+
+최신 CI 대기 중 devel이 중첩 표 배치 수정 #3949를 포함한 cf5d462dc로 전진했다. 공용 오늘할일
+충돌은 양쪽 기록을 보존해 해소했고 제품 코드는 충돌하지 않았다. spacing 42 / 42,
+`issue_2189_cell_text_clip` 1 / 1, composer 53 / 53과 production WASM HWP/HWPX 통합 E2E를
+제한 재실행했다. 두 형식 모두 11 / 69, 숫자 73, 116쪽으로 GREEN이며 p95는 49.6 / 49.7ms였다.
 
 ## 범위 경계
 

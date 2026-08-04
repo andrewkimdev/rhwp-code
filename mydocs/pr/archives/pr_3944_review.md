@@ -19,8 +19,8 @@ loaded documents: pr_review_workflow.md, pr_review/README.md,
                   multi_pr_update_branch.md
 current remote head: 99d25623812aab639ac36c1fc3cca5f66dadd4cf
                      (보정 push 전 작성 시점 참고값)
-local correction commit: 9964da1ea61466d43fa3d7f065660d43381d0fb9
-latest base: aeb5805cb93c92b8c44036f4c1fe1f2df420119f
+local correction commit: 1d5db120d
+latest base: cf5d462dcda1b5ab71160033e1d454b42198ad18
 ```
 
 ## 메타데이터
@@ -33,8 +33,8 @@ latest base: aeb5805cb93c92b8c44036f4c1fe1f2df420119f
 | 대상 / head | `devel` / `stack/issue-3937-distribution-glyph-width` |
 | 작성 시점 원격 상태 | draft, `MERGEABLE`; 보정 push 뒤 재확인 필요 |
 | 보정 전 원격 head | `99d25623812aab639ac36c1fc3cca5f66dadd4cf` |
-| 최신 동기화 기준 | `upstream/devel` `aeb5805cb93c92b8c44036f4c1fe1f2df420119f` |
-| review correction | `9964da1ea61466d43fa3d7f065660d43381d0fb9` |
+| 최신 동기화 기준 | `upstream/devel` `cf5d462dcda1b5ab71160033e1d454b42198ad18` |
+| review correction | `1d5db120d` |
 | review 문서 작성 전 PR 고유 규모 | 9 files, +444 / -119 |
 | 관련 issue | [#3937](https://github.com/edwardkim/rhwp/issues/3937) |
 | 다음 레이어 | [#3945](https://github.com/edwardkim/rhwp/pull/3945), [#3946](https://github.com/edwardkim/rhwp/pull/3946) |
@@ -70,7 +70,7 @@ Canvas2D/SVG의 기존 #2189 계약, 명시적 장평, 첨자 배율, ASCII pinn
 `textLength`를 모두 끄고 있었다. 압축된 origin 위에 intrinsic 폭 glyph가 그려져 글자 겹침이나 셀
 우변 클리핑이 재발할 수 있는 교차회귀였다.
 
-보정 commit `9964da1ea`에서 양수 값만 glyph-fit advance에서 제외하고, 0 또는 음수 값은 기존 layout
+보정 commit `1d5db120d`에서 양수 값만 glyph-fit advance에서 제외하고, 0 또는 음수 값은 기존 layout
 advance를 그대로 목표로 사용하도록 범위를 좁혔다. 음수 Canvas 경로는 ASCII pinning 활성·비활성 모두
 `5 / 8 = 0.625` fit을 유지한다. SVG 일반 ASCII와 반각 낫표도 음수 보정된 `textLength`를 유지한다.
 `issue_2189_cell_text_clip` 표적 통합 테스트로 셀 압축 계약을 별도 확인했다.
@@ -94,14 +94,14 @@ glyph-fit advance를 사용하도록 복원하면서 이 fallback 전체를 제�
 
 ### 5. collaborator self-merge 기록
 
-- 최신 `upstream/devel` `aeb5805cb` 위로 Stack을 다시 정렬했다.
+- 최신 `upstream/devel` `cf5d462dc` 위로 Stack을 다시 정렬했다.
 - 계획서와 Stage 1 기록을 최신 기준과 보정된 음수 간격 계약으로 갱신했다.
 - 이 review 문서와 대표 통합 시각 asset을 현재 레이어에 추가했다.
 - 보정은 단일 renderer correction commit으로 추적 가능해 별도 `review_impl` 문서는 만들지 않는다.
 
 ## 검증
 
-보정 commit `9964da1ea`에서 다음 검증을 순차 실행해 통과했다.
+보정 commit `1d5db120d`에서 다음 검증을 순차 실행해 통과했다.
 
 | 검증 | 결과 |
 | --- | --- |
@@ -115,6 +115,11 @@ glyph-fit advance를 사용하도록 복원하면서 이 fallback 전체를 제�
 
 보정 전 원격 head `99d256238`의 CI 성공은 역사 근거일 뿐 최종 merge 근거로 재사용하지 않는다. 보정과
 review 기록을 포함한 최신 head에서 GitHub Actions, Render Diff와 CodeQL을 다시 통과해야 한다.
+
+검토 CI 중 `devel`이 중첩 표 배치 수정 #3949를 포함한 `cf5d462dc`로 전진해 Stack을 다시
+정렬했다. 제품 충돌은 없었으며 spacing 42 / 42, `issue_2189_cell_text_clip` 1 / 1,
+composer 53 / 53과 production WASM HWP/HWPX 통합 E2E를 제한 재실행했다. 두 형식 모두
+11 / 69, 숫자 73, 최종 116쪽으로 GREEN이고 pending operation p95는 49.6 / 49.7ms였다.
 
 ## 시각·golden 판정
 
