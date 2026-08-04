@@ -17964,6 +17964,9 @@ impl TypesetEngine {
                     st.current_height = sync_h;
                 } else if !st.current_items.is_empty() {
                     // 배타 영역 침범 → 발신명의 블록을 통째로 다음 쪽에 단독 배치(분할 부적절).
+                    if std::env::var("RHWP_DIAG_SPLITSCAN").is_ok() {
+                        eprintln!("DIAG_ADVA pi={} sec={} cur_h={:.1}", para_idx, st.section_index, st.current_height);
+                    }
                     st.advance_column_or_new_page();
                 }
                 let flow_before = st.current_height;
@@ -18104,6 +18107,9 @@ impl TypesetEngine {
                     has_preceding_coanchored_float,
                 );
             }
+            if std::env::var("RHWP_DIAG_SPLITSCAN").is_ok() {
+                eprintln!("DIAG_ADVB pi={} sec={} cur_h={:.1}", para_idx, st.section_index, st.current_height);
+            }
             st.advance_column_or_new_page();
             placement_para_start_height = st.current_height;
         }
@@ -18207,6 +18213,9 @@ impl TypesetEngine {
                 && (saved_span.is_some() || measured_fits_current)
                 && declared_total <= available
             {
+                if std::env::var("RHWP_DIAG_SPLITSCAN").is_ok() {
+                    eprintln!("DIAG_ADVC pi={} sec={} cur_h={:.1}", para_idx, st.section_index, st.current_height);
+                }
                 st.advance_column_or_new_page();
                 reserve_declared_table_total = true;
             }
