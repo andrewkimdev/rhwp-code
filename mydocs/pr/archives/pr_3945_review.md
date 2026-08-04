@@ -18,9 +18,9 @@ loaded documents: pr_review_workflow.md, pr_review/README.md,
                   local_validation.md, visual_fixture_evidence.md,
                   multi_pr_update_branch.md
 remote head before correction: a5d26c2d8fc5433d4ec2558c33821f5526a29cd2
-reviewed local layer head: 8c9c35e9fa3518527c1d5aca28adfdf210022fe1
-parent layer head: 3534eb843ae07edf60f061a9b245958c8b7d2cf0
-upstream/devel: aeb5805cb93c92b8c44036f4c1fe1f2df420119f
+reviewed local layer head: 8d8239287
+parent layer head: 3b91ca268
+upstream/devel: cf5d462dcda1b5ab71160033e1d454b42198ad18
 ```
 
 ## 메타데이터
@@ -33,9 +33,9 @@ upstream/devel: aeb5805cb93c92b8c44036f4c1fe1f2df420119f
 | Stack 위치 | 2 / 3 — 부모 [#3944](https://github.com/edwardkim/rhwp/pull/3944), 자식 [#3946](https://github.com/edwardkim/rhwp/pull/3946) |
 | 작성 시점 원격 상태 | draft, `MERGEABLE`; 보정 push와 restack 뒤 재확인 필요 |
 | 보정 전 원격 head | `a5d26c2d8fc5433d4ec2558c33821f5526a29cd2` |
-| 리뷰 보정 layer head | `8c9c35e9fa3518527c1d5aca28adfdf210022fe1` |
-| 부모 레이어 head | `3534eb843ae07edf60f061a9b245958c8b7d2cf0` |
-| 최신 공통 기준 | `upstream/devel` `aeb5805cb93c92b8c44036f4c1fe1f2df420119f` |
+| 리뷰 보정 layer head | `8d8239287` |
+| 부모 레이어 head | `3b91ca268` |
+| 최신 공통 기준 | `upstream/devel` `cf5d462dcda1b5ab71160033e1d454b42198ad18` |
 | review 문서 작성 전 PR 고유 규모 | 5 files, +230 / -22 |
 | 관련 issue | [#3822](https://github.com/edwardkim/rhwp/issues/3822) |
 
@@ -72,7 +72,7 @@ DisplaySnapshot은 #3743 후속 아키텍처 범위로 남긴다.
 
 ### 2. 한글 무공백 어절 회귀 보강
 
-보정 commit `8c9c35e9f`에서 `korean_break_unit == 0`의 다중 문자 한글 어절을 별도 회귀로 추가했다.
+보정 commit `8d8239287`에서 `korean_break_unit == 0`의 다중 문자 한글 어절을 별도 회귀로 추가했다.
 
 ```text
 입력: "A 가나다라마바사"
@@ -114,6 +114,11 @@ fallback 표현을 유지한다.
 | #3822 전용 Latin·한글·숫자·잔여 폭·hanging indent | 5 passed / 0 failed |
 | `env CARGO_INCREMENTAL=0 cargo fmt --check` | 통과 |
 | `git diff --check` | 통과 |
+
+검토 CI 중 `devel`이 중첩 표 배치 수정 #3949를 포함한 `cf5d462dc`로 전진해 Stack을 다시
+정렬했다. composer 제품 충돌은 없었으며 53 / 53과 #3822 focused 5 / 5를 유지했다. 새
+production WASM HWP/HWPX 통합 E2E도 줄 전환 11 / 69, 숫자 73, 최종 116쪽으로 GREEN이고
+pending operation p95는 49.6 / 49.7ms였다.
 
 ## 실제 HWP/HWPX 증적
 

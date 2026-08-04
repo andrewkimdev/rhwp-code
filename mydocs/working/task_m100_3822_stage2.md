@@ -2,8 +2,8 @@
 
 - 이슈: [#3822](https://github.com/edwardkim/rhwp/issues/3822)
 - 브랜치: stack/issue-3822-overlong-token-wrap
-- 최신 기준: upstream/devel aeb5805cb
-- code candidate: 7d6c5d625
+- 최신 기준: upstream/devel cf5d462dc
+- code candidate: ba99fad54
 - 작성일: 2026-08-04
 
 ## 최신 기준 focused 결과
@@ -41,6 +41,11 @@ glyph outline의 실제 가로 비율을 직접 증명하지 않았다. 따라�
 최신 최상단 stack의 production WASM에서 같은 combined E2E를 재실행했다. HWP/HWPX 모두
 숫자 줄 전환 11 / 69, 최종 숫자 73, 최종 쪽수 116과 synchronous flush 0으로 GREEN이었다.
 두 정확성 수정과 #3815 scheduler의 조합이 최신 typeset 변경 뒤에도 유지됐다.
+
+검토 CI 중 devel이 중첩 표 배치 수정 #3949를 포함한 cf5d462dc로 전진했다. composer 제품
+코드는 충돌하지 않았고 53 / 53과 #3822 focused 5 / 5를 유지했다. 새 production WASM
+HWP/HWPX 통합 E2E도 줄 전환 11 / 69, 숫자 73, 최종 116쪽으로 GREEN이며 p95는
+49.6 / 49.7ms였다.
 
 Draft PR은 [#3945](https://github.com/edwardkim/rhwp/pull/3945)이며 부모는
 [#3944](https://github.com/edwardkim/rhwp/pull/3944), 자식은
