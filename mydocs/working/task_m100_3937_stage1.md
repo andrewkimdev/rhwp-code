@@ -2,8 +2,8 @@
 
 - 이슈: [#3937](https://github.com/edwardkim/rhwp/issues/3937)
 - 브랜치: stack/issue-3937-distribution-glyph-width
-- 최신 기준: upstream/devel 8d7bc622e
-- code candidate: 6d9b0f7f4
+- 최신 기준: upstream/devel ec1b21096
+- code candidate: 1e8741a2f
 - 작성일: 2026-08-04
 
 ## 원인과 수정
@@ -24,13 +24,14 @@ Canvas2D와 SVG는 이 계산을 사용하고, 문자 origin과 layout advance�
 - cargo check --target wasm32-unknown-unknown --lib: 통과
 - git diff --check: 통과
 
-최종 검증 뒤 devel이 19커밋 전진해 8d7bc622e로 다시 rebase했다. 추가 변경은
-structure query와 문서뿐이고 renderer 제품 파일과 겹치지 않는다. 최상단에서 focused
-spot-check를 다시 실행한다.
+최종 검증 뒤 devel이 다시 전진해 ec1b21096로 rebase했다. 추가 변경은 이 레이어의
+Canvas/SVG 제품 파일과 직접 겹치지 않았지만, typeset 쪽 경계 수정이 실제 문서의 쪽수에
+영향을 줄 수 있어 spacing 42 / 42, SVG 41 / 41과 wasm32 library check를 다시 실행해
+모두 통과했다.
 
-이전 integration snapshot에서는 production WASM HWP/HWPX 연속 IME→숫자 E2E 2 / 2와
-사용자 브라우저 시각 판정을 통과했다. 최상단 stack revision에서 같은 combined smoke를
-한 번 더 실행한다.
+최상단 stack revision에서 production WASM을 다시 만들고 HWP/HWPX 연속 IME→숫자 E2E
+2 / 2를 재실행했다. 두 형식 모두 숫자 줄 전환 11 / 69, 최종 숫자 73, 최종 쪽수 116,
+synchronous flush 0으로 GREEN이었다. 사용자 브라우저 시각 판정도 보존한다.
 
 ## 범위 경계
 
@@ -39,3 +40,6 @@ spot-check를 다시 실행한다.
 - #3815: deferred pagination 시작 coalescing
 
 세 변경은 제품 코드상 분리돼 있으며, 최상단 E2E가 실제 연속 입력 조합을 함께 검증한다.
+
+Draft PR은 [#3944](https://github.com/edwardkim/rhwp/pull/3944)이며 GitHub Stack
+#3947의 첫 레이어다.
