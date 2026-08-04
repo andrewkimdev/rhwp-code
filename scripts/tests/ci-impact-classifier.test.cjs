@@ -104,6 +104,42 @@ test('Native Skia integration test changes run Rust and Native Skia without Canv
   }
 });
 
+test('Rust test input changes keep default Rust tests alongside render gates', () => {
+  for (const filename of [
+    'tests/fixtures/fonts/RHWPExactFaceSmoke.ttc',
+    'ttfs/opensource/NotoSansKR-Regular.ttf',
+    'samples/render-p35-font-native-bitmap.hwpx',
+  ]) {
+    const result = classifyChanges({
+      eventName: 'pull_request',
+      files: [{ filename, status: 'modified' }],
+    });
+    assert.equal(result.rust_required, 'true', filename);
+    assert.equal(result.render_required, 'true', filename);
+    assert.equal(result.native_skia_required, 'true', filename);
+    assert.equal(result.codeql_languages, 'none', filename);
+    assert.equal(result.classification_status, 'classified', filename);
+    assert.equal(result.classifier_version, '2', filename);
+    assert.equal(result.reason, 'classified:rust-test-input', filename);
+  }
+});
+
+test('frontend font assets and render tooling do not over-enable the Rust lane', () => {
+  for (const filename of [
+    'assets/fonts/NotoSansKR-Regular.woff2',
+    'scripts/generate_exact_face_collection_fixture.py',
+    'docs/text-ir-v2.md',
+  ]) {
+    const result = classifyChanges({
+      eventName: 'pull_request',
+      files: [{ filename, status: 'modified' }],
+    });
+    assert.equal(result.rust_required, 'false', filename);
+    assert.equal(result.render_required, 'true', filename);
+    assert.equal(result.native_skia_required, 'true', filename);
+  }
+});
+
 test('Studio package configuration and broad runtime sources remain render-impacting', () => {
   for (const filename of [
     'rhwp-studio/package.json',

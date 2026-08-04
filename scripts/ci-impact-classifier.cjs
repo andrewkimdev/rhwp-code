@@ -21,6 +21,23 @@ const NATIVE_SKIA_RUST_FILES = new Set([
   'tests/render_p37_direct_pdf_export.rs',
 ]);
 
+const RUST_TEST_INPUT_FILES = new Set([
+  'samples/render-p35-font-native-bitmap.hwpx',
+]);
+
+const RUST_TEST_FONT_PREFIXES = [
+  'tests/fixtures/fonts/',
+  'ttfs/',
+];
+
+const RUST_TEST_FONT_EXTENSIONS = [
+  '.otf',
+  '.ttc',
+  '.ttf',
+  '.woff',
+  '.woff2',
+];
+
 const RENDER_TOOL_PATHS = new Set([
   'scripts/renderer_baseline.py',
   'scripts/renderer_baseline_manifest.json',
@@ -130,6 +147,16 @@ function isRustPath(filename) {
   return filename.endsWith('.rs') || filename === 'build.rs';
 }
 
+function isRustTestInputPath(filename) {
+  return (
+    RUST_TEST_INPUT_FILES.has(filename)
+    || (
+      RUST_TEST_FONT_PREFIXES.some((prefix) => filename.startsWith(prefix))
+      && RUST_TEST_FONT_EXTENSIONS.some((extension) => filename.endsWith(extension))
+    )
+  );
+}
+
 function isStudioKnownNonRenderSource(filename) {
   return (
     filename.startsWith('rhwp-studio/src/command/')
@@ -220,6 +247,14 @@ function classifyChanges(input = {}) {
       rustRequired = true;
       codeqlLanguages.add('rust');
       reasons.add('rust');
+      continue;
+    }
+
+    if (isRustTestInputPath(filename)) {
+      rustRequired = true;
+      renderRequired = true;
+      nativeSkiaRequired = true;
+      reasons.add('rust-test-input');
       continue;
     }
 

@@ -22,7 +22,8 @@ class CiImpactWorkflowTests(unittest.TestCase):
     def _step(self, name: str, source: str | None = None) -> str:
         workflow = source or self.workflow
         step = workflow.split(f"      - name: {name}", maxsplit=1)[1]
-        return step.split("\n      - name:", maxsplit=1)[0]
+        boundary = re.search(r"(?m)^(?:      - name:|  [A-Za-z0-9_-]+:)\s*", step)
+        return step[: boundary.start()] if boundary else step
 
     def _job(self, name: str) -> str:
         match = re.search(
@@ -57,7 +58,7 @@ class CiImpactWorkflowTests(unittest.TestCase):
             **overrides,
         }
         return subprocess.run(
-            ["bash", "-o", "pipefail", "-c", script],
+            ["bash", "-e", "-o", "pipefail", "-c", script],
             check=False,
             capture_output=True,
             env=env,
@@ -192,6 +193,17 @@ class CiImpactWorkflowTests(unittest.TestCase):
         self.assertIn("needs.lint.result == 'success'", native)
         self.assertIn("needs.preflight.outputs.rust_required == 'false'", native)
         self.assertIn("needs.lint.result == 'skipped'", native)
+        self.assertIn("frontend-unit-gates", native)
+        self.assertIn("frontend-package-gates", native)
+        self.assertIn("frontend_mode == 'none'", native)
+        self.assertIn("frontend_mode == 'unit'", native)
+        self.assertIn("frontend_mode == 'package'", native)
+
+    def test_aggregate_harness_stops_at_the_next_job_boundary(self) -> None:
+        step = self._step("Check Build & Test worker results")
+        script = textwrap.dedent(step.split("        run: |\n", maxsplit=1)[1])
+        self.assertNotIn("wasm-build:", script)
+        self.assertNotIn("startsWith(github.ref", script)
 
     def test_native_skia_integration_targets_are_classifier_inputs(self) -> None:
         native_step = self._step("Native Skia tests")
