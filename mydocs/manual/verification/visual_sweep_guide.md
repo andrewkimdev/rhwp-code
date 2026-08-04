@@ -34,7 +34,8 @@ PR에서는 이 가이드를 직접 시작점으로 쓴다.
 `tools/fidelity_compare/fidelity_compare.py --text-only --export-all-svg --layout-ledger`로 전수 후보를
 수집한다. visual sweep은 그 중 Square/Tight/Through 그림↔본문 기하 규칙을 같은 render tree에서
 직접 재사용하여 `square_wrap_text_overlap` flag와 annotation으로 남긴다. 반면 PDF↔SVG text owner,
-표 fragment, page-count ledger는 sweep이 다시 계산하지 않으므로 fidelity 원장을 함께 보존해야 한다.
+그림 앞 문단의 `float-owner-shift`, 표 fragment, page-count ledger는 sweep이 다시 계산하지 않으므로
+fidelity 원장을 함께 보존해야 한다.
 이 bridge의 render tree가 없거나 JSON이 손상되면 sweep은 `flagged=0`을 보고하지 않고 실패해야 한다.
 
 ## 필수 도구

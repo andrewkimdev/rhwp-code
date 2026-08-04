@@ -80,6 +80,9 @@ python3 tools/fidelity_compare/fidelity_compare.py 0 214 \
   보완한다. NFC·공백 정규화 뒤 한 쪽에서 사라진 16자 이상 **순서 보존** 문자열이 바로 다음 rhwp/PDF
   쪽에만 있으면 같은 owner 방향 후보로 기록한다. URL·citation·긴 각주 이동에는 강하지만, 최종 layout
   판정은 아니다.
+- `float-owner-shift-candidates.tsv`: `rhwp_earlier_than_reference` 본문 owner 이동과 바로 다음
+  페이지 상단 25% 안의 substantial Body `TopAndBottom`/`Square`/`Tight`/`Through` 그림을 한 행으로
+  묶는다. 그림 자체만으로는 후보가 되지 않으며, PDF↔SVG text owner 차이가 먼저 있어야 한다.
 - `page-count-ledger.tsv`: 기준 PDF, `--export-all-svg`의 전체 SVG, `--layout-ledger`의 전체 render tree
   쪽수를 분리 기록한다. 페이지 수 차이는 전역 page-break 보정의 근거가 아니라 individual owner 조사 후보를
   여는 신호다.
@@ -108,6 +111,11 @@ python3 tools/fidelity_compare/fidelity_compare.py 0 214 \
 우선순위 후보로 묶는다. `text-report.tsv` 상위 페이지와 `export-svg --json`의 `overflowCellLines` 및 bbox
 ledger를 합친 뒤에만 pixel diff와 visual sweep으로 확정한다.
 
+`--layout-ledger`를 함께 주면 `float-owner-shift-candidates.tsv`도 쓴다. 이는 generic owner
+candidate와 successor-page의 상단 Body float를 결합해, 그림 앞 문단의 줄바꿈이 한 페이지 이르게
+확정된 p118→p119 같은 경계를 바로 triage한다. 그림이 없는 일반 owner shift 또는 페이지 하단의
+무관한 그림은 이 파일에 넣지 않는다.
+
 `--export-all-svg`는 지정 범위와 관계없이 `export-svg`를 한 번 실행해 SVG cache를 채운다. 긴 문서의
 전수 text-only pass에서 페이지마다 rhwp 프로세스를 재기동하지 않기 위한 선택지다. 이후 같은 `--out-dir`에
 대해 후보 범위만 pixel 비교하면 기존 SVG를 재사용한다.
@@ -116,8 +124,9 @@ ledger를 합친 뒤에만 pixel diff와 visual sweep으로 확정한다.
 `page-count-ledger.tsv`에 render tree 전체 페이지 수를 남긴다. `--export-all-svg`를 함께 주면 SVG 전체 쪽수도
 기록한다. 선택 page SVG cache 수는 partial run과 stale cache를 구분할 수 없어서 전체 수로 가장하지 않는다.
 
-`--layout-ledger`는 `export-render-tree`를 한 번 실행해 `layout-candidates.tsv`와
-`table-fragment-candidates.tsv`를 만든다. `body_footnote_lines`는 Body `TextLine`의 하단이
+`--layout-ledger`는 `export-render-tree`를 한 번 실행해 `layout-candidates.tsv`,
+`table-fragment-candidates.tsv`, `float-owner-shift-candidates.tsv`를 만든다.
+`body_footnote_lines`는 Body `TextLine`의 하단이
 `FootnoteArea` 상단보다 1px 이상 아래인 경우, `table_footer`는 Body 표의 하단이 Footer 상단보다 1px 이상 아래인
 경우다. `*_outside_frame`은 Body 표/그림이 page frame 밖에 나간 경우다. 표 fragment ledger는 source `(pi, ci)`가
 인접 render-tree 쪽에 연속한 것, 표/footer·frame 충돌, 또는 page 높이의 하단 15%에 걸친 표와 24자 이상

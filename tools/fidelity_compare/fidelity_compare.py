@@ -1158,6 +1158,110 @@ def tree_path_for_page(tree_dir: Path, page_index: int) -> Path | None:
     return matches[0] if matches else None
 
 
+FLOAT_OWNER_SHIFT_WRAPS = frozenset({"TopAndBottom", "Square", "Tight", "Through"})
+FLOAT_OWNER_SHIFT_MAX_TOP_RATIO = 0.25
+FLOAT_OWNER_SHIFT_MIN_DIMENSION = 80.0
+
+
+def successor_top_float_records(
+    tree: Mapping[str, object], page_index: int
+) -> list[dict[str, object]]:
+    """Collect substantial Body floats in the successor page's top quarter.
+
+    A float alone does not establish a page-break defect.  The narrow geometry
+    filter is intentionally used only to attach an explanation to an already
+    observed PDF↔SVG text-owner shift.
+    """
+    page_box = bbox_from_node(tree)
+    if page_box is None:
+        return []
+    _, page_y, _, page_height = page_box
+    top_limit = page_y + page_height * FLOAT_OWNER_SHIFT_MAX_TOP_RATIO
+    records: list[dict[str, object]] = []
+
+    def walk(node: Mapping[str, object], region: str = "outside") -> None:
+        node_type = node.get("type")
+        if node_type in {"Body", "FootnoteArea", "Footer", "Header"}:
+            region = str(node_type)
+        box = bbox_from_node(node)
+        if region == "Body" and node_type == "Image" and box is not None:
+            text_wrap = node.get("textWrap")
+            x, y, width, height = box
+            if (
+                text_wrap in FLOAT_OWNER_SHIFT_WRAPS
+                and width >= FLOAT_OWNER_SHIFT_MIN_DIMENSION
+                and height >= FLOAT_OWNER_SHIFT_MIN_DIMENSION
+                and y <= top_limit
+            ):
+                records.append(
+                    {
+                        "page": page_index,
+                        "pi": node.get("pi"),
+                        "ci": node.get("ci"),
+                        "text_wrap": str(text_wrap),
+                        "bbox": box,
+                        "top_ratio": (y - page_y) / page_height,
+                    }
+                )
+        children = node.get("children")
+        if isinstance(children, list):
+            for child in children:
+                if isinstance(child, Mapping):
+                    walk(child, region)
+
+    walk(tree)
+    return records
+
+
+def successor_float_owner_shift_candidates(
+    tree_dir: Path,
+    requested_pages: Sequence[int],
+    page_differences: Mapping[int, tuple[Counter[str], Counter[str]]],
+) -> list[dict[str, object]]:
+    """Attach an upper successor-page float to an early rhwp text-owner shift.
+
+    This does not re-detect text movement.  It narrows the existing reciprocal
+    PDF/SVG candidate to the page-break pattern where rhwp kept a paragraph
+    above a float while the reference continued that paragraph before the same
+    successor-page float.
+    """
+    requested = set(requested_pages)
+    candidates: list[dict[str, object]] = []
+    for owner_shift in adjacent_text_owner_shift_candidates(page_differences):
+        page_index = int(owner_shift["page"])
+        next_page = int(owner_shift["next_page"])
+        if owner_shift["direction"] != "rhwp_earlier_than_reference":
+            continue
+        if page_index not in requested and next_page not in requested:
+            continue
+        tree_path = tree_path_for_page(tree_dir, next_page)
+        if tree_path is None:
+            continue
+        try:
+            tree = json.loads(tree_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError, json.JSONDecodeError):
+            continue
+        if not isinstance(tree, Mapping):
+            continue
+        for float_record in successor_top_float_records(tree, next_page):
+            candidates.append(
+                {
+                    **owner_shift,
+                    "float": float_record,
+                }
+            )
+
+    return sorted(
+        candidates,
+        key=lambda candidate: (
+            int(candidate["page"]),
+            int(candidate["next_page"]),
+            str(candidate["float"]["pi"]),
+            str(candidate["float"]["ci"]),
+        ),
+    )
+
+
 def numbered_page_count(directory: Path, suffix: str) -> int:
     """Count renderer page files while ignoring manifests and auxiliary files."""
     pattern = re.compile(rf"_([0-9]+){re.escape(suffix)}$")
@@ -1241,6 +1345,38 @@ def write_text_owner_sequence_ledger(
             report.write(
                 f"{int(candidate['page']) + 1}\t{int(candidate['next_page']) + 1}\t"
                 f"{candidate['direction']}\t{candidate['chars']}\t{sequence}\t"
+                "candidate only; PDF visual owner review required\n"
+            )
+
+
+def write_successor_float_owner_shift_ledger(
+    work_dir: Path,
+    tree_dir: Path,
+    requested_pages: Sequence[int],
+    page_differences: Mapping[int, tuple[Counter[str], Counter[str]]],
+) -> None:
+    """Write high-signal owner shifts whose successor starts with a Body float."""
+    report_path = work_dir / "float-owner-shift-candidates.tsv"
+    with report_path.open("w", encoding="utf-8") as report:
+        report.write(
+            "page\tnext_page\tdirection\tshared_chars\tsource_coverage\t"
+            "target_coverage\tpi\tci\ttext_wrap\tbbox\ttop_ratio\tnote\n"
+        )
+        for candidate in successor_float_owner_shift_candidates(
+            tree_dir, requested_pages, page_differences
+        ):
+            float_record = candidate["float"]
+            assert isinstance(float_record, Mapping)
+            report.write(
+                f"{int(candidate['page']) + 1}\t{int(candidate['next_page']) + 1}\t"
+                f"{candidate['direction']}\t{candidate['shared_count']}\t"
+                f"{float(candidate['source_coverage']):.3f}\t"
+                f"{float(candidate['target_coverage']):.3f}\t"
+                f"{format_number(float_record.get('pi'))}\t"
+                f"{format_number(float_record.get('ci'))}\t"
+                f"{float_record.get('text_wrap')}\t"
+                f"{format_bbox(float_record.get('bbox'))}\t"
+                f"{float(float_record['top_ratio']):.3f}\t"
                 "candidate only; PDF visual owner review required\n"
             )
 
@@ -1515,6 +1651,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             requested_pages,
             text_differences,
         )
+        write_successor_float_owner_shift_ledger(
+            work_dir,
+            tree_dir,
+            requested_pages,
+            text_differences,
+        )
     write_page_count_ledger(
         work_dir,
         reference_page_count=reference_page_count,
@@ -1549,6 +1691,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.layout_ledger:
         print("layout ledger:", work_dir / "layout-candidates.tsv")
         print("table fragment candidates:", work_dir / "table-fragment-candidates.tsv")
+        print(
+            "float owner-shift candidates:",
+            work_dir / "float-owner-shift-candidates.tsv",
+        )
     print("run state:", work_dir / "run-state.tsv")
     return 0 if not all_missing_pages else 1
 

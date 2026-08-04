@@ -1,6 +1,6 @@
 ---
 kind: analysis
-status: active
+status: completed
 canonical: mydocs/working/task_m100_3820_stage1.md
 last_verified: 2026-08-04
 ---
@@ -66,3 +66,42 @@ bbox=94.5,83.2,448.5,359.0)`가 있다.
 문단의 분할 결함임을 다시 교차해석해야 한다. `float-owner-shift-candidates.tsv`는 이 정확한
 두 근거를 한 행으로 연결해 review 우선순위를 올린다. 페이지 상단 25% 안의 Body float만
 연결하므로, 같은 페이지에 우연히 있는 하단 그림으로 owner shift를 과장하지 않는다.
+
+## 구현 및 검증 결과
+
+`fidelity_compare`에 `float-owner-shift-candidates.tsv`를 추가했다. 이 원장은 기존
+`text-owner-shift-candidates.tsv`의 `rhwp_earlier_than_reference` 행을 재사용하고, 다음 물리
+페이지의 Body `TopAndBottom`/`Square`/`Tight`/`Through` 그림 중 페이지 상단 25% 안에 놓인
+80px 이상 그림만 결합한다. 따라서 그림만 있거나 일반 문단 owner shift만 있는 경우는 후보로
+기록하지 않으며, PDF visual review가 여전히 최종 판정이다.
+
+실제 p118→p119 재실행 결과는 다음 한 행이다.
+
+```text
+118  119  rhwp_earlier_than_reference  72  1.000  1.000
+pi=1276  ci=0  TopAndBottom  bbox=94.5,83.2,448.5,359.0  top_ratio=0.074
+```
+
+이제 후보 한 행만으로 “p118에서 rhwp가 본문 72자를 너무 이르게 소유했고, p119 상단에
+그림 55가 있다”는 조사 우선순위가 드러난다. `scripts/visual_sweep.py`의 독립 raster 규칙도
+같은 pair에서 p118 `line_order_overlap`, p119 `column_text_flow_collapse`을 flag했다.
+두 도구가 같은 결함을 다른 축에서 후보화한 것이며, screenshot의 PDF 대조가 결함 확정 근거다.
+
+215쪽 full text-only/layout ledger도 완료했다. SVG와 render tree는 219쪽, 기준 PDF는 215쪽으로
+전역 page-count delta `+4`를 별도 기록했고, requested/completed는 215/215·missing 0이다.
+generic reciprocal owner 후보 8건 중 상단 float와 결합한 고신호 후보는 2건(p74→p75,
+p118→p119)으로 줄었다. 이 원장은 전체 문서의 자동 우선순위 큐이며, 두 건이 모두 결함이라는
+자동 판정은 아니다.
+
+```text
+python3 -m py_compile tools/fidelity_compare/fidelity_compare.py
+python3 -m unittest scripts/tests/test_fidelity_compare.py scripts/tests/test_visual_sweep.py
+# Ran 55 tests ... OK
+```
+
+증적은 다음 경로에 보관했다.
+
+- `output/task-3820-3821-fidelity/stage6-owner/float-owner-shift-candidates.tsv`
+- `output/task-3820-3821-fidelity/stage6-sweep/stage6-p118-owner/review/review_118.png`
+- `output/task-3820-3821-fidelity/stage6-sweep/stage6-p118-owner/review/review_119.png`
+- `output/task-3820-3821-fidelity/stage6-full-ledger/float-owner-shift-candidates.tsv`

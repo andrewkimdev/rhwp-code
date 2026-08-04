@@ -296,6 +296,90 @@ class TextLayerComparisonTests(unittest.TestCase):
         self.assertIn("52\t53\trhwp_later_than_reference", report)
         self.assertIn(moved, report)
 
+    def test_successor_top_float_refines_early_owner_shift(self) -> None:
+        moved = Counter("그림앞문단이기준PDF에서는다음쪽으로이어짐")
+        tree = {
+            "type": "Page",
+            "bbox": {"x": 0, "y": 0, "w": 800, "h": 1000},
+            "children": [
+                {
+                    "type": "Body",
+                    "bbox": {"x": 50, "y": 50, "w": 700, "h": 900},
+                    "children": [
+                        {
+                            "type": "Image",
+                            "pi": 1276,
+                            "ci": 0,
+                            "textWrap": "TopAndBottom",
+                            "bbox": {"x": 100, "y": 80, "w": 400, "h": 300},
+                        }
+                    ],
+                }
+            ],
+        }
+        differences = {
+            117: (Counter(), moved),
+            118: (moved, Counter()),
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            tree_dir = root / "render_tree"
+            tree_dir.mkdir()
+            (tree_dir / "document_119.json").write_text(
+                json.dumps(tree), encoding="utf-8"
+            )
+
+            candidates = FIDELITY.successor_float_owner_shift_candidates(
+                tree_dir, [117, 118], differences
+            )
+            FIDELITY.write_successor_float_owner_shift_ledger(
+                root, tree_dir, [117, 118], differences
+            )
+            report = (root / "float-owner-shift-candidates.tsv").read_text(
+                encoding="utf-8"
+            )
+
+        self.assertEqual(len(candidates), 1)
+        self.assertEqual(candidates[0]["direction"], "rhwp_earlier_than_reference")
+        self.assertEqual(candidates[0]["float"]["pi"], 1276)
+        self.assertEqual(candidates[0]["float"]["text_wrap"], "TopAndBottom")
+        self.assertIn("118\t119\trhwp_earlier_than_reference", report)
+        self.assertIn("\t1276\t0\tTopAndBottom\t", report)
+
+    def test_successor_float_owner_shift_ignores_lower_page_float(self) -> None:
+        moved = Counter("그림앞문단이기준PDF에서는다음쪽으로이어짐")
+        tree = {
+            "type": "Page",
+            "bbox": {"x": 0, "y": 0, "w": 800, "h": 1000},
+            "children": [
+                {
+                    "type": "Body",
+                    "children": [
+                        {
+                            "type": "Image",
+                            "textWrap": "TopAndBottom",
+                            "bbox": {"x": 100, "y": 400, "w": 400, "h": 300},
+                        }
+                    ],
+                }
+            ],
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            tree_dir = Path(directory)
+            (tree_dir / "document_119.json").write_text(
+                json.dumps(tree), encoding="utf-8"
+            )
+            candidates = FIDELITY.successor_float_owner_shift_candidates(
+                tree_dir,
+                [117, 118],
+                {
+                    117: (Counter(), moved),
+                    118: (moved, Counter()),
+                },
+            )
+
+        self.assertEqual(candidates, [])
+
     def test_numbered_page_count_ignores_manifest_and_non_page_files(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
