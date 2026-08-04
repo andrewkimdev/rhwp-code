@@ -2,7 +2,7 @@
 
 const fs = require('node:fs');
 
-const CLASSIFIER_VERSION = '1';
+const CLASSIFIER_VERSION = '2';
 const CODEQL_LANGUAGE_ORDER = ['javascript-typescript', 'python', 'rust'];
 const FRONTEND_MODE_RANK = { none: 0, unit: 1, package: 2 };
 
@@ -14,6 +14,11 @@ const RENDER_RUST_PREFIXES = [
 
 const RENDER_RUST_FILES = new Set([
   'src/document_core/queries/rendering.rs',
+]);
+
+const NATIVE_SKIA_RUST_FILES = new Set([
+  'tests/issue_2225_missing_picture_placeholder.rs',
+  'tests/render_p37_direct_pdf_export.rs',
 ]);
 
 const RENDER_TOOL_PATHS = new Set([
@@ -200,6 +205,14 @@ function classifyChanges(input = {}) {
       nativeSkiaRequired = true;
       codeqlLanguages.add('rust');
       reasons.add('rust-render');
+      continue;
+    }
+
+    if (NATIVE_SKIA_RUST_FILES.has(filename)) {
+      rustRequired = true;
+      nativeSkiaRequired = true;
+      codeqlLanguages.add('rust');
+      reasons.add('native-skia-rust');
       continue;
     }
 
