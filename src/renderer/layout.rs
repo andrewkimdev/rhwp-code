@@ -981,6 +981,76 @@ fn native_empty_single_topbottom_table_saved_top(
         .then_some(top)
 }
 
+/// native HWP5의 빈-host 1×1 RowBreak 표에서 cell paragraph 경계를 넘는 저장
+/// vpos reset은 첫 fragment의 raw page anchor를 명시한다. cell 전체 실측 높이는
+/// reset 뒤 continuation까지 합산하므로, 일반 y cursor로 그리면 첫 fragment가
+/// 기존 각주 아래로 밀린다. typeset이 이 형상만 fragment scan으로 보낸 뒤, layout도
+/// 같은 anchor에서 첫 조각을 paint해야 페이지네이터/렌더러 좌표가 일치한다.
+fn native_hwp5_internal_reset_rowbreak_first_fragment_saved_top(
+    native_hwp5_layout: bool,
+    para: &Paragraph,
+    next_para: Option<&Paragraph>,
+    table: &crate::model::table::Table,
+    col_area: &LayoutRect,
+    dpi: f64,
+) -> Option<f64> {
+    if !native_hwp5_layout
+        || para_has_visible_text(para)
+        || !is_para_topbottom_float(&table.common)
+        || table.common.treat_as_char
+        || table.row_count != 1
+        || table.col_count != 1
+        || table.cells.len() != 1
+        || !matches!(table.page_break, TablePageBreak::RowBreak)
+        || para
+            .controls
+            .iter()
+            .filter(|control| matches!(control, Control::Table(_)))
+            .count()
+            != 1
+    {
+        return None;
+    }
+
+    let host_seg = para
+        .line_segs
+        .iter()
+        .find(|seg| seg.tag & crate::model::paragraph::LineSeg::TAG_IMPLEMENTATION_PROPERTY == 0)?;
+    let next_seg = next_para?
+        .line_segs
+        .iter()
+        .find(|seg| seg.tag & crate::model::paragraph::LineSeg::TAG_IMPLEMENTATION_PROPERTY == 0)?;
+    // 후속 source가 위로 되감겨야 cell reset tail이 다음 physical page에 속한다.
+    if next_seg.vertical_pos >= host_seg.vertical_pos {
+        return None;
+    }
+
+    let mut previous_vpos = None;
+    let mut has_internal_reset = false;
+    for cell_para in &table.cells[0].paragraphs {
+        for seg in cell_para.line_segs.iter().filter(|seg| {
+            seg.tag & crate::model::paragraph::LineSeg::TAG_IMPLEMENTATION_PROPERTY == 0
+        }) {
+            if previous_vpos.is_some_and(|previous| previous > 0 && seg.vertical_pos <= 0) {
+                has_internal_reset = true;
+                break;
+            }
+            previous_vpos = Some(seg.vertical_pos);
+        }
+        if has_internal_reset {
+            break;
+        }
+    }
+    if !has_internal_reset {
+        return None;
+    }
+
+    let top = col_area.y + hwpunit_to_px(host_seg.vertical_pos, dpi);
+    let bottom = top + hwpunit_to_px(table.common.height as i32, dpi);
+    (top >= col_area.y + col_area.height * 0.5 && bottom <= col_area.y + col_area.height + 0.5)
+        .then_some(top)
+}
+
 /// native HWP5와 original HWPX에서 페이지를 넘긴 빈 RowBreak 그림 표는 저장된 cell height가 그 페이지의
 /// 실제 그림+caption flow보다 크게 남을 수 있다. 표 frame은 원본을 보존한 채, 뒤의
 /// 문단은 다음 저장 LINE_SEG anchor부터 재개해야 하는 형상만 골라 그 flow cursor를
@@ -8369,7 +8439,31 @@ impl LayoutEngine {
         // (예: -1796 HU = 4294965500u32) 도 통과시킴. signed 비교로 정정.
         let pt_y_start = if let Some(para) = paragraphs.get(para_index) {
             if let Some(Control::Table(t)) = para.controls.get(control_index) {
-                if !t.common.treat_as_char
+                if !is_continuation {
+                    if let Some(stored_top) =
+                        native_hwp5_internal_reset_rowbreak_first_fragment_saved_top(
+                            self.profile.get().native_hwp5_layout(),
+                            para,
+                            paragraphs.get(para_index + 1),
+                            t,
+                            col_area,
+                            self.dpi,
+                        )
+                    {
+                        stored_top
+                    } else if !t.common.treat_as_char
+                        && matches!(
+                            t.common.text_wrap,
+                            crate::model::shape::TextWrap::TopAndBottom
+                        )
+                        && matches!(t.common.vert_rel_to, crate::model::shape::VertRelTo::Para)
+                        && (t.common.vertical_offset as i32) > 0
+                    {
+                        para_start_y.get(&para_index).copied().unwrap_or(y_offset)
+                    } else {
+                        y_offset
+                    }
+                } else if !t.common.treat_as_char
                     && matches!(
                         t.common.text_wrap,
                         crate::model::shape::TextWrap::TopAndBottom

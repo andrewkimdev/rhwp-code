@@ -2609,14 +2609,23 @@ fn is_single_rowbreak_table_with_trustworthy_declared_height(
 /// 안전 여백을 실제 각주 경계로 바꿀 수 있게 구조 신호만 제공한다.
 fn rowbreak_table_has_internal_saved_vpos_reset(table: &crate::model::table::Table) -> bool {
     table.cells.iter().any(|cell| {
-        cell.paragraphs.iter().any(|para| {
-            para.line_segs.windows(2).any(|pair| {
-                !is_synthetic_line_seg(&pair[0])
-                    && !is_synthetic_line_seg(&pair[1])
-                    && pair[0].vertical_pos > 0
-                    && pair[1].vertical_pos <= 0
-            })
-        })
+        // 저장된 물리 page reset은 cell paragraph 경계에서 시작할 수도 있다. 각
+        // paragraph 안의 `windows(2)`만 보면 `<OPTN>` 다음 `간 특수 검사`처럼
+        // p[n]의 마지막 LINE_SEG → p[n+1]의 첫 LINE_SEG reset을 놓친다.
+        let mut previous_vpos = None;
+        for para in &cell.paragraphs {
+            for seg in para
+                .line_segs
+                .iter()
+                .filter(|seg| !is_synthetic_line_seg(seg))
+            {
+                if previous_vpos.is_some_and(|previous| previous > 0 && seg.vertical_pos <= 0) {
+                    return true;
+                }
+                previous_vpos = Some(seg.vertical_pos);
+            }
+        }
+        false
     })
 }
 
@@ -14214,7 +14223,6 @@ impl TypesetEngine {
             native_hwp5_existing_footnote_reset_overlap_break_line(
                 st, para, fmt, paragraphs, self.dpi,
             );
-
         let forced_page_break_line = internal_vpos_page_break_line(
             para,
             fmt.line_heights.len(),
@@ -14900,6 +14908,15 @@ impl TypesetEngine {
                 && end_line > cursor_line + 1
                 && end_line < line_count
                 && next_para_is_rowbreak_anchor_table
+                // HWP가 다음 source line을 새 physical page top(vpos=0)으로
+                // 기록했으면, 그 직전 줄들은 현 페이지의 마지막 본문이다. 표를
+                // 다음 페이지의 page-top에 보존하려고 한 줄을 되돌리면 이 tail까지
+                // 불필요하게 이월돼 이후 표 owner가 한 줄씩 밀린다.
+                && para
+                    .line_segs
+                    .get(end_line)
+                    .map(|next| next.vertical_pos != 0)
+                    .unwrap_or(true)
             {
                 end_line -= 1;
                 cumulative = fmt.line_advances_sum(cursor_line..end_line);
@@ -18312,6 +18329,7 @@ impl TypesetEngine {
             None
         };
         let mut reserve_declared_table_total = false;
+        let mut native_hwp5_internal_reset_rewind_needs_anchor_resync = false;
 
         // [Task #1046 Stage 1] 표 측정 드리프트 진단: 페이지네이터 effective_height vs
         // MeasuredTable 행높이 합(+cell_spacing). RHWP_TABLE_DRIFT=1 시 출력.
@@ -18827,9 +18845,55 @@ impl TypesetEngine {
                                 <= NATIVE_HWP5_NEAR_ANCHOR_ROWBREAK_FRAGMENT_TOLERANCE_PX
                             && bottom_px <= available + DECLARED_FLOAT_FIT_TOLERANCE_PX
                     });
+            // [#3820 Stage 11] 1×1 빈-host RowBreak 표도 cell 안의 저장 vpos reset이
+            // 있으면, 선언 common.height는 첫 physical fragment의 높이이고 실제 cell
+            // 측정치는 다음 쪽 tail까지 합친 값이다. 앞선 out-of-flow 표의 측정 팽창이
+            // current_height에 누적되면 이 표의 저장 anchor보다 아래로 흘러 declared
+            // defer가 표 전체를 다음 쪽에 보내 버린다. 기준 PDF p172의 `<BTS>` 표처럼
+            // reset 전 prefix와 기존 각주 사이의 fragment가 사라지고 후속 전체가 +1쪽
+            // 밀리는 결과다.
+            //
+            // 일반 1×1 표의 anchor를 되감으면 float overlap을 만들 수 있으므로, native
+            // HWP5·빈 host·비-TAC·TopAndBottom·RowBreak, cell 내부 reset, 후속 source
+            // rewind, 기존 각주라는 저장 계약을 모두 요구한다. 또한 저장 객체 하단이
+            // 실제 footnote boundary 안에 있고, 현재 flow의 초과분이 해당 표의
+            // `measured - declared` 팽창으로 설명될 때만 anchor를 복원한다. 이 경우에만
+            // 첫 fragment scan은 reset 전 cell tail을 현 페이지에 남길 수 있다.
+            const NATIVE_HWP5_INTERNAL_RESET_REWIND_RESYNC_TOLERANCE_PX: f64 = 16.0;
+            native_hwp5_internal_reset_rewind_needs_anchor_resync = st.profile.native_hwp5_layout()
+                && !table.common.treat_as_char
+                && is_para_topbottom_float(&table.common)
+                && matches!(
+                    table.page_break,
+                    crate::model::table::TablePageBreak::RowBreak
+                )
+                && !para_has_visible_text(para)
+                && table.row_count == 1
+                && table.col_count == 1
+                && table.cells.len() == 1
+                && ft.table_footnotes.is_empty()
+                && st.current_footnote_height > 0.0
+                && rowbreak_table_has_internal_saved_vpos_reset(table)
+                && next_rewinds_after_table
+                && saved_span.is_some_and(|(top_px, bottom_px)| {
+                    let flow_overrun = st.current_height - top_px;
+                    let measured_excess = (table_total - declared_total).max(0.0);
+                    top_px <= st.current_height
+                        && top_px <= available
+                        && bottom_px <= available + DECLARED_FLOAT_FIT_TOLERANCE_PX
+                        && flow_overrun >= NATIVE_HWP5_INTERNAL_RESET_REWIND_RESYNC_TOLERANCE_PX
+                        && flow_overrun
+                            <= measured_excess
+                                + NATIVE_HWP5_INTERNAL_RESET_REWIND_RESYNC_TOLERANCE_PX
+                });
+            if native_hwp5_internal_reset_rewind_needs_anchor_resync {
+                let (top_px, _) = saved_span.expect("resync requires stored table anchor");
+                st.current_height = top_px;
+                placement_para_start_height = top_px;
+            }
             if std::env::var("RHWP_DIAG_SCAN").is_ok() {
                 eprintln!(
-                    "DIAG_SCAN DECL_DEFER? pi={} cur_h={:.1} declared={:.1} avail={:.1} saved={:?} bottom_fits={} splits_here={} near_anchor_fragment={}",
+                    "DIAG_SCAN DECL_DEFER? pi={} cur_h={:.1} declared={:.1} avail={:.1} saved={:?} bottom_fits={} splits_here={} near_anchor_fragment={} internal_reset_resync={}",
                     para_idx,
                     st.current_height,
                     declared_total,
@@ -18838,6 +18902,7 @@ impl TypesetEngine {
                     saved_object_bottom_fits_current,
                     saved_anchor_splits_here,
                     native_hwp5_near_anchor_rowbreak_needs_fragment_scan,
+                    native_hwp5_internal_reset_rewind_needs_anchor_resync,
                 );
             }
             // [#2279 5축] 선언-이월의 저장 증거는 **host 문단 단위**(saved_span)로
@@ -18852,6 +18917,7 @@ impl TypesetEngine {
                 && !saved_object_bottom_fits_current
                 && !saved_anchor_splits_here
                 && !native_hwp5_near_anchor_rowbreak_needs_fragment_scan
+                && !native_hwp5_internal_reset_rewind_needs_anchor_resync
                 && !saved_host_line_after_stack_fits
                 && !single_row_object_declared_fits_current
                 && (saved_span.is_some() || measured_fits_current)
@@ -19728,7 +19794,8 @@ impl TypesetEngine {
             budget_para_start_height,
             first_fragment_actual_footnote_boundary:
                 (native_picture_caption_fits_actual_footnote_boundary
-                    || native_ordinary_rowbreak_rewind_uses_actual_footnote_boundary)
+                    || native_ordinary_rowbreak_rewind_uses_actual_footnote_boundary
+                    || native_hwp5_internal_reset_rewind_needs_anchor_resync)
                     .then(|| {
                         st.base_available_height()
                             - st.current_footnote_height
