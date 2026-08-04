@@ -23,38 +23,43 @@ CDP e2e 프로브 `rhwp-studio/e2e/issue-3682-chart-object-probe.test.mjs` 신�
 | P4 | undo | (삭제 미발생이라 무의미) | 2→1 은 붙여넣기 취소 |
 | P5 | z-order | **미검증** | `input-handler` 전역 함수는 없으나 브리지 `changeShapeZOrder` 존재 |
 
-## 확정된 진짜 갭 — P4 삭제
+## 최종 현황표 (단계 격리 재측정 후)
 
-경로 추적으로 근인 확정:
+| 단계 | 동작 | 실측 |
+|---|---|---|
+| P0 | ole 레이아웃 방출 | **됨** |
+| P1 | 클릭 선택 | **됨** (`type=ole ref={0,0,2}`) |
+| **P2** | **속성 다이얼로그** | **안 됨** ← 유일한 갭 |
+| P3 | 드래그 이동 | **됨** (Δ60,40) |
+| P4 | 복사·붙여넣기 | **됨** (1→2) |
+| P4 | 삭제 | **됨** (격리 측정 1→0) |
+| P4 | undo | **됨** (0→1) |
+| P5 | z-order | **됨** (`changeShapeZOrder front` → zOrder=8) |
 
-```
-input-handler-keyboard.ts:147 deleteSelectedObject()
-  ref.type === 'image'    → deletePictureControl
-  ref.type === 'equation' → deleteEquationControl
-  그 외(= 'ole' 포함)      → deleteShapeControl        ← 여기로 샌다
-```
+## 유일한 갭 — P2 속성 다이얼로그 (studio 배선)
 
-```rust
-// object_ops/shape.rs:1017
-if !matches!(&para.controls[control_idx], Control::Shape(_)) {
-    Err("지정된 컨트롤이 Shape이 아닙니다")
-}
-```
+커맨드 `format:object-properties`(`command/commands/format.ts:457`, shortcutLabel 'P',
+`canExecute: inPictureObjectSelection`)는 **정의만 있고 어디서도 호출되지 않는다**
+(grep: id 정의 1건 외 참조 0). 키보드 핸들러의 개체 선택 분기(input-handler-keyboard.ts
+:730~)에 Escape·Enter·Delete 는 있으나 **P 키 분기가 없다.**
 
-**차트(OLE)는 `Control::Shape` 이 아니므로 코어가 거부**한다. studio 는 반환값을
-확인하지 않아 조용히 실패한다. `delete_ole_control` 계열 코어 API 는 **부재**
-(`grep pub fn delete.*ole` 0건).
+코어·다이얼로그는 준비됨 — `PicturePropsDialog.open(sec, ppi, ci, type)` 가 type 을
+받으므로 'ole' 전달 경로만 열면 된다.
 
-## 방법 교훈 — 프로브 자체 검증 필요
+## 반증 이력 — 프로브가 만든 가짜 갭 3건
 
-1차 프로브는 P1·P3 를 "안 됨"으로 잘못 보고했다. 원인은 내가 추측한 API 이름
-(`pictureObjectSelection`)이 실제(`cursor.isInPictureObjectSelection()`)와 달랐기
-때문. **가짜 갭이 진짜 갭 목록을 오염시킬 뻔했다** — 실패 항목은 코드에서 실제
-API 존재를 확인한 뒤에만 갭으로 확정한다(#3681 프록시 함정과 동족).
+1차 프로브는 P1·P3(API 이름 오류), P4 삭제(붙여넣기 단계 간섭)를 "안 됨"으로 오보고했다.
+- P4 는 코어 직접 호출 실측으로 반증: `deleteShapeControl(0,0,2)` → `{"ok":true}`, ole 1→0.
+  (OLE 는 `Control::Shape(ShapeObject::Ole)` 이므로 코어 가드를 정상 통과한다 —
+  "코어가 OLE 를 거부한다"는 내 1차 경로 추적은 **틀렸다**.)
+- 교훈: 다단계 UI 프로브는 **단계 간 상태 간섭**이 기본값이다. 각 단계는 선택을
+  재확립하고, 실패 항목은 하위 계층(코어 API) 직접 호출로 교차 검증한 뒤에만 갭으로
+  확정한다.
 
 ## Stage 2 제안
 
-- 실제 갭은 **P4 삭제 1건 + 미검증 2건(P2·P5)**. 이슈의 "전부 불가"와 거리가 크다.
-- 다음: P2·P5 를 실제 진입점으로 재측정 → 확정 갭 목록 → 작업지시자와 수정 범위 결정.
-- 수정 후보(P4): 코어 `delete_ole_control_native` 신설 + studio `deleteSelectedObject`
-  에 `'ole'` 분기. 실패 시 조용히 넘어가지 않도록 반환값 검사도 함께.
+- 실제 갭은 **P2 속성 다이얼로그 1건**. 이슈의 "선택·이동·리사이즈·복사·삭제 전부 불가"는
+  실측으로 반증됐다(P6 저장 라운드트립만 미검증).
+- 수정: 키보드 핸들러 개체 선택 분기에 P 키 → `format:object-properties` 상당 경로 배선.
+  (커맨드 재사용이 이상적이나 핸들러에서 커맨드 레지스트리 접근 경로 확인 필요.)
+- P6(저장 라운드트립)는 CLI 로 별도 측정.

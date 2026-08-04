@@ -76,29 +76,25 @@ runTest('#3682 차트 개체 1급화 — P1~P5 행동 실측', async ({ page }) 
     sel.hasSelection ? `type=${sel.type} ref=${JSON.stringify(sel.ref)}` : '선택 상태 없음');
   await screenshot(page, '3682-p1-click-select');
 
-  // ── P2: 속성 다이얼로그 ──
-  const p2 = await page.evaluate(() => {
-    try {
-      const cur = window.__inputHandler?.cursor;
-      if (!cur?.isInPictureObjectSelection?.()) return { ok: false, why: '선택 상태 아님(P1 선행 실패)' };
-      const cmd = window.__commandRegistry ?? window.__app?.commands;
-      const run = cmd?.execute ?? cmd?.run;
-      if (typeof run !== 'function') return { ok: false, why: '커맨드 레지스트리 없음' };
-      run.call(cmd, 'format.pictureProps');
-      return { ok: true };
-    } catch (e) { return { ok: false, why: e.message }; }
-  });
-  await pause(page, 500);
+  // ── P2: 속성 다이얼로그 (실제 진입: 선택 상태에서 단축키 P) ──
+  // 단계 간 간섭 차단 — 매 단계 시작 시 선택을 재확립한다(P 키가 선택을 흐트러뜨림 실측).
+  await page.mouse.click(pt.x, pt.y);
+  await pause(page, 400);
+  await page.keyboard.press('KeyP');
+  await pause(page, 700);
   const dialogVisible = await page.evaluate(() =>
-    !!document.querySelector('.picture-props-dialog, [data-dialog="picture-props"], dialog[open]'));
-  record('P2', '속성 다이얼로그', dialogVisible ? '열림' : (p2.ok ? '호출됐으나 미표시' : '안 됨'), p2.why || '');
+    !!document.querySelector('.picture-props-dialog, [data-dialog="picture-props"], dialog[open], .modal-overlay'));
+  record('P2', '속성 다이얼로그(단축키 P)', dialogVisible ? '열림' : '안 됨',
+    dialogVisible ? 'format:object-properties' : '선택 상태에서 P 무반응');
   if (dialogVisible) {
     await screenshot(page, '3682-p2-props-dialog');
     await page.keyboard.press('Escape');
-    await pause(page);
+    await pause(page, 400);
   }
 
   // ── P3: 이동 (드래그) ──
+  await page.mouse.click(pt.x, pt.y);
+  await pause(page, 400);
   const before = (await oleClickPoint(page))?.layout;
   await page.mouse.move(pt.x, pt.y);
   await page.mouse.down();
@@ -137,13 +133,22 @@ runTest('#3682 차트 개체 1급화 — P1~P5 행동 실측', async ({ page }) 
   record('P4', 'undo', n3 > n2 ? '됨' : '안 됨', `ole 개수 ${n2}→${n3}`);
   await screenshot(page, '3682-p4-clipboard-undo');
 
-  // ── P5: z-order API 존재 ──
+  // ── P5: z-order (브리지 changeShapeZOrder 직접 호출) ──
+  await page.mouse.click(pt.x, pt.y);
+  await pause(page, 300);
   const p5 = await page.evaluate(() => {
-    const ih = window.__inputHandler;
-    const names = ['bringToFront', 'sendToBack', 'bringForward', 'sendBackward'];
-    return names.filter(n => typeof ih?.[n] === 'function');
+    try {
+      const cur = window.__inputHandler?.cursor;
+      const ref = cur?.getSelectedPictureRef?.();
+      if (!ref) return { ok: false, why: '선택 없음' };
+      const w = window.__wasm;
+      if (typeof w?.changeShapeZOrder !== 'function') return { ok: false, why: 'changeShapeZOrder 부재' };
+      const r = w.changeShapeZOrder(ref.sec, ref.ppi, ref.ci, 'front');
+      const res = typeof r === 'string' ? JSON.parse(r) : r;
+      return { ok: !!res?.ok, why: res?.ok ? `zOrder=${res.zOrder}` : (res?.error || JSON.stringify(res)) };
+    } catch (e) { return { ok: false, why: e.message }; }
   });
-  record('P5', 'z-order 명령', p5.length ? '함수 존재' : '안 됨', p5.join(',') || 'none');
+  record('P5', 'z-order(front)', p5.ok ? '됨' : '안 됨', p5.why);
 
   console.log('\n=== #3682 P0~P5 행동 실측 요약 ===');
   for (const r of results) console.log(`${r.phase}\t${r.item}\t${r.status}\t${r.detail}`);
