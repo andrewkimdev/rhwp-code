@@ -490,6 +490,24 @@ fn make_minimal_bmp_2x2() -> Vec<u8> {
     v
 }
 
+/// 최소 2x2 RGB TIFF를 생성한다 (브라우저가 data URI를 직접 decode하지 못하는 회귀용).
+fn make_minimal_tiff_2x2() -> Vec<u8> {
+    use image::{DynamicImage, ImageFormat, Rgb, RgbImage};
+    use std::io::Cursor;
+
+    let mut image = RgbImage::new(2, 2);
+    for y in 0..2 {
+        for x in 0..2 {
+            image.put_pixel(x, y, Rgb([32 + x as u8, 96 + y as u8, 160]));
+        }
+    }
+    let mut tiff = Vec::new();
+    DynamicImage::ImageRgb8(image)
+        .write_to(&mut Cursor::new(&mut tiff), ImageFormat::Tiff)
+        .expect("TIFF fixture encode");
+    tiff
+}
+
 #[test]
 fn test_bmp_to_png_success() {
     let bmp = make_minimal_bmp_2x2();
@@ -560,6 +578,23 @@ fn test_page_background_image_pcx_converts_to_png() {
     let output = renderer.output();
     assert!(output.contains("data:image/png;base64,iVBORw0KGgo"));
     assert!(!output.contains("data:image/x-pcx"));
+}
+
+#[test]
+fn test_image_node_tiff_converts_to_png_for_svg() {
+    let image = ImageNode::new(1, Some(make_minimal_tiff_2x2()));
+    let bbox = BoundingBox::new(10.0, 20.0, 100.0, 50.0);
+    let mut renderer = SvgRenderer::new();
+    renderer.begin_page(200.0, 100.0);
+
+    renderer.render_image_node(&image, &bbox);
+
+    let output = renderer.output();
+    assert!(
+        output.contains("data:image/png;base64,iVBORw0KGgo"),
+        "SVG picture TIFF must be browser-compatible PNG: {output}"
+    );
+    assert!(!output.contains("data:image/tiff"));
 }
 
 #[test]
