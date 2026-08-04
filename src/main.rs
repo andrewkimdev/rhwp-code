@@ -456,6 +456,7 @@ fn export_svg(args: &[String]) {
     }
 
     // 파일 읽기
+    let read_start = std::time::Instant::now();
     let data = match fs::read(file_path) {
         Ok(d) => d,
         Err(e) => {
@@ -463,10 +464,12 @@ fn export_svg(args: &[String]) {
             return;
         }
     };
+    let read_ms = read_start.elapsed().as_millis();
 
     let source_format = rhwp::parser::detect_format(&data);
 
     // 문서 로드
+    let parse_start = std::time::Instant::now();
     let mut doc = match rhwp::wasm_api::HwpDocument::from_bytes(&data) {
         Ok(d) => d,
         Err(e) => {
@@ -474,6 +477,7 @@ fn export_svg(args: &[String]) {
             return;
         }
     };
+    let parse_ms = parse_start.elapsed().as_millis();
 
     // [Task #741 후속] 외부 file path 그림 영역 영역 HWP file 영역 영역 같은 dir 영역
     // 영역 image 영역 영역 자동 load (basename 매칭).
@@ -532,7 +536,11 @@ fn export_svg(args: &[String]) {
         .and_then(|s| s.to_str())
         .unwrap_or("page");
 
+    let mut render_ms_total: u128 = 0;
+    let mut write_ms_total: u128 = 0;
+
     for page_num in &pages {
+        let render_start = std::time::Instant::now();
         let svg_result = if let Some(profile) = render_profile {
             doc.render_page_svg_layer_with_profile_native(*page_num, profile)
         } else if font_embed_mode != rhwp::renderer::svg::FontEmbedMode::None {
@@ -540,9 +548,10 @@ fn export_svg(args: &[String]) {
         } else {
             doc.render_page_svg_native(*page_num)
         };
+        render_ms_total += render_start.elapsed().as_millis();
         match svg_result {
             Ok(mut svg) => {
-                // 격자 오버레이 삽입
+                // 격자 오버레이 삽입 (진단용 부가 기능 — render 시간에 포함하지 않는다)
                 if let Some(mm) = grid_mm {
                     let origin_mm = match grid_origin {
                         GridOriginOption::Fixed(origin) => origin,
@@ -568,7 +577,10 @@ fn export_svg(args: &[String]) {
                 };
                 let svg_path = output_path.join(&svg_filename);
 
-                match fs::write(&svg_path, &svg) {
+                let write_start = std::time::Instant::now();
+                let write_result = fs::write(&svg_path, &svg);
+                write_ms_total += write_start.elapsed().as_millis();
+                match write_result {
                     Ok(_) => println!("  → {}", svg_path.display()),
                     Err(e) => eprintln!("오류: SVG 저장 실패 - {}: {}", svg_path.display(), e),
                 }
@@ -578,6 +590,11 @@ fn export_svg(args: &[String]) {
             }
         }
     }
+
+    eprintln!(
+        "RHWP_TIMING {{\"cmd\":\"export-svg\",\"readMs\":{},\"parseMs\":{},\"renderMs\":{},\"writeMs\":{}}}",
+        read_ms, parse_ms, render_ms_total, write_ms_total
+    );
 
     println!(
         "내보내기 완료: {}개 SVG 파일 → {}/",
@@ -646,6 +663,7 @@ fn export_render_tree(args: &[String]) {
         }
     }
 
+    let read_start = std::time::Instant::now();
     let data = match fs::read(file_path) {
         Ok(d) => d,
         Err(e) => {
@@ -653,8 +671,10 @@ fn export_render_tree(args: &[String]) {
             return;
         }
     };
+    let read_ms = read_start.elapsed().as_millis();
     let source_format = rhwp::parser::detect_format(&data);
 
+    let parse_start = std::time::Instant::now();
     let mut doc = match rhwp::wasm_api::HwpDocument::from_bytes(&data) {
         Ok(d) => d,
         Err(e) => {
@@ -662,6 +682,7 @@ fn export_render_tree(args: &[String]) {
             return;
         }
     };
+    let parse_ms = parse_start.elapsed().as_millis();
 
     if allows_implicit_sibling_resources(source_format) {
         if let Some(parent) = std::path::Path::new(file_path).parent() {
@@ -707,12 +728,21 @@ fn export_render_tree(args: &[String]) {
         None => (0..page_count).collect(),
     };
 
+    let mut render_ms_total: u128 = 0;
+    let mut write_ms_total: u128 = 0;
+
     for page_num in &pages {
-        match doc.build_page_render_tree(*page_num) {
+        let render_start = std::time::Instant::now();
+        let tree_result = doc.build_page_render_tree(*page_num);
+        render_ms_total += render_start.elapsed().as_millis();
+        match tree_result {
             Ok(tree) => {
                 let json_path = output_path.join(format!("render_tree_{:03}.json", page_num + 1));
                 let json = tree.root.to_json();
-                match fs::write(&json_path, json) {
+                let write_start = std::time::Instant::now();
+                let write_result = fs::write(&json_path, json);
+                write_ms_total += write_start.elapsed().as_millis();
+                match write_result {
                     Ok(_) => println!("  → {}", json_path.display()),
                     Err(e) => {
                         eprintln!(
@@ -728,6 +758,11 @@ fn export_render_tree(args: &[String]) {
             }
         }
     }
+
+    eprintln!(
+        "RHWP_TIMING {{\"cmd\":\"export-render-tree\",\"readMs\":{},\"parseMs\":{},\"renderMs\":{},\"writeMs\":{}}}",
+        read_ms, parse_ms, render_ms_total, write_ms_total
+    );
 
     println!(
         "내보내기 완료: {}개 render tree JSON 파일 → {}/",
@@ -1402,6 +1437,7 @@ fn export_pdf(args: &[String]) {
             output_file = format!("output/{}.pdf", stem);
         }
 
+        let read_start = std::time::Instant::now();
         let data = match fs::read(file_path) {
             Ok(d) => d,
             Err(e) => {
@@ -1409,7 +1445,9 @@ fn export_pdf(args: &[String]) {
                 return;
             }
         };
+        let read_ms = read_start.elapsed().as_millis();
 
+        let parse_start = std::time::Instant::now();
         let doc = match rhwp::wasm_api::HwpDocument::from_bytes(&data) {
             Ok(d) => d,
             Err(e) => {
@@ -1417,6 +1455,7 @@ fn export_pdf(args: &[String]) {
                 return;
             }
         };
+        let parse_ms = parse_start.elapsed().as_millis();
 
         let page_count = doc.page_count();
         println!("문서 로드 완료: {} ({}페이지)", file_path, page_count);
@@ -1446,12 +1485,34 @@ fn export_pdf(args: &[String]) {
             None => (0..page_count).collect(),
         };
 
-        let pdf_result = match render_profile {
-            Some(profile) => {
-                doc.render_pages_pdf_native_with_profile_and_options(&pages, profile, &pdf_options)
-            }
-            None => doc.render_pages_pdf_native_with_options(&pages, &pdf_options),
+        // [벤더 패치: phase 타이밍] SVG 레이아웃/생성(render)과 SVG→PDF 변환(convert,
+        // usvg::Tree::from_str + svg2pdf::to_chunk — export-pdf 총 시간의 ~75%를 차지하는
+        // 구간, src/renderer/pdf.rs의 병렬화 패치가 최적화한 바로 그 구간)을 분리 계측한다.
+        // render_pages_pdf_native_with_*options()가 내부에서 하던 두 단계를 여기서 그대로
+        // 풀어써서, 라이브러리 공개 API(반환 타입 등)는 건드리지 않는다.
+        let render_start = std::time::Instant::now();
+        let svg_pages_result: Result<Vec<String>, _> = match render_profile {
+            Some(profile) => pages
+                .iter()
+                .map(|&p| doc.render_page_svg_layer_with_profile_native(p, profile))
+                .collect(),
+            None => pages
+                .iter()
+                .map(|&p| doc.render_page_svg_native(p))
+                .collect(),
         };
+        let render_ms = render_start.elapsed().as_millis();
+        let svg_pages = match svg_pages_result {
+            Ok(pages) => pages,
+            Err(e) => {
+                eprintln!("오류: PDF 변환 실패 - {}", e);
+                return;
+            }
+        };
+
+        let convert_start = std::time::Instant::now();
+        let pdf_result = rhwp::renderer::pdf::svgs_to_pdf_with_options(&svg_pages, &pdf_options);
+        let convert_ms = convert_start.elapsed().as_millis();
         let pdf_bytes = match pdf_result {
             Ok(bytes) => bytes,
             Err(e) => {
@@ -1459,10 +1520,19 @@ fn export_pdf(args: &[String]) {
                 return;
             }
         };
+
+        let write_start = std::time::Instant::now();
         if let Err(e) = fs::write(&output_file, &pdf_bytes) {
             eprintln!("오류: PDF 저장 실패 - {}", e);
             return;
         }
+        let write_ms = write_start.elapsed().as_millis();
+
+        eprintln!(
+            "RHWP_TIMING {{\"cmd\":\"export-pdf\",\"readMs\":{},\"parseMs\":{},\"renderMs\":{},\"convertMs\":{},\"writeMs\":{}}}",
+            read_ms, parse_ms, render_ms, convert_ms, write_ms
+        );
+
         println!(
             "  → {} ({}KB, {}페이지)",
             output_file,
