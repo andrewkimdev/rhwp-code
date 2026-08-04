@@ -2,8 +2,8 @@
 
 - 이슈: [#3815](https://github.com/edwardkim/rhwp/issues/3815)
 - 브랜치: stack/issue-3815-pagination-coalescing
-- 최신 기준: upstream/devel 8d7bc622e
-- code candidate: fdebb38fb
+- 최신 기준: upstream/devel ec1b21096
+- code candidate: e2ec99228
 - 작성일: 2026-08-04
 
 ## Stack
@@ -21,7 +21,7 @@ cherry-pick은 포함하지 않았다.
 - SVG renderer: 41 / 41
 - composer: 52 / 52
 - runner + InputHandler focused: 23 / 23
-- Studio 전체 unit: 763 / 763
+- Studio 전체 unit: 763 / 763 (이전 stack 전체 검증, 최신 devel은 Studio 파일 변경 없음)
 - npx tsc --noEmit: 통과
 - production wasm-pack release build: 통과
 - wasm32-unknown-unknown library check: 통과
@@ -33,17 +33,18 @@ production WASM과 새 headless Chrome에서 continuous-only 시나리오를 각
 
 | 형식 | 숫자 줄 전환 | 최종 숫자 | pending operation p95 | 결과 |
 | --- | --- | ---: | ---: | --- |
-| HWP | 11 / 69 | 73 | 49.3ms | GREEN |
-| HWPX | 11 / 69 | 73 | 50.6ms | GREEN |
+| HWP | 11 / 69 | 73 | 50.1ms | GREEN |
+| HWPX | 11 / 69 | 73 | 50.9ms | GREEN |
 
 두 형식 모두 IME 조합 뒤 숫자가 두 번 줄바꿈되고 overflow 없이 최종 revision까지 게시됐다.
-이전 동일 smoke의 50.2ms / 49.7ms 대비 변화는 각각 -1.8% / +1.8%로 ±10% gate 안이다.
+최종 쪽수는 116, latest begin/final step revision은 132 / 132이며 synchronous flush는 0이다.
+이전 동일 smoke의 50.2ms / 49.7ms 대비 변화는 각각 -0.2% / +2.4%로 ±10% gate 안이다.
 따라서 2026-08-03에 완료한 current, 80ms, 250ms 형식별 3회 전체 측정은 반복하지 않았다.
 
-이후 devel이 19커밋 전진해 최종 base를 8d7bc622e로 갱신했다. 추가 변경은
-structure query와 문서이며 renderer, composer, Studio 제품 파일과 겹치지 않는다.
-전체 browser smoke는 보존하고 spacing 42 / 42, composer 52 / 52, Studio focused
-23 / 23과 TypeScript spot-check를 반복해 모두 통과했다.
+이후 devel이 ec1b21096로 전진했다. 추가 변경은 Stack 제품 파일과 직접 겹치지 않았지만
+typeset 쪽 경계 수정이 실제 HWP/HWPX 쪽수에 영향을 줄 수 있어 production WASM과 combined
+smoke까지 다시 실행했다. spacing 42 / 42, SVG 41 / 41, composer 52 / 52, Studio focused
+23 / 23, TypeScript와 production WASM을 모두 통과했고 두 형식의 115 → 116 결과도 유지됐다.
 
 ## 기존 성능 근거
 
@@ -56,5 +57,8 @@ flow가 안정되면 stable-tail fast path로 돌아간다.
 
 ## 게시 상태
 
-renderer 이슈 #3937은 생성했지만 세 stack branch는 아직 원격에 push하지 않았고 Draft PR도
-만들지 않았다. 세 본문을 작업지시자에게 먼저 보여준 뒤 승인받아 gh stack으로 제출한다.
+GitHub Stack #3947을 만들고 세 branch를 upstream에 push했다. Draft PR은 아래와 같다.
+
+- [#3944](https://github.com/edwardkim/rhwp/pull/3944): #3937 browser glyph 폭
+- [#3945](https://github.com/edwardkim/rhwp/pull/3945): #3822 overlong token wrap
+- [#3946](https://github.com/edwardkim/rhwp/pull/3946): #3815 pagination coalescing
