@@ -1,3 +1,10 @@
+---
+kind: guide
+status: active
+canonical: mydocs/manual/cli_commands.md
+last_verified: 2026-08-04
+---
+
 # rhwp-agent — 에이전트 운영 실험 표면 (#3918)
 
 `rhwp-agent` 는 에이전트가 rhwp 를 부려 작업을 완주할 때 반복되는 운영 루프 —
