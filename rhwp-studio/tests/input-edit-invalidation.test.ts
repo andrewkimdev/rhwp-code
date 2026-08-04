@@ -200,12 +200,16 @@ test('deferred pending이 실제로 있을 때만 page-local idle flush를 예�
   assert.match(inputHandlerSource, /if \(!effects\.documentPaginationPending\) return false;/);
   assert.match(
     inputHandlerSource,
-    /if \(!effects\.flowChanged && !replacesActiveJob\) return false;/,
+    /const replacesPendingJob = this\.deferredPaginationRunner\.hasPendingWork\(\);/,
   );
   assert.match(
     inputHandlerSource,
-    /this\.deferredPaginationRunner\.start\(\);/,
-    'cell-flow 경계는 동기 full flush 대신 resumable macrotask runner를 시작해야 한다',
+    /if \(!effects\.flowChanged && !replacesPendingJob\) return false;/,
+  );
+  assert.match(
+    inputHandlerSource,
+    /this\.deferredPaginationRunner\.requestStart\(DOCUMENT_PAGINATION_RESTART_COALESCE_DELAY_MS\);/,
+    'cell-flow 경계는 input stack 밖에서 latest-only resumable begin을 요청해야 한다',
   );
 });
 
@@ -233,8 +237,18 @@ test('document pagination은 작은 문서의 120ms idle과 명시 boundary에�
   );
   assert.match(
     inputHandlerSource,
-    /private shouldAutoFlushDeferredPagination\(\): boolean \{\s*if \(this\.deferredPaginationRunner\.isActive\(\)\) return false;\s*return this\.wasm\.pageCount <= DOCUMENT_PAGINATION_IDLE_FLUSH_PAGE_LIMIT;\s*\}/,
-    '전진 중인 resumable job 이 있으면 idle flush 는 같은 일을 동기로 되풀이하므로 예약하지 않는다',
+    /const DOCUMENT_PAGINATION_RESTART_COALESCE_DELAY_MS = 200;/,
+    'active restart만 마지막 입력 뒤 200ms까지 합친다',
+  );
+  assert.match(
+    inputHandlerSource,
+    /private shouldAutoFlushDeferredPagination\(\): boolean \{\s*if \(this\.deferredPaginationRunner\.hasPendingWork\(\)\) return false;\s*return this\.wasm\.pageCount <= DOCUMENT_PAGINATION_IDLE_FLUSH_PAGE_LIMIT;\s*\}/,
+    '예약 begin 또는 전진 중 job이 있으면 idle flush가 같은 일을 동기로 되풀이하면 안 된다',
+  );
+  assert.match(
+    inputHandlerSource,
+    /const shouldFlush = this\.deferredPaginationPending\s*\|\| this\.deferredPaginationFlushTimer !== null\s*\|\| this\.deferredPaginationRunner\.hasPendingWork\(\);/,
+    '명시 barrier는 queued begin도 pending work로 취급해야 한다',
   );
 
   const undoStart = inputHandlerSource.indexOf('private handleUndo(): void {');

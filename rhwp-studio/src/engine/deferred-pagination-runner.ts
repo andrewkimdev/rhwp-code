@@ -7,53 +7,87 @@ export interface DeferredPaginationClient {
 }
 
 type ScheduledTask = ReturnType<typeof setTimeout>;
+type ScheduleTask = (callback: () => void, delayMs?: number) => ScheduledTask;
+type RunnerState = 'idle' | 'begin-scheduled' | 'stepping';
 
 /**
  * #2424 continuation을 한 macrotask당 한 fragment budget씩 전진시킨다.
- * 입력이 오면 `start()`가 기존 shadow job과 예약 task를 폐기하고 최신 revision으로 교체한다.
+ * 입력은 `requestStart()`로 최신 revision 하나만 남긴다. 최초 admission은 다음 task에서 바로
+ * 확인하고, 이미 전진 중이거나 restart debounce 중인 job만 지정한 window까지 합친다.
  */
 export class DeferredPaginationRunner {
   private scheduled: ScheduledTask | null = null;
-  private active = false;
+  private state: RunnerState = 'idle';
+  private scheduledStartDelayMs: number | null = null;
+  private generation = 0;
 
   constructor(
     private readonly client: DeferredPaginationClient,
     private readonly onComplete: (result: DeferredPaginationResult) => void,
     private readonly onFallback: (result: DeferredPaginationResult) => void,
     private readonly fragmentBudget = 1,
-    private readonly scheduleTask: (callback: () => void) => ScheduledTask = (callback) =>
-      setTimeout(callback, 0),
+    private readonly scheduleTask: ScheduleTask = (callback, delayMs = 0) =>
+      setTimeout(callback, delayMs),
     private readonly cancelTask: (task: ScheduledTask) => void = (task) => clearTimeout(task),
   ) {}
 
   isActive(): boolean {
-    return this.active;
+    return this.state === 'stepping';
   }
 
-  start(): DeferredPaginationResult {
+  hasPendingWork(): boolean {
+    return this.state !== 'idle';
+  }
+
+  /**
+   * 기존 continuation을 폐기하고 최신 descriptor의 begin을 input stack 밖에 예약한다.
+   *
+   * 아직 admission을 확인하지 않은 최초 begin은 0ms를 유지한다. 성공해 전진 중인 job 또는
+   * 이미 debounce 중인 restart만 `restartDelayMs`를 다시 적용하므로 unsupported fallback을
+   * 고정 window만큼 늦추지 않는다.
+   */
+  requestStart(restartDelayMs: number): void {
+    const normalizedRestartDelayMs = Math.max(0, restartDelayMs);
+    const delayMs = this.state === 'stepping'
+      || (this.state === 'begin-scheduled' && (this.scheduledStartDelayMs ?? 0) > 0)
+      ? normalizedRestartDelayMs
+      : 0;
+
+    const generation = ++this.generation;
     this.cancelScheduledTask();
     this.client.cancelDeferredPagination();
-    this.active = false;
-    const result = this.client.beginDeferredPagination(this.fragmentBudget);
-    this.accept(result);
-    return result;
+    this.state = 'begin-scheduled';
+    this.scheduledStartDelayMs = delayMs;
+    this.scheduled = this.scheduleTask(() => {
+      if (!this.isCurrent(generation, 'begin-scheduled')) return;
+      this.scheduled = null;
+      this.scheduledStartDelayMs = null;
+      try {
+        this.accept(this.client.beginDeferredPagination(this.fragmentBudget), generation);
+      } catch {
+        this.fail(generation);
+      }
+    }, delayMs);
   }
 
   cancel(): void {
+    ++this.generation;
     this.cancelScheduledTask();
-    if (this.active) {
+    if (this.state === 'stepping') {
       this.client.cancelDeferredPagination();
     }
-    this.active = false;
+    this.state = 'idle';
+    this.scheduledStartDelayMs = null;
   }
 
-  private accept(result: DeferredPaginationResult): void {
+  private accept(result: DeferredPaginationResult, generation: number): void {
+    if (generation !== this.generation) return;
     if (result.status === 'pending') {
-      this.active = true;
-      this.scheduleNextStep();
+      this.state = 'stepping';
+      this.scheduleNextStep(generation);
       return;
     }
-    this.active = false;
+    this.state = 'idle';
     if (result.status === 'complete') {
       this.onComplete(result);
       return;
@@ -61,24 +95,34 @@ export class DeferredPaginationRunner {
     this.onFallback(result);
   }
 
-  private scheduleNextStep(): void {
-    if (!this.active || this.scheduled !== null) return;
+  private scheduleNextStep(generation: number): void {
+    if (!this.isCurrent(generation, 'stepping') || this.scheduled !== null) return;
     this.scheduled = this.scheduleTask(() => {
+      if (!this.isCurrent(generation, 'stepping')) return;
       this.scheduled = null;
-      if (!this.active) return;
       try {
-        this.accept(this.client.stepDeferredPagination(this.fragmentBudget));
+        this.accept(this.client.stepDeferredPagination(this.fragmentBudget), generation);
       } catch {
-        this.active = false;
-        this.onFallback({
-          ok: false,
-          status: 'fallback',
-          revision: 0,
-          fragmentsProcessed: 0,
-          pageCount: 0,
-        });
+        this.fail(generation);
       }
+    }, 0);
+  }
+
+  private fail(generation: number): void {
+    if (generation !== this.generation) return;
+    this.state = 'idle';
+    this.scheduledStartDelayMs = null;
+    this.onFallback({
+      ok: false,
+      status: 'fallback',
+      revision: 0,
+      fragmentsProcessed: 0,
+      pageCount: 0,
     });
+  }
+
+  private isCurrent(generation: number, state: RunnerState): boolean {
+    return generation === this.generation && this.state === state;
   }
 
   private cancelScheduledTask(): void {

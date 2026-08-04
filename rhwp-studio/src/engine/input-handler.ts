@@ -49,6 +49,8 @@ const DRAG_SCROLL_MAX_STEP_PX = 20;
 const PX_TO_RAW_2X = 150;
 const PX_TO_HWPUNIT = 75;
 const DOCUMENT_PAGINATION_IDLE_FLUSH_DELAY_MS = 120;
+// #3794: 250ms cadence의 obsolete work를 줄이되 최신 job 완료의 10% 회귀 상한 안에 둔다.
+const DOCUMENT_PAGINATION_RESTART_COALESCE_DELAY_MS = 200;
 /**
  * [#3412] idle 자동 flush 대상 문서 크기 상한.
  *
@@ -2515,7 +2517,7 @@ export class InputHandler {
    * 하는 셈이라 예약하지 않는다. 문서 크기 상한은 위 상수 주석 참조.
    */
   private shouldAutoFlushDeferredPagination(): boolean {
-    if (this.deferredPaginationRunner.isActive()) return false;
+    if (this.deferredPaginationRunner.hasPendingWork()) return false;
     return this.wasm.pageCount <= DOCUMENT_PAGINATION_IDLE_FLUSH_PAGE_LIMIT;
   }
 
@@ -2548,13 +2550,13 @@ export class InputHandler {
     if (effects.flowChanged && effects.paginationCompleted) return true;
     if (!effects.documentPaginationPending) return false;
 
-    const replacesActiveJob = this.deferredPaginationRunner.isActive();
+    const replacesPendingJob = this.deferredPaginationRunner.hasPendingWork();
     this.cancelDeferredPaginationFlush();
     this.deferredPaginationPending = true;
-    if (!effects.flowChanged && !replacesActiveJob) return false;
+    if (!effects.flowChanged && !replacesPendingJob) return false;
 
-    // 최신 revision의 shadow job으로 교체하고, 한 macrotask당 한 fragment씩 전진한다.
-    this.deferredPaginationRunner.start();
+    // 최초 admission은 다음 task에서 바로 확인하고 active restart만 마지막 입력까지 합친다.
+    this.deferredPaginationRunner.requestStart(DOCUMENT_PAGINATION_RESTART_COALESCE_DELAY_MS);
     return true;
   }
 
@@ -2594,7 +2596,7 @@ export class InputHandler {
   flushDeferredPaginationIfNeeded(reason = 'manual', emitChange = true): boolean {
     const shouldFlush = this.deferredPaginationPending
       || this.deferredPaginationFlushTimer !== null
-      || this.deferredPaginationRunner.isActive();
+      || this.deferredPaginationRunner.hasPendingWork();
     this.cancelDeferredPaginationFlush();
     if (!shouldFlush) return false;
 

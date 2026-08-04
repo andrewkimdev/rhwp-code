@@ -57,9 +57,9 @@ class ManualTasks {
     this.tasks = new Map();
   }
 
-  schedule(callback) {
+  schedule(callback, delayMs = 0) {
     const id = this.nextId++;
-    this.tasks.set(id, callback);
+    this.tasks.set(id, { callback, delayMs });
     return id;
   }
 
@@ -70,9 +70,15 @@ class ManualTasks {
   runOne() {
     const entry = this.tasks.entries().next().value;
     assert.ok(entry, 'scheduled continuation task');
-    const [id, callback] = entry;
+    const [id, task] = entry;
     this.tasks.delete(id);
-    callback();
+    task.callback();
+  }
+
+  first() {
+    const entry = this.tasks.entries().next().value;
+    assert.ok(entry, 'scheduled continuation task');
+    return entry[1];
   }
 }
 
@@ -101,7 +107,7 @@ class FakeClient {
   }
 }
 
-test('한 macrotask당 한 budget만 처리하고 complete에서 한 번 commit callback을 호출한다', () => {
+test('최초 begin은 input stack 밖에서 실행하고 이후 한 macrotask당 한 budget만 처리한다', () => {
   const tasks = new ManualTasks();
   const client = new FakeClient([
     result('pending', 1, 1),
@@ -115,13 +121,19 @@ test('한 macrotask당 한 budget만 처리하고 complete에서 한 번 commit 
     (value) => completed.push(value),
     (value) => fallbacks.push(value),
     1,
-    (callback) => tasks.schedule(callback),
+    (callback, delayMs) => tasks.schedule(callback, delayMs),
     (task) => tasks.cancel(task),
   );
 
-  assert.equal(runner.start().status, 'pending');
+  runner.requestStart(200);
+  assert.equal(runner.isActive(), false);
+  assert.equal(runner.hasPendingWork(), true);
+  assert.deepEqual(client.calls, [['cancel']], 'begin must not run in the input call stack');
+  assert.equal(tasks.first().delayMs, 0, 'first admission runs in the next task without debounce');
+
+  tasks.runOne();
+  assert.deepEqual(client.calls.at(-1), ['begin', 1, 1]);
   assert.equal(runner.isActive(), true);
-  assert.deepEqual(client.calls, [['cancel'], ['begin', 1, 1]]);
 
   tasks.runOne();
   assert.deepEqual(client.calls.at(-1), ['step', 1]);
@@ -137,7 +149,7 @@ test('한 macrotask당 한 budget만 처리하고 complete에서 한 번 commit 
   assert.equal(fallbacks.length, 0);
 });
 
-test('공개 페이지 수는 pending 동안 유지되고 complete callback에서 한 번 교체된다', () => {
+test('공개 페이지 수는 async begin과 pending step 동안 유지되고 complete에서 한 번 교체된다', () => {
   const tasks = new ManualTasks();
   const client = new FakeClient([
     result('pending', 1, 1, 115),
@@ -153,13 +165,16 @@ test('공개 페이지 수는 pending 동안 유지되고 complete callback에�
     },
     () => assert.fail('fallback must not run'),
     1,
-    (callback) => tasks.schedule(callback),
+    (callback, delayMs) => tasks.schedule(callback, delayMs),
     (task) => tasks.cancel(task),
   );
 
-  const begin = runner.start();
-  assert.equal(begin.pageCount, 115);
+  runner.requestStart(200);
   assert.equal(publicPageCount, 115);
+  assert.deepEqual(published, []);
+
+  tasks.runOne();
+  assert.equal(publicPageCount, 115, 'begin result must stay private');
   assert.deepEqual(published, []);
 
   tasks.runOne();
@@ -171,7 +186,7 @@ test('공개 페이지 수는 pending 동안 유지되고 complete callback에�
   assert.deepEqual(published, [116], 'final page count must publish once');
 });
 
-test('새 입력 start는 예약 step과 이전 core job을 취소하고 최신 revision으로 교체한다', () => {
+test('begin 전 반복 요청은 pending task 하나와 최신 revision begin 하나만 남긴다', () => {
   const tasks = new ManualTasks();
   const client = new FakeClient([result('complete', 2, 1)]);
   const completed = [];
@@ -180,26 +195,97 @@ test('새 입력 start는 예약 step과 이전 core job을 취소하고 최신 
     (value) => completed.push(value),
     () => assert.fail('fallback must not run'),
     1,
-    (callback) => tasks.schedule(callback),
+    (callback, delayMs) => tasks.schedule(callback, delayMs),
     (task) => tasks.cancel(task),
   );
 
-  runner.start();
+  runner.requestStart(200);
   assert.equal(tasks.tasks.size, 1);
+  assert.equal(tasks.first().delayMs, 0);
   client.beginRevision = 2;
-  runner.start();
-  assert.equal(tasks.tasks.size, 1, 'old scheduled step must be replaced');
+  runner.requestStart(200);
+  assert.equal(tasks.tasks.size, 1, 'old scheduled begin must be replaced');
+  assert.equal(tasks.first().delayMs, 0, 'unproven admission must not inherit restart debounce');
+  assert.equal(client.calls.some(([name]) => name === 'begin'), false);
   assert.deepEqual(
     client.calls.filter(([name]) => name === 'cancel'),
     [['cancel'], ['cancel']],
   );
 
   tasks.runOne();
+  assert.deepEqual(client.calls.at(-1), ['begin', 1, 2]);
+  tasks.runOne();
   assert.equal(completed.length, 1);
   assert.equal(completed[0].revision, 2);
 });
 
-test('unsupported begin은 step을 예약하지 않고 fallback callback으로 전달한다', () => {
+test('active restart와 그 후 요청은 old step을 버리고 coalescing window를 다시 시작한다', () => {
+  const tasks = new ManualTasks();
+  const client = new FakeClient([result('complete', 3, 1)]);
+  const completed = [];
+  const runner = new DeferredPaginationRunner(
+    client,
+    (value) => completed.push(value),
+    () => assert.fail('fallback must not run'),
+    1,
+    (callback, delayMs) => tasks.schedule(callback, delayMs),
+    (task) => tasks.cancel(task),
+  );
+
+  runner.requestStart(200);
+  tasks.runOne();
+  assert.equal(runner.isActive(), true);
+  const staleStep = tasks.first().callback;
+
+  client.beginRevision = 2;
+  runner.requestStart(200);
+  assert.equal(runner.isActive(), false);
+  assert.equal(tasks.tasks.size, 1);
+  assert.equal(tasks.first().delayMs, 200);
+  staleStep();
+  assert.equal(
+    client.calls.some(([name]) => name === 'step'),
+    false,
+    'a superseded callback must not enter the old core job',
+  );
+
+  client.beginRevision = 3;
+  runner.requestStart(200);
+  assert.equal(tasks.tasks.size, 1);
+  assert.equal(tasks.first().delayMs, 200, 'latest input must restart the coalescing window');
+  tasks.runOne();
+  assert.deepEqual(client.calls.at(-1), ['begin', 1, 3]);
+  tasks.runOne();
+  assert.equal(completed.length, 1);
+  assert.equal(completed[0].revision, 3);
+});
+
+test('cancel은 queued begin과 이미 dequeue된 stale callback을 모두 무효화한다', () => {
+  const tasks = new ManualTasks();
+  const client = new FakeClient([]);
+  const completed = [];
+  const fallbacks = [];
+  const runner = new DeferredPaginationRunner(
+    client,
+    (value) => completed.push(value),
+    (value) => fallbacks.push(value),
+    1,
+    (callback, delayMs) => tasks.schedule(callback, delayMs),
+    (task) => tasks.cancel(task),
+  );
+
+  runner.requestStart(200);
+  const staleBegin = tasks.first().callback;
+  runner.cancel();
+  assert.equal(runner.hasPendingWork(), false);
+  assert.equal(tasks.tasks.size, 0);
+  staleBegin();
+  assert.equal(client.calls.some(([name]) => name === 'begin'), false);
+  assert.equal(completed.length, 0);
+  assert.equal(fallbacks.length, 0);
+});
+
+test('unsupported async begin은 step 없이 fallback callback으로 전달한다', () => {
   const tasks = new ManualTasks();
   const client = new FakeClient([]);
   client.beginDeferredPagination = (budget) => {
@@ -212,13 +298,48 @@ test('unsupported begin은 step을 예약하지 않고 fallback callback으로 �
     () => assert.fail('complete must not run'),
     (value) => fallbacks.push(value),
     1,
-    (callback) => tasks.schedule(callback),
+    (callback, delayMs) => tasks.schedule(callback, delayMs),
     (task) => tasks.cancel(task),
   );
 
-  assert.equal(runner.start().status, 'fallback');
+  runner.requestStart(200);
+  assert.equal(fallbacks.length, 0, 'fallback must not run in the input call stack');
+  tasks.runOne();
   assert.equal(runner.isActive(), false);
+  assert.equal(runner.hasPendingWork(), false);
   assert.equal(tasks.tasks.size, 0);
   assert.equal(fallbacks.length, 1);
   assert.equal(fallbacks[0].revision, 7);
+});
+
+test('begin과 step 예외는 각각 fallback을 정확히 한 번 게시한다', () => {
+  for (const failure of ['begin', 'step']) {
+    const tasks = new ManualTasks();
+    const client = new FakeClient([]);
+    if (failure === 'begin') {
+      client.beginDeferredPagination = () => {
+        throw new Error('begin failed');
+      };
+    } else {
+      client.stepDeferredPagination = () => {
+        throw new Error('step failed');
+      };
+    }
+    const fallbacks = [];
+    const runner = new DeferredPaginationRunner(
+      client,
+      () => assert.fail('complete must not run'),
+      (value) => fallbacks.push(value),
+      1,
+      (callback, delayMs) => tasks.schedule(callback, delayMs),
+      (task) => tasks.cancel(task),
+    );
+
+    runner.requestStart(200);
+    tasks.runOne();
+    if (failure === 'step') tasks.runOne();
+    assert.equal(fallbacks.length, 1, `${failure} fallback count`);
+    assert.equal(fallbacks[0].status, 'fallback');
+    assert.equal(runner.hasPendingWork(), false);
+  }
 });
