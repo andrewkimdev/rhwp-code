@@ -4720,8 +4720,42 @@ fn assign_pic_numbers_in_controls(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::model::control::Control;
+    use crate::model::document::{Document, Section};
+    use crate::model::paragraph::Paragraph;
     use std::fs::File;
     use std::io::Read;
+
+    /// [#3676] `cold`는 미주 fixup의 부수 효과가 아니라 구역 본문 계약이다.
+    /// 미주가 전혀 없는 HWP3에서도 한글 저장본처럼 첫 문단에 단 정의가 하나 있어야 한다.
+    #[test]
+    fn issue_3676_no_endnote_section_gets_one_initial_column_def() {
+        let mut doc = Document {
+            sections: vec![Section {
+                paragraphs: vec![Paragraph::default()],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        fixup_hwp3_notes(&mut doc, &Hwp3DocInfo::default());
+        let controls = &doc.sections[0].paragraphs[0].controls;
+        assert!(
+            matches!(controls.first(), Some(Control::ColumnDef(_))),
+            "미주가 없어도 HWP3 구역 첫 문단은 cold로 시작해야 한다"
+        );
+
+        // parser fixup이 재적용되어도 이미 존재하는 cold를 중복하지 않는다.
+        fixup_hwp3_notes(&mut doc, &Hwp3DocInfo::default());
+        assert_eq!(
+            doc.sections[0].paragraphs[0]
+                .controls
+                .iter()
+                .filter(|control| matches!(control, Control::ColumnDef(_)))
+                .count(),
+            1
+        );
+    }
 
     #[test]
     fn read_hwp3_padding_scaled_preserves_negative_values_without_overflow() {
