@@ -75,6 +75,16 @@ pub enum DocumentEvent {
         para: usize,
         ctrl: usize,
     },
+    TableSplit {
+        section: usize,
+        para: usize,
+        ctrl: usize,
+    },
+    TablesMerged {
+        section: usize,
+        para: usize,
+        ctrl: usize,
+    },
     CellSplit {
         section: usize,
         para: usize,
@@ -227,6 +237,22 @@ impl DocumentEvent {
                 ctrl,
             } => format!(
                 r#"{{"type":"CellsMerged","section":{},"para":{},"ctrl":{}}}"#,
+                section, para, ctrl
+            ),
+            DocumentEvent::TableSplit {
+                section,
+                para,
+                ctrl,
+            } => format!(
+                r#"{{"type":"TableSplit","section":{},"para":{},"ctrl":{}}}"#,
+                section, para, ctrl
+            ),
+            DocumentEvent::TablesMerged {
+                section,
+                para,
+                ctrl,
+            } => format!(
+                r#"{{"type":"TablesMerged","section":{},"para":{},"ctrl":{}}}"#,
                 section, para, ctrl
             ),
             DocumentEvent::CellSplit {

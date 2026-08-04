@@ -26733,3 +26733,1124 @@ fn local_resize_override_follows_plain_height_delta() {
         "높이 override 도 plain delta 를 따라와야 한다 (폭과 대칭)"
     );
 }
+
+// ─── 표 나누기 / 표 붙이기 (한컴 table(dividing).htm / table(attach).htm) ────
+//
+// 나누기: 커서 행부터 새 표로 분리. 첫 행에서는 불가. 뒤 표는 앞 표 속성 상속.
+// 붙이기: 다음 표를 현재 표 뒤에 이어 붙임. 사이에 내용 문단이 있으면 거부.
+//         칸 수가 달라도 붙는다 (한컴 명세).
+
+fn table_control_paras(doc: &HwpDocument) -> Vec<usize> {
+    use crate::model::control::Control;
+    doc.document.sections[0]
+        .paragraphs
+        .iter()
+        .enumerate()
+        .filter(|(_, p)| p.controls.iter().any(|c| matches!(c, Control::Table(_))))
+        .map(|(i, _)| i)
+        .collect()
+}
+
+#[test]
+fn split_table_divides_rows_and_inherits_attrs() {
+    let mut doc = HwpDocument::create_empty();
+    let created = doc.create_table_native(0, 0, 0, 4, 3).expect("표 생성");
+    let para_idx = issue_1481_json_usize(&created, "paraIdx");
+
+    let (orig_width, orig_border) = {
+        let t = issue_1481_table(&doc, para_idx);
+        (t.common.width, t.border_fill_id)
+    };
+
+    doc.split_table_native(0, para_idx, 0, 2)
+        .expect("표 나누기");
+
+    let tables = table_control_paras(&doc);
+    assert_eq!(tables.len(), 2, "나누면 표가 두 개여야 한다");
+
+    let front = issue_1481_table(&doc, tables[0]);
+    assert_eq!(front.row_count, 2, "앞 표는 커서 행 이전까지");
+    assert_eq!(front.cells.len(), 6);
+    assert!(front.cells.iter().all(|c| c.row < 2));
+
+    let back = issue_1481_table(&doc, tables[1]);
+    assert_eq!(back.row_count, 2, "뒤 표는 커서 행부터");
+    assert_eq!(back.cells.len(), 6);
+    assert!(
+        back.cells.iter().all(|c| c.row < 2),
+        "뒤 표 셀 row 는 0 부터 재배열되어야 한다"
+    );
+    assert_eq!(back.common.width, orig_width, "뒤 표는 앞 표 폭 상속");
+    assert_eq!(back.border_fill_id, orig_border, "뒤 표는 앞 표 속성 상속");
+}
+
+#[test]
+fn split_table_at_first_row_is_rejected() {
+    let mut doc = HwpDocument::create_empty();
+    let created = doc.create_table_native(0, 0, 0, 3, 2).expect("표 생성");
+    let para_idx = issue_1481_json_usize(&created, "paraIdx");
+
+    assert!(
+        doc.split_table_native(0, para_idx, 0, 0).is_err(),
+        "첫 행에서는 표 나누기가 거부되어야 한다 (한컴 동일)"
+    );
+}
+
+#[test]
+fn split_then_merge_round_trips_rows() {
+    let mut doc = HwpDocument::create_empty();
+    let created = doc.create_table_native(0, 0, 0, 5, 3).expect("표 생성");
+    let para_idx = issue_1481_json_usize(&created, "paraIdx");
+
+    doc.split_table_native(0, para_idx, 0, 3).expect("나누기");
+    let tables = table_control_paras(&doc);
+    assert_eq!(tables.len(), 2);
+
+    doc.merge_table_with_next_native(0, tables[0], 0)
+        .expect("붙이기");
+
+    let tables = table_control_paras(&doc);
+    assert_eq!(tables.len(), 1, "붙이면 표가 하나여야 한다");
+    let t = issue_1481_table(&doc, tables[0]);
+    assert_eq!(t.row_count, 5, "행 수 원복");
+    assert_eq!(t.cells.len(), 15);
+    // 이어붙인 행들의 row 재배열 검증
+    for r in 0..5u16 {
+        assert_eq!(
+            t.cells.iter().filter(|c| c.row == r).count(),
+            3,
+            "행 {r} 셀 수"
+        );
+    }
+}
+
+#[test]
+fn merge_rejects_when_paragraph_between_has_content() {
+    let mut doc = HwpDocument::create_empty();
+    let created = doc.create_table_native(0, 0, 0, 4, 2).expect("표 생성");
+    let para_idx = issue_1481_json_usize(&created, "paraIdx");
+    doc.split_table_native(0, para_idx, 0, 2).expect("나누기");
+
+    let tables = table_control_paras(&doc);
+    let between = tables[0] + 1;
+    assert!(between < tables[1], "나눈 사이에 문단이 있어야 한다");
+    doc.document.sections[0].paragraphs[between]
+        .text
+        .push_str("사이 내용");
+
+    assert!(
+        doc.merge_table_with_next_native(0, tables[0], 0).is_err(),
+        "표 사이에 내용이 있으면 붙이기가 거부되어야 한다 (한컴 동일)"
+    );
+}
+
+#[test]
+fn split_table_recomputes_corrupted_row_sizes() {
+    // 파싱이 불완전한 문서는 row_sizes 가 row_count 와 어긋날 수 있다. 그 상태로
+    // 나누면 산술 분할(drain/truncate)은 어긋남을 양쪽 표로 전파해 직렬화를
+    // 깨뜨린다 — 나누기는 양쪽 row_sizes 를 실제 셀에서 재계산해야 한다.
+    use crate::model::control::Control;
+    let mut doc = HwpDocument::create_empty();
+    let created = doc.create_table_native(0, 0, 0, 4, 3).expect("표 생성");
+    let para_idx = issue_1481_json_usize(&created, "paraIdx");
+
+    for c in &mut doc.document.sections[0].paragraphs[para_idx].controls {
+        if let Control::Table(t) = c {
+            t.row_sizes = vec![1]; // 손상 재현: 4행인데 항목 1개
+        }
+    }
+
+    doc.split_table_native(0, para_idx, 0, 2)
+        .expect("표 나누기");
+
+    for &p in &table_control_paras(&doc) {
+        let t = issue_1481_table(&doc, p);
+        assert_eq!(
+            t.row_sizes.len(),
+            t.row_count as usize,
+            "row_sizes 길이는 row_count 와 일치해야 한다"
+        );
+        for r in 0..t.row_count {
+            assert_eq!(
+                t.row_sizes[r as usize] as usize,
+                t.cells.iter().filter(|c| c.row == r).count(),
+                "행 {r} 의 row_sizes 는 실제 셀 수여야 한다"
+            );
+        }
+    }
+}
+
+#[test]
+fn merge_failure_leaves_back_table_intact() {
+    // 검증이 뒤 표 제거 이후에 이뤄지면, 실패한 붙이기가 뒤 표를 문서에서
+    // 지워 버린다 — 모든 검증은 문서 변형 전에 끝나야 한다.
+    let mut doc = HwpDocument::create_empty();
+    let created = doc.create_table_native(0, 0, 0, 4, 2).expect("표 생성");
+    let para_idx = issue_1481_json_usize(&created, "paraIdx");
+    doc.split_table_native(0, para_idx, 0, 2).expect("나누기");
+    assert_eq!(table_control_paras(&doc).len(), 2);
+
+    assert!(
+        doc.merge_table_with_next_native(0, para_idx, 7).is_err(),
+        "잘못된 control_idx 는 거부되어야 한다"
+    );
+    assert_eq!(
+        table_control_paras(&doc).len(),
+        2,
+        "실패한 붙이기가 뒤 표를 지우면 안 된다"
+    );
+    let back = issue_1481_table(&doc, table_control_paras(&doc)[1]);
+    assert_eq!(back.row_count, 2, "뒤 표 내용 보존");
+}
+
+#[test]
+fn merge_rejects_corrupted_back_row_overflow_before_mutation() {
+    // 손상 문서의 뒤 표에 row=u16::MAX 셀이 있으면 `cell.row += front_rows` 가
+    // debug panic / release wraparound 를 일으킨다. row_count 합 검증만으로는
+    // 못 걸러내므로, 셀·zone 실측 최대 행 기준으로 변형 전에 거부해야 한다.
+    use crate::model::control::Control;
+    let mut doc = HwpDocument::create_empty();
+    let created = doc.create_table_native(0, 0, 0, 4, 2).expect("표 생성");
+    let para_idx = issue_1481_json_usize(&created, "paraIdx");
+    doc.split_table_native(0, para_idx, 0, 2).expect("나누기");
+    let tables = table_control_paras(&doc);
+    assert_eq!(tables.len(), 2);
+
+    for c in &mut doc.document.sections[0].paragraphs[tables[1]].controls {
+        if let Control::Table(t) = c {
+            t.cells[0].row = u16::MAX; // 손상 재현
+        }
+    }
+
+    assert!(
+        doc.merge_table_with_next_native(0, tables[0], 0).is_err(),
+        "행 오버플로를 일으킬 손상 표는 거부되어야 한다"
+    );
+    assert_eq!(
+        table_control_paras(&doc).len(),
+        2,
+        "거부된 붙이기가 뒤 표를 지우면 안 된다"
+    );
+}
+
+#[test]
+fn split_connects_new_paragraph_vpos_to_flow() {
+    // [Task #2299 계약] 새로 삽입한 문단(사이 빈 문단·뒤 표 host)의 LineSeg 가
+    // placeholder vpos(0)로 남으면, 직렬화 시 가짜 단/쪽 경계로 기록되고 이후
+    // 편집의 vpos 재계산이 이를 저장 경계로 오인해 고착시킨다.
+    let mut doc = HwpDocument::create_empty();
+    let created = doc.create_table_native(0, 0, 0, 4, 3).expect("표 생성");
+    let para_idx = issue_1481_json_usize(&created, "paraIdx");
+
+    doc.split_table_native(0, para_idx, 0, 2)
+        .expect("표 나누기");
+
+    let paras = &doc.document.sections[0].paragraphs;
+    for (label, idx) in [("사이 문단", para_idx + 1), ("뒤 표 host", para_idx + 2)] {
+        let vpos = paras[idx].line_segs.first().map(|l| l.vertical_pos);
+        assert!(
+            vpos.is_some_and(|v| v > 0),
+            "{label}(문단 {idx})의 vertical_pos 는 흐름에 연결되어야 한다 (실제 {vpos:?})"
+        );
+    }
+}
+
+#[test]
+fn split_updates_dimensions_without_raw_ctrl_data() {
+    // HWPX 파서는 표의 raw_ctrl_data 를 비워 두므로, 크기 갱신이 raw 존재에
+    // 의존하면 나뉜 두 표가 모두 원본 전체 크기(common.height)로 남는다.
+    use crate::model::control::Control;
+    let mut doc = HwpDocument::create_empty();
+    let created = doc.create_table_native(0, 0, 0, 4, 3).expect("표 생성");
+    let para_idx = issue_1481_json_usize(&created, "paraIdx");
+
+    let orig_height = issue_1481_table(&doc, para_idx).common.height;
+    for c in &mut doc.document.sections[0].paragraphs[para_idx].controls {
+        if let Control::Table(t) = c {
+            t.raw_ctrl_data = Vec::new(); // HWPX 파스 문서 재현
+        }
+    }
+
+    doc.split_table_native(0, para_idx, 0, 2)
+        .expect("표 나누기");
+
+    let tables = table_control_paras(&doc);
+    let front = issue_1481_table(&doc, tables[0]);
+    let back = issue_1481_table(&doc, tables[1]);
+    assert!(
+        front.common.height < orig_height && back.common.height < orig_height,
+        "raw_ctrl_data 가 없어도 나뉜 표의 common.height 는 재계산되어야 한다 \
+         (원본 {orig_height}, 앞 {}, 뒤 {})",
+        front.common.height,
+        back.common.height
+    );
+}
+
+#[test]
+fn split_assigns_unique_nonzero_instance_ids() {
+    // instance_id 는 저장소 계약상 고유 비-0 이어야 한다 (create_table_native 의
+    // "비-0 필수", html_table_import 의 "고유한 비-0 값"). 0 으로 두면 두 번
+    // 나눴을 때 0 짜리 표 두 개가 생겨 동일-ID 충돌이 재현된다.
+    let mut doc = HwpDocument::create_empty();
+    let created = doc.create_table_native(0, 0, 0, 6, 2).expect("표 생성");
+    let para_idx = issue_1481_json_usize(&created, "paraIdx");
+
+    doc.split_table_native(0, para_idx, 0, 4)
+        .expect("1차 나누기");
+    doc.split_table_native(0, para_idx, 0, 2)
+        .expect("2차 나누기");
+
+    fn stored_instance_id(t: &crate::model::table::Table) -> u32 {
+        use crate::model::shape::common_obj_offsets;
+        if t.raw_ctrl_data.len() >= common_obj_offsets::INSTANCE_ID.end {
+            u32::from_le_bytes(
+                t.raw_ctrl_data[common_obj_offsets::INSTANCE_ID]
+                    .try_into()
+                    .unwrap(),
+            )
+        } else {
+            t.common.instance_id
+        }
+    }
+    let ids: Vec<u32> = table_control_paras(&doc)
+        .iter()
+        .map(|&p| stored_instance_id(issue_1481_table(&doc, p)))
+        .collect();
+    assert_eq!(ids.len(), 3);
+    for id in &ids {
+        assert_ne!(*id, 0, "instance_id 는 비-0 이어야 한다: {ids:?}");
+    }
+    let unique: std::collections::HashSet<u32> = ids.iter().copied().collect();
+    assert_eq!(unique.len(), 3, "instance_id 는 서로 달라야 한다: {ids:?}");
+}
+
+#[test]
+fn split_row_index_conversion_rejects_u16_overflow() {
+    // WASM 경계의 u32 → u16 캐스팅이 묵시적 절단이면 65537 이 1 로 바뀌어
+    // 요청 밖 행에서 표가 나뉜다 — 명시적 오류여야 한다.
+    assert!(super::row_index_from_u32(65537).is_err());
+    assert!(super::row_index_from_u32(u32::MAX).is_err());
+    assert_eq!(super::row_index_from_u32(3).unwrap(), 3u16);
+    assert_eq!(super::row_index_from_u32(65535).unwrap(), u16::MAX);
+}
+
+#[test]
+fn split_table_rejects_when_vertical_merge_crosses_cut() {
+    let mut doc = HwpDocument::create_empty();
+    let created = doc.create_table_native(0, 0, 0, 4, 2).expect("표 생성");
+    let para_idx = issue_1481_json_usize(&created, "paraIdx");
+
+    // row1~row2 를 세로 병합 (col0) — 분할선(2)을 가로지르게 만든다.
+    doc.merge_table_cells_native(0, para_idx, 0, 1, 0, 2, 0)
+        .expect("세로 병합");
+
+    assert!(
+        doc.split_table_native(0, para_idx, 0, 2).is_err(),
+        "세로 병합 셀이 걸친 위치에서는 나누기가 거부되어야 한다 (한컴 동일)"
+    );
+    // 걸치지 않는 위치(1)는 허용
+    doc.split_table_native(0, para_idx, 0, 3)
+        .expect("병합 아래 경계에서는 나뉘어야 한다");
+}
+
+#[test]
+fn split_preserves_local_resize_on_both_sides() {
+    // Alt 로 조절한 행별 폭(local resize)이 나누기에서 소실되면 안 된다.
+    let mut doc = HwpDocument::create_empty();
+    let created = doc.create_table_native(0, 0, 0, 4, 3).expect("표 생성");
+    let para_idx = issue_1481_json_usize(&created, "paraIdx");
+
+    // 앞쪽(row1 col1, idx4)·뒤쪽(row3 col2, idx11) 셀에 localResize 등록
+    let (w4, w11) = {
+        let t = issue_1481_table(&doc, para_idx);
+        (t.cells[4].width + 600, t.cells[11].width + 900)
+    };
+    doc.resize_table_cells_native(
+        0,
+        para_idx,
+        0,
+        &format!(
+            r#"[{{"cellIdx":4,"widthDelta":600,"localResize":true,"renderWidth":{w4}}},{{"cellIdx":11,"widthDelta":900,"localResize":true,"renderWidth":{w11}}}]"#
+        ),
+    )
+    .expect("local resize");
+
+    doc.split_table_native(0, para_idx, 0, 2).expect("나누기");
+    let tables = table_control_paras(&doc);
+
+    let front = issue_1481_table(&doc, tables[0]);
+    assert_eq!(
+        front.local_resize_cell_widths,
+        vec![(4usize, w4)],
+        "앞 표는 자기 범위 항목을 그대로 보존해야 한다"
+    );
+    let back = issue_1481_table(&doc, tables[1]);
+    assert_eq!(
+        back.local_resize_cell_widths,
+        vec![(11usize - 6, w11)],
+        "뒤 표 항목은 앞 셀 수(6)만큼 당겨 재매핑되어야 한다"
+    );
+
+    // 붙이면 원래 배치로 돌아와야 한다
+    doc.merge_table_with_next_native(0, tables[0], 0)
+        .expect("붙이기");
+    let tables = table_control_paras(&doc);
+    let merged = issue_1481_table(&doc, tables[0]);
+    let mut widths = merged.local_resize_cell_widths.clone();
+    widths.sort();
+    assert_eq!(widths, vec![(4usize, w4), (11usize, w11)], "붙이기 후 원복");
+}
+
+#[test]
+fn split_table_survives_hwp_save_reload() {
+    // 나눈 문서를 HWP 로 저장해 다시 열어도 표 두 개가 그대로여야 한다.
+    let mut doc = HwpDocument::create_empty();
+    let created = doc.create_table_native(0, 0, 0, 5, 2).expect("표 생성");
+    let para_idx = issue_1481_json_usize(&created, "paraIdx");
+    doc.split_table_native(0, para_idx, 0, 2).expect("나누기");
+
+    let bytes = doc.export_hwp_native().expect("HWP 저장");
+    let reloaded = HwpDocument::from_bytes(&bytes).expect("재파싱");
+
+    let tables = table_control_paras(&reloaded);
+    assert_eq!(tables.len(), 2, "저장-재열기 후에도 표 두 개");
+    let front = issue_1481_table(&reloaded, tables[0]);
+    let back = issue_1481_table(&reloaded, tables[1]);
+    assert_eq!((front.row_count, back.row_count), (2, 3));
+    assert_eq!(front.cells.len(), 4);
+    assert_eq!(back.cells.len(), 6);
+}
+
+#[test]
+fn split_then_column_resize_still_works() {
+    // 나눈 뒤에도 칸 전체 리사이즈(Ctrl 경로)가 각 표에 독립적으로 적용돼야 한다.
+    let mut doc = HwpDocument::create_empty();
+    let created = doc.create_table_native(0, 0, 0, 4, 2).expect("표 생성");
+    let para_idx = issue_1481_json_usize(&created, "paraIdx");
+    doc.split_table_native(0, para_idx, 0, 2).expect("나누기");
+    let tables = table_control_paras(&doc);
+
+    let before = issue_1481_table(&doc, tables[1]).cells[0].width;
+    // 뒤 표 col0 전체 +300
+    let updates: Vec<String> = issue_1481_table(&doc, tables[1])
+        .cells
+        .iter()
+        .enumerate()
+        .filter(|(_, c)| c.col == 0)
+        .map(|(i, _)| format!(r#"{{"cellIdx":{i},"widthDelta":300}}"#))
+        .collect();
+    doc.resize_table_cells_native(0, tables[1], 0, &format!("[{}]", updates.join(",")))
+        .expect("리사이즈");
+
+    let back = issue_1481_table(&doc, tables[1]);
+    assert_eq!(back.cells[0].width, before + 300, "뒤 표 리사이즈 반영");
+    let front = issue_1481_table(&doc, tables[0]);
+    assert_eq!(
+        front.cells[0].width, before,
+        "앞 표는 영향 없음 (따로 놀지도, 같이 끌려가지도 않게)"
+    );
+}
+
+// ─── 표 나누기/붙이기 확장 케이스 매트릭스 ──────────────────────────
+
+#[test]
+fn split_at_last_row_leaves_one_row_back() {
+    let mut doc = HwpDocument::create_empty();
+    let created = doc.create_table_native(0, 0, 0, 4, 2).expect("표");
+    let p = issue_1481_json_usize(&created, "paraIdx");
+    doc.split_table_native(0, p, 0, 3)
+        .expect("마지막 행 나누기");
+    let t = table_control_paras(&doc);
+    assert_eq!(issue_1481_table(&doc, t[0]).row_count, 3);
+    assert_eq!(issue_1481_table(&doc, t[1]).row_count, 1, "뒤 표 1행");
+}
+
+#[test]
+fn split_two_row_table_minimal() {
+    let mut doc = HwpDocument::create_empty();
+    let created = doc.create_table_native(0, 0, 0, 2, 2).expect("표");
+    let p = issue_1481_json_usize(&created, "paraIdx");
+    doc.split_table_native(0, p, 0, 1).expect("2행 표 나누기");
+    let t = table_control_paras(&doc);
+    assert_eq!(issue_1481_table(&doc, t[0]).row_count, 1);
+    assert_eq!(issue_1481_table(&doc, t[1]).row_count, 1);
+}
+
+#[test]
+fn split_single_row_table_always_rejected() {
+    let mut doc = HwpDocument::create_empty();
+    let created = doc.create_table_native(0, 0, 0, 1, 3).expect("표");
+    let p = issue_1481_json_usize(&created, "paraIdx");
+    assert!(doc.split_table_native(0, p, 0, 0).is_err());
+    assert!(
+        doc.split_table_native(0, p, 0, 1).is_err(),
+        "범위 초과도 거부"
+    );
+}
+
+#[test]
+fn split_preserves_cell_text_on_both_sides() {
+    let mut doc = HwpDocument::create_empty();
+    let created = doc.create_table_native(0, 0, 0, 3, 2).expect("표");
+    let p = issue_1481_json_usize(&created, "paraIdx");
+    {
+        use crate::model::control::Control;
+        let para = &mut doc.document.sections[0].paragraphs[p];
+        if let Some(Control::Table(t)) = para.controls.get_mut(0) {
+            t.cells[0].paragraphs[0].text = "앞머리".to_string();
+            t.cells[5].paragraphs[0].text = "뒤꼬리".to_string();
+        }
+    }
+    doc.split_table_native(0, p, 0, 1).expect("나누기");
+    let t = table_control_paras(&doc);
+    assert_eq!(
+        issue_1481_table(&doc, t[0]).cells[0].paragraphs[0].text,
+        "앞머리"
+    );
+    let back = issue_1481_table(&doc, t[1]);
+    let tail = back
+        .cells
+        .iter()
+        .find(|c| c.paragraphs[0].text == "뒤꼬리")
+        .expect("뒤 표에 텍스트 보존");
+    assert_eq!(tail.row, 1, "원래 row2 가 뒤 표 row1 로 재배열");
+}
+
+#[test]
+fn split_allows_horizontal_merge_and_preserves_span() {
+    let mut doc = HwpDocument::create_empty();
+    let created = doc.create_table_native(0, 0, 0, 3, 3).expect("표");
+    let p = issue_1481_json_usize(&created, "paraIdx");
+    // row2 에서 가로 병합 (분할과 무관한 축)
+    doc.merge_table_cells_native(0, p, 0, 2, 0, 2, 1)
+        .expect("가로 병합");
+    doc.split_table_native(0, p, 0, 2)
+        .expect("가로 병합은 나누기 허용");
+    let t = table_control_paras(&doc);
+    let back = issue_1481_table(&doc, t[1]);
+    assert!(back.cells.iter().any(|c| c.col_span == 2), "colSpan 보존");
+}
+
+#[test]
+fn split_allowed_when_vertical_merge_ends_at_cut() {
+    let mut doc = HwpDocument::create_empty();
+    let created = doc.create_table_native(0, 0, 0, 4, 2).expect("표");
+    let p = issue_1481_json_usize(&created, "paraIdx");
+    doc.merge_table_cells_native(0, p, 0, 0, 0, 1, 0)
+        .expect("row0~1 세로 병합");
+    // 병합이 row1 에서 끝나므로 경계(2)는 가로지르지 않는다
+    doc.split_table_native(0, p, 0, 2)
+        .expect("경계 정확히 아래는 허용");
+}
+
+#[test]
+fn split_twice_makes_three_tables() {
+    let mut doc = HwpDocument::create_empty();
+    let created = doc.create_table_native(0, 0, 0, 6, 2).expect("표");
+    let p = issue_1481_json_usize(&created, "paraIdx");
+    doc.split_table_native(0, p, 0, 4).expect("1차");
+    let t = table_control_paras(&doc);
+    doc.split_table_native(0, t[0], 0, 2)
+        .expect("2차 (앞 표 재분할)");
+    let t = table_control_paras(&doc);
+    assert_eq!(t.len(), 3);
+    let rows: Vec<u16> = t
+        .iter()
+        .map(|p| issue_1481_table(&doc, *p).row_count)
+        .collect();
+    assert_eq!(rows, vec![2, 2, 2]);
+}
+
+#[test]
+fn split_survives_snapshot_undo_roundtrip() {
+    let mut doc = HwpDocument::create_empty();
+    let created = doc.create_table_native(0, 0, 0, 4, 2).expect("표");
+    let p = issue_1481_json_usize(&created, "paraIdx");
+    let snap = doc.save_snapshot();
+    doc.split_table_native(0, p, 0, 2).expect("나누기");
+    assert_eq!(table_control_paras(&doc).len(), 2);
+    doc.restore_snapshot(snap).expect("스냅샷 복원");
+    assert_eq!(
+        table_control_paras(&doc).len(),
+        1,
+        "undo(스냅샷 복원) 후 원복"
+    );
+    assert_eq!(issue_1481_table(&doc, p).row_count, 4);
+}
+
+#[test]
+fn split_inherits_repeat_header_and_keeps_caption_front_only() {
+    let mut doc = HwpDocument::create_empty();
+    let created = doc.create_table_native(0, 0, 0, 3, 2).expect("표");
+    let p = issue_1481_json_usize(&created, "paraIdx");
+    {
+        use crate::model::control::Control;
+        use crate::model::shape::Caption;
+        let para = &mut doc.document.sections[0].paragraphs[p];
+        if let Some(Control::Table(t)) = para.controls.get_mut(0) {
+            t.repeat_header = true;
+            t.caption = Some(Caption::default());
+        }
+    }
+    doc.split_table_native(0, p, 0, 1).expect("나누기");
+    let t = table_control_paras(&doc);
+    let front = issue_1481_table(&doc, t[0]);
+    let back = issue_1481_table(&doc, t[1]);
+    assert!(
+        front.repeat_header && back.repeat_header,
+        "제목행 반복 속성 상속"
+    );
+    assert!(front.caption.is_some(), "캡션은 앞 표 유지");
+    assert!(back.caption.is_none(), "뒤 표는 캡션 없음");
+}
+
+#[test]
+fn split_row_sizes_partitioned() {
+    let mut doc = HwpDocument::create_empty();
+    let created = doc.create_table_native(0, 0, 0, 5, 2).expect("표");
+    let p = issue_1481_json_usize(&created, "paraIdx");
+    let orig = issue_1481_table(&doc, p).row_sizes.clone();
+    doc.split_table_native(0, p, 0, 2).expect("나누기");
+    let t = table_control_paras(&doc);
+    let front = issue_1481_table(&doc, t[0]);
+    let back = issue_1481_table(&doc, t[1]);
+    if !orig.is_empty() {
+        assert_eq!(front.row_sizes.len(), 2);
+        assert_eq!(back.row_sizes.len(), 3);
+    }
+}
+
+#[test]
+fn split_invalid_targets_rejected() {
+    let mut doc = HwpDocument::create_empty();
+    let created = doc.create_table_native(0, 0, 0, 3, 2).expect("표");
+    let p = issue_1481_json_usize(&created, "paraIdx");
+    assert!(
+        doc.split_table_native(0, p + 99, 0, 1).is_err(),
+        "없는 문단"
+    );
+    assert!(doc.split_table_native(0, p, 7, 1).is_err(), "없는 컨트롤");
+    assert!(doc.split_table_native(3, p, 0, 1).is_err(), "없는 구역");
+}
+
+#[test]
+fn split_survives_hwpx_save_reload() {
+    // create_empty 문서는 HWPX ID 맵 미등록으로 원래 export 불가(기존 한계) —
+    // 실물 빈 문서를 기반으로 검증한다.
+    let root = env!("CARGO_MANIFEST_DIR");
+    let bytes =
+        std::fs::read(format!("{root}/samples/253E164F57A1BC6934-empty.hwp")).expect("샘플");
+    let mut doc = HwpDocument::from_bytes(&bytes).expect("파싱");
+    let baseline = table_control_paras(&doc).len(); // 샘플 자체 표 수
+    let created = doc.create_table_native(0, 0, 0, 4, 2).expect("표 생성");
+    let p = issue_1481_json_usize(&created, "paraIdx");
+    doc.split_table_native(0, p, 0, 2).expect("나누기");
+    let out = doc.export_hwpx_native().expect("HWPX 저장");
+    let reloaded = HwpDocument::from_bytes(&out).expect("재파싱");
+    let tables = table_control_paras(&reloaded);
+    let shapes: Vec<(u16, u16, usize)> = tables
+        .iter()
+        .map(|p| {
+            let t = issue_1481_table(&reloaded, *p);
+            (t.row_count, t.col_count, t.cells.len())
+        })
+        .collect();
+    assert_eq!(
+        tables.len(),
+        baseline + 2,
+        "HWPX 왕복: 샘플 원본 표 + 나눈 두 표 전부 생존 — 실제: {shapes:?}"
+    );
+    assert_eq!(
+        shapes.iter().filter(|s| **s == (2, 2, 4)).count(),
+        2,
+        "나눈 2×2 두 표가 보존되어야 한다: {shapes:?}"
+    );
+}
+
+#[test]
+fn merge_different_col_counts_keeps_rows_intact() {
+    // 한컴 명세: 칸 수 달라도 붙는다. 각 행은 자기 칸 배치를 유지한다.
+    let mut doc = HwpDocument::create_empty();
+    let created = doc.create_table_native(0, 0, 0, 2, 2).expect("2열 표");
+    let p = issue_1481_json_usize(&created, "paraIdx");
+    // 2열 표를 나눈 뒤, 뒤 표에 열 추가해 3열로 만들고 다시 붙인다
+    doc.split_table_native(0, p, 0, 1).expect("나누기");
+    let t = table_control_paras(&doc);
+    doc.insert_table_column_native(0, t[1], 0, 1, true)
+        .expect("열 추가");
+    assert_eq!(issue_1481_table(&doc, t[1]).col_count, 3);
+    doc.merge_table_with_next_native(0, t[0], 0)
+        .expect("칸 수 다른 붙이기");
+    let t = table_control_paras(&doc);
+    let m = issue_1481_table(&doc, t[0]);
+    assert_eq!(m.col_count, 3, "col_count 는 큰 쪽");
+    assert_eq!(
+        m.cells.iter().filter(|c| c.row == 0).count(),
+        2,
+        "앞 행은 2칸 유지"
+    );
+    assert_eq!(
+        m.cells.iter().filter(|c| c.row == 1).count(),
+        3,
+        "뒤 행은 3칸 유지"
+    );
+}
+
+#[test]
+fn merge_three_tables_sequentially() {
+    let mut doc = HwpDocument::create_empty();
+    let created = doc.create_table_native(0, 0, 0, 6, 2).expect("표");
+    let p = issue_1481_json_usize(&created, "paraIdx");
+    doc.split_table_native(0, p, 0, 4).expect("1차 나누기");
+    let t = table_control_paras(&doc);
+    doc.split_table_native(0, t[0], 0, 2).expect("2차 나누기");
+    // 3개 → 앞에서 두 번 붙여 1개
+    let t = table_control_paras(&doc);
+    doc.merge_table_with_next_native(0, t[0], 0)
+        .expect("1차 붙이기");
+    let t = table_control_paras(&doc);
+    doc.merge_table_with_next_native(0, t[0], 0)
+        .expect("2차 붙이기");
+    let t = table_control_paras(&doc);
+    assert_eq!(t.len(), 1);
+    assert_eq!(issue_1481_table(&doc, t[0]).row_count, 6, "6행 원복");
+}
+
+#[test]
+fn merge_rejected_at_document_end_without_next_table() {
+    let mut doc = HwpDocument::create_empty();
+    let created = doc.create_table_native(0, 0, 0, 2, 2).expect("표");
+    let p = issue_1481_json_usize(&created, "paraIdx");
+    assert!(
+        doc.merge_table_with_next_native(0, p, 0).is_err(),
+        "다음 표 없음 → 거부"
+    );
+}
+
+#[test]
+fn merge_allows_whitespace_only_paragraph_between() {
+    let mut doc = HwpDocument::create_empty();
+    let created = doc.create_table_native(0, 0, 0, 4, 2).expect("표");
+    let p = issue_1481_json_usize(&created, "paraIdx");
+    doc.split_table_native(0, p, 0, 2).expect("나누기");
+    let t = table_control_paras(&doc);
+    // 사이 문단에 표(컨트롤)를 넣으면... 그 자체가 다음 표가 되므로,
+    // 대신 텍스트 아닌 컨트롤 존재 케이스: 사이 문단에 빈 문자열 + 컨트롤 흉내로
+    // 텍스트를 넣는 기존 케이스와 구분해 공백만 있는 문단은 허용되는지 확인.
+    let between = t[0] + 1;
+    doc.document.sections[0].paragraphs[between].text = "   ".to_string();
+    doc.merge_table_with_next_native(0, t[0], 0)
+        .expect("공백뿐인 문단은 빈 문단으로 취급 (한컴: 빈칸 허용)");
+}
+
+#[test]
+fn merge_keeps_front_caption() {
+    let mut doc = HwpDocument::create_empty();
+    let created = doc.create_table_native(0, 0, 0, 4, 2).expect("표");
+    let p = issue_1481_json_usize(&created, "paraIdx");
+    {
+        use crate::model::control::Control;
+        use crate::model::shape::Caption;
+        let para = &mut doc.document.sections[0].paragraphs[p];
+        if let Some(Control::Table(t)) = para.controls.get_mut(0) {
+            t.caption = Some(Caption::default());
+        }
+    }
+    doc.split_table_native(0, p, 0, 2).expect("나누기");
+    let t = table_control_paras(&doc);
+    doc.merge_table_with_next_native(0, t[0], 0)
+        .expect("붙이기");
+    let t = table_control_paras(&doc);
+    assert!(
+        issue_1481_table(&doc, t[0]).caption.is_some(),
+        "앞 캡션 유지"
+    );
+}
+
+#[test]
+fn merge_then_split_again_roundtrip() {
+    let mut doc = HwpDocument::create_empty();
+    let created = doc.create_table_native(0, 0, 0, 5, 3).expect("표");
+    let p = issue_1481_json_usize(&created, "paraIdx");
+    doc.split_table_native(0, p, 0, 2).expect("나누기");
+    let t = table_control_paras(&doc);
+    doc.merge_table_with_next_native(0, t[0], 0)
+        .expect("붙이기");
+    let t = table_control_paras(&doc);
+    doc.split_table_native(0, t[0], 0, 2).expect("재나누기");
+    let t = table_control_paras(&doc);
+    assert_eq!(t.len(), 2);
+    assert_eq!(issue_1481_table(&doc, t[1]).row_count, 3);
+}
+
+#[test]
+fn merge_survives_hwp_save_reload() {
+    let mut doc = HwpDocument::create_empty();
+    let created = doc.create_table_native(0, 0, 0, 4, 2).expect("표");
+    let p = issue_1481_json_usize(&created, "paraIdx");
+    doc.split_table_native(0, p, 0, 2).expect("나누기");
+    let t = table_control_paras(&doc);
+    doc.merge_table_with_next_native(0, t[0], 0)
+        .expect("붙이기");
+    let bytes = doc.export_hwp_native().expect("저장");
+    let reloaded = HwpDocument::from_bytes(&bytes).expect("재파싱");
+    let t = table_control_paras(&reloaded);
+    assert_eq!(t.len(), 1);
+    assert_eq!(issue_1481_table(&reloaded, t[0]).row_count, 4);
+}
+
+#[test]
+fn merge_rejects_when_nontable_control_between() {
+    use crate::model::control::{Control, Hyperlink};
+    let mut doc = HwpDocument::create_empty();
+    let created = doc.create_table_native(0, 0, 0, 4, 2).expect("표");
+    let p = issue_1481_json_usize(&created, "paraIdx");
+    doc.split_table_native(0, p, 0, 2).expect("나누기");
+    let t = table_control_paras(&doc);
+    let between = t[0] + 1;
+    doc.document.sections[0].paragraphs[between]
+        .controls
+        .push(Control::Hyperlink(Hyperlink {
+            url: "https://example.com".into(),
+            text: "링크".into(),
+        }));
+    assert!(
+        doc.merge_table_with_next_native(0, t[0], 0).is_err(),
+        "사이 문단에 컨트롤이 있으면 거부"
+    );
+}
+
+#[test]
+fn create_empty_table_hwpx_export_known_limitation() {
+    // 기존 한계 고정: create_empty 문서는 HWPX ID 맵(charPr/paraPr/style 0)
+    // 미등록으로 표 유무와 무관하게 export 가 거부된다. split 탓이 아님을
+    // 대조 실험으로 봉인해 둔다 (해소되면 이 테스트를 뒤집을 것).
+    let mut doc = HwpDocument::create_empty();
+    doc.create_table_native(0, 0, 0, 4, 2).expect("표");
+    assert!(doc.export_hwpx_native().is_err());
+}
+
+/// 코퍼스 전수 스윕: samples 의 모든 HWP 문서 × 모든 최상위 표 × 분할점
+/// {1, 중간, 마지막} 에서 나누기→불변식 검증→붙이기→원본 대조.
+///
+/// 무겁기 때문에 기본 제외 — 실행: `cargo test ... corpus_split_join_sweep -- --ignored`
+#[test]
+#[ignore]
+fn corpus_split_join_sweep_all_samples() {
+    use crate::model::control::Control;
+
+    let root = env!("CARGO_MANIFEST_DIR");
+    let mut files: Vec<_> = std::fs::read_dir(format!("{root}/samples"))
+        .expect("samples 디렉터리")
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| p.extension().and_then(|s| s.to_str()) == Some("hwp"))
+        .collect();
+    files.sort();
+
+    #[derive(Clone, PartialEq, Debug)]
+    struct TableSig {
+        rows: u16,
+        cols: u16,
+        cells: Vec<(u16, u16, u16, u16, String)>, // (row, col, rspan, cspan, 첫문단 텍스트)
+    }
+    fn sig(t: &crate::model::table::Table) -> TableSig {
+        TableSig {
+            rows: t.row_count,
+            cols: t.col_count,
+            cells: t
+                .cells
+                .iter()
+                .map(|c| {
+                    (
+                        c.row,
+                        c.col,
+                        c.row_span,
+                        c.col_span,
+                        c.paragraphs
+                            .first()
+                            .map(|p| p.text.clone())
+                            .unwrap_or_default(),
+                    )
+                })
+                .collect(),
+        }
+    }
+
+    let (mut docs, mut tables, mut splits_ok, mut rejected, mut merged_ok) =
+        (0u32, 0u32, 0u32, 0u32, 0u32);
+    let mut failures: Vec<String> = Vec::new();
+
+    for path in files {
+        let Ok(bytes) = std::fs::read(&path) else {
+            continue;
+        };
+        let name = path.file_name().unwrap().to_string_lossy().to_string();
+        // 암호 문서 등 파싱 불가는 건너뜀
+        let Ok(probe) = HwpDocument::from_bytes(&bytes) else {
+            continue;
+        };
+        docs += 1;
+
+        // 최상위 표 위치 수집 (섹션 0 한정 — 파일당 비용 통제)
+        let table_locs: Vec<(usize, usize, u16)> = probe.document.sections[0]
+            .paragraphs
+            .iter()
+            .enumerate()
+            .flat_map(|(pi, para)| {
+                para.controls.iter().enumerate().filter_map(move |(ci, c)| {
+                    if let Control::Table(t) = c {
+                        Some((pi, ci, t.row_count))
+                    } else {
+                        None
+                    }
+                })
+            })
+            .collect();
+
+        for (pi, ci, rows) in table_locs {
+            if rows < 2 {
+                continue;
+            }
+            tables += 1;
+            let cuts: Vec<u16> = {
+                let mut c = vec![1, rows / 2, rows - 1];
+                c.dedup();
+                c.retain(|x| *x >= 1 && *x < rows);
+                c
+            };
+            for cut in cuts {
+                let mut doc = HwpDocument::from_bytes(&bytes).expect("재파싱");
+                let orig = sig(
+                    match doc.document.sections[0].paragraphs[pi].controls.get(ci) {
+                        Some(Control::Table(t)) => t,
+                        _ => continue,
+                    },
+                );
+                match doc.split_table_native(0, pi, ci, cut) {
+                    Err(e) => {
+                        // 허용된 거부 사유만 인정
+                        let msg = format!("{e:?}");
+                        if msg.contains("세로로 합쳐진") || msg.contains("첫 번째 줄") {
+                            rejected += 1;
+                        } else {
+                            failures.push(format!("{name} 표(p{pi}) cut{cut}: 예상 밖 거부 {msg}"));
+                        }
+                        continue;
+                    }
+                    Ok(_) => splits_ok += 1,
+                }
+                // 불변식: 나눈 두 표의 시그니처 합 = 원본
+                let front = sig(
+                    match doc.document.sections[0].paragraphs[pi].controls.get(ci) {
+                        Some(Control::Table(t)) => t,
+                        _ => {
+                            failures.push(format!("{name} p{pi} cut{cut}: 앞 표 소실"));
+                            continue;
+                        }
+                    },
+                );
+                if front.rows != cut {
+                    failures.push(format!(
+                        "{name} p{pi} cut{cut}: 앞 행수 {}≠{cut}",
+                        front.rows
+                    ));
+                }
+                // 붙여서 원본과 대조
+                if let Err(e) = doc.merge_table_with_next_native(0, pi, ci) {
+                    failures.push(format!("{name} p{pi} cut{cut}: 붙이기 실패 {e:?}"));
+                    continue;
+                }
+                let merged = sig(
+                    match doc.document.sections[0].paragraphs[pi].controls.get(ci) {
+                        Some(Control::Table(t)) => t,
+                        _ => {
+                            failures.push(format!("{name} p{pi} cut{cut}: 병합 표 소실"));
+                            continue;
+                        }
+                    },
+                );
+                if merged != orig {
+                    failures.push(format!(
+                        "{name} p{pi} cut{cut}: 라운드트립 불일치 (rows {}→{}, cells {}→{})",
+                        orig.rows,
+                        merged.rows,
+                        orig.cells.len(),
+                        merged.cells.len()
+                    ));
+                } else {
+                    merged_ok += 1;
+                }
+            }
+        }
+    }
+
+    eprintln!(
+        "[corpus sweep] 문서 {docs} · 표 {tables} · 나누기 성공 {splits_ok} · 정당 거부 {rejected} · 라운드트립 일치 {merged_ok} · 실패 {}",
+        failures.len()
+    );
+    for f in failures.iter().take(20) {
+        eprintln!("  FAIL {f}");
+    }
+    assert!(failures.is_empty(), "{}건 실패 (위 로그)", failures.len());
+}
+
+#[test]
+fn split_after_local_resize_keeps_render_grid() {
+    // Alt(행별 폭, local resize)로 조절한 표를 나누면, base grid 재계산이
+    // override 행을 제외하지 않을 경우 뒤 표의 common.width 가 override 폭만큼
+    // 부풀어 전 행이 넓게 렌더된다 (override 행은 residual 몰아주기로 두 배).
+    // 한컴 의미론: Alt 는 표 폭 유지, 나누기도 폭 불변 — 렌더 폭이 나누기
+    // 전후로 같아야 한다.
+    use crate::model::control::Control;
+    let bytes = std::fs::read(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/samples/21868765_별표2_보건소_분장사무.hwp"
+    ))
+    .expect("샘플");
+    let mut doc = HwpDocument::from_bytes(&bytes).expect("파싱");
+    doc.paginate();
+    let para_idx = doc.document.sections[0]
+        .paragraphs
+        .iter()
+        .enumerate()
+        .find(|(_, p)| p.controls.iter().any(|c| matches!(c, Control::Table(_))))
+        .map(|(i, _)| i)
+        .expect("표 문단");
+
+    let bb = |d: &HwpDocument, p: usize| -> Vec<(u16, u16, f64)> {
+        let json = d
+            .get_table_cell_bboxes_by_path_native(
+                0,
+                p,
+                r#"[{"controlIndex":0,"cellIndex":0,"cellParaIndex":0}]"#,
+            )
+            .expect("bbox");
+        let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+        v.as_array()
+            .unwrap()
+            .iter()
+            .map(|c| {
+                (
+                    c["row"].as_u64().unwrap() as u16,
+                    c["col"].as_u64().unwrap() as u16,
+                    c["w"].as_f64().unwrap(),
+                )
+            })
+            .collect()
+    };
+    let at = |v: &Vec<(u16, u16, f64)>, r: u16, c: u16| {
+        v.iter()
+            .find(|x| x.0 == r && x.1 == c)
+            .map(|x| x.2)
+            .unwrap()
+    };
+
+    // Alt+→ ×3 상당: (12,2) +900, 같은 줄 (12,0)/(12,1) 이 -450 씩 흡수
+    let (i0, w0, i1, w1, i2, w2) = {
+        let t = issue_1481_table(&doc, para_idx);
+        let f = |r: u16, c: u16| {
+            t.cells
+                .iter()
+                .position(|x| x.row == r && x.col == c && x.row_span == 1)
+                .expect("셀")
+        };
+        let (a, b, c) = (f(12, 0), f(12, 1), f(12, 2));
+        (
+            a,
+            t.cells[a].width,
+            b,
+            t.cells[b].width,
+            c,
+            t.cells[c].width,
+        )
+    };
+    let payload = format!(
+        r#"[{{"cellIdx":{i2},"widthDelta":900,"localResize":true,"renderWidth":{}}},{{"cellIdx":{i0},"widthDelta":-450,"localResize":true,"renderWidth":{}}},{{"cellIdx":{i1},"widthDelta":-450,"localResize":true,"renderWidth":{}}}]"#,
+        w2 + 900,
+        w0 - 450,
+        w1 - 450,
+    );
+    doc.resize_table_cells_native(0, para_idx, 0, &payload)
+        .expect("alt resize");
+
+    let pre = bb(&doc, para_idx);
+    let (pre_plain_c2, pre_override_c2) = (at(&pre, 11, 2), at(&pre, 12, 2));
+
+    // HWP에는 Studio의 local-resize 런타임 힌트가 저장되지 않는다. 저장 후
+    // 다시 연 상태와 같이 힌트를 비워도, 셀 폭에서 추론한 outlier 행은 base
+    // grid와 표 전체 폭 재계산에서 똑같이 제외해야 한다.
+    for control in &mut doc.document.sections[0].paragraphs[para_idx].controls {
+        if let Control::Table(table) = control {
+            table.local_resize_rows.clear();
+            table.local_resize_cols.clear();
+            table.local_resize_cell_widths.clear();
+            table.local_resize_cell_heights.clear();
+        }
+    }
+
+    doc.split_table_native(0, para_idx, 0, 10).expect("나누기");
+
+    let tables: Vec<usize> = doc.document.sections[0]
+        .paragraphs
+        .iter()
+        .enumerate()
+        .filter(|(_, p)| p.controls.iter().any(|c| matches!(c, Control::Table(_))))
+        .map(|(i, _)| i)
+        .collect();
+    let back = bb(&doc, tables[1]);
+
+    // 원래 row 11/12/13 → 뒤 표 row 1/2/3
+    assert!(
+        (at(&back, 1, 2) - pre_plain_c2).abs() < 0.5,
+        "나누기 후 일반 행 폭이 변하면 안 된다: {} → {}",
+        pre_plain_c2,
+        at(&back, 1, 2)
+    );
+    assert!(
+        (at(&back, 3, 2) - pre_plain_c2).abs() < 0.5,
+        "나누기 후 일반 행 폭이 변하면 안 된다: {} → {}",
+        pre_plain_c2,
+        at(&back, 3, 2)
+    );
+    assert!(
+        (at(&back, 2, 2) - pre_override_c2).abs() < 0.5,
+        "나누기 후 Alt 행 폭이 변하면 안 된다: {} → {}",
+        pre_override_c2,
+        at(&back, 2, 2)
+    );
+}
+
+#[test]
+fn split_rejects_corrupted_cell_row_span_overflow_before_mutation() {
+    // `row + row_span`을 u16으로 더하면 debug에서는 panic, release에서는
+    // wrap한다. 손상 입력은 나누기 전 명시적 오류로 막고 원본 표를 남겨야 한다.
+    use crate::model::control::Control;
+    let mut doc = HwpDocument::create_empty();
+    let created = doc.create_table_native(0, 0, 0, 2, 2).expect("표 생성");
+    let para_idx = issue_1481_json_usize(&created, "paraIdx");
+
+    for control in &mut doc.document.sections[0].paragraphs[para_idx].controls {
+        if let Control::Table(table) = control {
+            table.row_count = u16::MAX;
+            let cell = table.cells.first_mut().expect("셀");
+            cell.row = u16::MAX - 2;
+            cell.row_span = 3;
+        }
+    }
+
+    assert!(
+        doc.split_table_native(0, para_idx, 0, u16::MAX - 1)
+            .is_err(),
+        "손상된 row/span은 panic 대신 오류여야 한다"
+    );
+    assert_eq!(
+        table_control_paras(&doc),
+        vec![para_idx],
+        "실패는 표를 추가하지 않는다"
+    );
+    let table = issue_1481_table(&doc, para_idx);
+    assert_eq!(table.row_count, u16::MAX, "실패는 기존 표를 바꾸지 않는다");
+    assert_eq!(table.cells[0].row, u16::MAX - 2);
+    assert_eq!(table.cells[0].row_span, 3);
+}
