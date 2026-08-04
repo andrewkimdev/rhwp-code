@@ -70,3 +70,24 @@ anchor mode를 깨뜨릴 수 있으므로 아래의 source-local gate로 고친�
 - rhwp render tree: `output/task-3820-3821-fidelity/stage3-p156-tree/render_tree_156.json`
 
 이 분석 문서를 커밋한 다음에만 code/test를 수정한다.
+
+## 결과 (2026-08-04)
+
+`layout_body_picture`에 위 gate를 적용했다. post-fix render-tree에서 `pi=1692/ci=1`
+image left는 `436.5px`, p1697 TextLine max-right는 `429.7px`로 측정되어 gap은
+`6.8px`이다. 직접 p156 쌍 비교에서도 본문과 그림 64가 더 이상 맞닿지 않으며, 그림과
+caption이 같이 이동했다.
+
+```text
+issue_3821_page_tail_square_picture_wrap_reaches_visible_text_after_guides ... ok
+issue_3821_square_picture_wrap_band_is_bounded_and_contiguous ... ok
+issue_3820_rewinding_rowbreak_uses_painted_first_fragment_boundary ... ok
+각각 1 passed; 0 failed
+```
+
+`output/task-3820-3821-fidelity/stage3-review-pairs/p156_rhwp_pdf.png`가 p156 직접
+비교 증적이다.
+
+그림 52는 p108에 여전히 caption만 있고 image가 누락된다. 이 문제는 left margin
+paint-origin과 별개인 placement owner 결함이다. Stage 4에서 자동 탐지 도구의
+text↔image overlap 판정과 함께 분석한다.

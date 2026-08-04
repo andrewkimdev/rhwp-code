@@ -974,7 +974,8 @@ mod tests {
 
     /// #3821: page-tail Square 그림의 wrap band는 첫 vpos-reset 문단에서 끊기면 안
     /// 된다. 실물 HWP p156에서 그림 64(pi=1692, ci=1) 옆의 visible p1697 text는
-    /// 그림 왼쪽 narrow band 안에 끝나야 한다.
+    /// 그림 왼쪽 narrow band 안에 끝나며, HWP outer-left margin(510HU)이 만든
+    /// 실제 PDF 공백(약 5.7px @96dpi)을 보존해야 한다.
     #[test]
     fn issue_3821_page_tail_square_picture_wrap_reaches_visible_text_after_guides() {
         let Some(core) = load_document(
@@ -1034,14 +1035,18 @@ mod tests {
             "#3821: p1697 visible lines in picture vertical band not found",
         );
 
-        let overlapping: Vec<_> = lines_in_image_band
-            .into_iter()
-            .filter(|line| line.bbox.x + line.bbox.width > image_left + 0.5)
-            .map(|line| (line.bbox.x, line.bbox.y, line.bbox.width))
-            .collect();
+        let line_right = lines_in_image_band
+            .iter()
+            .map(|line| line.bbox.x + line.bbox.width)
+            .fold(f64::NEG_INFINITY, f64::max);
+        let actual_gap = image_left - line_right;
         assert!(
-            overlapping.is_empty(),
-            "#3821: p1697 line band crosses deferred Square picture left edge x={image_left:.1}: {overlapping:?}",
+            actual_gap >= 5.0,
+            "#3821: p1697 line band must retain PDF-like outer-left margin; image_left={image_left:.1}, line_right={line_right:.1}, gap={actual_gap:.1}",
+        );
+        assert!(
+            actual_gap <= 8.0,
+            "#3821: p1697 gap must come from the 510HU outer-left margin, not an arbitrary global shift: {actual_gap:.1}px",
         );
     }
 
