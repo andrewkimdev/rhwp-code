@@ -16409,11 +16409,12 @@ impl TypesetEngine {
         // [#2243 진단] 배치 종료 시 누적 — 동작 불변.
         if std::env::var("RHWP_DIAG_TAC").is_ok() {
             eprintln!(
-                "DIAG_TAC_END pi={} cur_h={:.1} trailing_fired={} has_post_text={}",
+                "DIAG_TAC_END pi={} cur_h={:.1} trailing_fired={} has_post_text={} delta={:.1}",
                 para_idx,
                 st.current_height,
                 is_tac && fmt.total_height > fmt.height_for_fit && !has_post_text,
                 has_post_text,
+                (fmt.total_height - fmt.height_for_fit).max(0.0),
             );
         }
         if strict_following_plain_text_fit && is_last_placed {
