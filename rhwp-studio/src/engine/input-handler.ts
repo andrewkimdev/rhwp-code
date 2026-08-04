@@ -3666,6 +3666,13 @@ export class InputHandler {
   /** 현재 커서 위치를 반환한다 */
   getCursorPosition(): DocumentPosition { return this.cursor.getPosition(); }
 
+  /** 본문 탐색 전에 각주 전용 편집 컨텍스트를 종료한다. */
+  exitFootnoteModeForBodyNavigation(): void {
+    if (!this.cursor.isInFootnote()) return;
+    this.cursor.exitFootnoteMode();
+    this.eventBus.emit('footnoteModeChanged', false);
+  }
+
   /** 커서를 지정 위치로 이동하고 캐럿을 표시한다. 성공하면 true 반환. */
   moveCursorTo(pos: DocumentPosition): boolean {
     // 이동 전 위치가 유효한지 사전 검증 (경고 로그 방지)

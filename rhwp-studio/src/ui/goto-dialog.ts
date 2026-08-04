@@ -245,6 +245,9 @@ export class GotoDialog extends ModalDialog {
       return false;
     }
 
+    // 화면 이동이 성공한 경우에만 각주 편집 컨텍스트를 끝낸다. 이동이 실패하면 사용자는
+    // 기존 각주를 계속 편집할 수 있어야 하고, 본문 커서는 아래에서만 배치해야 한다.
+    ih.exitFootnoteModeForBodyNavigation();
     const moved = this.tryMoveCursor(
       ih,
       posResult.sec!,
