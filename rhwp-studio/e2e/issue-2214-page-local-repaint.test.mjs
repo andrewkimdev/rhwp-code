@@ -13,6 +13,7 @@
  * Usage:
  *   node e2e/issue-2214-page-local-repaint.test.mjs --mode=headless
  *   node e2e/issue-2214-page-local-repaint.test.mjs --mode=headless --runs=1  # local smoke
+ *   node e2e/issue-2214-page-local-repaint.test.mjs --mode=headless --continuous-only
  *   node e2e/issue-2214-page-local-repaint.test.mjs --mode=headless --review-only
  *   node e2e/issue-2214-page-local-repaint.test.mjs --mode=headless --diagnose
  *   node e2e/issue-2214-page-local-repaint.test.mjs --mode=headless --diagnose \
@@ -49,6 +50,9 @@ const TARGET = Object.freeze({
   cellPath: [{ controlIndex: 2, cellIndex: 2, cellParaIndex: 5 }],
 });
 const MAX_INSERTS = 128;
+const CONTINUOUS_WRAP_MAX_INSERTS = 160;
+const CONTINUOUS_WRAP_TAIL_INPUTS = 4;
+const CONTINUOUS_INPUT_MIN_GAP_MS = 8;
 
 const SAMPLES = Object.freeze({
   hwp: path.join(REPO_ROOT, 'samples/issue1949_giant_cell_nested_tables_perf.hwp'),
@@ -82,6 +86,12 @@ function summarizeDurations(values) {
     p95Ms: percentile(values, 0.95),
     maxMs: values.length ? Math.max(...values) : null,
   };
+}
+
+function traceDurations(trace, type) {
+  return trace.events
+    .filter((event) => event.type === type && typeof event.durationMs === 'number')
+    .map((event) => event.durationMs);
 }
 
 function writeJson(filePath, value) {
@@ -528,6 +538,28 @@ async function resolveCompositedClip(page) {
   return clip;
 }
 
+async function resolveCaretGlyphClip(page) {
+  return page.evaluate(() => {
+    const canvasView = window.__canvasView;
+    const cursorRect = window.__inputHandler.cursor.getRect();
+    const pageIndex = Number.isInteger(cursorRect?.pageIndex) ? cursorRect.pageIndex : 0;
+    const canvas = canvasView.canvasPool.getCanvas(pageIndex);
+    if (!canvas || !cursorRect) throw new Error('caret glyph canvas unavailable');
+    const canvasRect = canvas.getBoundingClientRect();
+    const tree = window.__wasm.getPageLayerTreeObject(pageIndex);
+    const scale = tree.pageWidth > 0 ? canvasRect.width / tree.pageWidth : 1;
+    const glyphWidth = Math.max(cursorRect.height * 1.5, 24);
+    return {
+      x: Math.max(0, Math.floor(canvasRect.left + (cursorRect.x - glyphWidth) * scale)),
+      y: Math.max(0, Math.floor(canvasRect.top + (cursorRect.y - 2) * scale)),
+      width: Math.max(1, Math.ceil(glyphWidth * scale)),
+      height: Math.max(1, Math.ceil((cursorRect.height + 4) * scale)),
+      pageIndex,
+      scale,
+    };
+  });
+}
+
 async function captureCompositedCrop(page, filePath, clip) {
   mkdirSync(path.dirname(filePath), { recursive: true });
   await page.evaluate(() => {
@@ -740,6 +772,17 @@ async function waitForDeferredPaginationCompletion(page, timeoutMs = 5_000) {
     { timeout: timeoutMs, polling: 25 },
   );
   return performance.now() - startedAt;
+}
+
+async function waitForDeferredPaginationBegin(page, timeoutMs = 1_000) {
+  await page.waitForFunction(
+    () => (
+      window.__inputHandler.hasDeferredPaginationPending()
+      && (window.__issue2214Trace?.events ?? [])
+        .some((event) => event.type === 'wasm.beginDeferredPagination')
+    ),
+    { timeout: timeoutMs, polling: 10 },
+  );
 }
 
 async function runTimeline(page, format, bytes, transitionAt) {
@@ -1079,13 +1122,15 @@ function assertExactFocusedState(
   expectedLineCount,
   expectedBoundsHeight,
   expectedPending,
+  expectedCaretVisible = true,
+  expectedPageCount = 115,
 ) {
   const prefix = `${format} run ${runNumber} ${state.label}`;
   const expectedLength = expectedText.length;
   assert.equal(state.model.length, expectedLength, `${prefix}: model length`);
   assert.equal(state.model.text, expectedText, `${prefix}: model text`);
   assert.equal(state.model.lineCount, expectedLineCount, `${prefix}: line count`);
-  assert.equal(state.pagination.pageCount, 115, `${prefix}: page count`);
+  assert.equal(state.pagination.pageCount, expectedPageCount, `${prefix}: page count`);
   if (expectedPending !== null) {
     assert.equal(state.pagination.pending, expectedPending, `${prefix}: pending state`);
   }
@@ -1124,10 +1169,71 @@ function assertExactFocusedState(
   assertApprox(rect?.y, lastOp.bbox.y, `${prefix}: cursor y at tree end`);
   assertApprox(rect?.height, lastOp.bbox.height, `${prefix}: cursor height`);
 
-  assert.ok(state.caret, `${prefix}: DOM caret`);
-  assert.equal(state.caret.display, 'block', `${prefix}: DOM caret display`);
-  assert.ok(state.caret.clientRect?.width > 0, `${prefix}: DOM caret width`);
-  assertApprox(state.caret.clientRect?.height, rect.height, `${prefix}: DOM caret height`);
+  if (expectedCaretVisible) {
+    assert.ok(state.caret, `${prefix}: DOM caret`);
+    assert.equal(state.caret.display, 'block', `${prefix}: DOM caret display`);
+    assert.ok(state.caret.clientRect?.width > 0, `${prefix}: DOM caret width`);
+    assertApprox(state.caret.clientRect?.height, rect.height, `${prefix}: DOM caret height`);
+  }
+}
+
+function assertContinuousFlowGeometry(format, label, state, digitTokenStart) {
+  const prefix = `${format} ${label}`;
+  const bounds = state.cursor.rect?.cellBounds;
+  assert.ok(bounds, `${prefix}: cell bounds`);
+  const left = bounds.x;
+  const right = bounds.x + bounds.w;
+  const digitOps = [];
+  const suffixBands = [];
+  for (const [index, op] of state.layerTree.targetOps.entries()) {
+    const start = targetRunStart(op, `${prefix} op ${index}`);
+    const textLength = String(op.text ?? '').length;
+    // Existing justified source lines in this fixture carry their original ink
+    // envelope. Validate every run that contains or follows the edited suffix.
+    if (start + textLength <= TARGET.charOffset) continue;
+    assert.ok(
+      op.bbox.x >= left - 0.2,
+      `${prefix}: TextRun ${index} left=${op.bbox.x}, cellLeft=${left}`,
+    );
+    assert.ok(
+      op.bbox.x + op.bbox.width <= right + 0.2,
+      `${prefix}: TextRun ${index} right=${op.bbox.x + op.bbox.width}, cellRight=${right}, `
+        + `key=${op.stableSourceKey}, text=${JSON.stringify(op.text)}`,
+    );
+    if (start + textLength > digitTokenStart) {
+      suffixBands.push({ top: op.bbox.y, bottom: op.bbox.y + op.bbox.height });
+    }
+    if (start >= digitTokenStart && /^1+$/.test(op.text)) digitOps.push(op);
+  }
+  assert.ok(state.model.lines.length > 0, `${prefix}: line ranges`);
+  assert.equal(state.model.lines[0].charStart, 0, `${prefix}: first line start`);
+  for (let index = 1; index < state.model.lines.length; index += 1) {
+    assert.equal(
+      state.model.lines[index - 1].charEnd,
+      state.model.lines[index].charStart,
+      `${prefix}: line ${index - 1}→${index} UTF-16 continuity`,
+    );
+  }
+  assert.equal(state.model.lines.at(-1).charEnd, state.model.length, `${prefix}: final line end`);
+  assert.ok(digitOps.length >= 2, `${prefix}: numeric suffix line runs`);
+  const naturalAdvance = digitOps.at(-1).bbox.width / digitOps.at(-1).text.length;
+  assert.ok(naturalAdvance <= state.cursor.rect.height, `${prefix}: final digit advance`);
+  for (const [index, op] of digitOps.entries()) {
+    const advance = op.bbox.width / op.text.length;
+    assert.ok(advance <= naturalAdvance * 1.5 + 0.2, `${prefix}: digit run ${index} stretch ${advance}`);
+  }
+  const bands = [];
+  for (const band of suffixBands.sort((a, b) => a.top - b.top)) {
+    const previous = bands.at(-1);
+    if (previous && Math.abs(band.top - previous.top) <= 0.2) {
+      previous.bottom = Math.max(previous.bottom, band.bottom);
+    } else {
+      bands.push({ ...band });
+    }
+  }
+  for (let index = 1; index < bands.length; index += 1) {
+    assert.ok(bands[index].top >= bands[index - 1].bottom - 0.2, `${prefix}: suffix line overlap`);
+  }
 }
 
 function assertFocusedTrace(format, runNumber, trace) {
@@ -1350,6 +1456,272 @@ async function runFocusedFormat(page, format, bytes, runNumber) {
     finalLength: checkpoints.at62.model.length,
     trace: traceSummary,
     visual,
+  };
+}
+
+async function runContinuousImeDigitSmoke(page, format, bytes) {
+  await restoreTrace(page);
+  await openDocumentThroughApp(page, format, bytes);
+  await moveToTarget(page);
+  const initial = await readFocusedSnapshot(page);
+  const initialText = initial.model.text;
+  const clip = await resolveCompositedClip(page);
+  const directory = path.join(OUTPUT_ROOT, 'continuous-ime-digit', format);
+  const timelineStart = await page.evaluate(() => performance.now());
+  await installTrace(page);
+
+  const stableKeyboardDurationsMs = await typeKeyboardOnes(page, 55);
+  await waitTwoRafs(page);
+  const beforeCompositionText = `${initialText}${'1'.repeat(55)}`;
+  const beforeComposition = await readFocusedSnapshot(page);
+  assert.equal(beforeComposition.model.text, beforeCompositionText, `${format} continuous IME precondition text`);
+  assert.equal(beforeComposition.model.lineCount, 4, `${format} continuous IME precondition lines`);
+  assert.equal(beforeComposition.pagination.pending, true, `${format} continuous IME precondition pending`);
+
+  await page.evaluate(() => {
+    window.__inputHandler.textarea.dispatchEvent(new CompositionEvent('compositionstart', {
+      bubbles: true,
+      data: '',
+    }));
+  });
+  const compositionStates = [];
+  const compositionCaptures = {};
+  let glyphClip = null;
+  for (const value of ['ㅎ', '하', '한']) {
+    await page.evaluate((text) => {
+      const textarea = window.__inputHandler.textarea;
+      textarea.value = text;
+      textarea.dispatchEvent(new InputEvent('input', {
+        bubbles: true,
+        data: text,
+        inputType: 'insertCompositionText',
+        isComposing: true,
+      }));
+    }, value);
+    await waitTwoRafs(page);
+    const expectedText = `${initialText}${'1'.repeat(55)}${value}`;
+    const state = await collectState(page, `continuous-ime-${value}-2raf`, timelineStart);
+    assert.equal(state.model.lineCount, 5, `${format} continuous IME ${value}: flow line count`);
+    assertExactFocusedState(
+      format,
+      'continuous-ime-digit',
+      state,
+      expectedText,
+      5,
+      945.9,
+      true,
+      false,
+    );
+    compositionStates.push(state);
+
+    if (value === '하') {
+      glyphClip = await resolveCaretGlyphClip(page);
+      compositionCaptures.ha = await captureCompositedCrop(
+        page,
+        path.join(directory, 'ime-ha-2raf.png'),
+        glyphClip,
+      );
+    } else if (value === '한') {
+      assert.ok(glyphClip, `${format} continuous IME: glyph clip`);
+      compositionCaptures.han = await captureCompositedCrop(
+        page,
+        path.join(directory, 'ime-han-2raf.png'),
+        glyphClip,
+      );
+    }
+  }
+  const compositionInkComparison = comparePng(
+    compositionCaptures.han.filePath,
+    compositionCaptures.ha.filePath,
+    path.join(directory, 'ime-ha-vs-han-diff.png'),
+  );
+  assert.equal(compositionInkComparison.comparable, true, `${format} continuous IME: glyph crop comparable`);
+  assert.ok(
+    compositionInkComparison.changedPixelCount > 0,
+    `${format} continuous IME: 한 must replace 하 in the composited canvas within 2-rAF`,
+  );
+  assert.notEqual(
+    compositionCaptures.han.sha256,
+    compositionCaptures.ha.sha256,
+    `${format} continuous IME: glyph crop hash`,
+  );
+  await page.evaluate(() => {
+    window.__inputHandler.textarea.dispatchEvent(new CompositionEvent('compositionend', {
+      bubbles: true,
+      data: '한',
+    }));
+  });
+
+  // Put the following digit token behind an explicit break opportunity. This is the
+  // browser form of #3822: the old composer moved an overlong token after the prior
+  // break, then skipped character-level breaking for that token.
+  await waitForDeferredPaginationBegin(page);
+  await page.keyboard.type(' ');
+  const separatorText = `${initialText}${'1'.repeat(55)}한 `;
+  const separatorState = await readFocusedSnapshot(page);
+  assert.equal(separatorState.model.text, separatorText, `${format} continuous IME separator text`);
+  assert.equal(separatorState.pagination.pending, true, `${format} continuous IME separator pending`);
+
+  // Cross two digit line boundaries while that pagination job is active. No
+  // completion wait is allowed before the second wrap is observed.
+  let digitCount = 0;
+  const digitWraps = [];
+  let tailInputsRemaining = null;
+  const initialImeLineCount = separatorState.model.lineCount;
+  let previousLineCount = initialImeLineCount;
+  const durationsMs = [];
+  while (digitCount < CONTINUOUS_WRAP_MAX_INSERTS) {
+    digitCount += 1;
+    const startedAt = performance.now();
+    await page.keyboard.type('1');
+    durationsMs.push(performance.now() - startedAt);
+    const expectedText = `${separatorText}${'1'.repeat(digitCount)}`;
+    const snapshot = await readFocusedSnapshot(page);
+    const prefix = `${format} continuous IME digit ${digitCount}`;
+    assert.equal(snapshot.model.text, expectedText, `${prefix}: model text`);
+    assert.equal(snapshot.model.length, expectedText.length, `${prefix}: model length`);
+    assert.equal(snapshot.cursor.position.charOffset, expectedText.length, `${prefix}: cursor offset`);
+    assert.equal(snapshot.pagination.pageCount, 115, `${prefix}: page count`);
+    assert.equal(snapshot.pagination.pending, true, `${prefix}: pending`);
+    assert.equal(snapshot.cursor.rect?.cellOverflowed, false, `${prefix}: cursor overflow`);
+
+    if (snapshot.model.lineCount > previousLineCount) {
+      digitWraps.push({ digitCount, from: previousLineCount, to: snapshot.model.lineCount });
+      previousLineCount = snapshot.model.lineCount;
+    }
+    if (snapshot.model.lineCount >= initialImeLineCount + 2 && tailInputsRemaining === null) {
+      assert.equal(snapshot.pagination.pending, true, `${format} continuous IME: second wrap pending`);
+      tailInputsRemaining = CONTINUOUS_WRAP_TAIL_INPUTS;
+    } else if (tailInputsRemaining !== null) {
+      tailInputsRemaining -= 1;
+      if (tailInputsRemaining === 0) break;
+    }
+    await delay(page, CONTINUOUS_INPUT_MIN_GAP_MS);
+  }
+  assert.deepEqual(
+    digitWraps.map((wrap) => wrap.digitCount),
+    [11, 69],
+    `${format} continuous IME: deterministic digit line transitions`,
+  );
+  assert.equal(tailInputsRemaining, 0, `${format} continuous IME: post-wrap tail inputs`);
+
+  await waitTwoRafs(page);
+  const expectedText = `${separatorText}${'1'.repeat(digitCount)}`;
+  const expectedLineCount = initialImeLineCount + 2;
+  const digitTokenStart = TARGET.charOffset + 57;
+  const pendingState = await collectState(page, 'continuous-ime-digit-second-tail-2raf', timelineStart);
+  assertExactFocusedState(
+    format,
+    'continuous-ime-digit',
+    pendingState,
+    expectedText,
+    expectedLineCount,
+    945.9,
+    true,
+  );
+  assertContinuousFlowGeometry(format, 'continuous IME digit pending', pendingState, digitTokenStart);
+  const pendingCapture = await captureCompositedCrop(
+    page,
+    path.join(directory, 'ime-digit-pending.png'),
+    clip,
+  );
+
+  await waitForDeferredPaginationCompletion(page, 15_000);
+  const completedState = await collectState(page, 'continuous-ime-digit-complete', timelineStart);
+  assertExactFocusedState(
+    format,
+    'continuous-ime-digit',
+    completedState,
+    expectedText,
+    expectedLineCount,
+    945.9,
+    false,
+    true,
+    116,
+  );
+  assertContinuousFlowGeometry(format, 'continuous IME digit complete', completedState, digitTokenStart);
+  const completedCapture = await captureCompositedCrop(
+    page,
+    path.join(directory, 'ime-digit-complete.png'),
+    clip,
+  );
+  const comparison = comparePng(
+    completedCapture.filePath,
+    pendingCapture.filePath,
+    path.join(directory, 'ime-digit-pending-vs-complete-diff.png'),
+  );
+  assert.equal(comparison.comparable, true, `${format} continuous IME: comparable crop`);
+  assert.equal(comparison.changedPixelCount, 0, `${format} continuous IME: pending ink must be final ink`);
+  assert.equal(completedCapture.sha256, pendingCapture.sha256, `${format} continuous IME: exact crop hash`);
+
+  const trace = await collectTrace(page);
+  const begins = trace.events.filter((event) => event.type === 'wasm.beginDeferredPagination');
+  const steps = trace.events.filter((event) => event.type === 'wasm.stepDeferredPagination');
+  const latestBegin = begins.at(-1);
+  const finalStep = steps.at(-1);
+  assert.ok(latestBegin, `${format} continuous IME: latest deferred begin`);
+  assert.ok(finalStep, `${format} continuous IME: final deferred step`);
+  assert.equal(finalStep.status, 'complete', `${format} continuous IME: final deferred status`);
+  assert.equal(finalStep.pageCount, 116, `${format} continuous IME: final deferred page count`);
+  assert.equal(
+    finalStep.revision,
+    latestBegin.revision,
+    `${format} continuous IME: latest begin/final step revision`,
+  );
+  assert.ok(
+    latestBegin.sequence < finalStep.sequence,
+    `${format} continuous IME: latest begin must precede final step`,
+  );
+  assert.equal(trace.counts.deferredReplace, 2, `${format} continuous IME: replacement count`);
+  assert.equal(trace.counts.wasmFlush, 0, `${format} continuous IME: WASM flush`);
+  assert.equal(trace.counts.inputFlush, 0, `${format} continuous IME: input flush`);
+  const operationDurationsMs = traceDurations(trace, 'InputHandler.executeOperation');
+  assert.equal(
+    operationDurationsMs.length,
+    57 + digitCount,
+    `${format} continuous IME: operation timing count`,
+  );
+  const timing = {
+    keyboardBeforeFlow: summarizeDurations(stableKeyboardDurationsMs),
+    keyboardPendingFlow: summarizeDurations(durationsMs),
+    operationBeforeFlow: summarizeDurations(operationDurationsMs.slice(0, 55)),
+    operationPendingFlow: summarizeDurations(operationDurationsMs.slice(55)),
+    cursorQuery: summarizeDurations(traceDurations(trace, 'wasm.getCursorRectByPathNear')),
+    filteredRender: summarizeDurations(traceDurations(trace, 'wasm.renderPageToCanvasFiltered')),
+    pageRender: summarizeDurations(traceDurations(trace, 'PageRenderer.renderPage')),
+  };
+  await restoreTrace(page);
+  console.log(
+    `  continuous IME→digit: correctness GREEN, wraps=${digitWraps.map((wrap) => wrap.digitCount).join('/')}, `
+      + `digits=${digitCount}, `
+      + `pendingOpP95=${timing.operationPendingFlow.p95Ms.toFixed(1)}ms`,
+  );
+  return {
+    format,
+    correctness: 'passed',
+    latency: 'measured-not-gated',
+    compositionStates: compositionStates.map((state) => ({
+      label: state.label,
+      lineCount: state.model.lineCount,
+      pending: state.pagination.pending,
+    })),
+    digitWraps,
+    digitCount,
+    durations: summarizeDurations(durationsMs),
+    timing,
+    traceCounts: trace.counts,
+    paginationTrace: {
+      beginCount: begins.length,
+      latestBeginRevision: latestBegin.revision,
+      finalStepRevision: finalStep.revision,
+      finalStepStatus: finalStep.status,
+      finalStepPageCount: finalStep.pageCount,
+    },
+    compositionCaptures,
+    compositionInkComparison,
+    pendingCapture,
+    completedCapture,
+    comparison,
   };
 }
 
@@ -1909,7 +2281,13 @@ async function runFocusedMain() {
     .filter(Boolean);
   const runs = Number(cliValue('runs', '3'));
   const reviewOnly = process.argv.includes('--review-only');
+  const continuousOnly = process.argv.includes('--continuous-only');
   assert.ok(Number.isInteger(runs) && runs > 0, '--runs must be a positive integer');
+  assert.equal(
+    reviewOnly && continuousOnly,
+    false,
+    '--review-only and --continuous-only are mutually exclusive',
+  );
   for (const format of formats) assert.ok(SAMPLES[format], `unsupported format: ${format}`);
 
   mkdirSync(OUTPUT_ROOT, { recursive: true });
@@ -1935,28 +2313,37 @@ async function runFocusedMain() {
   const startedAt = new Date().toISOString();
   const results = [];
   const rawSmokes = [];
+  const continuousSmokes = [];
   const reviewSmokes = [];
   try {
     await loadApp(page);
     for (const format of formats) {
-      if (!reviewOnly) {
+      if (!reviewOnly && !continuousOnly) {
         console.log(`\n[${format.toUpperCase()}] focused GREEN (${runs} runs)`);
         for (let runNumber = 1; runNumber <= runs; runNumber += 1) {
           results.push(await runFocusedFormat(page, format, fixtures[format].bytes, runNumber));
         }
+      }
+      if (!reviewOnly) {
+        console.log(`\n[${format.toUpperCase()}] continuous IME→digit second-wrap`);
+        continuousSmokes.push(await runContinuousImeDigitSmoke(page, format, fixtures[format].bytes));
+      }
+      if (!reviewOnly && !continuousOnly) {
         rawSmokes.push(await runRawStableSmoke(page, format, fixtures[format].bytes, 'ime'));
         rawSmokes.push(await runRawStableSmoke(page, format, fixtures[format].bytes, 'ios'));
         rawSmokes.push(await runRawBoundarySmoke(page, format, fixtures[format].bytes, 'ime'));
         rawSmokes.push(await runRawBoundarySmoke(page, format, fixtures[format].bytes, 'ios'));
       }
-      console.log(`\n[${format.toUpperCase()}] #2424 deletion/IME/output barrier`);
-      reviewSmokes.push(await runDeleteKeySmoke(page, format, fixtures[format].bytes, 'Backspace'));
-      reviewSmokes.push(await runDeleteKeySmoke(page, format, fixtures[format].bytes, 'Delete'));
-      reviewSmokes.push(await runMultiUpdateImeSmoke(page, format, fixtures[format].bytes));
-      reviewSmokes.push(await runImeAcrossPaginationCommitSmoke(page, format, fixtures[format].bytes));
-      reviewSmokes.push(await runSaveBarrierSmoke(page, format, fixtures[format].bytes));
-      if (format === 'hwp') {
-        reviewSmokes.push(await runPrintBarrierSmoke(page, format, fixtures[format].bytes));
+      if (!continuousOnly) {
+        console.log(`\n[${format.toUpperCase()}] #2424 deletion/IME/output barrier`);
+        reviewSmokes.push(await runDeleteKeySmoke(page, format, fixtures[format].bytes, 'Backspace'));
+        reviewSmokes.push(await runDeleteKeySmoke(page, format, fixtures[format].bytes, 'Delete'));
+        reviewSmokes.push(await runMultiUpdateImeSmoke(page, format, fixtures[format].bytes));
+        reviewSmokes.push(await runImeAcrossPaginationCommitSmoke(page, format, fixtures[format].bytes));
+        reviewSmokes.push(await runSaveBarrierSmoke(page, format, fixtures[format].bytes));
+        if (format === 'hwp') {
+          reviewSmokes.push(await runPrintBarrierSmoke(page, format, fixtures[format].bytes));
+        }
       }
     }
   } finally {
@@ -1975,6 +2362,7 @@ async function runFocusedMain() {
       chromePath: process.env.CHROME_PATH ?? process.env.PUPPETEER_EXECUTABLE_PATH ?? null,
       viewport: { width: 1280, height: 900, deviceScaleFactor: 1 },
       runs,
+      continuousOnly,
     },
     fixtures: Object.fromEntries(Object.entries(fixtures).map(([format, value]) => [format, {
       path: value.path,
@@ -1983,6 +2371,7 @@ async function runFocusedMain() {
     }])),
     results,
     rawSmokes,
+    continuousSmokes,
     reviewSmokes,
   };
   writeJson(path.join(OUTPUT_ROOT, 'focused-summary.json'), summary);
