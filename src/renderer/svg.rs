@@ -3309,20 +3309,7 @@ fn svg_cluster_text_length_attrs(
     script_advance_scale: f64,
     scale_x: f64,
 ) -> String {
-    let glyph_advance = if let Some(glyph_advance) = style.glyph_fit_advance(layout_cluster_advance)
-    {
-        glyph_advance
-    } else if cluster_str.chars().any(is_halfwidth_cjk_quote) {
-        // 낫표는 Canvas의 전용 0.5 scale 경로와 달리 SVG `textLength`가 반각
-        // 강제를 담당한다. 음수 배분 간격에서 일반 glyph fit을 꺼도 이 계약은
-        // 유지해야 하므로, 간격 0인 같은 style로 intrinsic advance만 재측정한다.
-        let mut unspaced_style = style.clone();
-        unspaced_style.extra_char_spacing = 0.0;
-        compute_char_positions(cluster_str, &unspaced_style)
-            .last()
-            .copied()
-            .unwrap_or(0.0)
-    } else {
+    let Some(glyph_advance) = style.glyph_fit_advance(layout_cluster_advance) else {
         return String::new();
     };
     svg_text_length_attrs(cluster_str, glyph_advance * script_advance_scale, scale_x)

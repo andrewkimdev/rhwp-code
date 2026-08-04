@@ -2,7 +2,7 @@
 
 - 이슈: [#3937](https://github.com/edwardkim/rhwp/issues/3937)
 - 브랜치: stack/issue-3937-distribution-glyph-width
-- 최신 기준: upstream/devel ec1b21096
+- 최신 기준: upstream/devel aeb5805cb
 - code candidate: 1e8741a2f
 - 작성일: 2026-08-04
 
@@ -14,8 +14,9 @@ advance를 glyph-fit 폭으로 사용해 배분 간격만큼 glyph 윤곽까지 
 
 TextStyle에 layout advance에서 양수 배분 간격만 제거하는 공통 계산을 추가했다.
 Canvas2D와 SVG는 이 계산을 사용하고, 문자 origin과 layout advance는 바꾸지 않는다.
-음수 간격은 원래 폭을 안전하게 복원할 수 없어 일반 fit을 생략하며 반각 CJK 인용부호의
-전용 textLength 계약은 유지한다.
+음수 간격은 #2189 셀 오버플로우 보정에서 사용하던 layout advance 기반 browser fit을
+그대로 유지한다. 따라서 이번 변경은 양수 배분·셀 underflow 간격만 glyph 폭에서 제외하며,
+음수 보정과 반각 CJK 인용부호의 기존 textLength 계약은 바꾸지 않는다.
 
 ## 최신 기준 검증
 
@@ -28,6 +29,10 @@ Canvas2D와 SVG는 이 계산을 사용하고, 문자 origin과 layout advance�
 Canvas/SVG 제품 파일과 직접 겹치지 않았지만, typeset 쪽 경계 수정이 실제 문서의 쪽수에
 영향을 줄 수 있어 spacing 42 / 42, SVG 41 / 41과 wasm32 library check를 다시 실행해
 모두 통과했다.
+
+PR 리뷰에서 음수 `extra_char_spacing`이 #2189 셀 오버플로우 보정의 주요 입력이라는
+교차회귀 위험이 확인됐다. 양수만 glyph-fit에서 제외하도록 범위를 좁히고, 음수 Canvas
+일반/ASCII fit과 SVG `textLength`, #2189 표적 회귀를 다시 검증했다.
 
 최상단 stack revision에서 production WASM을 다시 만들고 HWP/HWPX 연속 IME→숫자 E2E
 2 / 2를 재실행했다. 두 형식 모두 숫자 줄 전환 11 / 69, 최종 숫자 73, 최종 쪽수 116,

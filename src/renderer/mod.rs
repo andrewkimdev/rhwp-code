@@ -260,17 +260,18 @@ impl TextStyle {
     /// 폭에 포함하면 영문·숫자 glyph 자체가 가로로 늘어난다. 문자 위치 계산은
     /// 그대로 두고, glyph 맞춤 단계에서만 이 간격을 제외한다.
     ///
-    /// 음수 값은 text measurement 의 최소 advance clamp가 개입할 수 있으므로
-    /// 원래 glyph 폭을 안전하게 역산할 수 없다. 이 경우 `None`을 반환해 브라우저
-    /// glyph 맞춤을 끄고, 명시적 장평(`ratio`)과 cluster 위치만 적용한다.
+    /// 음수 값은 셀 오버플로우 보정(#2189)에서 glyph까지 layout advance에
+    /// 맞추는 기존 계약이므로 그대로 유지한다. 최소 advance clamp 때문에
+    /// intrinsic 폭을 안전하게 역산할 수도 없다. 따라서 양수 간격만 제외한다.
     pub(crate) fn glyph_fit_advance(&self, layout_cluster_advance: f64) -> Option<f64> {
-        if !layout_cluster_advance.is_finite()
-            || !self.extra_char_spacing.is_finite()
-            || self.extra_char_spacing < 0.0
-        {
+        if !layout_cluster_advance.is_finite() || !self.extra_char_spacing.is_finite() {
             return None;
         }
-        Some((layout_cluster_advance - self.extra_char_spacing).max(0.0))
+        if self.extra_char_spacing > 0.0 {
+            Some((layout_cluster_advance - self.extra_char_spacing).max(0.0))
+        } else {
+            Some(layout_cluster_advance)
+        }
     }
 
     /// 시각적 bold 여부.
@@ -306,9 +307,9 @@ impl TextStyle {
 
 /// Canvas 폰트의 실측 폭을 레이아웃 advance에 맞출 때 적용할 배율을 계산한다.
 ///
-/// 문자 간격은 다음 cluster의 시작 위치를 바꾸는 값이므로 glyph 폭 맞춤과
-/// 분리한다. 음수 간격은 원래 glyph advance를 안전하게 역산할 수 없어 맞춤을
-/// 끄고, 양수 배분 간격은 `glyph_fit_advance`로 제외한다.
+/// 양수 문자 간격은 다음 cluster의 시작 위치를 바꾸는 값이므로 glyph 폭 맞춤과
+/// 분리한다. 음수 간격은 #2189 셀 오버플로우 보정의 기존 glyph-fit 계약을
+/// 유지하고, 양수 배분 간격만 `glyph_fit_advance`로 제외한다.
 pub(crate) fn canvas_cluster_fit_scale(
     style: &TextStyle,
     layout_cluster_advance: f64,
@@ -1637,7 +1638,7 @@ mod tests {
             extra_char_spacing: -3.0,
             ..Default::default()
         };
-        assert_eq!(negative.glyph_fit_advance(5.0), None);
+        assert_eq!(negative.glyph_fit_advance(5.0), Some(5.0));
     }
 
     #[test]
@@ -1676,7 +1677,14 @@ mod tests {
             extra_char_spacing: -3.0,
             ..Default::default()
         };
-        assert_eq!(canvas_cluster_fit_scale(&negative, 5.0, 8.0, true), None);
+        assert_eq!(
+            canvas_cluster_fit_scale(&negative, 5.0, 8.0, true),
+            Some(0.625)
+        );
+        assert_eq!(
+            canvas_cluster_fit_scale(&negative, 5.0, 8.0, false),
+            Some(0.625)
+        );
     }
 
     #[test]

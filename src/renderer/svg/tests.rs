@@ -213,7 +213,7 @@ fn extra_char_spacing_does_not_expand_ascii_glyph_width() {
 }
 
 #[test]
-fn negative_extra_char_spacing_moves_origins_without_compressing_svg_glyphs() {
+fn negative_extra_char_spacing_preserves_existing_svg_glyph_fit() {
     let base_style = TextStyle {
         font_size: 20.0,
         font_family: "돋움".to_string(),
@@ -238,14 +238,12 @@ fn negative_extra_char_spacing_moves_origins_without_compressing_svg_glyphs() {
     let spaced_output = spaced_renderer.output();
 
     for glyph in ["A", "1"] {
-        let needle = format!(">{glyph}</text>");
-        let line = spaced_output
-            .lines()
-            .find(|line| line.contains(needle.as_str()))
-            .unwrap_or_else(|| panic!("SVG 에 `{glyph}` <text> 가 있어야 함"));
+        let base_length = text_length_of(base_output, glyph);
+        let spaced_length = text_length_of(spaced_output, glyph);
         assert!(
-            !line.contains("textLength="),
-            "음수 배분 간격은 glyph를 압축하지 않고 위치만 옮겨야 함: {line}"
+            (spaced_length - (base_length - 2.0)).abs() < 0.001,
+            "음수 셀 보정은 기존 SVG glyph-fit 폭을 유지해야 함: \
+             glyph={glyph}, base={base_length}, spaced={spaced_length}"
         );
     }
 
@@ -290,7 +288,7 @@ fn test_svg_draw_text_corner_quote_uses_halfwidth_text_length() {
             .expect("SVG must emit the following Hangul character");
         assert!(
             quote_line.contains("textLength="),
-            "`「` glyph 는 음수 자간에서도 반각 textLength 를 가져야 함: {quote_line}"
+            "`「` glyph 는 음수 셀 보정에서도 textLength 를 가져야 함: {quote_line}"
         );
         assert!(
             !hangul_line.contains("textLength="),
@@ -301,8 +299,8 @@ fn test_svg_draw_text_corner_quote_uses_halfwidth_text_length() {
     let base_quote_length = text_length_of(&base_output, "「");
     let negative_quote_length = text_length_of(&negative_output, "「");
     assert!(
-        (negative_quote_length - base_quote_length).abs() < 0.001,
-        "음수 배분 간격이 낫표 glyph의 반각 폭을 바꾸면 안 됨: \
+        (negative_quote_length - (base_quote_length - 2.0)).abs() < 0.001,
+        "음수 셀 보정은 낫표의 기존 SVG glyph-fit 폭을 유지해야 함: \
          base={base_quote_length}, negative={negative_quote_length}"
     );
     assert!(
