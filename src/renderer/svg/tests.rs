@@ -91,6 +91,24 @@ fn text_length_of(output: &str, glyph: &str) -> f64 {
         .unwrap_or_else(|_| panic!("textLength 는 수치여야 함: {line}"))
 }
 
+fn text_x_of(output: &str, glyph: &str) -> f64 {
+    let needle = format!(">{glyph}</text>");
+    let line = output
+        .lines()
+        .find(|line| line.contains(needle.as_str()))
+        .unwrap_or_else(|| panic!("SVG 에 `{glyph}` <text> 가 있어야 함"));
+    let value = line
+        .split(" x=\"")
+        .nth(1)
+        .unwrap_or_else(|| panic!("`{glyph}` 는 x 좌표를 가져야 함: {line}"))
+        .split('"')
+        .next()
+        .unwrap_or_else(|| panic!("x 값이 닫히지 않음: {line}"));
+    value
+        .parse()
+        .unwrap_or_else(|_| panic!("x 좌표는 수치여야 함: {line}"))
+}
+
 #[test]
 fn test_svg_draw_text_script_scales_text_length_by_glyph_size() {
     // [#2771] 첨자 글리프는 본문의 0.7 배 크기로 그려진다. 그런데 폭 맞춤에 쓰는
@@ -150,36 +168,144 @@ fn test_svg_draw_text_non_script_text_length_is_unchanged() {
 }
 
 #[test]
-fn test_svg_draw_text_corner_quote_uses_halfwidth_text_length() {
-    let mut renderer = SvgRenderer::new();
-    renderer.begin_page(800.0, 600.0);
-    renderer.draw_text(
-        "「여",
+fn extra_char_spacing_does_not_expand_ascii_glyph_width() {
+    let base_style = TextStyle {
+        font_size: 20.0,
+        font_family: "돋움".to_string(),
+        ..Default::default()
+    };
+
+    let mut base_renderer = SvgRenderer::new();
+    base_renderer.begin_page(800.0, 600.0);
+    base_renderer.draw_text("A1", 10.0, 100.0, &base_style);
+    let base_output = base_renderer.output();
+
+    let mut spaced_renderer = SvgRenderer::new();
+    spaced_renderer.begin_page(800.0, 600.0);
+    spaced_renderer.draw_text(
+        "A1",
         10.0,
         100.0,
         &TextStyle {
-            font_size: 13.333,
-            font_family: "돋움체".to_string(),
-            ..Default::default()
+            extra_char_spacing: 20.0,
+            ..base_style
         },
     );
-    let output = renderer.output();
-    let quote_line = output
-        .lines()
-        .find(|line| line.contains(">「</text>"))
-        .expect("SVG must emit the opening corner quote");
-    let hangul_line = output
-        .lines()
-        .find(|line| line.contains(">여</text>"))
-        .expect("SVG must emit the following Hangul character");
+    let spaced_output = spaced_renderer.output();
 
+    for glyph in ["A", "1"] {
+        let base_length = text_length_of(base_output, glyph);
+        let spaced_length = text_length_of(spaced_output, glyph);
+        assert!(
+            (spaced_length - base_length).abs() < 0.001,
+            "배분 자간은 영문·숫자 glyph 폭을 늘리면 안 됨: \
+             glyph={glyph}, base={base_length}, spaced={spaced_length}"
+        );
+    }
+
+    let base_second_x = text_x_of(base_output, "1");
+    let spaced_second_x = text_x_of(spaced_output, "1");
     assert!(
-        quote_line.contains("textLength="),
-        "`「` glyph 는 반각 advance 에 맞춰 textLength 를 가져야 함: {quote_line}"
+        (spaced_second_x - base_second_x - 20.0).abs() < 0.001,
+        "glyph 폭은 고정해도 배분 간격은 다음 글자의 위치에 유지되어야 함: \
+         base_x={base_second_x}, spaced_x={spaced_second_x}"
+    );
+}
+
+#[test]
+fn negative_extra_char_spacing_preserves_existing_svg_glyph_fit() {
+    let base_style = TextStyle {
+        font_size: 20.0,
+        font_family: "돋움".to_string(),
+        ..Default::default()
+    };
+    let mut base_renderer = SvgRenderer::new();
+    base_renderer.begin_page(800.0, 600.0);
+    base_renderer.draw_text("A1", 10.0, 100.0, &base_style);
+    let base_output = base_renderer.output();
+
+    let mut spaced_renderer = SvgRenderer::new();
+    spaced_renderer.begin_page(800.0, 600.0);
+    spaced_renderer.draw_text(
+        "A1",
+        10.0,
+        100.0,
+        &TextStyle {
+            extra_char_spacing: -2.0,
+            ..base_style
+        },
+    );
+    let spaced_output = spaced_renderer.output();
+
+    for glyph in ["A", "1"] {
+        let base_length = text_length_of(base_output, glyph);
+        let spaced_length = text_length_of(spaced_output, glyph);
+        assert!(
+            (spaced_length - (base_length - 2.0)).abs() < 0.001,
+            "음수 셀 보정은 기존 SVG glyph-fit 폭을 유지해야 함: \
+             glyph={glyph}, base={base_length}, spaced={spaced_length}"
+        );
+    }
+
+    let base_second_x = text_x_of(base_output, "1");
+    let spaced_second_x = text_x_of(spaced_output, "1");
+    assert!(
+        (spaced_second_x - base_second_x + 2.0).abs() < 0.001,
+        "음수 배분 간격은 다음 글자의 위치에는 유지되어야 함: \
+         base_x={base_second_x}, spaced_x={spaced_second_x}"
+    );
+}
+
+#[test]
+fn test_svg_draw_text_corner_quote_uses_halfwidth_text_length() {
+    let render = |extra_char_spacing| {
+        let mut renderer = SvgRenderer::new();
+        renderer.begin_page(800.0, 600.0);
+        renderer.draw_text(
+            "「여",
+            10.0,
+            100.0,
+            &TextStyle {
+                font_size: 13.333,
+                font_family: "돋움체".to_string(),
+                extra_char_spacing,
+                ..Default::default()
+            },
+        );
+        renderer.output().to_string()
+    };
+    let base_output = render(0.0);
+    let negative_output = render(-2.0);
+
+    for output in [&base_output, &negative_output] {
+        let quote_line = output
+            .lines()
+            .find(|line| line.contains(">「</text>"))
+            .expect("SVG must emit the opening corner quote");
+        let hangul_line = output
+            .lines()
+            .find(|line| line.contains(">여</text>"))
+            .expect("SVG must emit the following Hangul character");
+        assert!(
+            quote_line.contains("textLength="),
+            "`「` glyph 는 음수 셀 보정에서도 textLength 를 가져야 함: {quote_line}"
+        );
+        assert!(
+            !hangul_line.contains("textLength="),
+            "일반 한글 glyph 는 낫표 보정의 영향을 받으면 안 됨: {hangul_line}"
+        );
+    }
+
+    let base_quote_length = text_length_of(&base_output, "「");
+    let negative_quote_length = text_length_of(&negative_output, "「");
+    assert!(
+        (negative_quote_length - (base_quote_length - 2.0)).abs() < 0.001,
+        "음수 셀 보정은 낫표의 기존 SVG glyph-fit 폭을 유지해야 함: \
+         base={base_quote_length}, negative={negative_quote_length}"
     );
     assert!(
-        !hangul_line.contains("textLength="),
-        "일반 한글 glyph 는 낫표 보정의 영향을 받으면 안 됨: {hangul_line}"
+        (text_x_of(&negative_output, "여") - text_x_of(&base_output, "여") + 2.0).abs() < 0.001,
+        "음수 배분 간격은 낫표 다음 글자의 위치에는 유지되어야 함"
     );
 }
 

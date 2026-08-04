@@ -56,28 +56,6 @@ fn partial_text_replay_bounds(op: &PaintOp) -> Option<BoundingBox> {
     }
 }
 
-/// Canvas 폰트의 실측 폭을 레이아웃 advance에 맞출 때 적용할 배율을 계산한다.
-///
-/// 음수 자간은 다음 글자의 시작 위치만 당기는 속성이다. 이를 글자 자체의 폭 제한으로
-/// 사용하면 한글 glyph가 가로로 눌리므로, 음수 자간에서는 폭 맞춤을 적용하지 않는다.
-fn canvas_cluster_fit_scale(
-    cluster_advance: f64,
-    visual_width: f64,
-    letter_spacing: f64,
-    pin_ascii_advance: bool,
-) -> Option<f64> {
-    if cluster_advance <= 0.0 || visual_width <= 0.0 || letter_spacing < 0.0 {
-        return None;
-    }
-    if pin_ascii_advance {
-        return Some((cluster_advance / visual_width).clamp(0.1, 2.0));
-    }
-    if visual_width > cluster_advance + 0.25 {
-        return Some((cluster_advance / visual_width).clamp(0.1, 1.0));
-    }
-    None
-}
-
 /// Hanyang-PUA 옛한글 코드포인트를 KS X 1026-1:2007 자모 시퀀스로 확장 (Task #528).
 fn expand_pua_old_hangul_canvas(text: &str) -> String {
     if !text.chars().any(|ch| map_pua_old_hangul(ch).is_some()) {
@@ -2227,12 +2205,6 @@ impl Renderer for WebCanvasRenderer {
 
         // 위첨자/아래첨자: 글꼴 크기 축소 + y좌표 조정
         let (font_size, y) = style.script_draw_metrics(base_font_size, y);
-        // [#2771] 폰트를 이미 0.7 배로 설정했으므로 measure_text 도 0.7 배 폭을
-        // 돌려준다. 맞춤 대상 advance(본문 기준)를 같은 배율로 줄이지 않으면
-        // fit_scale = base / (0.7·base) ≈ 1.43 이 되어 글리프가 가로로 늘어난다.
-        // 비첨자는 정확히 1.0 이라 종전 fit_scale 이 불변이다.
-        let script_advance_scale = style.script_advance_scale();
-
         let font_family = super::canvas_font_family_chain(&style.font_family);
 
         let font = format!(
@@ -2419,10 +2391,10 @@ impl Renderer for WebCanvasRenderer {
                             .ok()
                             .map(|metrics| metrics.width())
                             .and_then(|actual_w| {
-                                canvas_cluster_fit_scale(
-                                    cluster_advance * script_advance_scale,
+                                super::canvas_cluster_fit_scale(
+                                    style,
+                                    cluster_advance,
                                     actual_w * ratio,
-                                    style.letter_spacing,
                                     pin_ascii_advance,
                                 )
                             })
@@ -3727,18 +3699,5 @@ mod tests {
         assert_eq!(color_to_css(0x00FF0000), "#0000ff"); // 파랑
         assert_eq!(color_to_css(0x00FFFFFF), "#ffffff"); // 흰색
         assert_eq!(color_to_css(0x00000000), "#000000"); // 검정
-    }
-
-    #[test]
-    fn issue_2809_negative_letter_spacing_does_not_compress_glyph() {
-        assert_eq!(canvas_cluster_fit_scale(7.5, 15.0, -7.5, false), None);
-        assert_eq!(canvas_cluster_fit_scale(7.5, 15.0, -7.5, true), None);
-    }
-
-    #[test]
-    fn non_negative_letter_spacing_keeps_existing_font_fit_policy() {
-        assert_eq!(canvas_cluster_fit_scale(7.5, 15.0, 0.0, false), Some(0.5));
-        assert_eq!(canvas_cluster_fit_scale(7.5, 15.0, 0.0, true), Some(0.5));
-        assert_eq!(canvas_cluster_fit_scale(15.0, 14.9, 0.0, false), None);
     }
 }
