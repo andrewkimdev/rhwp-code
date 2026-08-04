@@ -972,6 +972,15 @@ export class CanvasView {
     return this.viewportManager;
   }
 
+  /** 전역 쪽 번호를 뷰포트 상단으로 이동한다. */
+  gotoPage(pageIndex: number): boolean {
+    if (!Number.isInteger(pageIndex) || pageIndex < 0 || pageIndex >= this.virtualScroll.pageCount) {
+      return false;
+    }
+    this.viewportManager.setScrollTop(this.virtualScroll.getPageOffset(pageIndex));
+    return true;
+  }
+
   getRenderBackend(): RenderBackend {
     return this.pageRenderer.getBackend();
   }

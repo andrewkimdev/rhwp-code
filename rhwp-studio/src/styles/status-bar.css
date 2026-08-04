@@ -24,6 +24,25 @@
   flex-wrap: nowrap;
 }
 
+/* 현재 쪽 표시는 찾아가기 진입점이다. 상태 바의 다른 텍스트와 같은 치수를 유지한다. */
+.stb-page-button {
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.stb-page-button:hover {
+  color: var(--accent-primary);
+}
+
+.stb-page-button:focus-visible {
+  outline: 1px solid var(--accent-primary);
+  outline-offset: 1px;
+}
+
 /* 세로 구분선 — 한컴 .vertical_line_wrap .col_line */
 .stb-divider {
   display: inline-block;

@@ -171,6 +171,7 @@ const commandServices: CommandServices = {
   getContext,
   getInputHandler: () => inputHandler,
   getViewportManager: () => canvasView?.getViewportManager() ?? null,
+  gotoPage: (globalPage) => canvasView?.gotoPage(globalPage) ?? false,
   setEditMode,
 };
 
@@ -710,6 +711,10 @@ function setupZoomControls(): void {
 let totalSections = 1;
 
 function setupEventListeners(): void {
+  sbPage().addEventListener('click', () => {
+    dispatcher.dispatch('edit:goto');
+  });
+
   eventBus.on('current-page-changed', (page, _total) => {
     const pageIdx = page as number;
     sbPage().textContent = `${pageIdx + 1} / ${_total} 쪽`;

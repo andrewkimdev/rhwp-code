@@ -155,12 +155,13 @@ export class GotoDialog extends ModalDialog {
     return ih.moveCursorTo({ sectionIndex: sec, paragraphIndex: para, charOffset: offset });
   }
 
-  /** 지정 문단 전후 ±5 범위에서 커서 이동 가능한 문단 탐색 */
-  private fallbackMove(ih: any, sec: number, para: number): void {
+  /** 지정 문단 전후 ±5 범위에서 커서 이동 가능한 문단을 찾아 결과를 반환한다. */
+  private fallbackMove(ih: any, sec: number, para: number): boolean {
     for (let d = 1; d <= 5; d++) {
-      if (this.tryMoveCursor(ih, sec, para + d, 0)) return;
-      if (para - d >= 0 && this.tryMoveCursor(ih, sec, para - d, 0)) return;
+      if (this.tryMoveCursor(ih, sec, para + d, 0)) return true;
+      if (para - d >= 0 && this.tryMoveCursor(ih, sec, para - d, 0)) return true;
     }
+    return false;
   }
 
   show(): void {
@@ -183,6 +184,10 @@ export class GotoDialog extends ModalDialog {
   hide(): void {
     this.removePageEnterHandler();
     super.hide();
+    // 모달 input이 제거되면 키보드 포커스가 문서 밖으로 빠진다. InputHandler는 active인
+    // 동안 전역 단축키를 양보하므로 textarea에 다시 포커스하지 않으면 Option+G를 비롯한
+    // 편집 단축키가 다음 입력에서 사라진다.
+    this.services.getInputHandler()?.focus();
   }
 
   private installPageEnterHandler(): void {
@@ -227,13 +232,32 @@ export class GotoDialog extends ModalDialog {
       return false;
     }
 
+    // 표가 쪽의 첫 항목이면 해당 상위 문단에 커서를 둘 수 없을 수 있다. 화면 이동은
+    // 커서 배치와 독립적으로 먼저 완료해야 대형 문서의 후반부도 항상 표시된다.
+    if (!this.services.gotoPage(globalPage)) {
+      this.statusLabel.textContent = '해당 쪽으로 화면을 이동할 수 없습니다.';
+      return false;
+    }
+
     const ih = this.services.getInputHandler();
-    if (ih) {
-      ih.moveCursorTo({
-        sectionIndex: posResult.sec!,
-        paragraphIndex: posResult.para!,
-        charOffset: posResult.charOffset ?? 0,
-      });
+    if (!ih) {
+      this.statusLabel.textContent = '문서 입력기를 찾을 수 없습니다.';
+      return false;
+    }
+
+    const moved = this.tryMoveCursor(
+      ih,
+      posResult.sec!,
+      posResult.para!,
+      posResult.charOffset ?? 0,
+    ) || this.fallbackMove(ih, posResult.sec!, posResult.para!);
+    if (!moved) {
+      // 화면은 대상 쪽으로 이동했지만 커서를 놓을 문단을 찾지 못했다. 다음 입력을
+      // 허용하려 모달을 유지한다.
+      this.statusLabel.textContent = '해당 쪽의 커서 위치를 찾을 수 없습니다. 쪽 번호를 다시 입력하세요.';
+      this.pageInput.focus();
+      this.pageInput.select();
+      return false;
     }
   }
 }
