@@ -5,8 +5,9 @@
 - **브랜치**: `codex/issue-3744-clause-context-confidence`
 - **수행계획서**: `mydocs/plans/task_m100_3744.md`
 - **기준 commit**: `upstream/devel` `0889974a01db3585df8ad2c1f13203e3cb9f51f8`
-- **절차 상태**: Stage 3 구현·focused 검증 완료, Stage 4 승인 대기
-- **다음 승인 경계**: 승인 C — corpus 영향·전체 release 검증 승인
+- **최종 동기화 기준**: `upstream/devel` `2971a1d9a`
+- **절차 상태**: Stage 4 corpus·release 검증 및 최종 보고 완료, 원격 작업 승인 대기
+- **다음 승인 경계**: 승인 D — push·PR·GitHub 상태 변경 승인
 
 ## 1. 변경 경계
 
@@ -126,23 +127,27 @@ anchor의 만료가 전파되지 않는다.
 - `CARGO_INCREMENTAL=0 cargo test --test issue_3695_structure_auto_policy -- --nocapture`
 - `CARGO_INCREMENTAL=0 cargo test --test cli_json_contract export_structure_ -- --nocapture`
 
-red→green 결과와 focused 실측은 `mydocs/working/task_m100_3744_stage3.md`에 기록했다. Stage 4의
-전체 corpus·release 측정은 아직 실행하지 않았다.
+red→green 결과와 focused 실측은 `mydocs/working/task_m100_3744_stage3.md`에 기록했다. 이후 Stage 4에서
+최신 기준의 focused gate를 다시 통과하고 전체 corpus·release 측정을 완료했다.
 
-## 5. Stage 4 corpus·release 검증
+## 5. Stage 4 corpus·release 검증 (완료)
 
-1. Stage 3 도중 갱신된 최신 `upstream/devel`에 작업 커밋을 동기화하고 focused green을 재확인한다.
-2. 동일 입력을 기준/보정 evaluator로 비교해 top-level 351개와 recursive 668개 영향표를 만든다.
-3. mode, node_count, kind별 증감, 대표 좌표를 기록하고 각 변화에 의도 근거를 붙인다.
-4. 공개 JSON key와 CLI 정상/오류 exit code가 바뀌지 않았음을 기존 계약 테스트로 확인한다.
-5. 다음 게이트를 순차 실행한다.
+1. 작업 커밋을 최신 `upstream/devel` `2971a1d9a`에 conflict 없이 rebase하고 focused green을
+   재확인했다. upstream의 `StructureDoc.node_count` `nodeCount` rename도 최종 트리에 보존했다.
+2. 기준과 보정 checkout에 서로 다른 Cargo target을 사용해 top-level 353개(350 parse)와 recursive
+   673개(670 parse)를 비교했다. 양쪽 parse 결과는 일치했고 변경 문서는 recursive 11개다.
+3. recursive kind 증감은 `호` -4,351, `목` +167이며, 오래된 anchor 제거 6문서와 direct 제목 회복
+   5문서로 분류했다. 대표 좌표와 문서별 근거는 최종 보고서에 기록했다.
+4. 공개 JSON key와 CLI 계약은 기존 계약 테스트 및 최신 upstream envelope integrity test로 확인했다.
+5. 다음 게이트를 순차 통과했다.
 
 - `CARGO_INCREMENTAL=0 cargo test --profile release-test --tests`
 - `CARGO_INCREMENTAL=0 cargo fmt --check`
 - `git diff --check`
 - `CARGO_INCREMENTAL=0 cargo clippy --all-targets -- -D warnings`
 
-최종 보고서와 필요 최소 CLI 문서를 갱신하고, 원격 작업 승인 전 로컬 커밋에서 중지한다.
+최종 결과는 `mydocs/report/task_m100_3744_report.md`에 기록했다. CLI 사용법·공개 schema는 바뀌지
+않아 별도 CLI 문서 수정은 하지 않았으며, 원격 작업 승인 전 로컬 커밋에서 중지한다.
 
 ## 6. 금지 사항
 
