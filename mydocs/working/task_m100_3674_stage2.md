@@ -122,3 +122,11 @@ Q&A 표 호스트 문단의 [PS]: **`line=160/Percent`, spacing before=0 after=0
 
 행 분할 축(RowBreak 무시)과 이 축은 독립 — 분할이 되면 fit 과대평가와 무관하게
 잔여가 채워진다. 두 축 모두 수정 후보.
+## 코드 진입점 확보 (2026-08-04 4보)
+
+- `src/renderer/typeset.rs:16403` — "TAC 표: trailing line_spacing 복원 (Paginator
+  place_table_fits:777-783 동일)" → **fit 이 호스트 줄간격을 표 높이에 가산**하는 지점.
+- `typeset.rs:873` — provenance 별 "빈 앵커 TAC 표 host_line_spacing 미가산" 분기 존재.
+- `typeset.rs:14440` — 비-TAC 표도 trailing line_spacing 포함.
+- 다음: place_table_fits(777-783)와 위 두 곳의 가산량을 160%/표높이 기준으로 산출해
+  p293·296·299 의 needed vs slack 을 수치 재현 → 확정 후 수정 설계.
