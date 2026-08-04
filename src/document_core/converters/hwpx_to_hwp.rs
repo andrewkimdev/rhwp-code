@@ -29,6 +29,7 @@ use crate::model::table::{Cell, Table, TablePageBreak};
 use crate::parser::FileFormat;
 
 use super::common_obj_attr_writer::{pack_common_attr_bits, serialize_common_obj_attr};
+use super::hwpx_master_page_slots::materialize_hwp5_master_page_slots;
 
 /// 어댑터 실행 보고서.
 ///
@@ -104,6 +105,8 @@ pub struct AdapterReport {
     pub master_page_autonum_placeholder_removed: u32,
     /// HWPX 바탕쪽 line shape rendering matrix를 HWP5 size ratio contract로 보정한 횟수
     pub master_page_line_rendering_size_ratio_materialized: u32,
+    /// HWPX 희소 바탕쪽을 HWP5 `Both`/`Odd` 저장 슬롯으로 명시화한 구역 수 (#3930)
+    pub master_page_apply_slots_materialized: u32,
     /// [#2767] 캡션이 있는 그림(gso `$pic`) CTRL_HEADER 의 한컴 캡션 비트(bit 29,
     /// 0x2000_0000) 보강 횟수. 표는 이미 `materialize_table_ctrl_header_attr` 로
     /// 보강되지만 그림은 빠져 있었다(전 코퍼스 실측 80/80 이 개체 종류와 무관하게
@@ -157,6 +160,7 @@ impl AdapterReport {
                 + self.header_footer_fwspace_control_materialized
                 + self.master_page_autonum_placeholder_removed
                 + self.master_page_line_rendering_size_ratio_materialized
+                + self.master_page_apply_slots_materialized
                 + self.picture_caption_common_attr_materialized)
                 > 0
     }
@@ -182,7 +186,10 @@ impl AdapterReport {
 /// 정확한 vpos 가 채워져 있어 추가 사전계산이 불필요. 직렬화 → 재로드 시에도 vpos 가 그대로
 /// 보존된다 (정수 필드 라운드트립).
 pub fn convert_hwpx_to_hwp_ir(doc: &mut Document) -> AdapterReport {
-    convert_to_hwp_ir(doc)
+    let master_page_apply_slots_materialized = materialize_hwp5_master_page_slots(doc);
+    let mut report = convert_to_hwp_ir(doc);
+    report.master_page_apply_slots_materialized = master_page_apply_slots_materialized;
+    report
 }
 
 /// HWPX/HWP3 출처 IR 을 HWP 직렬화기가 기대하는 형태로 정규화한다.
@@ -2035,6 +2042,11 @@ pub fn convert_if_hwpx_source(doc: &mut Document, source_format: FileFormat) -> 
     }
     // [Issue #1770] HWPX 출처만 마커 부여 (HWP3 은 자체 variant 시멘틱 유지).
     // idempotent — 이미 있으면 추가하지 않는다.
+    let master_page_apply_slots_materialized = if matches!(source_format, FileFormat::Hwpx) {
+        materialize_hwp5_master_page_slots(doc)
+    } else {
+        0
+    };
     if matches!(source_format, FileFormat::Hwpx)
         && !doc
             .extra_streams
@@ -2056,7 +2068,9 @@ pub fn convert_if_hwpx_source(doc: &mut Document, source_format: FileFormat) -> 
         doc.extra_streams
             .push((HWP3_ORIGIN_STREAM_PATH.to_string(), b"1".to_vec()));
     }
-    convert_to_hwp_ir(doc)
+    let mut report = convert_to_hwp_ir(doc);
+    report.master_page_apply_slots_materialized = master_page_apply_slots_materialized;
+    report
 }
 
 #[cfg(test)]
