@@ -841,6 +841,18 @@ export function onKeyDown(this: any, e: KeyboardEvent): void {
     }
     // Shift/Ctrl/Alt/Meta 키만 누름 → 무시
     if (['Shift', 'Control', 'Alt', 'Meta'].includes(e.key)) return;
+    // [#3682] 개체 선택 상태를 요구하는 커맨드(예: 'P' 개체 속성)를 먼저 시도한다.
+    // 아래 폴스루는 선택을 해제하므로, 그 뒤 일반 단축키 경로에 도달할 때는 이미
+    // canExecute(inPictureObjectSelection) 가 거짓이 되어 영영 실행되지 않았다
+    // — 차트뿐 아니라 그림·도형 공통으로 개체 속성이 열리지 않던 원인.
+    {
+      const cmdId = matchShortcut(e, defaultShortcuts);
+      if (cmdId && this.dispatcher?.isEnabled?.(cmdId)) {
+        e.preventDefault();
+        this.dispatcher.dispatch(cmdId);
+        return;
+      }
+    }
     // 기타 키 → 개체 선택 해제 후 일반 처리로 폴스루
     this.exitPictureObjectSelectionIfNeeded();
   }
