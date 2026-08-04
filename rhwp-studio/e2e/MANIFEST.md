@@ -56,6 +56,7 @@ e2e 스크립트의 **단일 권위 목록**이다. 파일 추가/변경/폐기 
 | `issue-3682-chart-object-probe.test.mjs` | 진단 | active | #3682 차트 개체 P1~P5 행동 현황 수집 프로브 | chart/세로막대형/묶은세로막대형.hwp | 수동 | legacy-name · 최신 devel의 기존 미등재 항목 보완 |
 | `issue-3953-large-document-goto.test.mjs` | 상시 | active | #3953 대형 HWP 후반부 찾아가기, 오류 재입력과 상태 표시줄 진입 | 정책연구용역사업 중간진도보고서(살아있는 간장 기증자의 의학적 선별기준 연구).hwp | 수동 | |
 | `issue-4026-footnote-global-shortcuts.test.mjs` | 상시 | active | #4026 각주 편집 중 Cmd+Z 되돌리기와 Option+G 찾아가기 | footnote-01.hwp | 수동 | |
+| `issue-4030-footnote-goto-transition.test.mjs` | 상시 | active | #4030 실제 대형 HWP 각주에서 Option+G 200쪽 이동 시 본문 모드·상태 표시·viewport 전환 | 정책연구용역사업 중간진도보고서(살아있는 간장 기증자의 의학적 선별기준 연구).hwp | 수동 | |
 | `issue-595.test.mjs` | 진단 | hold | Issue #595 진단 e2e | exam_math.hwp | 수동 | legacy-name · #595 진단 (assertion 0) |
 | `line-spacing.test.mjs` | 상시 | active | 줄간격 변경에 따른 페이지 넘김 검증 | — | 수동 |  |
 | `navigation-shortcuts.test.mjs` | 상시 | active | 플랫폼별 navigation shortcut | — | 수동 |  |
