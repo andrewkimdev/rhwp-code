@@ -4341,6 +4341,7 @@ fn export_svg(args: &[String]) -> i32 {
     }
 
     // 파일 읽기
+    let read_start = std::time::Instant::now();
     let data = match fs::read(file_path) {
         Ok(d) => d,
         Err(e) => {
@@ -4348,14 +4349,17 @@ fn export_svg(args: &[String]) -> i32 {
             return EXIT_RUNTIME;
         }
     };
+    let read_ms = read_start.elapsed().as_millis();
 
     let source_format = rhwp::parser::detect_format(&data);
 
     // 문서 로드
+    let parse_start = std::time::Instant::now();
     let mut doc = match load_document(&data) {
         Ok(d) => d,
         Err(e) => return e.report(),
     };
+    let parse_ms = parse_start.elapsed().as_millis();
 
     // [Task #741 후속] 외부 file path 그림 영역 영역 HWP file 영역 영역 같은 dir 영역
     // 영역 image 영역 영역 자동 load (basename 매칭).
@@ -4422,8 +4426,11 @@ fn export_svg(args: &[String]) -> i32 {
     let mut written = 0usize;
     // [#3668] LAYOUT_OVERFLOW_CELL 집계 — 페이지 렌더 직후 take 로 페이지 귀속.
     let mut overflow_cell_total: u64 = 0;
+    let mut render_ms_total: u128 = 0;
+    let mut write_ms_total: u128 = 0;
 
     for page_num in &pages {
+        let render_start = std::time::Instant::now();
         let svg_result = if let Some(profile) = render_profile {
             doc.render_page_svg_layer_with_profile_native(*page_num, profile)
         } else if font_embed_mode != rhwp::renderer::svg::FontEmbedMode::None {
@@ -4431,11 +4438,12 @@ fn export_svg(args: &[String]) -> i32 {
         } else {
             doc.render_page_svg_native(*page_num)
         };
+        render_ms_total += render_start.elapsed().as_millis();
         let page_overflow_cell_lines = doc.take_overflow_cell_lines();
         overflow_cell_total += u64::from(page_overflow_cell_lines);
         match svg_result {
             Ok(mut svg) => {
-                // 격자 오버레이 삽입
+                // 격자 오버레이 삽입 (진단용 부가 기능 — render 시간에 포함하지 않는다)
                 if let Some(mm) = grid_mm {
                     let origin_mm = match grid_origin {
                         GridOriginOption::Fixed(origin) => origin,
@@ -4461,7 +4469,10 @@ fn export_svg(args: &[String]) -> i32 {
                 };
                 let svg_path = output_path.join(&svg_filename);
 
-                match fs::write(&svg_path, &svg) {
+                let write_start = std::time::Instant::now();
+                let write_result = fs::write(&svg_path, &svg);
+                write_ms_total += write_start.elapsed().as_millis();
+                match write_result {
                     Ok(_) => {
                         if json_mode {
                             manifest.push(serde_json::json!({
@@ -4483,6 +4494,11 @@ fn export_svg(args: &[String]) -> i32 {
             }
         }
     }
+
+    eprintln!(
+        "RHWP_TIMING {{\"cmd\":\"export-svg\",\"readMs\":{},\"parseMs\":{},\"renderMs\":{},\"writeMs\":{}}}",
+        read_ms, parse_ms, render_ms_total, write_ms_total
+    );
 
     // 단건 JSON 명령의 실패는 stdout 을 비워야 한다. 부분 매니페스트를 출력하면
     // 소비자가 성공 결과로 오인하거나 stdout JSON을 파싱한 뒤 실패를 놓친다.
@@ -4580,6 +4596,7 @@ fn export_render_tree(args: &[String]) -> i32 {
         return EXIT_USAGE;
     };
 
+    let read_start = std::time::Instant::now();
     let data = match fs::read(file_path) {
         Ok(d) => d,
         Err(e) => {
@@ -4587,12 +4604,15 @@ fn export_render_tree(args: &[String]) -> i32 {
             return EXIT_RUNTIME;
         }
     };
+    let read_ms = read_start.elapsed().as_millis();
     let source_format = rhwp::parser::detect_format(&data);
 
+    let parse_start = std::time::Instant::now();
     let mut doc = match load_document(&data) {
         Ok(d) => d,
         Err(e) => return e.report(),
     };
+    let parse_ms = parse_start.elapsed().as_millis();
 
     if allows_implicit_sibling_resources(source_format) {
         if let Some(parent) = std::path::Path::new(file_path).parent() {
@@ -4640,13 +4660,21 @@ fn export_render_tree(args: &[String]) -> i32 {
 
     // [#2707] 요청한 페이지 수가 아니라 실제로 저장에 성공한 페이지 수를 센다.
     let mut written = 0usize;
+    let mut render_ms_total: u128 = 0;
+    let mut write_ms_total: u128 = 0;
 
     for page_num in &pages {
-        match doc.build_page_render_tree(*page_num) {
+        let render_start = std::time::Instant::now();
+        let tree_result = doc.build_page_render_tree(*page_num);
+        render_ms_total += render_start.elapsed().as_millis();
+        match tree_result {
             Ok(tree) => {
                 let json_path = output_path.join(format!("render_tree_{:03}.json", page_num + 1));
                 let json = tree.root.to_json();
-                match fs::write(&json_path, json) {
+                let write_start = std::time::Instant::now();
+                let write_result = fs::write(&json_path, json);
+                write_ms_total += write_start.elapsed().as_millis();
+                match write_result {
                     Ok(_) => {
                         println!("  → {}", json_path.display());
                         written += 1;
@@ -4665,6 +4693,11 @@ fn export_render_tree(args: &[String]) -> i32 {
             }
         }
     }
+
+    eprintln!(
+        "RHWP_TIMING {{\"cmd\":\"export-render-tree\",\"readMs\":{},\"parseMs\":{},\"renderMs\":{},\"writeMs\":{}}}",
+        read_ms, parse_ms, render_ms_total, write_ms_total
+    );
 
     println!(
         "내보내기 완료: {}개 render tree JSON 파일 → {}/",
@@ -5493,6 +5526,7 @@ fn export_pdf(args: &[String]) -> i32 {
             output_file = format!("output/{}.pdf", stem);
         }
 
+        let read_start = std::time::Instant::now();
         let data = match fs::read(file_path) {
             Ok(d) => d,
             Err(e) => {
@@ -5500,11 +5534,14 @@ fn export_pdf(args: &[String]) -> i32 {
                 return 1;
             }
         };
+        let read_ms = read_start.elapsed().as_millis();
 
+        let parse_start = std::time::Instant::now();
         let mut doc = match load_document(&data) {
             Ok(d) => d,
             Err(e) => return e.report(),
         };
+        let parse_ms = parse_start.elapsed().as_millis();
 
         // [#3302] 외부 연결 그림 같은 디렉터리 자동 적재 — export-svg/export-png 와 동일 규칙.
         if allows_implicit_sibling_resources(rhwp::parser::detect_format(&data)) {
@@ -5547,32 +5584,65 @@ fn export_pdf(args: &[String]) -> i32 {
             None => (0..page_count).collect(),
         };
 
+        // [벤더 패치: phase 타이밍] SVG 레이아웃/생성(render)과 SVG→PDF 변환(convert,
+        // usvg::Tree::from_str + svg2pdf::to_chunk — export-pdf 총 시간의 ~75%를 차지하는
+        // 구간, src/renderer/pdf.rs의 병렬화 패치가 최적화한 바로 그 구간)을 분리 계측한다.
+        // render_pages_pdf_native_with_*options()가 내부에서 하던 두 단계를 여기서 그대로
+        // 풀어써서, 라이브러리 공개 API(반환 타입 등)는 건드리지 않는다. DirectLayer
+        // backend는 SVG 중간 표현 없이 레이어 트리를 직접 PDF로 그리므로 render/convert로
+        // 나눌 지점이 없다 — 전체를 convertMs 로 계상한다 (renderMs=0).
+        let render_ms: u128;
+        let convert_ms: u128;
         let pdf_result = match pdf_backend {
-            rhwp::renderer::pdf::PdfBackend::CompatibilitySvg => match render_profile {
-                Some(profile) => doc.render_pages_pdf_native_with_profile_and_options(
-                    &pages,
-                    profile,
-                    &pdf_options,
-                ),
-                None => doc.render_pages_pdf_native_with_options(&pages, &pdf_options),
-            },
+            rhwp::renderer::pdf::PdfBackend::CompatibilitySvg => {
+                let render_start = std::time::Instant::now();
+                let svg_pages_result: Result<Vec<String>, _> = match render_profile {
+                    Some(profile) => pages
+                        .iter()
+                        .map(|&p| doc.render_page_svg_layer_with_profile_native(p, profile))
+                        .collect(),
+                    None => pages
+                        .iter()
+                        .map(|&p| doc.render_page_svg_native(p))
+                        .collect(),
+                };
+                render_ms = render_start.elapsed().as_millis();
+                let svg_pages = match svg_pages_result {
+                    Ok(pages) => pages,
+                    Err(e) => {
+                        eprintln!("오류: PDF 변환 실패 - {}", e);
+                        return 1;
+                    }
+                };
+                let convert_start = std::time::Instant::now();
+                let result = rhwp::renderer::pdf::svgs_to_pdf_with_options(&svg_pages, &pdf_options)
+                    .map_err(rhwp::error::HwpError::RenderError);
+                convert_ms = convert_start.elapsed().as_millis();
+                result
+            }
             rhwp::renderer::pdf::PdfBackend::DirectLayer => {
-                #[cfg(feature = "native-skia")]
-                {
-                    direct_pdf_options.font_paths = pdf_options.font_paths.clone();
-                    doc.render_pages_pdf_direct_native_with_profile_and_options(
-                        &pages,
-                        render_profile.unwrap_or(rhwp::paint::RenderProfile::Print),
-                        &direct_pdf_options,
-                    )
-                }
-                #[cfg(not(feature = "native-skia"))]
-                {
-                    Err(rhwp::error::HwpError::RenderError(
-                        "direct PDF backend requires a build with the native-skia feature"
-                            .to_string(),
-                    ))
-                }
+                render_ms = 0;
+                let convert_start = std::time::Instant::now();
+                let result = {
+                    #[cfg(feature = "native-skia")]
+                    {
+                        direct_pdf_options.font_paths = pdf_options.font_paths.clone();
+                        doc.render_pages_pdf_direct_native_with_profile_and_options(
+                            &pages,
+                            render_profile.unwrap_or(rhwp::paint::RenderProfile::Print),
+                            &direct_pdf_options,
+                        )
+                    }
+                    #[cfg(not(feature = "native-skia"))]
+                    {
+                        Err(rhwp::error::HwpError::RenderError(
+                            "direct PDF backend requires a build with the native-skia feature"
+                                .to_string(),
+                        ))
+                    }
+                };
+                convert_ms = convert_start.elapsed().as_millis();
+                result
             }
         };
         let pdf_bytes = match pdf_result {
@@ -5582,10 +5652,19 @@ fn export_pdf(args: &[String]) -> i32 {
                 return 1;
             }
         };
+
+        let write_start = std::time::Instant::now();
         if let Err(e) = fs::write(&output_file, &pdf_bytes) {
             eprintln!("오류: PDF 저장 실패 - {}", e);
             return 1;
         }
+        let write_ms = write_start.elapsed().as_millis();
+
+        eprintln!(
+            "RHWP_TIMING {{\"cmd\":\"export-pdf\",\"readMs\":{},\"parseMs\":{},\"renderMs\":{},\"convertMs\":{},\"writeMs\":{}}}",
+            read_ms, parse_ms, render_ms, convert_ms, write_ms
+        );
+
         if json_mode {
             let backend_name = match pdf_backend {
                 rhwp::renderer::pdf::PdfBackend::CompatibilitySvg => "svg",
