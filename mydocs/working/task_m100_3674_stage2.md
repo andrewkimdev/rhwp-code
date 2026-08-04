@@ -263,3 +263,18 @@ declared_overflows_current = cur_h + declared_total > available + 1.0(관용)
 - 후보 2: 관용치 확대 — 임시방편, 경계만 이동. 비권고.
 - 검증: red-check + 구역10 쪽 시작 서열(한컴 11쪽 정합 방향) + release-test 전체 +
   10k 서베이 회귀 게이트.
+
+## 11보 — 후보 1 승인, 구현 진입점 (2026-08-04)
+
+이월 실행부(typeset.rs ~18090)의 탈출 조건 목록에 **`saved_anchor_splits_here`** 가
+이미 있다 — 저장 데이터가 "여기서 분할됨"을 증명하면 이월하지 않는 설계. pi=14 는
+이 플래그가 false 라 이월됐다. 그런데 저장 오라클은 분할을 증명한다: **다음 문단
+15 의 stored vpos=376.0 < 14 의 545.5 (되감김) = 14 의 꼬리가 다음 쪽 0~376 을 차지.**
+
+**구현 방향(후보 1 구체화)**: `saved_anchor_splits_here` 판정을 이 형상(빈 host·
+RowBreak·다행·다음 문단 vpos 되감김·현재 anchor 는 쪽 내)까지 인지하도록 확장 —
+declared 선판정을 우회해 분할 스캔에 진입시킨다. 주석의 기존 사례(86712 pi=30,
+saved=None 계열)와 동일 정신이며 #874(1×1)·#2439 보호는 row_count>1 로 자연 배제.
+
+검증: red-check → 구역10 서열 한컴 수렴 → release-test → 10k 서베이 → 시각 스왑
+(output/issue3674_swap B쌍 재생성).
