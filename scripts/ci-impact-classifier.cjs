@@ -105,6 +105,12 @@ function failClosedPathReason(filename) {
   ) {
     return 'classifier-contract';
   }
+  if (
+    filename === 'rhwp-studio/tsconfig.ci-unit.json'
+    || filename === 'rhwp-studio/types/wasm-ci-unit-stub.d.ts'
+  ) {
+    return 'frontend-unit-contract';
+  }
   return '';
 }
 
@@ -119,16 +125,19 @@ function isRustPath(filename) {
   return filename.endsWith('.rs') || filename === 'build.rs';
 }
 
-function isStudioRenderTest(filename) {
-  if (!filename.startsWith('rhwp-studio/tests/')) {
-    return false;
-  }
-  const basename = filename.slice('rhwp-studio/tests/'.length).toLowerCase();
+function isStudioKnownNonRenderSource(filename) {
   return (
-    basename.startsWith('render-')
-    || basename.includes('renderer')
-    || basename.includes('canvaskit')
-    || basename.startsWith('issue-3315-')
+    filename.startsWith('rhwp-studio/src/command/')
+    || filename === 'rhwp-studio/src/engine/command.ts'
+  );
+}
+
+function isStudioPackageSource(filename) {
+  return (
+    filename.startsWith('rhwp-studio/src/core/')
+    || filename.startsWith('rhwp-studio/src/embed/')
+    || filename === 'rhwp-studio/src/main.ts'
+    || filename.startsWith('rhwp-studio/public/')
   );
 }
 
@@ -201,40 +210,30 @@ function classifyChanges(input = {}) {
       continue;
     }
 
-    if (filename.startsWith('rhwp-studio/src/view/')) {
-      requireFrontend('unit', 'studio-render');
-      renderRequired = true;
-      continue;
-    }
-
-    if (isStudioRenderTest(filename)) {
-      requireFrontend('unit', 'studio-render-test');
-      renderRequired = true;
-      continue;
-    }
-
     if (filename.startsWith('rhwp-studio/src/hwpctl/')) {
       requireFrontend('package', 'studio-package');
       continue;
     }
 
-    if (
-      filename.startsWith('rhwp-studio/src/core/')
-      || filename.startsWith('rhwp-studio/src/embed/')
-      || filename === 'rhwp-studio/src/main.ts'
-      || filename.startsWith('rhwp-studio/public/')
-    ) {
-      requireFrontend('package', 'studio-package');
+    if (isStudioPackageSource(filename)) {
+      requireFrontend('package', 'studio-render-package');
+      renderRequired = true;
       continue;
     }
 
-    if (filename.startsWith('rhwp-studio/src/') || filename.startsWith('rhwp-studio/tests/')) {
+    if (isStudioKnownNonRenderSource(filename)) {
+      requireFrontend('unit', 'studio-unit');
+      continue;
+    }
+
+    if (filename.startsWith('rhwp-studio/tests/')) {
       requireFrontend('unit', 'studio-unit');
       continue;
     }
 
     if (filename.startsWith('rhwp-studio/')) {
-      requireFrontend('package', 'studio-package');
+      requireFrontend('package', 'studio-render-package');
+      renderRequired = true;
       continue;
     }
 
