@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # [#3508] multi_pr_update_branch.md 2.5의 stale run 수동 정리를 원커맨드로 감싼다.
+# [#4025] --author 모드: 한 기여자의 열린 PR run 을 일괄 정리한다(에이전트 오작동 대응).
 #
 #   사용법: scripts/cancel_stale_pr_runs.sh <PR번호> [--dry-run]
+#          scripts/cancel_stale_pr_runs.sh --author <로그인> [--dry-run]
 #
 # - 현재 head SHA를 확인하고, 같은 PR head(head_repository+head_branch)의 이전 SHA
 #   active run만 force-cancel API로 취소한다. 일반 `gh run cancel`은 시도하지 않는다(2.5 규정).
@@ -11,8 +13,98 @@
 set -euo pipefail
 
 REPO="${RHWP_REPO:-edwardkim/rhwp}"
-PR="${1:?사용법: $0 <PR번호> [--dry-run]}"
+PR="${1:?사용법: $0 <PR번호> | --author <로그인>  [--dry-run]}"
 DRY="${2:-}"
+
+# ─── [#4025] --author 모드 ────────────────────────────────────────────────
+# 2026-08-04 실측: 에이전트 오작동으로 fork PR 69건이 하루에 생성돼 러너가 포화됐다
+# (진행 15 + 대기 39). PR 모드는 "최신 head run 보존"이 설계 목적이라 이 상황을 못 푼다
+# — 사고에서는 그 최신 run 들이 러너를 먹기 때문이다. 그래서 별도 모드로 둔다.
+#
+# 안전 경계: **열린 PR 의 head 브랜치 목록과 대조**해 목록 밖(devel·main·타 기여자)은
+# 절대 취소하지 않는다. 8/4 실측에서 이 대조가 devel CI 를 지켰다.
+if [ "$PR" = "--author" ]; then
+  AUTHOR="${2:?사용법: $0 --author <로그인> [--dry-run]}"
+  DRY="${3:-}"
+
+  branches=$(gh pr list --repo "$REPO" --state open --author "$AUTHOR" \
+    --limit 200 --json headRefName --jq '[.[].headRefName]')
+  bcount=$(jq 'length' <<<"$branches")
+  echo "author=$AUTHOR  열린 PR head 브랜치 ${bcount}개 (${REPO})"
+  if [ "$bcount" -eq 0 ]; then
+    echo "  열린 PR 이 없습니다 — 정리할 대상이 없습니다."
+    exit 0
+  fi
+
+  # [#4025] --paginate 전량 조회는 run 이력이 쌓이면 수 분씩 걸린다(실측 타임아웃).
+  # active 상태만 서버에서 걸러 받는다 — 정리 대상은 정의상 active 뿐이다.
+  fetch_active() {
+    { gh api "repos/$REPO/actions/runs?status=in_progress&per_page=100" --jq '.workflow_runs[]' 2>/dev/null
+      gh api "repos/$REPO/actions/runs?status=queued&per_page=100" --jq '.workflow_runs[]' 2>/dev/null; }
+  }
+  active=$(fetch_active | jq -s --argjson brs "$branches" '
+      [ .[]
+        | select(.status == "queued" or .status == "in_progress"
+                 or .status == "pending" or .status == "requested"
+                 or .status == "waiting")
+        | select(.head_branch as $b | $brs | index($b))
+        | {id, name: (.name // .display_title), branch: .head_branch,
+           status, url: .html_url}
+      ]')
+  acount=$(jq 'length' <<<"$active")
+
+  # 보호된(대조 밖) active run 수 — 요약에 함께 보고한다.
+  protected=$(fetch_active | jq -s --argjson brs "$branches" '
+      [ .[]
+        | select(.status == "queued" or .status == "in_progress")
+        | select(.head_branch as $b | ($brs | index($b)) | not)
+      ] | length')
+
+  echo "  대상 active run ${acount}건 / 보호(대조 밖) ${protected}건"
+  jq -r '.[] | "    [\(.status)] \(.name)  \(.branch)  \(.url)"' <<<"$active" | head -40
+  [ "$acount" -gt 40 ] && echo "    … 외 $((acount - 40))건"
+
+  if [ "$DRY" = "--dry-run" ]; then
+    echo "  --dry-run: 취소하지 않고 종료합니다."
+    exit 0
+  fi
+  if [ "$acount" -eq 0 ]; then
+    echo "  취소할 run 이 없습니다."
+    exit 0
+  fi
+
+  # 1차 gh run cancel → 2차 force-cancel.
+  # 8/4 실측: 1차만으로는 44건이 남았다(취소 반영 지연·신규 큐잉). 2차가 필수다.
+  ok=0
+  for run_id in $(jq -r '.[].id' <<<"$active"); do
+    gh run cancel "$run_id" --repo "$REPO" >/dev/null 2>&1 && ok=$((ok + 1)) || true
+  done
+  echo "  1차 cancel 요청: ${ok}/${acount}"
+  sleep 20
+
+  remain=$(fetch_active | jq -s --argjson brs "$branches" '
+      [ .[]
+        | select(.status == "queued" or .status == "in_progress")
+        | select(.head_branch as $b | $brs | index($b))
+        | .id
+      ]')
+  rcount=$(jq 'length' <<<"$remain")
+  if [ "$rcount" -gt 0 ]; then
+    echo "  2차 force-cancel 대상 ${rcount}건"
+    for run_id in $(jq -r '.[]' <<<"$remain"); do
+      gh api --method POST "repos/$REPO/actions/runs/$run_id/force-cancel" >/dev/null 2>&1 || true
+    done
+    sleep 20
+  fi
+
+  final=$(fetch_active | jq -s --argjson brs "$branches" '
+      [ .[] | select(.status == "queued" or .status == "in_progress")
+        | select(.head_branch as $b | $brs | index($b)) ] | length')
+  echo "완료: 대상 ${acount}건 → 잔여 ${final}건 (보호 ${protected}건은 건드리지 않음)"
+  [ "$final" -gt 0 ] && echo "  잔여가 있으면 재실행하세요(신규 큐잉 가능성)."
+  exit 0
+fi
+# ─────────────────────────────────────────────────────────────────────────
 
 pr_json=$(gh pr view "$PR" --repo "$REPO" \
   --json state,headRefOid,headRefName,headRepositoryOwner,headRepository)
