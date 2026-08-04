@@ -58,7 +58,7 @@ fixture를 요청했다.
 | --- | --- |
 | fixture | `samples/issue3637/regulatory_impact_nested_table_escape.hwpx` |
 | fixture SHA-256 | `e7b147f7cea66c97bed79085a3d89c2656037e0f711232f659ed3c7344984f62` |
-| 한컴 2020 기준 PDF | `pdf/pr3949/regulatory_impact_nested_table_escape-2020.pdf` |
+| 한컴 2020 기준 PDF | [`pr_3949_planet6897_nested_table_hancom2020_reference.pdf`](../assets/pr_3949_planet6897_nested_table_hancom2020_reference.pdf) |
 | 기준 PDF SHA-256 | `5b78a0bb9e66edd6c0469e524a5656e1dfccaf40718c75c28a71ae1693baa7b5` |
 | 기준 PDF | 31쪽, A4, 561,034 bytes, `PrintToPDFEx`/`PrintMethod=0` |
 
@@ -116,7 +116,7 @@ git diff --check
 기준 PDF보다 5쪽 많아, 문서 전체 픽셀 점수는 이번 한 지점의 변경만으로 품질을 판정하는
 지표가 될 수 없다.
 
-- 결과 경로: `output/review-pr3949-nested-table/`
+- 결과 경로: `output/review-pr3949-nested-table/` (로컬 검토 산출)
 - sweep 상태: 요청 1~31쪽 모두 완료
 - 30쪽 단일 비교 diff: 수정 전 `15.96%`, 수정 후 `16.02%`
 
@@ -131,6 +131,8 @@ git diff --check
 
 - `CI preflight`, lint, Canvas visual diff, Native Skia, slow shard, regular shard 1~3,
   `Build & Test`, CodeQL: 모두 성공
+- review-only fast-pass 후보: `99cd22d`의
+  [CI / Build & Test](https://github.com/edwardkim/rhwp/actions/runs/30901405999) 성공
 - `mergeStateStatus`: `CLEAN`
 - `mergeable`: `MERGEABLE`
 
