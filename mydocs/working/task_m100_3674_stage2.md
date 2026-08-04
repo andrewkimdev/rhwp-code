@@ -195,3 +195,23 @@ fresh 쪽에 통째 들어가면 이월). 유력 시나리오: 표 14 의 첫 �
 
 기대 효과: 구역 10 에서만 +4쪽(한컴 11 vs rhwp 15). 같은 패턴이 제5장 전체(+9)와
 재저장본 갭(+10)의 지배 성분일 가능성이 높다.
+
+## 8보 — Stage 3-1 계측: 결함 서명 확보 (2026-08-04)
+
+`RHWP_TABLE_DRIFT` + 신규 `RHWP_DIAG_SPLITSCAN`(scan 결과 출력, 동작 불변) 실측:
+
+| | pi=12 (sec=10) | pi=14 (sec=10) |
+|---|---|---|
+| table_total | 448.3 | 554.6 |
+| cur_h → 잔여 | 579.7 → **161.1** | 566.7 → **174.1** |
+| 분할 시도 | **TABLE_SPLIT_AVAIL/RESULT 발생** | **없음 — 스캔 미진입** |
+| 결과 | rows 0~3 + **row4 내부 컷**(consumed 155.8, limit 24.5) → 이어짐 322.1 | 통짜 이월 (+1쪽) |
+
+- rhwp 는 행 내부 컷 능력까지 있고 pi=12 에서 실제로 썼다. **pi=14 는 잔여가 더 큰데도
+  분할 게이트 앞에서 거부**됐다 — 게이트는 TABLE_DRIFT 출력 지점과 TABLE_SPLIT_AVAIL
+  사이의 상류 분기.
+- 한컴 오라클: 14 의 head=총 554.6−tail 376(다음 문단 15 저장 vpos)≈**178.6px** —
+  잔여 174.1+host_sp 와 사실상 일치. **한컴은 잔여를 그대로 head 로 채웠다.**
+- 로그: `scratchpad/diag_drift.log`·`diag_split.log`. 다음 세션: TABLE_DRIFT →
+  TABLE_SPLIT_AVAIL 사이 분기 조건 식별(eff_h 553.3 vs 440.3, host_sp 1.3 vs 8.0,
+  declared 175.2 vs 159.8 중 어느 입력이 갈랐는지) → 수정 설계.

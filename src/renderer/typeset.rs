@@ -19366,6 +19366,14 @@ impl TypesetEngine {
             if end_row <= cursor_row {
                 end_row = cursor_row + 1;
             }
+            // [#3674 진단] 표 행 분할 스캔 입력/결과 — 동작 불변.
+            if std::env::var("RHWP_DIAG_SPLITSCAN").is_ok() {
+                eprintln!(
+                    "DIAG_SPLITSCAN pi={} cursor={} end_row={} consumed={:.1} avail={:.1} hdr={:.1} rows={} intra={} cont={}",
+                    para_idx, cursor_row, end_row, consumed, avail_for_rows,
+                    header_overhead, row_count, can_intra_split, is_continuation,
+                );
+            }
 
             // [#2097] 첫 조각 각주 예약-컷 재정합 — 한글은 각주를 앵커 줄과 함께
             // 움직이므로(인서트-인지 컷), 표 전체 각주 선-예약(available 차감)은
