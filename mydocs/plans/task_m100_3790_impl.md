@@ -111,6 +111,7 @@ policy를 미채택하기로 결정할 때까지 보존한다. 이후 재사용�
 node --test scripts/tests/ci-impact-classifier.test.cjs
 python3 -m unittest scripts/tests/test_ci_impact_workflow.py
 python3 -m unittest scripts/tests/test_render_diff_workflow.py
+npm --prefix rhwp-studio run e2e:renderer-contract
 git diff --check
 ```
 

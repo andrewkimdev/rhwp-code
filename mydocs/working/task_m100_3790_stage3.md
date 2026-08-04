@@ -41,6 +41,7 @@ controller enforcement는 Stage 3~5 진리표 확정과 정상 devel→main 릴�
 | `node --test scripts/tests/ci-impact-classifier.test.cjs` | 24/24 통과 |
 | `python3 -m unittest scripts/tests/test_ci_impact_workflow.py scripts/tests/test_render_diff_workflow.py` | 14/14 통과 |
 | `actionlint .github/workflows/ci.yml .github/workflows/render-diff.yml` | 통과 |
+| `npm --prefix rhwp-studio run e2e:renderer-contract` | 통과 |
 | `npx --prefix rhwp-studio tsc --project rhwp-studio/tsconfig.ci-unit.json --noEmit` | 통과 |
 | `npm --prefix rhwp-studio run test` | 759/759 통과 |
 | `git diff --check` | 통과 |

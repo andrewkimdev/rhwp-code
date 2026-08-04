@@ -3009,7 +3009,7 @@ requireSnippet(
 );
 assert.ok(
   renderDiffWorkflowSource.includes("RHWP_CHROMIUM_BUILD_ID: '1660786'")
-    && renderDiffWorkflowSource.includes('chromium@${RHWP_CHROMIUM_BUILD_ID}'),
+    && renderDiffWorkflowSource.includes('chromium@"${RHWP_CHROMIUM_BUILD_ID}"'),
   'render-diff CI should pin the Chromium revision used by hard visual gates',
 );
 assert.ok(
