@@ -2,7 +2,7 @@
 
 - 이슈: [#3815](https://github.com/edwardkim/rhwp/issues/3815)
 - 브랜치: stack/issue-3815-pagination-coalescing
-- 최신 기준: upstream/devel ec1b21096
+- 최신 기준: upstream/devel aeb5805cb
 - code candidate: e2ec99228
 - 작성일: 2026-08-04
 
@@ -19,7 +19,7 @@ cherry-pick은 포함하지 않았다.
 
 - renderer spacing focused: 42 / 42
 - SVG renderer: 41 / 41
-- composer: 52 / 52
+- composer: 53 / 53
 - runner + InputHandler focused: 23 / 23
 - Studio 전체 unit: 763 / 763 (이전 stack 전체 검증, 최신 devel은 Studio 파일 변경 없음)
 - npx tsc --noEmit: 통과
@@ -41,9 +41,9 @@ production WASM과 새 headless Chrome에서 continuous-only 시나리오를 각
 이전 동일 smoke의 50.2ms / 49.7ms 대비 변화는 각각 -0.2% / +2.4%로 ±10% gate 안이다.
 따라서 2026-08-03에 완료한 current, 80ms, 250ms 형식별 3회 전체 측정은 반복하지 않았다.
 
-이후 devel이 ec1b21096로 전진했다. 추가 변경은 Stack 제품 파일과 직접 겹치지 않았지만
+이후 devel이 aeb5805cb로 전진했다. 추가 변경은 Stack 제품 파일과 직접 겹치지 않았지만
 typeset 쪽 경계 수정이 실제 HWP/HWPX 쪽수에 영향을 줄 수 있어 production WASM과 combined
-smoke까지 다시 실행했다. spacing 42 / 42, SVG 41 / 41, composer 52 / 52, Studio focused
+smoke까지 다시 실행했다. spacing 42 / 42, SVG 41 / 41, composer 53 / 53, Studio focused
 23 / 23, TypeScript와 production WASM을 모두 통과했고 두 형식의 115 → 116 결과도 유지됐다.
 
 ## 기존 성능 근거
@@ -54,6 +54,17 @@ step p95 최대는 8.4ms였다.
 
 남은 pending operation 비용은 exact cursor query가 지배하며 이번 scheduler PR의 비범위다.
 flow가 안정되면 stable-tail fast path로 돌아간다.
+
+200ms보다 짧은 간격의 입력이 계속되면 active restart timer가 재예약되어 pagination step과
+쪽수 게시가 잠시 멈춘다. 200ms 이상 쉬면 최신 revision에서 재개되고, 완료 뒤 stable-tail
+fast path로 복귀한다. 이 pending 구간에서는 기존 120ms idle flush도 선점하지 않는다.
+
+HWP/HWPX 2 / 2, pending operation p95, 115 → 116 쪽수, revision 일치와 synchronous flush 0은
+모두 로컬 production WASM + Chrome `--continuous-only` 결과다. Render Diff CI는 이 E2E의
+`node --check`만 실행하며 브라우저 성능·쪽수 결과를 대신하지 않는다. 리뷰 재현을 위해
+`npm run e2e:issue-3815` 진입점과 MANIFEST 설명을 추가했다.
+최신 devel에 이미 추적되던 #3682 진단 프로브의 누락 행도 함께 등록해 새 MANIFEST 검사를
+stack top에서 통과시켰다. 프로브 동작이나 #3682 제품 범위는 변경하지 않는다.
 
 ## 게시 상태
 

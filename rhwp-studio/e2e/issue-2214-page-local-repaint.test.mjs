@@ -1,10 +1,12 @@
 /**
- * Issue #2214 focused GREEN regression and optional diagnostic.
+ * Issue #2214 focused GREEN regression, #3815 stack integration, and optional diagnostic.
  *
  * The default path is a focused HWP/HWPX regression that verifies the 56th
  * cell-flow boundary, pre-cursor pagination, exact tree/caret state, and the
  * absence of an additional flush through the 62nd input. The original
- * timeline/PNG controls remain available behind --diagnose.
+ * timeline/PNG controls remain available behind --diagnose. `--continuous-only` is the local
+ * production-WASM + Chrome integration gate for #3815 on top of #3937/#3822; CI only syntax-checks
+ * this browser scenario, so its measured timings and page/revision assertions are local evidence.
  *
  * [#2430] 한양·휴먼 HFT ASCII 실측 교정으로 대상 셀의 줄 채움 임계가 44→56,
  * 관측 범위가 50→62 로 이동했다 (native 계약: tests/issue_2214_page_local_repaint.rs
