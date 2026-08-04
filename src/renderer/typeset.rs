@@ -16409,11 +16409,12 @@ impl TypesetEngine {
         // [#2243 진단] 배치 종료 시 누적 — 동작 불변.
         if std::env::var("RHWP_DIAG_TAC").is_ok() {
             eprintln!(
-                "DIAG_TAC_END pi={} cur_h={:.1} trailing_fired={} has_post_text={}",
+                "DIAG_TAC_END pi={} cur_h={:.1} trailing_fired={} has_post_text={} delta={:.1}",
                 para_idx,
                 st.current_height,
                 is_tac && fmt.total_height > fmt.height_for_fit && !has_post_text,
                 has_post_text,
+                (fmt.total_height - fmt.height_for_fit).max(0.0),
             );
         }
         if strict_following_plain_text_fit && is_last_placed {
@@ -17985,6 +17986,17 @@ impl TypesetEngine {
             && table_total <= available
             && !saved_host_line_after_stack_fits
         {
+            // [#3674 진단] 통짜 이월 분기 발동 기록 — 동작 불변.
+            if std::env::var("RHWP_DIAG_SPLITSCAN").is_ok() {
+                eprintln!(
+                    "DIAG_2439_DEFER pi={} cur_h={:.1} total={:.1} avail={:.1} coanchor={}",
+                    para_idx,
+                    st.current_height,
+                    table_total,
+                    available,
+                    has_preceding_coanchored_float,
+                );
+            }
             st.advance_column_or_new_page();
             placement_para_start_height = st.current_height;
         }
@@ -18183,6 +18195,19 @@ impl TypesetEngine {
             || declared_table_whole_fits
             || saved_host_line_after_stack_fits
         {
+            // [#3674 진단] fit 분기 발동 사유 — 동작 불변.
+            if std::env::var("RHWP_DIAG_SPLITSCAN").is_ok() {
+                eprintln!(
+                    "DIAG_FIT pi={} plain={} overlay={} single={} declared={} saved={} cur_h={:.1} total={:.1} avail={:.1}",
+                    para_idx,
+                    st.current_height + table_total <= available,
+                    fits_after_overlay_shapes,
+                    single_row_object_height_advance.is_some(),
+                    declared_table_whole_fits,
+                    saved_host_line_after_stack_fits,
+                    st.current_height, table_total, available,
+                );
+            }
             self.place_table_with_text(
                 st,
                 para_idx,
@@ -18556,6 +18581,19 @@ impl TypesetEngine {
         // 우선한다. `table_total`은 첫 fragment의 host/row/caption fit overhead를
         // 이미 포함하므로, 이 경계 안에 들어오는지 한 번 계산해 뒤의 두 defer
         // gate에서 같은 계약으로 사용한다.
+        // [#3674 진단] 분할 경로 도달 브래킷 — 동작 불변.
+        if std::env::var("RHWP_DIAG_SPLITSCAN").is_ok() {
+            eprintln!(
+                "DIAG_PRESPLIT pi={} remaining={:.1} unit_h={:.1} blk=({},{},{:.1}) items={}",
+                para_idx,
+                remaining_on_page,
+                split_unit_h,
+                first_block_start,
+                first_block_end,
+                first_block_h,
+                st.current_items.len(),
+            );
+        }
         let native_picture_caption_fits_actual_footnote_boundary = st.profile.native_hwp5_layout()
             && !table.common.treat_as_char
             && is_para_topbottom_float(&table.common)
@@ -19364,6 +19402,14 @@ impl TypesetEngine {
             );
             if end_row <= cursor_row {
                 end_row = cursor_row + 1;
+            }
+            // [#3674 진단] 표 행 분할 스캔 입력/결과 — 동작 불변.
+            if std::env::var("RHWP_DIAG_SPLITSCAN").is_ok() {
+                eprintln!(
+                    "DIAG_SPLITSCAN pi={} cursor={} end_row={} consumed={:.1} avail={:.1} hdr={:.1} rows={} intra={} cont={}",
+                    para_idx, cursor_row, end_row, consumed, avail_for_rows,
+                    header_overhead, row_count, can_intra_split, is_continuation,
+                );
             }
 
             // [#2097] 첫 조각 각주 예약-컷 재정합 — 한글은 각주를 앵커 줄과 함께
