@@ -28,16 +28,41 @@ Stage 4의 `square_wrap_text_overlap`은 그림의 물리 box를 본문이 가�
 반면 `fidelity_compare --text-only --export-all-svg --layout-ledger`는 PDF↔SVG 인접 페이지의
 reciprocal text difference와 16자 이상 순서 보존 문자열을 `text-owner-*-candidates.tsv`에
 기록한다. 먼저 이 기존 ledger가 p118→p119의 문단 절 이동을 실제로 후보화하는지 확인한다.
-기존 원장만으로도 확인되면 중복 detector를 만들지 않는다.
 
 ## 수용 기준과 다음 단계
 
 1. direct-pair text-only 전수 export에서 p118→p119에 `rhwp_earlier_than_reference` owner
    후보와 이동한 실제 본문 문자열이 남는지 확인한다.
-2. candidate가 없거나 짧은 문단·문자 Counter 상쇄로 놓치면, 인접 page의 Body text sequence와
-   successor-page TopAndBottom 그림을 결합한 별도 `float_owner_shift` 후보를 fidelity ledger에
-   추가한다. 그림 존재만으로 결함으로 판정하지 않고 PDF owner 차이가 함께 있을 때만 낸다.
+2. 기존 owner candidate가 있더라도, 인접 page의 Body text movement와 successor-page
+   `TopAndBottom`/`Square`/`Tight`/`Through` 그림을 결합한 `float_owner_shift` **triage 행**을
+   fidelity ledger에 추가한다. 이는 generic owner detector의 중복이 아니라, 그림 존재만으로
+   결함으로 판정하지 않고 PDF owner 차이가 함께 있을 때만 그림 원인을 함께 보이게 하는 연결이다.
 3. 후보는 PDF 시각 review를 요구하는 triage 신호이며, 자동 불합격·전역 page-break 보정의
    근거로 사용하지 않는다.
 
 이 분석 문서를 커밋한 뒤에만 fidelity 도구·test·사용 문서를 수정한다.
+
+## 기존 원장 재현 결과와 보완 근거
+
+현재 binary로 다음 direct pair를 실행했다.
+
+```text
+RHWP_BIN=target/task-3820-3821-fidelity/release-test/rhwp \
+python3 tools/fidelity_compare/fidelity_compare.py 117 118 \
+  --source 'samples/정책연구용역사업 중간진도보고서(살아있는 간장 기증자의 의학적 선별기준 연구).hwp' \
+  --reference-pdf 'pdf/pr3740/hwp/정책연구용역사업 중간진도보고서(살아있는 간장 기증자의 의학적 선별기준 연구)-2020.pdf' \
+  --label stage6-p118-owner --reference-grade '한컴 2020 기준 PDF' \
+  --text-only --export-all-svg --layout-ledger \
+  --out-dir output/task-3820-3821-fidelity/stage6-owner
+```
+
+`text-owner-shift-candidates.tsv`에는 user p118→p119의
+`rhwp_earlier_than_reference`, `shared_chars=72`, `source_coverage=1.000`,
+`target_coverage=1.000`이 실제로 기록됐다. 따라서 owner detector 자체는 이 결함을 이미
+놓치지 않는다. 같은 render tree의 p119에는 Body `Image(pi=1276, ci=0, textWrap=TopAndBottom,
+bbox=94.5,83.2,448.5,359.0)`가 있다.
+
+그러나 이 둘은 서로 다른 TSV에 있어, 215쪽 전수 결과에서 사용자가 owner 이동이 그림 앞
+문단의 분할 결함임을 다시 교차해석해야 한다. `float-owner-shift-candidates.tsv`는 이 정확한
+두 근거를 한 행으로 연결해 review 우선순위를 올린다. 페이지 상단 25% 안의 Body float만
+연결하므로, 같은 페이지에 우연히 있는 하단 그림으로 owner shift를 과장하지 않는다.
