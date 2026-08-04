@@ -2385,6 +2385,73 @@ fn native_hwp5_existing_footnote_reset_overlap_break_line(
         })
 }
 
+/// 큰 inline `TopAndBottom` 그림 바로 앞 native HWP5 본문 문단의 physical-page
+/// reset을 찾는다.
+///
+/// HWP5는 그림을 위한 다음 physical page의 본문 tail을 같은 paragraph의 LINE_SEG에
+/// 보관할 수 있다. 일반 text reset은 다단 coordinate drift 또는 저장 시점의 잔재일 수
+/// 있으므로 전역 page break 신호가 아니다. 다만 현재 쪽 하단의 visible text가 `vpos=0`
+/// 으로 reset되고, 즉시 다음 문단이 page-top 부근에서 시작하는 큰 inline
+/// TopAndBottom 그림 하나인 경우는 PDF의 본문-그림 owner 경계를 직접 표현한다.
+///
+/// 이 경로는 그림 앞 text tail만 PartialParagraph로 나누고 그림 자체는 다음 loop에서
+/// normal flow로 배치한다. 따라서 Square/비-TAC float, 표, 각주, 작은 inline object 및
+/// successor가 없는 일반 reset에는 적용하지 않는다.
+fn native_hwp5_text_reset_before_large_tac_topbottom_picture_break_line(
+    st: &TypesetState,
+    para: &Paragraph,
+    fmt: &FormattedParagraph,
+    paragraphs: &[Paragraph],
+    para_idx: usize,
+    dpi: f64,
+) -> Option<usize> {
+    if !st.profile.native_hwp5_layout()
+        || st.col_count != 1
+        || st.current_footnote_height > 0.0
+        || st.current_items.is_empty()
+        || st.current_height < st.layout.body_area.height * 0.60
+        || !para.controls.is_empty()
+        || !para_has_visible_text(para)
+        || fmt.line_heights.len() < 2
+        || para.line_segs.len() < fmt.line_heights.len()
+    {
+        return None;
+    }
+
+    let next_para = paragraphs.get(para_idx + 1)?;
+    if next_para.controls.len() != 1
+        || next_para.line_segs.len() != 1
+        || para_has_visible_text(next_para)
+        || !para_controls_only_tac_topbottom_objects(next_para)
+    {
+        return None;
+    }
+    let next_line = next_para.line_segs.first()?;
+    if is_synthetic_line_seg(next_line)
+        || !(0..=8_000).contains(&next_line.vertical_pos)
+        || hwpunit_to_px(next_line.line_height, dpi) < st.layout.body_area.height * 0.15
+    {
+        return None;
+    }
+
+    para.line_segs[..fmt.line_heights.len()]
+        .windows(2)
+        .enumerate()
+        .find_map(|(prev_idx, pair)| {
+            let (prev, next) = (&pair[0], &pair[1]);
+            if is_synthetic_line_seg(prev)
+                || is_synthetic_line_seg(next)
+                || prev.vertical_pos <= 0
+                || next.vertical_pos != 0
+            {
+                return None;
+            }
+            (hwpunit_to_px(prev.vertical_pos + prev.line_height, dpi)
+                >= st.layout.body_area.height * 0.70)
+                .then_some(prev_idx + 1)
+        })
+}
+
 /// native HWP5/HWPX의 2행 그림+caption RowBreak 표인지 판별한다.
 ///
 /// 그림을 첫 행에, caption을 둘째 행에 저장한 표는 현재 페이지의 기존 각주 위에
@@ -14181,6 +14248,11 @@ impl TypesetEngine {
                 fmt.line_heights.len(),
                 st.current_height,
                 available,
+            )
+        })
+        .or_else(|| {
+            native_hwp5_text_reset_before_large_tac_topbottom_picture_break_line(
+                st, para, fmt, paragraphs, para_idx, self.dpi,
             )
         })
         // full-fit early return보다 앞의 같은 chain에 넣어야 reset tail을 통째로

@@ -29,6 +29,8 @@ const PAGE_79: u32 = 78;
 const PAGE_80: u32 = 79;
 const PAGE_90: u32 = 89;
 const PAGE_91: u32 = 90;
+const PAGE_118: u32 = 117;
+const PAGE_119: u32 = 118;
 const PAGE_126: u32 = 125;
 const PAGE_127: u32 = 126;
 const PAGE_37: u32 = 36;
@@ -155,6 +157,19 @@ fn paragraph_line_boxes(node: &RenderNode, para_index: usize, boxes: &mut Vec<Bo
     }
     for child in &node.children {
         paragraph_line_boxes(child, para_index, boxes);
+    }
+}
+
+fn paragraph_line_indices(node: &RenderNode, para_index: usize, out: &mut Vec<u32>) {
+    if let RenderNodeType::TextLine(line) = &node.node_type {
+        if line.para_index == Some(para_index) {
+            if let Some(line_index) = line.line_index {
+                out.push(line_index);
+            }
+        }
+    }
+    for child in &node.children {
+        paragraph_line_indices(child, para_index, out);
     }
 }
 
@@ -1032,6 +1047,50 @@ fn native_hwp5_square_picture_uses_the_next_page_wrap_owner() {
             .iter()
             .all(|line| does_not_overlap_horizontally(*line, image)),
         "p156 pi=1693 본문은 그림 64와 물리적으로 교차하면 안 됨: image={image:?}, lines={overlapping_vertical_lines:?}"
+    );
+}
+
+#[test]
+fn native_hwp5_text_tail_before_figure_55_keeps_the_pdf_page_owner() {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(SAMPLE);
+    let bytes = fs::read(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+    let doc = HwpDocument::from_bytes(&bytes).expect("parse #3820 HWP evidence fixture");
+
+    let p118_tree = doc
+        .build_page_render_tree(PAGE_118)
+        .expect("render physical page 118");
+    let p119_tree = doc
+        .build_page_render_tree(PAGE_119)
+        .expect("render physical page 119");
+    let mut p118_lines = Vec::new();
+    let mut p119_lines = Vec::new();
+    paragraph_line_indices(&p118_tree.root, 1275, &mut p118_lines);
+    paragraph_line_indices(&p119_tree.root, 1275, &mut p119_lines);
+    p118_lines.sort_unstable();
+    p119_lines.sort_unstable();
+    assert_eq!(
+        p118_lines,
+        (0..9).collect::<Vec<_>>(),
+        "#3820 p118은 Figure 55 앞 pi=1275의 앞 9 stored lines에서 끝나야 함"
+    );
+    assert_eq!(
+        p119_lines,
+        vec![9, 10],
+        "#3820 p119은 Figure 55보다 먼저 pi=1275 tail 두 줄을 이어야 함"
+    );
+
+    let mut p118_images = Vec::new();
+    let mut p119_images = Vec::new();
+    images_for_control(&p118_tree.root, 1276, 0, &mut p118_images);
+    images_for_control(&p119_tree.root, 1276, 0, &mut p119_images);
+    assert!(
+        p118_images.is_empty(),
+        "#3820 그림 55는 p118에 앞당겨지면 안 됨: {p118_images:?}"
+    );
+    assert_eq!(
+        p119_images.len(),
+        1,
+        "#3820 p119은 pi=1275 tail 뒤 그림 55를 정확히 한 번 그려야 함: {p119_images:?}"
     );
 }
 

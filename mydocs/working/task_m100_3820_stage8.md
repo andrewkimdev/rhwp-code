@@ -1,6 +1,6 @@
 ---
 kind: analysis
-status: active
+status: completed
 canonical: mydocs/working/task_m100_3820_stage1.md
 last_verified: 2026-08-04
 ---
@@ -58,3 +58,21 @@ p119의 continuation이 되고 그림 55는 그 뒤 normal flow로 배치된다.
 2. p118/p119 기준 PDF direct raster와 layout owner가 일치하고 기존 p94/p106/p107/p108/p156/
    p168~170 contracts가 유지된다.
 3. focused Rust regression과 selected visual sweep을 다시 실행한다.
+
+## 구현과 검증 결과
+
+`native_hwp5_text_reset_before_large_tac_topbottom_picture_break_line`은 위 네 가지 조건을
+모두 확인한 뒤에만 reset line을 typeset의 `forced_page_break_line`으로 제공한다. 결과적으로
+p118에는 `PartialParagraph pi=1275 lines=0..9`, p119에는 `lines=9..11` 뒤
+`Shape pi=1276 ci=0`이 기록된다. 이전처럼 p118이 993.4px로 body를 넘는 대신, 보정 후
+940.1px로 source tail 안에 끝난다.
+
+새 integration regression `native_hwp5_text_tail_before_figure_55_keeps_the_pdf_page_owner`는
+render tree에서 p118의 `pi=1275` line index `0..8`, p119의 `9..10`, p119 그림 55 단일
+Image owner를 고정한다. 같은 fixture의 footnote, RowBreak, Square 그림 경계를 포함한 focused
+test target은 20 passed/0 failed다.
+
+selected sweep은 p118/p119/p127의 requested/completed/missing을 **3/3/0**으로 완료했고,
+p118과 p119 자동 flag는 모두 0건이다. direct review와 증적은
+[Stage 8 visual sweep](task_m100_3820_stage8_visual_sweep.md)에 보관한다. p127의 PDF 대비
+Square-wrap 여백 차이는 이 보정 범위에 포함되지 않으며 다음 stage의 잔여 결함으로 유지한다.
