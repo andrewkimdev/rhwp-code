@@ -5,8 +5,9 @@
 - **선행 작업**: [#3693](https://github.com/edwardkim/rhwp/issues/3693) / PR #3715,
   [#3695](https://github.com/edwardkim/rhwp/issues/3695) / PR #3749
 - **브랜치**: `codex/issue-3744-clause-context-confidence`
+- **Draft PR**: [#3933](https://github.com/edwardkim/rhwp/pull/3933)
 - **최종 기준**: `upstream/devel` `2971a1d9a`
-- **상태**: Stage 4 corpus·release 검증 완료, 승인 D 원격 작업 대기
+- **상태**: draft PR·self-merge review 기록 완료, 최신 CI·code review·merge 승인 대기
 
 ## 1. 결론
 
@@ -128,6 +129,9 @@ top-level 순증가 +144는 하위 디렉터리의 시장구조조사 +23을 제
 
 ## 7. 승인 경계와 후속 작업
 
-Stage 4 범위인 최신 동기화, corpus 영향 분류, 전체 검증, 최종 보고와 로컬 커밋까지 완료했다.
-원격 push, PR 생성, GitHub comment와 #3744/#1528 상태 변경은 수행하지 않았다. 승인 D를 받은 뒤
-브랜치를 push하고 `devel` 대상 PR을 생성해 CI·review를 거친다.
+Stage 4 범위인 최신 동기화, corpus 영향 분류, 전체 검증과 최종 보고를 완료한 뒤 승인 D를 받아
+원본 저장소 branch push와 `devel` 대상 draft PR #3933 생성을 완료했다. collaborator self-merge review는
+`mydocs/pr/archives/pr_3933_review.md`에 기록했다.
+
+GitHub review/comment, ready 전환, merge와 #3744/#1528 상태 변경은 수행하지 않았다. 최신 PR head의
+required GitHub Actions와 별도 code review를 확인한 뒤 승인 E에서 ready·merge 여부를 결정한다.

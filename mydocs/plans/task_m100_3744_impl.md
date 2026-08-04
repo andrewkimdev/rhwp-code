@@ -3,11 +3,12 @@
 - **이슈**: #3744
 - **상위 이슈**: #1528
 - **브랜치**: `codex/issue-3744-clause-context-confidence`
+- **Draft PR**: [#3933](https://github.com/edwardkim/rhwp/pull/3933)
 - **수행계획서**: `mydocs/plans/task_m100_3744.md`
 - **기준 commit**: `upstream/devel` `0889974a01db3585df8ad2c1f13203e3cb9f51f8`
 - **최종 동기화 기준**: `upstream/devel` `2971a1d9a`
-- **절차 상태**: Stage 4 corpus·release 검증 및 최종 보고 완료, 원격 작업 승인 대기
-- **다음 승인 경계**: 승인 D — push·PR·GitHub 상태 변경 승인
+- **절차 상태**: draft PR 생성·self-merge review 기록 완료, 최신 CI·code review·merge 승인 대기
+- **다음 승인 경계**: 승인 E — ready 전환·merge 승인
 
 ## 1. 변경 경계
 
@@ -147,12 +148,22 @@ red→green 결과와 focused 실측은 `mydocs/working/task_m100_3744_stage3.md
 - `CARGO_INCREMENTAL=0 cargo clippy --all-targets -- -D warnings`
 
 최종 결과는 `mydocs/report/task_m100_3744_report.md`에 기록했다. CLI 사용법·공개 schema는 바뀌지
-않아 별도 CLI 문서 수정은 하지 않았으며, 원격 작업 승인 전 로컬 커밋에서 중지한다.
+않아 별도 CLI 문서 수정은 하지 않았으며, 승인 D를 받아 원격 게시 단계로 이동했다.
 
-## 6. 금지 사항
+## 6. Stage 5 draft PR·self-merge 준비 (완료)
+
+1. 원본 저장소의 `task_m100_3744` branch로 push하고 `devel` 대상 draft PR #3933을 생성했다.
+2. `mydocs/pr/archives/pr_3933_review.md`에 역할·규모·검증·visual 판정·merge 조건을 기록했다.
+3. 기존 수행·구현계획서가 승인부터 merge 전 경계를 충분히 정의하므로 별도
+   `pr_3933_review_impl.md`는 만들지 않았다.
+4. 최신 PR head의 GitHub Actions와 별도 code review를 확인하고 승인 E에서 ready·merge 여부를
+   결정한다.
+
+## 7. 금지 사항
 
 - 파일명·section/paragraph 좌표·para shape ID를 제품 판정에 하드코딩하지 않는다.
 - sample 하나의 44건을 맞추기 위한 임의 threshold를 채택하지 않는다.
 - #3695 auto selector와 explicit outline 동작을 함께 리팩터링하지 않는다.
 - parser/render/serializer 변경과 시각 fixture 추가를 이 이슈에 섞지 않는다.
-- 승인 B 전 제품 소스를 구현하지 않고, 승인 D 전 push·PR·GitHub comment를 수행하지 않는다.
+- 승인 B 전 제품 소스를 구현하지 않고, 승인 D 전 push·PR을 수행하지 않는다.
+- 승인 E 전 GitHub review/comment, ready 전환, merge와 이슈 상태 변경을 수행하지 않는다.
