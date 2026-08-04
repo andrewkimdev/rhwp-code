@@ -80,6 +80,16 @@ pub struct BinDataEntry {
     pub is_embedded: bool,
 }
 
+/// [#3546] OOXML 차트 파트 — BinData 매니페스트 대상이 아니라
+/// `Chart/chartN.xml` 원형 경로로 방출되는 항목.
+#[derive(Debug, Clone)]
+pub struct ChartPartEntry {
+    /// ZIP 엔트리 경로 (예: "Chart/chart1.xml")
+    pub href: String,
+    /// IR 상의 bin_data_id (= 60000 + N, HWPX 파서 주입 규약)
+    pub bin_data_id: u16,
+}
+
 /// 1-pass 스캔으로 구축되는 직렬화 컨텍스트.
 #[derive(Debug, Default)]
 pub struct SerializeContext {
@@ -91,6 +101,10 @@ pub struct SerializeContext {
     pub style_ids: IdPool<u16>,
     /// `bin_data_id` (IR) → manifest 엔트리 매핑
     pub bin_data_map: HashMap<u16, BinDataEntry>,
+    /// [#3546] OOXML 차트 파트 — Chart/chartN.xml 원형 방출 목록.
+    /// 원본 content.hpf 는 Chart 파트를 나열하지 않으므로 manifest·3-way
+    /// 단언 대상 밖이다.
+    pub chart_entries: Vec<ChartPartEntry>,
     /// 문서 전역 문단 ID 카운터 — `<hp:p id="...">` 에 발급한다.
     para_id_counter: u32,
     /// subList(셀·글상자) 직렬화 중첩 깊이 (#1379 3단계).
@@ -171,6 +185,18 @@ impl SerializeContext {
         // 순번(i+1) 명명은 링크 항목으로 id 에 구멍이 있는 문서(#1891 73504)에서
         // 이름과 id 가 어긋나 재파스 그림 참조가 엉킨다.
         for bd in doc.bin_data_content.iter() {
+            // [#3546] OOXML 차트 파트(HWPX 파서가 60000+N 으로 주입)는 BinData 가
+            // 아니다 — 원본은 Chart/chartN.xml 이고 content.hpf 도 나열하지 않는다.
+            // manifest 등록 없이 원형 경로로 별도 방출한다.
+            if bd.extension == "ooxml_chart" {
+                if let Some(n) = bd.id.checked_sub(60000).filter(|n| *n >= 1) {
+                    ctx.chart_entries.push(ChartPartEntry {
+                        href: format!("Chart/chart{}.xml", n),
+                        bin_data_id: bd.id,
+                    });
+                    continue;
+                }
+            }
             // 빈 확장자는 원본과 동일하게 확장자 없이(`image{id}.`) 재직렬화한다.
             // 예전엔 `.bin` 기본값을 붙였으나(#1981), 원본이 확장자 없는 BinData
             // (`BinData/image13.` 등, OLE·미상 임베드)를 담은 경우 라운드트립 확장자

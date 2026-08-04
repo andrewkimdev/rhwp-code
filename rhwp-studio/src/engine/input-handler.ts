@@ -1677,6 +1677,10 @@ export class InputHandler {
       { type: 'separator' },
       { type: 'command', commandId: 'table:cell-props', label: '표 속성...' },
       { type: 'separator' },
+      // 표 나누기는 커서 행이 분할 기준이라 셀 내부 메뉴에만 둔다 —
+      // 객체 선택 상태에는 기준 행이 없다.
+      { type: 'command', commandId: 'table:attach', label: '표 붙이기' },
+      { type: 'separator' },
       { type: 'command', commandId: 'table:delete' },
     ];
   }
@@ -1765,6 +1769,8 @@ export class InputHandler {
       { type: 'separator' },
       { type: 'command', commandId: 'table:formula', label: '계산식(F)...' },
       { type: 'separator' },
+      { type: 'command', commandId: 'table:split', label: '표 나누기' },
+      { type: 'command', commandId: 'table:attach', label: '표 붙이기' },
       { type: 'command', commandId: 'table:delete' },
     ];
   }

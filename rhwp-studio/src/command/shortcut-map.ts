@@ -47,6 +47,11 @@ export const defaultShortcuts: [ShortcutDef, string][] = [
   [{ key: 'ㄹ', alt: true }, 'format:char-shape'],
   [{ key: 't', alt: true }, 'format:para-shape'],
   [{ key: 'ㅅ', alt: true }, 'format:para-shape'],
+  // [#3682] 개체 속성 — 커맨드(shortcutLabel 'P')는 정의돼 있었으나 단축키 매핑이
+  // 없어 어떤 경로로도 실행되지 않았다(차트/그림/도형 공통). 개체 선택 상태에서만
+  // canExecute 가 참이므로 본문 타이핑의 'p' 와 충돌하지 않는다.
+  [{ key: 'p', code: 'KeyP' }, 'format:object-properties'],
+  [{ key: 'ㅔ', code: 'KeyP' }, 'format:object-properties'],
 
   // 서식 – 스타일
   [{ key: 'f6' }, 'format:style-dialog'],

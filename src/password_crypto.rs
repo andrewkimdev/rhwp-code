@@ -785,6 +785,11 @@ struct HwpxEncryptedEntry {
 
 fn is_hwpx_protected_path(path: &str) -> bool {
     path.starts_with("BinData/")
+        // [#3546] 차트 XML 은 문서 내용(데이터 값·라벨)이다. 종전에는
+        // BinData/*.ooxml_chart 로 방출돼 위 분기로 암호화됐으나, 원형
+        // Chart/chartN.xml 방출로 바뀌며 평문으로 남지 않도록 포함한다.
+        // 복호 측은 암호화 manifest 기반이라 왕복은 대칭이다.
+        || path.starts_with("Chart/")
         || path.starts_with("Preview/")
         || path == "settings.xml"
         || path == "Contents/header.xml"

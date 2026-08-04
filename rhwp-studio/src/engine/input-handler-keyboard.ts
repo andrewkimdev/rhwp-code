@@ -335,6 +335,10 @@ const chordMapK: Record<string, string> = {
  * (새 창) 영역 영역 JS 차단 불가 영역 영역 Ctrl+M 영역 영역 변경 (PR #786 후속 정정).
  */
 const chordMapM: Record<string, string> = {
+  a: 'table:split',   // 한컴 Ctrl+N,A — Chrome 이 Ctrl+N 을 차단해 Ctrl+M 계열로 이관
+  ㅁ: 'table:split',  // 한글 IME
+  z: 'table:attach',  // 한컴 Ctrl+N,Z
+  ㅋ: 'table:attach', // 한글 IME
   n: 'insert:footnote',
   ㅜ: 'insert:footnote', // 한글 IME
   s: 'page:hide',
@@ -395,7 +399,11 @@ export function onKeyDown(this: any, e: KeyboardEvent): void {
       return;
     }
   }
-  if (this._pendingChordM) {
+  // 한글 IME 조합 중이면 e.key 가 'Process' 라 여기서 chord 를 판별할 수 없다.
+  // flag 를 소모하지 않고 아래 IME 전용 분기(e.code 기반)로 넘긴다 — 종전에는
+  // 여기서 flag 를 지워 버려 IME 분기가 도달 불가였다. (M chord 만 IME 전용
+  // 분기를 갖고 있어 예외도 M 에만 둔다 — K/V/G 는 IME 경로 자체가 없다.)
+  if (this._pendingChordM && !(e.isComposing || e.keyCode === 229)) {
     this._pendingChordM = false;
     const key = e.key.toLowerCase();
     const cmdId = chordMapM[key];
@@ -489,6 +497,7 @@ export function onKeyDown(this: any, e: KeyboardEvent): void {
       this._pendingChordM = false;
       const codeToKey: Record<string, string> = {
         KeyM: 'm', KeyN: 'n', KeyS: 's', KeyF: 'f', KeyK: 'k',
+        KeyA: 'a', KeyZ: 'z', // 표 나누기/붙이기 (Ctrl+M,A / Ctrl+M,Z)
       };
       const key = codeToKey[e.code];
       if (key && this.dispatcher) {
@@ -832,6 +841,18 @@ export function onKeyDown(this: any, e: KeyboardEvent): void {
     }
     // Shift/Ctrl/Alt/Meta 키만 누름 → 무시
     if (['Shift', 'Control', 'Alt', 'Meta'].includes(e.key)) return;
+    // [#3682] 개체 선택 상태를 요구하는 커맨드(예: 'P' 개체 속성)를 먼저 시도한다.
+    // 아래 폴스루는 선택을 해제하므로, 그 뒤 일반 단축키 경로에 도달할 때는 이미
+    // canExecute(inPictureObjectSelection) 가 거짓이 되어 영영 실행되지 않았다
+    // — 차트뿐 아니라 그림·도형 공통으로 개체 속성이 열리지 않던 원인.
+    {
+      const cmdId = matchShortcut(e, defaultShortcuts);
+      if (cmdId && this.dispatcher?.isEnabled?.(cmdId)) {
+        e.preventDefault();
+        this.dispatcher.dispatch(cmdId);
+        return;
+      }
+    }
     // 기타 키 → 개체 선택 해제 후 일반 처리로 폴스루
     this.exitPictureObjectSelectionIfNeeded();
   }

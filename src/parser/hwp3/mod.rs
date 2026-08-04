@@ -3486,7 +3486,28 @@ fn parse_hwp3_inner(
     cursor.set_position(info_block_end);
 
     // 4. 본문 텍스트 압축 해제 (`doc_info.compressed` 확인 후 `flate2` 사용)
-    let remaining_data = &data[(30 + current_pos as usize + doc_info.info_block_length as usize)..];
+    //
+    // [보안] `info_block_length` 는 u16 이지만 **문서가 정하는 값**이라, 짧은/손상된
+    // 파일에서 본문 시작 오프셋이 파일 끝을 넘길 수 있다. 종전엔 `&data[start..]` 가
+    // 그대로 슬라이싱해 `range start index N out of range` 패닉(DoS)이었다 — 신뢰 경계
+    // 밖 `.hwp` 로 `parse_hwp3` 를 부르는 라이브러리·MCP 소비자를 죽인다. 경계를 확인해
+    // 파싱 오류로 끝낸다(오버플로 방지 위해 saturating_add).
+    let body_start = 30usize
+        .saturating_add(current_pos as usize)
+        .saturating_add(doc_info.info_block_length as usize);
+    let remaining_data = match data.get(body_start..) {
+        Some(slice) => slice,
+        None => {
+            return Err(Hwp3Error::ParseError {
+                message: format!(
+                    "정보 블록 길이({})가 파일 범위를 벗어납니다 (본문 시작 {} > 파일 크기 {})",
+                    doc_info.info_block_length,
+                    body_start,
+                    data.len()
+                ),
+            });
+        }
+    };
 
     let mut decompressed_data = Vec::new();
     let body_data = if doc_info.compressed != 0 {
@@ -3640,7 +3661,11 @@ fn parse_hwp3_inner(
                     next_id
                 };
 
-                let img_data = block.data[32..].to_vec();
+                // [보안] `block.data.len()` 은 문서가 정한 length 라 24~31 일 수 있다.
+                // 위 `>= 24` 가드는 name(`[0..16]`)만 보장하므로 `[32..]` 슬라이스는
+                // 별도로 경계를 확인한다 — 종전엔 24~31 바이트 블록에서 슬라이스 시작
+                // OOB 패닉(DoS)이었다. 이미지 데이터가 없는 짧은 블록은 빈 바이트로 둔다.
+                let img_data = block.data.get(32..).unwrap_or(&[]).to_vec();
 
                 // WMF/EMF도 포함한 magic 기반 확장자 판별. 배경 이미지(#6)도 같은
                 // BinData 경로를 사용하므로 공용 helper로 유지한다.
@@ -3974,10 +3999,18 @@ fn fixup_hwp3_notes(doc: &mut crate::model::document::Document, doc_info: &Hwp3D
         }
     }
 
+    // [#3676] 구역 첫 문단의 단 정의(`cold`)는 미주와 무관하게 항상 있어야 한다. 한글은
+    // `secd` 뒤에 `cold` 가 없는 구역을 **파일 전체 거부**로 처리한다 — 미주가 없는 HWP3
+    // 변환본이 그래서 안 열렸다(`3050521 형사 제1심 소송기록`, #3676 잔여 1건).
+    // 한글 저장본과 대조하면 `CTRL_HEADER` 가 7개인데 변환본은 6개였고, 빠진 하나가
+    // 정확히 `cold` 다.
+    for section in &mut doc.sections {
+        ensure_hwp3_initial_body_column_def(&mut section.paragraphs);
+    }
+
     if state.has_endnote {
         for section in &mut doc.sections {
             section.section_def.endnote_shape = hwp3_default_endnote_shape(doc_info);
-            ensure_hwp3_initial_body_column_def(&mut section.paragraphs);
             let page_def = &section.section_def.page_def;
             let body_width_hu = page_def
                 .width
@@ -4687,8 +4720,42 @@ fn assign_pic_numbers_in_controls(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::model::control::Control;
+    use crate::model::document::{Document, Section};
+    use crate::model::paragraph::Paragraph;
     use std::fs::File;
     use std::io::Read;
+
+    /// [#3676] `cold`는 미주 fixup의 부수 효과가 아니라 구역 본문 계약이다.
+    /// 미주가 전혀 없는 HWP3에서도 한글 저장본처럼 첫 문단에 단 정의가 하나 있어야 한다.
+    #[test]
+    fn issue_3676_no_endnote_section_gets_one_initial_column_def() {
+        let mut doc = Document {
+            sections: vec![Section {
+                paragraphs: vec![Paragraph::default()],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        fixup_hwp3_notes(&mut doc, &Hwp3DocInfo::default());
+        let controls = &doc.sections[0].paragraphs[0].controls;
+        assert!(
+            matches!(controls.first(), Some(Control::ColumnDef(_))),
+            "미주가 없어도 HWP3 구역 첫 문단은 cold로 시작해야 한다"
+        );
+
+        // parser fixup이 재적용되어도 이미 존재하는 cold를 중복하지 않는다.
+        fixup_hwp3_notes(&mut doc, &Hwp3DocInfo::default());
+        assert_eq!(
+            doc.sections[0].paragraphs[0]
+                .controls
+                .iter()
+                .filter(|control| matches!(control, Control::ColumnDef(_)))
+                .count(),
+            1
+        );
+    }
 
     #[test]
     fn read_hwp3_padding_scaled_preserves_negative_values_without_overflow() {
