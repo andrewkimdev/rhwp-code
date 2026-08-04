@@ -28,18 +28,20 @@ fn valid_hwp3_still_parses() {
     );
 }
 
-/// `info_block_length` 를 0xFFFF 로 키우면 본문 시작이 파일 끝을 넘는다 → 패닉 금지.
+/// `info_block_length` 를 0xFFFF 로 키우면 본문 시작이 파일 끝을 넘는다 → 패닉 없이 오류.
 #[test]
-fn oversized_info_block_length_does_not_panic() {
+fn oversized_info_block_length_returns_error_without_panicking() {
     let mut data = sample();
     // info_block_length: doc_info off 126 = 파일 off 156 (u16 LE). encrypted(off 126)는 0 유지.
     data[156] = 0xFF;
     data[157] = 0xFF;
-    let r = std::panic::catch_unwind(|| {
-        let _ = rhwp::parser::hwp3::parse_hwp3(&data);
-    });
+    let r = std::panic::catch_unwind(|| rhwp::parser::hwp3::parse_hwp3(&data));
     assert!(
         r.is_ok(),
         "info_block_length 가 파일 범위를 넘을 때 패닉했습니다 (DoS)"
+    );
+    assert!(
+        matches!(r, Ok(Err(_))),
+        "범위를 넘는 info_block_length 는 성공이 아니라 파싱 오류여야 합니다"
     );
 }

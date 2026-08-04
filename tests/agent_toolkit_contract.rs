@@ -18,8 +18,10 @@ const SAMPLE_HWP3: &str = "samples/hwp3-sample.hwp";
 /// 다른 내용·다른 포맷의 두 번째 표본 — diff·evidence 의 "다름" 축.
 const SAMPLE_HWPX: &str = "samples/hwpx/form-01.hwpx";
 
-fn agent_bin() -> &'static str {
-    env!("CARGO_BIN_EXE_rhwp-agent")
+/// nextest archive가 런타임에 주입하는 binary 경로를 우선한다(#3289).
+fn agent_bin() -> String {
+    std::env::var("CARGO_BIN_EXE_rhwp-agent")
+        .unwrap_or_else(|_| env!("CARGO_BIN_EXE_rhwp-agent").to_string())
 }
 
 fn sample(rel: &str) -> PathBuf {

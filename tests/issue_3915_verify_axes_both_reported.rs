@@ -22,6 +22,12 @@ fn repo(rel: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join(rel)
 }
 
+/// nextest archive가 런타임에 주입하는 binary 경로를 우선한다(#3289).
+fn rhwp_bin() -> String {
+    std::env::var("CARGO_BIN_EXE_rhwp")
+        .unwrap_or_else(|_| env!("CARGO_BIN_EXE_rhwp").to_string())
+}
+
 fn export(sample: &str, out: &Path, flags: &[&str]) -> Output {
     let mut args: Vec<String> = vec![
         "export-hwpx".into(),
@@ -29,7 +35,7 @@ fn export(sample: &str, out: &Path, flags: &[&str]) -> Output {
         out.to_string_lossy().into_owned(),
     ];
     args.extend(flags.iter().map(|f| (*f).to_string()));
-    Command::new(env!("CARGO_BIN_EXE_rhwp"))
+    Command::new(rhwp_bin())
         .args(&args)
         .output()
         .expect("rhwp 실행 실패")
