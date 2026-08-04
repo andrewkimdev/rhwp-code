@@ -7289,11 +7289,50 @@ impl LayoutEngine {
         let row_has_top_and_bottom_flow = row_cells
             .iter()
             .any(|cell| self.cell_has_top_and_bottom_non_inline_flow(cell));
+        // [#3820 Stage 11] native HWP5의 1×1 TopAndBottom RowBreak float는 셀 문단
+        // 경계의 `양수 vpos -> 0`을 실제 물리 쪽 전환으로 저장하는 경우가 있다.
+        // 일반 1~2열 RowBreak 표에 적용하는 relaxed rule은 이 reset을 "공간이 남은
+        // 로컬 재시작"으로 흡수하지만, p172의 `<OPTN>` 뒤 `간 특수 검사`처럼 다음
+        // fragment의 내용을 기존 FootnoteArea 위에 과적재한다. 표 내부의 같은 문단
+        // 줄 reset과 달리 **문단 경계** reset이고, native HWP5·empty-host float가
+        // 갖는 1×1 저장 형상일 때만 relaxed rule에서 제외한다.
+        let native_hwp5_single_cell_topbottom_cross_para_reset = self
+            .profile
+            .get()
+            .native_hwp5_layout()
+            && !table.common.treat_as_char
+            && matches!(
+                table.page_break,
+                crate::model::table::TablePageBreak::RowBreak
+            )
+            && matches!(
+                table.common.text_wrap,
+                crate::model::shape::TextWrap::TopAndBottom
+            )
+            && table.row_count == 1
+            && table.col_count == 1
+            && row_cells.len() == 1
+            && row_cells[0].paragraphs.windows(2).any(|pair| {
+                match (
+                    pair[0].line_segs.iter().rev().find(|seg| {
+                        seg.tag & crate::model::paragraph::LineSeg::TAG_IMPLEMENTATION_PROPERTY == 0
+                    }),
+                    pair[1].line_segs.iter().find(|seg| {
+                        seg.tag & crate::model::paragraph::LineSeg::TAG_IMPLEMENTATION_PROPERTY == 0
+                    }),
+                ) {
+                    (Some(previous), Some(current)) => {
+                        previous.vertical_pos > 0 && current.vertical_pos <= 0
+                    }
+                    _ => false,
+                }
+            });
         let relaxed_hard_break = matches!(
             table.page_break,
             crate::model::table::TablePageBreak::RowBreak
         ) && (table.col_count <= 2 || table.row_count > 5)
-            && !row_has_top_and_bottom_flow;
+            && !row_has_top_and_bottom_flow
+            && !native_hwp5_single_cell_topbottom_cross_para_reset;
         let allow_midpage_reset_absorb =
             self.profile.get().hwpx_stored_layout() || row_has_top_and_bottom_flow;
         let rewind_internal_hard_break_orphan = Self::row_has_prior_rowspan_cover(table, row);

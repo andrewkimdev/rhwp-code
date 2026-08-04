@@ -932,6 +932,36 @@ fn is_single_rowbreak_table_with_trustworthy_declared_height(
             .is_some_and(|height| height <= declared_height * SINGLE_ROW_DECLARED_TRUST_MAX_RATIO)
 }
 
+/// 저장 host vpos를 physical paint anchor로 쓸 수 있는지 판별한다.
+///
+/// 빈 TopAndBottom RowBreak 표는 host와 다음 문단의 저장 사다리가 **표 선언 높이와
+/// outer margin만큼** 실제로 전진한 경우에만 raw vpos가 물리 위치다. 이 증거가
+/// 없으면 raw vpos는 같은 쪽의 문단 좌표일 수 있다. 렌더 경로가 이를 무시하면
+/// typeset이 선택한 일반 흐름 위치와 달라져, p172 `pi=1804`처럼 표가 수백 px 아래로
+/// 그려지고 다음 table fragment가 각주 아래로 밀린다.
+fn stored_ladder_leaves_object_room(
+    para: &Paragraph,
+    next_para: Option<&Paragraph>,
+    table: &crate::model::table::Table,
+) -> bool {
+    let need = table.common.height as i64
+        + table.outer_margin_top as i64
+        + table.outer_margin_bottom as i64;
+    let first_vpos = |paragraph: &Paragraph| {
+        paragraph
+            .line_segs
+            .iter()
+            .find(|seg| {
+                seg.tag & crate::model::paragraph::LineSeg::TAG_IMPLEMENTATION_PROPERTY == 0
+            })
+            .map(|seg| seg.vertical_pos as i64)
+    };
+    match (first_vpos(para), next_para.and_then(first_vpos)) {
+        (Some(current), Some(next)) => next - current >= need,
+        _ => false,
+    }
+}
+
 /// empty-host TopAndBottom 그림 표가 native HWP의 raw page vpos와 선언 높이로
 /// 현재 본문 안에 완전히 들어가는 경우의 paint anchor.
 fn native_empty_single_topbottom_table_saved_top(
@@ -958,6 +988,7 @@ fn native_empty_single_topbottom_table_saved_top(
             .filter(|control| matches!(control, Control::Table(_)))
             .count()
             != 1
+        || !stored_ladder_leaves_object_room(para, next_para, table)
     {
         return None;
     }

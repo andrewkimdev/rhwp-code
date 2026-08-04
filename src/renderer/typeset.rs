@@ -1098,6 +1098,83 @@ fn para_is_empty_topbottom_table_anchor(para: &Paragraph) -> bool {
             .any(|ctrl| matches!(ctrl, Control::Table(t) if is_para_topbottom_float(&t.common)))
 }
 
+/// native HWP5의 그림 표 뒤에 붙은 빈 문단 중, 저장 vpos가 표의 실제 paint span 안에
+/// 들어가는 것은 본문 줄이 아니라 그림 위치를 유지하는 guide line이다.
+///
+/// 이 fixture의 p182 `그림 67`은 빈 host 2×1 RowBreak 표 뒤에 같은 PS의 빈 line 다섯
+/// 개를 남긴다. 표는 이미 선언 높이만큼 흐름을 소비했으므로 guide line까지 다시
+/// advance하면 다음 두 본문 문단이 p183으로 밀린다. 일반 빈 줄은 의도된 간격일 수
+/// 있으므로, native HWP5·empty host·positive offset·2×1 figure table·동일 PS·표 span
+/// 내부라는 저장 계약이 모두 있을 때만 숨긴다.
+fn native_hwp5_figure_table_overlay_guide_empty(
+    para_idx: usize,
+    para: &Paragraph,
+    paragraphs: &[Paragraph],
+) -> bool {
+    if para.controls.is_empty()
+        && !para_has_visible_text(para)
+        && para.column_type == ColumnBreakType::None
+    {
+        let Some(guide_vpos) = para
+            .line_segs
+            .iter()
+            .find(|seg| !is_synthetic_line_seg(seg))
+            .map(|seg| seg.vertical_pos)
+        else {
+            return false;
+        };
+        let Some((_, host)) = (0..para_idx).rev().find_map(|idx| {
+            let candidate = paragraphs.get(idx)?;
+            (!candidate.controls.is_empty() || para_has_visible_text(candidate))
+                .then_some((idx, candidate))
+        }) else {
+            return false;
+        };
+        if host.para_shape_id != para.para_shape_id || para_has_visible_text(host) {
+            return false;
+        }
+        let Some((anchor_vpos, table)) = host
+            .line_segs
+            .iter()
+            .find(|seg| !is_synthetic_line_seg(seg))
+            .map(|seg| seg.vertical_pos)
+            .and_then(|anchor_vpos| {
+                host.controls.iter().find_map(|control| match control {
+                    Control::Table(table)
+                        if !table.common.treat_as_char
+                            && is_para_topbottom_float(&table.common)
+                            && matches!(
+                                table.page_break,
+                                crate::model::table::TablePageBreak::RowBreak
+                            )
+                            && table.row_count == 2
+                            && table.col_count == 1
+                            && table.cells.len() == 2
+                            && signed_hwpunit(table.common.vertical_offset) > 0
+                            && table.cells.first().is_some_and(|cell| {
+                                cell.paragraphs.iter().any(|cell_para| {
+                                    cell_para.controls.iter().any(|control| {
+                                        matches!(control, Control::Picture(_) | Control::Shape(_))
+                                    })
+                                })
+                            }) =>
+                    {
+                        Some((anchor_vpos, table))
+                    }
+                    _ => None,
+                })
+            })
+        else {
+            return false;
+        };
+        let table_bottom = anchor_vpos
+            .saturating_add(signed_hwpunit(table.common.vertical_offset).max(0))
+            .saturating_add(table.common.height.min(i32::MAX as u32) as i32);
+        return guide_vpos >= anchor_vpos && guide_vpos < table_bottom;
+    }
+    false
+}
+
 /// [Task #1863] 텍스트 없이 TAC 표만 담은 문단 — 시각적으로 단독 표 줄.
 /// 빈 앵커 TopAndBottom 표 뒤에 이런 문단이 오면 표-표 스택이므로 앵커의
 /// host_line_spacing 이 표 사이 시각 간격이다 (#1133 과 동일 본질).
@@ -2200,8 +2277,6 @@ fn native_hwp5_final_marker_footnote_uses_next_reset_page(
 ) -> bool {
     if !st.profile.native_hwp5_layout()
         || st.col_count != 1
-        || !st.is_first_footnote_on_page
-        || st.current_footnote_height > 0.0
         || para.controls.len() != 1
         || !matches!(para.controls.get(ctrl_idx), Some(Control::Footnote(_)))
         || !para_has_visible_text(para)
@@ -2255,9 +2330,15 @@ fn native_hwp5_final_marker_footnote_uses_next_reset_page(
         return false;
     }
 
-    // 현재 page에는 아직 각주가 없으므로 projected height는 이 첫 note 하나의
-    // separator/margin을 포함한다. 실제 footer band 회수 규칙도 함께 적용해야
-    // p26처럼 "예약 뒤에만" 생기는 collision만 판별한다.
+    // marker 뒤의 다음 문단이 stored `vpos=0`으로 새 physical page를 시작할 때,
+    // 현재 page의 마지막 note를 새 page로 소유시킬지 판정한다.
+    //
+    // 첫 각주뿐 아니라 기존 각주 뒤의 마지막 note도 같은 계약을 가질 수 있다. 예를
+    // 들어 이 fixture의 p199에는 257)이 남고 258)의 marker는 p199 tail에 있지만,
+    // p200의 첫 본문과 함께 footnote area를 시작한다. 258)을 p199에 더하면 p200의
+    // `pi=2310` reset tail 여섯 줄이 footer 아래로 그려진다. 다음 문단의 explicit
+    // page-top reset과 projected footnote collision을 둘 다 요구하므로, 일반 multi-note
+    // owner를 이동시키지는 않는다.
     let projected_footnote_height = st.projected_footnote_height(footnote_height, 1);
     let projected_reclaim = st.footer_band_reclaim_for_height(projected_footnote_height);
     let projected_available = (st.base_available_height()
@@ -5396,6 +5477,20 @@ impl TypesetEngine {
             if is_overlay_guide_empty_para {
                 // 글앞/글뒤 표 뒤의 빈 guide 줄은 떠 있는 개체의 위치 보조값이며,
                 // 다단 flow 높이를 소비하지 않는다.
+                continue;
+            }
+
+            let is_native_hwp5_figure_table_overlay_guide_empty = profile.native_hwp5_layout()
+                && native_hwp5_figure_table_overlay_guide_empty(para_idx, para, paragraphs);
+            if is_native_hwp5_figure_table_overlay_guide_empty {
+                // `그림 67` 같은 2×1 그림 표는 선언한 표 높이로 이미 flow를 예약한다.
+                // 표 paint span 내부의 빈 HWP line은 다시 높이를 소비하면 안 되지만,
+                // PI↔page 진단에서 문단 자체는 계속 추적 가능해야 하므로 0-height item으로
+                // 남긴다.
+                st.hidden_empty_paras.insert(para_idx);
+                st.current_items.push(PageItem::FullParagraph {
+                    para_index: para_idx,
+                });
                 continue;
             }
 
@@ -16400,12 +16495,12 @@ impl TypesetEngine {
         let stored_single_topbottom_top = (is_topbottom_para_float
             && topbottom_float_count == 1
             && is_stored_anchor_table
-            // [#3925] HWPX 원본은 다음 저장 사다리가 개체 높이를 실제로 비울 때만 raw anchor 를
-            // 믿는다. 비우지 않는 호스트(36324768: lh 14.7px 인데 표 253.1px)를 raw anchor
-            // 로 보내면 쪽 소비가 187px 부풀어 뒤 문단이 다음 쪽으로 밀린다(2->3쪽).
-            && (st.profile.native_hwp5_layout()
-                || (st.profile.hwpx_stored_layout()
-                    && stored_ladder_leaves_object_room(para, next_para, table))))
+            // [#3820 Stage 11/#3925] raw anchor는 원본 종류가 아니라 저장 사다리가
+            // 표 선언 높이를 실제로 비울 때만 물리 flow anchor다. 비우지 않는 native
+            // HWP5 host(pi=1797)도 raw vpos를 쓰면 논리 flow가 300px 이상 부풀어
+            // 뒤 본문이 다음 쪽으로 밀린다. HWPX의 같은 형상(36324768)과 동일한
+            // 저장 계약으로 묶어, 두 형식 모두 다음 문단 vpos 간격을 확인한다.
+            && stored_ladder_leaves_object_room(para, next_para, table))
         .then(|| {
             let current = para
                 .line_segs
@@ -18891,9 +18986,38 @@ impl TypesetEngine {
                 st.current_height = top_px;
                 placement_para_start_height = top_px;
             }
+            // [#3820 Stage 11] native HWP5의 빈-host 1×1 RowBreak 표가 자체 각주를
+            // 여러 개 갖고 실제 셀 내용이 선언 높이보다 크게 자랐을 때, 첫 fragment에
+            // 포함되지 않을 **자체 각주 전체**를 먼저 예약하면 선언 높이가 현재 물리
+            // 본문에는 들어가도 표 전체가 다음 쪽으로 defer된다. p174 표 46은 이
+            // 경우다: p174에는 표 prefix가, p175에는 continuation과 223~231 각주가
+            // 있어야 한다. 이후의 `table_fn_reserved` 재스캔은 첫 fragment에 footnote
+            // anchor가 없음을 확인한 경우에만 예약을 풀어 실제 첫 조각 경계를 정한다.
+            // 따라서 이 분기는 그 안전한 재스캔 경로에 *진입*시키는 역할만 한다.
+            let native_hwp5_own_footnote_fragment_can_start_before_reservation =
+                st.profile.native_hwp5_layout()
+                    && !table.common.treat_as_char
+                    && is_para_topbottom_float(&table.common)
+                    && matches!(
+                        table.page_break,
+                        crate::model::table::TablePageBreak::RowBreak
+                    )
+                    && !para_has_visible_text(para)
+                    && table.row_count == 1
+                    && table.col_count == 1
+                    && table.cells.len() == 1
+                    && ft.table_footnotes.len() >= 2
+                    && st.current_footnote_height <= 0.5
+                    && table_total > declared_total * SINGLE_ROW_DECLARED_TRUST_MAX_RATIO
+                    && st.current_height > 0.5
+                    && st.current_height + declared_total
+                        <= st.base_available_height()
+                            - st.current_zone_y_offset
+                            - st.current_bottom_fixed_exclusion
+                            + DECLARED_FLOAT_FIT_TOLERANCE_PX;
             if std::env::var("RHWP_DIAG_SCAN").is_ok() {
                 eprintln!(
-                    "DIAG_SCAN DECL_DEFER? pi={} cur_h={:.1} declared={:.1} avail={:.1} saved={:?} bottom_fits={} splits_here={} near_anchor_fragment={} internal_reset_resync={}",
+                    "DIAG_SCAN DECL_DEFER? pi={} cur_h={:.1} declared={:.1} avail={:.1} saved={:?} bottom_fits={} splits_here={} near_anchor_fragment={} internal_reset_resync={} own_fn_fragment={}",
                     para_idx,
                     st.current_height,
                     declared_total,
@@ -18903,6 +19027,7 @@ impl TypesetEngine {
                     saved_anchor_splits_here,
                     native_hwp5_near_anchor_rowbreak_needs_fragment_scan,
                     native_hwp5_internal_reset_rewind_needs_anchor_resync,
+                    native_hwp5_own_footnote_fragment_can_start_before_reservation,
                 );
             }
             // [#2279 5축] 선언-이월의 저장 증거는 **host 문단 단위**(saved_span)로
@@ -18918,6 +19043,7 @@ impl TypesetEngine {
                 && !saved_anchor_splits_here
                 && !native_hwp5_near_anchor_rowbreak_needs_fragment_scan
                 && !native_hwp5_internal_reset_rewind_needs_anchor_resync
+                && !native_hwp5_own_footnote_fragment_can_start_before_reservation
                 && !saved_host_line_after_stack_fits
                 && !single_row_object_declared_fits_current
                 && (saved_span.is_some() || measured_fits_current)
@@ -19360,17 +19486,44 @@ impl TypesetEngine {
                 - st.layout.pagination_tolerance_px)
                 .max(0.0)
         };
+        // [#3820 Stage 11] p174의 표 46처럼 1×1 빈-host RowBreak 표도 실제 셀은
+        // 여러 physical fragment로 나뉠 수 있다. 이 형상에 표 전체 각주를 먼저
+        // 예약하면, 첫 marker(223)가 현쪽에 있더라도 그림과 뒤 문단을 위한 본문
+        // 공간까지 빼앗아 p174→p176으로 한 쪽씩 늦어진다. 한글은 첫 fragment에는
+        // marker만 두고, 다음 fragment의 footer lane에 223–231을 둔다.
+        //
+        // 일반 단일 행 표까지 queue로 넓히면 작은 고정-height 표의 각주 ownership이
+        // 바뀐다. native HWP5·비-TAC·TopAndBottom·빈 host·RowBreak·1×1,
+        // 8개 이상 각주, 그리고 measured 높이가 declared 높이의 1.5배를 넘는
+        // 실제 대형 cell이라는 저장/측정 계약을 모두 요구한다. 최소 한 줄만
+        // 시작할 수 있는 본문 여백도 확인해, 빈 조각을 만드는 경우는 제외한다.
+        let native_hwp5_oversized_single_row_fragment_queues_footnotes =
+            !table.common.treat_as_char
+                && st.profile.native_hwp5_layout()
+                && is_para_topbottom_float(&table.common)
+                && matches!(
+                    table.page_break,
+                    crate::model::table::TablePageBreak::RowBreak
+                )
+                && !para_has_visible_text(para)
+                && row_count == 1
+                && table.cells.len() == 1
+                && ft.table_footnote_count >= 8
+                && table_total > declared_object_total * SINGLE_ROW_DECLARED_TRUST_MAX_RATIO
+                && st.current_height > 0.5
+                && no_table_note_available >= st.current_height + MIN_TOP_KEEP_PX + 0.5;
         let queue_table_footnotes = !table.common.treat_as_char
             && st.profile.native_hwp5_layout()
             && matches!(
                 table.page_break,
                 crate::model::table::TablePageBreak::RowBreak
             )
-            && row_count > 1
             && !ft.table_footnotes.is_empty()
             && table.cells.iter().all(|cell| cell.row_span == 1)
-            // 기존 page의 일반 각주는 유지한 채, 표 첫 행만은 실제로 시작할 수 있어야 한다.
-            && no_table_note_available >= st.current_height + cut_row_h[0] + 0.5;
+            && ((row_count > 1
+                // 기존 page의 일반 각주는 유지한 채, 표 첫 행만은 실제로 시작할 수 있어야 한다.
+                && no_table_note_available >= st.current_height + cut_row_h[0] + 0.5)
+                || native_hwp5_oversized_single_row_fragment_queues_footnotes);
         if queue_table_footnotes {
             if std::env::var("RHWP_TABLE_DRIFT").is_ok() {
                 eprintln!(
@@ -19399,9 +19552,19 @@ impl TypesetEngine {
                 .max(0.0);
             // row cut과 문서 저장 높이의 sub-pixel 변환 차이로, 기준 PDF에서
             // 정확히 바닥에 닿는 마지막 행을 불필요하게 다음 fragment로 보내지
-            // 않도록 이 작은 queue 경로에만 1px round-off 여유를 준다.
-            table_available = (available - st.layout.pagination_tolerance_px + 1.0)
-                .min(st.base_available_height())
+            // 않도록 이 작은 queue 경로에만 round-off 여유를 준다. 위의 대형
+            // 단일-cell 계약은 그림 66 뒤 마지막 1줄을 2.4px 차이로 p175에
+            // 남기는 실제 HWP5 저장 반올림도 함께 보정한다. 이 값은 해당
+            // footnote-queue 형상에만 적용되며 일반 표의 body 경계를 넓히지 않는다.
+            let queue_footer_roundoff_slack =
+                if native_hwp5_oversized_single_row_fragment_queues_footnotes {
+                    4.0
+                } else {
+                    1.0
+                };
+            table_available = (available - st.layout.pagination_tolerance_px
+                + queue_footer_roundoff_slack)
+                .min(st.base_available_height() + queue_footer_roundoff_slack)
                 .max(0.0);
             st.fragment_queued_table_footnotes
                 .insert((para_idx, ctrl_idx));
