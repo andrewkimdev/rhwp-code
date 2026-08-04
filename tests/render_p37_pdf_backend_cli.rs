@@ -41,8 +41,22 @@ fn explicit_svg_backend_preserves_default_pdf_bytes_and_stdout() {
     let _ = std::fs::remove_file(&output_path);
 
     assert_eq!(default_output.stdout, explicit_output.stdout);
-    assert_eq!(default_output.stderr, explicit_output.stderr);
+    // [벤더 패치: phase 타이밍] stderr의 RHWP_TIMING 줄은 실제 경과 시간을 담으므로
+    // 실행마다 달라진다 — 그 한 줄만 제외하고 나머지 stderr가 같은지 비교한다.
+    assert_eq!(
+        strip_timing_line(&default_output.stderr),
+        strip_timing_line(&explicit_output.stderr)
+    );
     assert_eq!(default_pdf, explicit_pdf);
+}
+
+fn strip_timing_line(stderr: &[u8]) -> Vec<u8> {
+    String::from_utf8_lossy(stderr)
+        .lines()
+        .filter(|line| !line.starts_with("RHWP_TIMING "))
+        .collect::<Vec<_>>()
+        .join("\n")
+        .into_bytes()
 }
 
 #[cfg(not(feature = "native-skia"))]
