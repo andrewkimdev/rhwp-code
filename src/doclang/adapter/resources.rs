@@ -54,7 +54,12 @@ pub fn bin_data_bytes(document: &Document, bin_data_id: u16) -> Option<(Vec<u8>,
         .bin_data_content
         .iter()
         .find(|c| c.id == bin_data_id && !c.data.is_empty())
-        .map(|c| (c.data.load(), c.extension.as_str()))
+        // [#2550] 상한 초과(deflate bomb 포함)는 항목 없음과 같은 `None` 으로 접는다.
+        .and_then(|c| {
+            c.data
+                .load_limited(crate::model::bin_data::MAX_BIN_DATA_BYTES)
+                .map(|bytes| (bytes, c.extension.as_str()))
+        })
 }
 
 /// Look up a font name by language index and font ID.

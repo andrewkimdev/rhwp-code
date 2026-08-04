@@ -132,7 +132,7 @@ use super::border_rendering::{
     render_edge_borders, render_transparent_borders,
 };
 use super::text_measurement::{estimate_text_width, resolved_to_text_style};
-use super::utils::find_bin_data;
+use super::utils::find_bin_data_bytes;
 use super::{CellContext, CellPathEntry, LayoutEngine};
 
 // 표 수평 정렬: model::shape 타입 사용
@@ -2448,9 +2448,7 @@ impl LayoutEngine {
         }
         // [Task #429] image fill 처리 — zone 처리와 동일 패턴
         if let Some(img_fill) = border_style.and_then(|bs| bs.image_fill.as_ref()) {
-            if let Some(img_content) =
-                crate::renderer::layout::find_bin_data(bin_data_content, img_fill.bin_data_id)
-            {
+            if let Some(img_bytes) = find_bin_data_bytes(bin_data_content, img_fill.bin_data_id) {
                 let img_id = tree.next_id();
                 let img_node = RenderNode::new(
                     img_id,
@@ -2459,7 +2457,7 @@ impl LayoutEngine {
                         brightness: img_fill.brightness,
                         contrast: img_fill.contrast,
                         effect: img_fill.effect,
-                        ..ImageNode::new(img_fill.bin_data_id, Some(img_content.data.load()))
+                        ..ImageNode::new(img_fill.bin_data_id, Some(img_bytes))
                     }),
                     BoundingBox::new(cell_x, cell_y, cell_w, cell_h),
                 );

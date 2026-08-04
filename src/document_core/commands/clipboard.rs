@@ -16,6 +16,17 @@ use crate::model::paragraph::{FieldRange, LineSeg, Paragraph};
 /// 약 2mm (1mm = 7200/25.4 ≈ 283.46 HWPUNIT). 한컴 정합은 작업지시자 시각 대조로 미세조정.
 const PASTE_CASCADE_STEP_HU: u32 = 567;
 
+/// [#2550] 압축 해제 상한 초과 항목(deflate bomb 포함)에 대한 공통 오류.
+///
+/// 범위 초과(`범위 초과`)와 같은 `RenderError` 계열이라 호출부 처리 경로가 같다.
+fn bin_data_over_limit_error(bin_data_id: u16) -> HwpError {
+    HwpError::RenderError(format!(
+        "바이너리 데이터 {} 압축 해제 상한 {}MB 초과",
+        bin_data_id,
+        crate::model::bin_data::MAX_BIN_DATA_BYTES / (1024 * 1024)
+    ))
+}
+
 fn clipboard_paragraphs_contain_field(paragraphs: &[Paragraph]) -> bool {
     paragraphs.iter().any(|para| !para.field_ranges.is_empty())
 }
@@ -1633,8 +1644,11 @@ impl DocumentCore {
             None
         };
 
-        if let Some(bdc) = image_data {
-            let bytes = bdc.data.load();
+        // [#2550] 상한 초과(deflate bomb 포함)는 이미지 누락과 같은 빈 조각으로 접는다.
+        if let Some(bytes) = image_data.and_then(|bdc| {
+            bdc.data
+                .load_limited(crate::model::bin_data::MAX_BIN_DATA_BYTES)
+        }) {
             let base64_data = base64::engine::general_purpose::STANDARD.encode(&bytes);
             let mime_type = detect_clipboard_image_mime(&bytes);
 
@@ -1691,7 +1705,9 @@ impl DocumentCore {
                 HwpError::RenderError(format!("바이너리 데이터 {} 범위 초과", bin_data_id))
             })?;
 
-        Ok(bdc.data.load())
+        bdc.data
+            .load_limited(crate::model::bin_data::MAX_BIN_DATA_BYTES)
+            .ok_or_else(|| bin_data_over_limit_error(bin_data_id))
     }
 
     /// 컨트롤의 이미지 MIME 타입을 반환한다.
@@ -1733,7 +1749,11 @@ impl DocumentCore {
                 HwpError::RenderError(format!("바이너리 데이터 {} 범위 초과", bin_data_id))
             })?;
 
-        Ok(detect_clipboard_image_mime(&bdc.data.load()).to_string())
+        let bytes = bdc
+            .data
+            .load_limited(crate::model::bin_data::MAX_BIN_DATA_BYTES)
+            .ok_or_else(|| bin_data_over_limit_error(bin_data_id))?;
+        Ok(detect_clipboard_image_mime(&bytes).to_string())
     }
 
     /// BinData ID(1-based)로 이미지 바이너리 데이터를 반환한다.
@@ -1750,7 +1770,9 @@ impl DocumentCore {
             .ok_or_else(|| {
                 HwpError::RenderError(format!("바이너리 데이터 {} 범위 초과", bin_data_id))
             })?;
-        Ok(bdc.data.load())
+        bdc.data
+            .load_limited(crate::model::bin_data::MAX_BIN_DATA_BYTES)
+            .ok_or_else(|| bin_data_over_limit_error(bin_data_id))
     }
 
     /// BinData ID(1-based)로 이미지 MIME 타입을 반환한다.
@@ -1767,7 +1789,11 @@ impl DocumentCore {
             .ok_or_else(|| {
                 HwpError::RenderError(format!("바이너리 데이터 {} 범위 초과", bin_data_id))
             })?;
-        Ok(detect_clipboard_image_mime(&bdc.data.load()).to_string())
+        let bytes = bdc
+            .data
+            .load_limited(crate::model::bin_data::MAX_BIN_DATA_BYTES)
+            .ok_or_else(|| bin_data_over_limit_error(bin_data_id))?;
+        Ok(detect_clipboard_image_mime(&bytes).to_string())
     }
 
     // === 클립보드 HTML 붙여넣기 ===

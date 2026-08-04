@@ -11,7 +11,7 @@ use super::super::{
 };
 use super::border_rendering::border_width_to_px;
 use super::text_measurement::{estimate_text_width, resolved_to_text_style};
-use super::utils::{extract_shape_transform, find_bin_data, picture_display_size_hu};
+use super::utils::{extract_shape_transform, find_bin_data_bytes, picture_display_size_hu};
 use super::LayoutEngine;
 use crate::model::bin_data::BinDataContent;
 use crate::model::control::Control;
@@ -194,7 +194,7 @@ impl LayoutEngine {
 
         // BinData에서 이미지 데이터 찾기 (bin_data_id는 1-indexed 순번)
         let bin_data_id = picture.image_attr.bin_data_id;
-        let image_data = find_bin_data(bin_data_content, bin_data_id).map(|c| c.data.load());
+        let image_data = find_bin_data_bytes(bin_data_content, bin_data_id);
         // [Task #2225] 그림 미지정(bin 참조 실패 + 외부 경로 없음): 한컴은 편집기
         // 에서만 점선 테두리+그림-없음 아이콘으로 표시하고 인쇄 등가 출력은
         // 미출력 — 의미 노드(MissingPicture)로 방출해 백엔드별 분기를 일원화.
@@ -496,7 +496,7 @@ impl LayoutEngine {
 
         // BinData에서 이미지 데이터 찾기 (bin_data_id는 1-indexed 순번)
         let bin_data_id = picture.image_attr.bin_data_id;
-        let image_data = find_bin_data(bin_data_content, bin_data_id).map(|c| c.data.load());
+        let image_data = find_bin_data_bytes(bin_data_content, bin_data_id);
         // [Task #2225] 그림 미지정 — layout_picture_full 과 동일 분기.
         if image_data.as_ref().is_none_or(|d| d.is_empty())
             && picture.image_attr.external_path.is_none()
