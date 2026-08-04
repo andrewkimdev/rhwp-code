@@ -99,6 +99,13 @@ fidelity 저하를 아직 충분히 검출하지 못한다.
 이는 p170 이후의 모든 페이지를 개별 수정할 사안이 아니다. p168~170의 표·그림·문단 owner와
 page-break 결정을 먼저 고쳐 같은 논리 흐름을 다시 정렬해야 한다.
 
+**2026-08-04 Stage 7 상태:** 최초 p168 분기(표 44 `pi=1778`의 first fragment 누락)는
+`319ed3dd4`에서 해소했다. p168은 `PartialTable` first fragment, p169은 continuation+그림 65,
+p170은 `(라) 심혈관계 검사` 본문으로 다시 정렬됐고 rhwp 전체 쪽수는 219에서 218로 줄었다.
+다만 기준 PDF의 215쪽보다 아직 3쪽 많고, 이 전수 inventory 자체는 수정 전 기준선이므로 D-03 전체를
+해결로 재분류하지 않는다. focused 3-way 증적과 다음 조사 범위는
+[Stage 7 visual sweep](../working/task_m100_3820_stage7_visual_sweep.md)에 기록했다.
+
 증적:
 
 - `output/task-3820-3821-fidelity/stage7-full-sweep/stage7-full-215/review/review_168.png` ~ `review_171.png`

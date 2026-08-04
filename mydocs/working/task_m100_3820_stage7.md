@@ -1,6 +1,6 @@
 ---
 kind: analysis
-status: active
+status: completed
 canonical: mydocs/working/task_m100_3820_stage1.md
 last_verified: 2026-08-04
 ---
@@ -89,4 +89,5 @@ inline 표·rowspan/footnote가 있는 표에 전파하지 않는다.
 4. p168~170 PDF raster/overlay와 layout ledger를 재생성해 최초 divergence가 해소됐는지 확인한다.
 5. 이 수정 뒤에야 전수 215쪽 sweep으로 D-03 연쇄 후보가 실제로 줄었는지 판정한다.
 
-이 분석 문서를 커밋한 뒤, source-anchored 회귀 테스트와 renderer 보정을 시작한다.
+이 분석은 `319ed3dd4`의 source-anchored 회귀와 renderer 보정으로 완료했다. 시각 대조와
+잔여 범위는 [Stage 7 visual sweep](task_m100_3820_stage7_visual_sweep.md)에 고정한다.
