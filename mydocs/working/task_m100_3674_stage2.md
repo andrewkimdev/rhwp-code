@@ -232,3 +232,34 @@ fresh 쪽에 통째 들어가면 이월). 유력 시나리오: 표 14 의 첫 �
   (17880~17960 추정) 판독 + 18219~18505 각 분기 입구 프로브 1회전 → 게이트 확정.
 
 프로브 3종(DIAG_SPLITSCAN·DIAG_2439_DEFER·DIAG_PRESPLIT)은 env 가드로 동작 불변.
+
+## 10보 — 게이트 최종 확정 (2026-08-04)
+
+`DIAG_FIT` 실측: pi=14 는 fit 분기 도달 시 **이미 cur_h=0.0** — TABLE_DRIFT(cur_h
+566.7)와 fit 사이에서 쪽 이월이 선행됐다. 그 구간의 이월 경로는
+`declared_empty_para_float_total` 분기 하나이며, 판정식이 확정 원인이다:
+
+```
+// typeset.rs ~18029
+declared_overflows_current = cur_h + declared_total > available + 1.0(관용)
+```
+
+| | 식 | 결과 |
+|---|---|---|
+| pi=14 | 566.7 + 175.2 = 741.9 > 741.8 | **0.1px 초과 → 분할 검토 없이 통짜 이월** |
+| pi=12 | 579.7 + 159.8 = 739.5 ≤ 741.8 | 통과 → 정상 분할 경로 |
+
+`saved_object_bottom_fits_current` 구제도 실패(저장 top 545.5+16 < cur_h 566.7).
+
+**결함 정의**: 빈 host·RowBreak·다행 float 표에서 declared(저장 최소 셀합) 기반
+선판정이 **분할 스캔을 선점**한다. 한컴은 같은 지점에서 행 분할로 잔여 ~174px 를
+채웠다(head 178.6px 실측). declared 는 한컴에서 이월 판정 기준이 아니다.
+
+### 수정 설계 후보 (승인 대상)
+
+- **후보 1(권고)**: RowBreak 다행 표는 `declared_overflows_current` 여도 이월하지 않고
+  분할 스캔에 진입 — 첫 블록이 잔여에 들어가면 분할, 아니면 기존 이월. 이 경로의
+  기존 보호 대상(빈 host 1×1 그림 표 등 #874·#2439 계열)은 row_count 조건으로 배제.
+- 후보 2: 관용치 확대 — 임시방편, 경계만 이동. 비권고.
+- 검증: red-check + 구역10 쪽 시작 서열(한컴 11쪽 정합 방향) + release-test 전체 +
+  10k 서베이 회귀 게이트.

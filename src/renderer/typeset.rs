@@ -18192,6 +18192,19 @@ impl TypesetEngine {
             || declared_table_whole_fits
             || saved_host_line_after_stack_fits
         {
+            // [#3674 진단] fit 분기 발동 사유 — 동작 불변.
+            if std::env::var("RHWP_DIAG_SPLITSCAN").is_ok() {
+                eprintln!(
+                    "DIAG_FIT pi={} plain={} overlay={} single={} declared={} saved={} cur_h={:.1} total={:.1} avail={:.1}",
+                    para_idx,
+                    st.current_height + table_total <= available,
+                    fits_after_overlay_shapes,
+                    single_row_object_height_advance.is_some(),
+                    declared_table_whole_fits,
+                    saved_host_line_after_stack_fits,
+                    st.current_height, table_total, available,
+                );
+            }
             self.place_table_with_text(
                 st,
                 para_idx,
