@@ -2,7 +2,7 @@
 kind: analysis
 status: active
 canonical: mydocs/working/task_m100_3820_stage1.md
-last_verified: 2026-08-04
+last_verified: 2026-08-05
 ---
 
 # Task #3820 Stage 11 — p166 이후 여분 페이지 anchor 추적
@@ -84,9 +84,10 @@ render-tree source `(pi, line range, control)`를 함께 사용해 **해당 범�
 
 - 대상: `samples/basic/issue2007_nested_cell_pagination_42065.hwp`
 - 기준: `pdf/basic/issue2007_nested_cell_pagination_42065-2020.pdf` (17쪽)
-- 재현 결과: 최신 rhwp SVG export는 24쪽으로, 기준보다 7쪽 과분할된다. `--text-only`
-  1–17쪽 비교는 owner 후보를 보고하지 않았지만, 이는 SVG 전체 쪽수를 세지 않는 모드라
-  중첩 표의 visual/pagination 결함을 검출하지 못한 것이다.
+- 재현 결과: 최신 rhwp SVG export는 24쪽으로, 기준보다 7쪽 과분할되고
+  `overflowCellLines=1266`을 보고한다. `--text-only` 1–17쪽 비교는 owner 후보를
+  보고하지 않았지만, 이는 SVG 전체 쪽수를 세지 않는 모드라 중첩 표의
+  visual/pagination 결함을 검출하지 못한 것이다.
 - 최초 직접 증상: p1부터 표 scale·행 높이가 기준과 다르고, p3에서 `pi=7`의 1×1
   native HWP5 `RowBreak` 외부 표(필드 `impt_reprt0`) 안 1×1 중첩 표의 continuation이
   frame 밖으로 누적된다. 현재 p3은 `PartialTable pi=2 ci=1 rows=1..2`로 렌더되며,
@@ -96,6 +97,7 @@ render-tree source `(pi, line range, control)`를 함께 사용해 **해당 범�
   [p1–17 contact sheet](../../tmp/stage11-issue2007-current-png/reference-current-p001-p017-contact.png),
   전체 SVG/PNG는 `tmp/stage11-issue2007-current-svg/`,
   `tmp/stage11-issue2007-current-png/`, `tmp/stage11-issue2007-reference-png/`에 보관한다.
-- 상태: 이 Stage 11의 p166 이후 범위 보정과 분리된 **미해결 신규 결함**으로 등록한다.
-  다음 단계에서는 `pi=7`의 outer/nested `RowBreak` continuation contract를 별도
-  focused regression으로 고정한 뒤 셀 fragment pagination을 수정한다.
+- 상태: 이 Stage 11의 p166 이후 범위 보정과 분리된 **미해결 신규 결함**으로
+  [#4039](https://github.com/edwardkim/rhwp/issues/4039)에 등록했다. 다음 단계에서는
+  `pi=7`의 outer/nested `RowBreak` continuation contract를 별도 focused regression으로
+  고정한 뒤 셀 fragment pagination을 수정한다.
