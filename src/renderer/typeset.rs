@@ -18722,16 +18722,50 @@ impl TypesetEngine {
                     (top_px - st.current_height).abs() <= 16.0
                         && bottom_px > available + DECLARED_FLOAT_FIT_TOLERANCE_PX
                 });
+            // [#3820 Stage 7] 표 44(pi=1778)는 앞선 표의 row-internal tail 뒤에서
+            // host anchor가 흐름보다 19.1px 앞선다. 저장된 object bottom 자체는
+            // 현재 body 안에 있지만, 일반 declared-height defer gate가 그 19.1px을
+            // "이미 지나간 anchor"로 보고 표 전체를 다음 page로 보낸다. 한컴은 이
+            // 경우 첫 fragment를 현 page에 둔 뒤 다음 page에서 이어 그린다.
+            //
+            // 일반 anchor tolerance를 넓히면 page-tail float를 통째로 남기는
+            // document-wide 회귀가 생길 수 있다. native HWP5, non-TAC, paragraph
+            // TopAndBottom, RowBreak, 다행 ordinary-row, table-footnote 없음, 다음
+            // source paragraph의 vpos rewind라는 여섯 저장 계약을 모두 만족하고,
+            // saved object bottom이 이미 body 안에 드는 경우에만 declared defer를
+            // 건너뛰어 아래 fragment scan에 맡긴다. 24px은 1.8개의 HWP 기본 line
+            // 높이보다 작고, 이 fixture의 19.1px flow/anchor drift를 포괄하는
+            // fragment-local 허용치다.
+            const NATIVE_HWP5_NEAR_ANCHOR_ROWBREAK_FRAGMENT_TOLERANCE_PX: f64 = 24.0;
+            let native_hwp5_near_anchor_rowbreak_needs_fragment_scan =
+                st.profile.native_hwp5_layout()
+                    && !table.common.treat_as_char
+                    && is_para_topbottom_float(&table.common)
+                    && matches!(
+                        table.page_break,
+                        crate::model::table::TablePageBreak::RowBreak
+                    )
+                    && table.row_count > 1
+                    && ft.table_footnotes.is_empty()
+                    && table.cells.iter().all(|cell| cell.row_span == 1)
+                    && next_rewinds_after_table
+                    && saved_span.is_some_and(|(top_px, bottom_px)| {
+                        top_px <= st.current_height
+                            && st.current_height - top_px
+                                <= NATIVE_HWP5_NEAR_ANCHOR_ROWBREAK_FRAGMENT_TOLERANCE_PX
+                            && bottom_px <= available + DECLARED_FLOAT_FIT_TOLERANCE_PX
+                    });
             if std::env::var("RHWP_DIAG_SCAN").is_ok() {
                 eprintln!(
-                    "DIAG_SCAN DECL_DEFER? pi={} cur_h={:.1} declared={:.1} avail={:.1} saved={:?} bottom_fits={} splits_here={}",
+                    "DIAG_SCAN DECL_DEFER? pi={} cur_h={:.1} declared={:.1} avail={:.1} saved={:?} bottom_fits={} splits_here={} near_anchor_fragment={}",
                     para_idx,
                     st.current_height,
                     declared_total,
                     available,
                     saved_span,
                     saved_object_bottom_fits_current,
-                    saved_anchor_splits_here
+                    saved_anchor_splits_here,
+                    native_hwp5_near_anchor_rowbreak_needs_fragment_scan,
                 );
             }
             // [#2279 5축] 선언-이월의 저장 증거는 **host 문단 단위**(saved_span)로
@@ -18745,6 +18779,7 @@ impl TypesetEngine {
                 && declared_overflows_current
                 && !saved_object_bottom_fits_current
                 && !saved_anchor_splits_here
+                && !native_hwp5_near_anchor_rowbreak_needs_fragment_scan
                 && !saved_host_line_after_stack_fits
                 && !single_row_object_declared_fits_current
                 && (saved_span.is_some() || measured_fits_current)
