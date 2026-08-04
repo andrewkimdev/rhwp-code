@@ -890,9 +890,6 @@ impl Table {
     /// 부풀지 않는다 (Alt 는 표 폭 유지 의미론). 제외하고 남는 행이 없으면
     /// `get_column_widths` 로 폴백한다.
     pub fn base_grid_column_widths(&self) -> Vec<HwpUnit> {
-        if self.local_resize_rows.is_empty() {
-            return self.get_column_widths();
-        }
         let outliers = self.base_grid_outlier_rows();
         let excluded = |row: u16| self.local_resize_rows.contains(&row) || outliers.contains(&row);
         let mut widths = vec![0u32; self.col_count as usize];

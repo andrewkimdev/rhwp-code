@@ -27777,6 +27777,18 @@ fn split_after_local_resize_keeps_render_grid() {
     let pre = bb(&doc, para_idx);
     let (pre_plain_c2, pre_override_c2) = (at(&pre, 11, 2), at(&pre, 12, 2));
 
+    // HWP에는 Studio의 local-resize 런타임 힌트가 저장되지 않는다. 저장 후
+    // 다시 연 상태와 같이 힌트를 비워도, 셀 폭에서 추론한 outlier 행은 base
+    // grid와 표 전체 폭 재계산에서 똑같이 제외해야 한다.
+    for control in &mut doc.document.sections[0].paragraphs[para_idx].controls {
+        if let Control::Table(table) = control {
+            table.local_resize_rows.clear();
+            table.local_resize_cols.clear();
+            table.local_resize_cell_widths.clear();
+            table.local_resize_cell_heights.clear();
+        }
+    }
+
     doc.split_table_native(0, para_idx, 0, 10).expect("나누기");
 
     let tables: Vec<usize> = doc.document.sections[0]
@@ -27807,4 +27819,38 @@ fn split_after_local_resize_keeps_render_grid() {
         pre_override_c2,
         at(&back, 2, 2)
     );
+}
+
+#[test]
+fn split_rejects_corrupted_cell_row_span_overflow_before_mutation() {
+    // `row + row_span`을 u16으로 더하면 debug에서는 panic, release에서는
+    // wrap한다. 손상 입력은 나누기 전 명시적 오류로 막고 원본 표를 남겨야 한다.
+    use crate::model::control::Control;
+    let mut doc = HwpDocument::create_empty();
+    let created = doc.create_table_native(0, 0, 0, 2, 2).expect("표 생성");
+    let para_idx = issue_1481_json_usize(&created, "paraIdx");
+
+    for control in &mut doc.document.sections[0].paragraphs[para_idx].controls {
+        if let Control::Table(table) = control {
+            table.row_count = u16::MAX;
+            let cell = table.cells.first_mut().expect("셀");
+            cell.row = u16::MAX - 2;
+            cell.row_span = 3;
+        }
+    }
+
+    assert!(
+        doc.split_table_native(0, para_idx, 0, u16::MAX - 1)
+            .is_err(),
+        "손상된 row/span은 panic 대신 오류여야 한다"
+    );
+    assert_eq!(
+        table_control_paras(&doc),
+        vec![para_idx],
+        "실패는 표를 추가하지 않는다"
+    );
+    let table = issue_1481_table(&doc, para_idx);
+    assert_eq!(table.row_count, u16::MAX, "실패는 기존 표를 바꾸지 않는다");
+    assert_eq!(table.cells[0].row, u16::MAX - 2);
+    assert_eq!(table.cells[0].row_span, 3);
 }

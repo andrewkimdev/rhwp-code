@@ -240,16 +240,23 @@ impl DocumentCore {
                     at_row, table.row_count
                 )));
             }
-            // 세로 병합 셀이 분할 행을 가로지르면 양쪽 어디에도 온전히 속할 수
-            // 없다 — 한컴도 이 경우 나누기를 막는다.
-            if table
-                .cells
-                .iter()
-                .any(|c| c.row < at_row && c.row + c.row_span > at_row)
-            {
-                return Err(HwpError::RenderError(
-                    "세로로 합쳐진 셀이 걸쳐 있어 이 위치에서 나눌 수 없습니다".to_string(),
-                ));
+            // 손상된 row/span은 이후 row 이동·그리드 재구축에서 overflow나 wrap을
+            // 만들 수 있으므로, 어떤 문서 변형보다 먼저 거절한다. 세로 병합 셀이
+            // 분할 행을 가로지르면 양쪽 어디에도 온전히 속할 수 없다 — 한컴도 이
+            // 경우 나누기를 막는다.
+            for cell in &table.cells {
+                let row_end = u32::from(cell.row) + u32::from(cell.row_span);
+                if cell.row_span == 0 || row_end > u32::from(table.row_count) {
+                    return Err(HwpError::RenderError(format!(
+                        "손상된 표 셀 행 범위: row={}, row_span={}, 총 {}행",
+                        cell.row, cell.row_span, table.row_count
+                    )));
+                }
+                if cell.row < at_row && row_end > u32::from(at_row) {
+                    return Err(HwpError::RenderError(
+                        "세로로 합쳐진 셀이 걸쳐 있어 이 위치에서 나눌 수 없습니다".to_string(),
+                    ));
+                }
             }
 
             // 뒤 표: 속성 상속을 위해 통째로 복제한 뒤 행을 갈라낸다.
