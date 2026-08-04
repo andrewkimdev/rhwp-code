@@ -2408,6 +2408,35 @@ fn is_single_noninline_picture_table(table: &crate::model::table::Table) -> bool
 /// `LINE_SEG`에 물리 페이지 좌표를 남기는 형상이다. 후자의 내부 그림은 TAC여도
 /// 표 자체가 비-TAC float이므로 허용한다. 그림이 아닌 단순 1×1 표는 별도의 선언
 /// 높이 신뢰 판정을 통과한 native HWP5에서만 raw anchor를 허용한다.
+/// 다음 저장 `vpos` 사다리가 이 개체 높이를 실제로 비우는가 [#3925].
+///
+/// 비우지 않는 호스트의 raw `vpos` 를 물리 anchor 로 해석하면 개체가 저장 사다리보다 훨씬
+/// 아래에 놓여 쪽 소비가 부풀고 뒤 문단이 다음 쪽으로 밀린다 —
+/// `36324768_결재문서본문.hwpx` pi=11 은 호스트 `lh` 가 14.7px 인데 표는 253.1px 라
+/// 쪽 소비가 187px 늘어 2→3쪽이 됐다. host 줄 높이만으로는 #3738 표적을 223쪽으로
+/// 악화시키므로, 다음 문단과의 `vpos` 간격만 저장 사다리 증거로 쓴다.
+fn stored_ladder_leaves_object_room(
+    para: &Paragraph,
+    next_para: Option<&Paragraph>,
+    table: &crate::model::table::Table,
+) -> bool {
+    let need = table.common.height as i64
+        + table.outer_margin_top as i64
+        + table.outer_margin_bottom as i64;
+    let first = |p: &Paragraph| {
+        p.line_segs
+            .iter()
+            .find(|seg| !is_synthetic_line_seg(seg))
+            .map(|seg| seg.vertical_pos as i64)
+    };
+    // 다음 문단의 저장 vpos가 개체와 바깥 여백만큼 진행했을 때만 raw anchor를
+    // 물리 page anchor로 믿는다. host 줄 높이는 이 형상에서 독립 증거가 아니다.
+    match (first(para), next_para.and_then(first)) {
+        (Some(cur), Some(next)) => next - cur >= need,
+        _ => false,
+    }
+}
+
 fn is_stored_anchor_picture_table(table: &crate::model::table::Table) -> bool {
     !table.common.treat_as_char
         && matches!(
@@ -2557,6 +2586,49 @@ fn paragraph_saved_vpos_reset_starts_new_page_after(
 
     matches!((next_first_vpos, curr_last_vpos), (Some(nv), Some(cl))
         if (if multi_col { nv < cl } else { nv <= allowed_top_vpos }) && cl > 5000)
+}
+
+/// 저장 `vpos` 되돌아감을 쪽 경계로 인정하려면 쪽이 이만큼 차 있어야 한다 [#3837].
+///
+/// 쪽 중간에서 인정하면 한 문서 안에서 가드가 연쇄 발동해 쪽수가 늘어난다
+/// (`156633519 산업활동동향`: pi 501개 이동 +3쪽). 이 조건 하나로 PI 코호트 회귀가
+/// 2건에서 0건이 됐고, 50·75·90% 가 모두 같은 결과라 가장 조인 값을 쓴다.
+const STORED_VPOS_REWIND_MIN_FILL: f64 = 0.90;
+
+/// 저장 `vpos` 가 되돌아가는 자리 — 한글이 거기서 쪽을 끊었다는 신호다 [#3837].
+///
+/// 기존 [`paragraph_saved_vpos_reset_starts_new_page_after`] 는 단일 단에서 `nv == 0`
+/// 만 인정하고, 그마저 fit 완화에만 쓰인다(#418 회피). 여기서는 되돌아감 자체를 본다.
+///
+/// 판별력 실측(r29 `PI_MISMATCH` n=1 코호트 66건): 어긋난 항목의 36% 가 되돌아감인데,
+/// 같은 문서 **다른 쪽**의 마지막 항목은 1,134개 중 2개(0.2%)뿐이다 — 180배 농축.
+fn stored_vpos_rewinds(prev_vpos: Option<i32>, para: &Paragraph) -> bool {
+    let Some(nv) = para
+        .line_segs
+        .iter()
+        .find(|s| !is_synthetic_line_seg(s))
+        .map(|s| s.vertical_pos)
+    else {
+        return false;
+    };
+    // `cl > 5000` 은 기존 vpos-reset 가드와 같은 하한 — 쪽 상단 근처에서 시작한 항목을
+    // 기준으로 삼으면 되돌아감이 아니라 정상 흐름을 끊는다.
+    prev_vpos.is_some_and(|cl| nv < cl && cl > 5000)
+}
+
+/// 값이 있는 가장 가까운 앞 문단의 마지막 저장 `vpos` — 직전 문단이 비어 line_segs 가
+/// 없을 수 있다.
+fn preceding_stored_vpos(paragraphs: &[Paragraph], para_idx: usize) -> Option<i32> {
+    paragraphs[..para_idx.min(paragraphs.len())]
+        .iter()
+        .rev()
+        .find_map(|p| {
+            p.line_segs
+                .iter()
+                .rev()
+                .find(|s| !is_synthetic_line_seg(s))
+                .map(|s| s.vertical_pos)
+        })
 }
 
 fn paragraph_forces_page_boundary_after(
@@ -13774,7 +13846,19 @@ impl TypesetEngine {
             fmt.height_for_fit,
             omit_untrusted_empty || strict_after_empty_host_float,
         );
+        // [#3837] 저장 vpos 가 되돌아가면 한글은 거기서 쪽을 끊었다.
+        let stored_vpos_rewind_break = st.col_count == 1
+            && !st.current_items.is_empty()
+            // 같은 문단이 이미 이 쪽에 놓였으면 걸지 않는다 — 되돌아감은 문단 시작 신호라
+            // 이미 시작한 뒤 걸면 문단을 쪼갠다.
+            && !st
+                .current_items
+                .iter()
+                .any(|it| page_item_para_index(it) == Some(para_idx))
+            && st.current_height >= available * STORED_VPOS_REWIND_MIN_FILL
+            && stored_vpos_rewinds(preceding_stored_vpos(paragraphs, para_idx), para);
         if forced_page_break_line.is_none()
+            && !stored_vpos_rewind_break
             && (st.current_height + page_end_fit_height <= available
                 || saved_single_line_bottom_fits
                 || saved_list_tail_body_vpos_fits)
@@ -15184,6 +15268,7 @@ impl TypesetEngine {
                             is_first_placed,
                             is_last_placed,
                             styles,
+                            preceding_stored_vpos(paragraphs_all, para_idx),
                         );
                     } else if self.try_typeset_empty_para_float_table(
                         st,
@@ -15732,7 +15817,12 @@ impl TypesetEngine {
         let stored_single_topbottom_top = (is_topbottom_para_float
             && topbottom_float_count == 1
             && is_stored_anchor_table
-            && (st.profile.native_hwp5_layout() || st.profile.hwpx_stored_layout()))
+            // [#3925] HWPX 원본은 다음 저장 사다리가 개체 높이를 실제로 비울 때만 raw anchor 를
+            // 믿는다. 비우지 않는 호스트(36324768: lh 14.7px 인데 표 253.1px)를 raw anchor
+            // 로 보내면 쪽 소비가 187px 부풀어 뒤 문단이 다음 쪽으로 밀린다(2->3쪽).
+            && (st.profile.native_hwp5_layout()
+                || (st.profile.hwpx_stored_layout()
+                    && stored_ladder_leaves_object_room(para, next_para, table))))
         .then(|| {
             let current = para
                 .line_segs
@@ -15824,6 +15914,8 @@ impl TypesetEngine {
         is_first_placed: bool,
         is_last_placed: bool,
         styles: &ResolvedStyleSet,
+        // [#3837] 값이 있는 가장 가까운 앞 문단의 마지막 저장 vpos.
+        prev_stored_vpos: Option<i32>,
     ) {
         // [Task #1152] 호스트 문단의 intra-paragraph vpos-reset 가드.
         // empty-text host paragraph 가 N controls + N line_segs 1:1 매핑이고,
@@ -15969,10 +16061,25 @@ impl TypesetEngine {
             .is_some_and(|bounds| {
                 saved_bounds_fit_at_flow_tail(bounds, st.current_height, available)
             });
-        if st.current_height + table_height > available
+        // [#3837] 저장 vpos 되돌아감은 한글이 이 표를 다음 쪽 맨 위에 뒀다는 신호다
+        // (21967401 응시원서: 직전 항목 vpos=41645 인데 이 표는 1000).
+        // 이 문단이 이 쪽에서 이미 시작했으면 걸지 않는다 — 되돌아감은 "이 문단이 새 쪽에서
+        // 시작한다"는 뜻이라 이미 시작한 뒤에 걸면 문단을 쪼갠다(156483831: 그림은 4쪽,
+        // 같은 문단의 표만 5쪽으로 밀려 4->5쪽).
+        let same_para_already_placed = st
+            .current_items
+            .iter()
+            .any(|it| page_item_para_index(it) == Some(para_idx));
+        let stored_vpos_rewind_break = st.col_count == 1
+            && !st.current_items.is_empty()
+            && !same_para_already_placed
+            && st.current_height >= available * STORED_VPOS_REWIND_MIN_FILL
+            && stored_vpos_rewinds(prev_stored_vpos, para);
+        if (st.current_height + table_height > available
             && !fits_after_overlay_shapes
             && !saved_tac_table_bottom_fits
-            && !st.current_items.is_empty()
+            && !st.current_items.is_empty())
+            || stored_vpos_rewind_break
         {
             st.advance_column_or_new_page();
         }
@@ -16409,11 +16516,12 @@ impl TypesetEngine {
         // [#2243 진단] 배치 종료 시 누적 — 동작 불변.
         if std::env::var("RHWP_DIAG_TAC").is_ok() {
             eprintln!(
-                "DIAG_TAC_END pi={} cur_h={:.1} trailing_fired={} has_post_text={}",
+                "DIAG_TAC_END pi={} cur_h={:.1} trailing_fired={} has_post_text={} delta={:.1}",
                 para_idx,
                 st.current_height,
                 is_tac && fmt.total_height > fmt.height_for_fit && !has_post_text,
                 has_post_text,
+                (fmt.total_height - fmt.height_for_fit).max(0.0),
             );
         }
         if strict_following_plain_text_fit && is_last_placed {
@@ -17985,6 +18093,17 @@ impl TypesetEngine {
             && table_total <= available
             && !saved_host_line_after_stack_fits
         {
+            // [#3674 진단] 통짜 이월 분기 발동 기록 — 동작 불변.
+            if std::env::var("RHWP_DIAG_SPLITSCAN").is_ok() {
+                eprintln!(
+                    "DIAG_2439_DEFER pi={} cur_h={:.1} total={:.1} avail={:.1} coanchor={}",
+                    para_idx,
+                    st.current_height,
+                    table_total,
+                    available,
+                    has_preceding_coanchored_float,
+                );
+            }
             st.advance_column_or_new_page();
             placement_para_start_height = st.current_height;
         }
@@ -18183,6 +18302,19 @@ impl TypesetEngine {
             || declared_table_whole_fits
             || saved_host_line_after_stack_fits
         {
+            // [#3674 진단] fit 분기 발동 사유 — 동작 불변.
+            if std::env::var("RHWP_DIAG_SPLITSCAN").is_ok() {
+                eprintln!(
+                    "DIAG_FIT pi={} plain={} overlay={} single={} declared={} saved={} cur_h={:.1} total={:.1} avail={:.1}",
+                    para_idx,
+                    st.current_height + table_total <= available,
+                    fits_after_overlay_shapes,
+                    single_row_object_height_advance.is_some(),
+                    declared_table_whole_fits,
+                    saved_host_line_after_stack_fits,
+                    st.current_height, table_total, available,
+                );
+            }
             self.place_table_with_text(
                 st,
                 para_idx,
@@ -18556,6 +18688,19 @@ impl TypesetEngine {
         // 우선한다. `table_total`은 첫 fragment의 host/row/caption fit overhead를
         // 이미 포함하므로, 이 경계 안에 들어오는지 한 번 계산해 뒤의 두 defer
         // gate에서 같은 계약으로 사용한다.
+        // [#3674 진단] 분할 경로 도달 브래킷 — 동작 불변.
+        if std::env::var("RHWP_DIAG_SPLITSCAN").is_ok() {
+            eprintln!(
+                "DIAG_PRESPLIT pi={} remaining={:.1} unit_h={:.1} blk=({},{},{:.1}) items={}",
+                para_idx,
+                remaining_on_page,
+                split_unit_h,
+                first_block_start,
+                first_block_end,
+                first_block_h,
+                st.current_items.len(),
+            );
+        }
         let native_picture_caption_fits_actual_footnote_boundary = st.profile.native_hwp5_layout()
             && !table.common.treat_as_char
             && is_para_topbottom_float(&table.common)
@@ -19364,6 +19509,14 @@ impl TypesetEngine {
             );
             if end_row <= cursor_row {
                 end_row = cursor_row + 1;
+            }
+            // [#3674 진단] 표 행 분할 스캔 입력/결과 — 동작 불변.
+            if std::env::var("RHWP_DIAG_SPLITSCAN").is_ok() {
+                eprintln!(
+                    "DIAG_SPLITSCAN pi={} cursor={} end_row={} consumed={:.1} avail={:.1} hdr={:.1} rows={} intra={} cont={}",
+                    para_idx, cursor_row, end_row, consumed, avail_for_rows,
+                    header_overhead, row_count, can_intra_split, is_continuation,
+                );
             }
 
             // [#2097] 첫 조각 각주 예약-컷 재정합 — 한글은 각주를 앵커 줄과 함께
@@ -20622,6 +20775,106 @@ mod tests {
             }],
             ..Default::default()
         }
+    }
+
+    /// [#3925] HWPX empty-host 그림 표의 raw anchor는 다음 저장 사다리가 개체 높이를
+    /// 실제로 비운 경우에만 쓸 수 있다. 작은 일반 줄의 vpos를 그대로 쓰면
+    /// 36324768처럼 표 높이를 이중 소비해 뒤 본문을 다음 쪽으로 민다.
+    #[test]
+    fn stored_host_anchor_requires_next_ladder_room() {
+        let table = Table {
+            common: CommonObjAttr {
+                height: 18_000,
+                ..Default::default()
+            },
+            outer_margin_top: 500,
+            outer_margin_bottom: 300,
+            ..Default::default()
+        };
+        let host = Paragraph {
+            line_segs: vec![LineSeg {
+                vertical_pos: 1_000,
+                line_height: 1_100,
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let short_ladder = Paragraph {
+            line_segs: vec![LineSeg {
+                vertical_pos: 2_500,
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        assert!(
+            !stored_ladder_leaves_object_room(&host, Some(&short_ladder), &table),
+            "짧은 다음-vpos 간격은 raw anchor의 저장 증거가 아니다"
+        );
+
+        let full_ladder = Paragraph {
+            line_segs: vec![LineSeg {
+                vertical_pos: 19_800,
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        assert!(
+            stored_ladder_leaves_object_room(&host, Some(&full_ladder), &table),
+            "다음 저장 vpos가 표 높이와 바깥 여백을 모두 비우면 사다리 증거다"
+        );
+
+        let covered_host = Paragraph {
+            line_segs: vec![LineSeg {
+                vertical_pos: 1_000,
+                line_height: 18_800,
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        assert!(
+            !stored_ladder_leaves_object_room(&covered_host, None, &table),
+            "host 줄 높이는 #3738 표적을 되살릴 수 있어 다음-vpos 사다리 없이 raw anchor의 증거가 아니다"
+        );
+    }
+
+    /// [#3900] 합성 LineSeg는 serializer가 만든 placeholder라 물리 페이지 경계의
+    /// 저장 증거가 아니다. 앞·뒤 양쪽 모두 실제 저장 줄만 보아야 한다.
+    #[test]
+    fn stored_vpos_rewind_ignores_synthetic_line_segments() {
+        let previous = Paragraph {
+            line_segs: vec![
+                LineSeg {
+                    vertical_pos: 41_645,
+                    ..Default::default()
+                },
+                LineSeg {
+                    vertical_pos: 0,
+                    tag: LineSeg::TAG_IMPLEMENTATION_PROPERTY,
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+        let current = Paragraph {
+            line_segs: vec![
+                LineSeg {
+                    vertical_pos: 0,
+                    tag: LineSeg::TAG_IMPLEMENTATION_PROPERTY,
+                    ..Default::default()
+                },
+                LineSeg {
+                    vertical_pos: 1_000,
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+        let paragraphs = vec![previous, current.clone()];
+
+        let previous_vpos = preceding_stored_vpos(&paragraphs, 1);
+        assert_eq!(previous_vpos, Some(41_645));
+        assert!(stored_vpos_rewinds(previous_vpos, &current));
     }
 
     #[test]
