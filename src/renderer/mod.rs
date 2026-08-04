@@ -253,6 +253,26 @@ impl TextStyle {
         }
     }
 
+    /// 브라우저 렌더러가 실제 glyph 폭을 맞출 때 사용할 advance 를 반환한다.
+    ///
+    /// `extra_char_spacing` 의 양수 값은 배분/나눔 정렬에서 다음 cluster 의 시작
+    /// 위치를 옮기는 간격이다. 이를 SVG `textLength` 또는 Canvas `scaleX`의 목표
+    /// 폭에 포함하면 영문·숫자 glyph 자체가 가로로 늘어난다. 문자 위치 계산은
+    /// 그대로 두고, glyph 맞춤 단계에서만 이 간격을 제외한다.
+    ///
+    /// 음수 값은 text measurement 의 최소 advance clamp가 개입할 수 있으므로
+    /// 원래 glyph 폭을 안전하게 역산할 수 없다. 이 경우 `None`을 반환해 브라우저
+    /// glyph 맞춤을 끄고, 명시적 장평(`ratio`)과 cluster 위치만 적용한다.
+    pub(crate) fn glyph_fit_advance(&self, layout_cluster_advance: f64) -> Option<f64> {
+        if !layout_cluster_advance.is_finite()
+            || !self.extra_char_spacing.is_finite()
+            || self.extra_char_spacing < 0.0
+        {
+            return None;
+        }
+        Some((layout_cluster_advance - self.extra_char_spacing).max(0.0))
+    }
+
     /// 시각적 bold 여부.
     ///
     /// CharShape.bold=true 외에도 HY헤드라인M 같은 heavy display face 를
@@ -282,6 +302,31 @@ impl TextStyle {
             None
         }
     }
+}
+
+/// Canvas 폰트의 실측 폭을 레이아웃 advance에 맞출 때 적용할 배율을 계산한다.
+///
+/// 문자 간격은 다음 cluster의 시작 위치를 바꾸는 값이므로 glyph 폭 맞춤과
+/// 분리한다. 음수 간격은 원래 glyph advance를 안전하게 역산할 수 없어 맞춤을
+/// 끄고, 양수 배분 간격은 `glyph_fit_advance`로 제외한다.
+pub(crate) fn canvas_cluster_fit_scale(
+    style: &TextStyle,
+    layout_cluster_advance: f64,
+    visual_width: f64,
+    pin_ascii_advance: bool,
+) -> Option<f64> {
+    let cluster_advance =
+        style.glyph_fit_advance(layout_cluster_advance)? * style.script_advance_scale();
+    if cluster_advance <= 0.0 || visual_width <= 0.0 || style.letter_spacing < 0.0 {
+        return None;
+    }
+    if pin_ascii_advance {
+        return Some((cluster_advance / visual_width).clamp(0.1, 2.0));
+    }
+    if visual_width > cluster_advance + 0.25 {
+        return Some((cluster_advance / visual_width).clamp(0.1, 1.0));
+    }
+    None
 }
 
 impl Default for TextStyle {
@@ -1575,6 +1620,63 @@ mod tests {
 
         // 비첨자는 인자를 그대로 돌려준다.
         assert_eq!(base.script_draw_metrics(20.0, 100.0), (20.0, 100.0));
+    }
+
+    #[test]
+    fn positive_distribution_spacing_is_not_part_of_glyph_fit_advance() {
+        let positive = TextStyle {
+            extra_char_spacing: 12.0,
+            ..Default::default()
+        };
+        assert_eq!(positive.glyph_fit_advance(20.0), Some(8.0));
+
+        let zero = TextStyle::default();
+        assert_eq!(zero.glyph_fit_advance(8.0), Some(8.0));
+
+        let negative = TextStyle {
+            extra_char_spacing: -3.0,
+            ..Default::default()
+        };
+        assert_eq!(negative.glyph_fit_advance(5.0), None);
+    }
+
+    #[test]
+    fn issue_2809_negative_letter_spacing_does_not_compress_canvas_glyph() {
+        let style = TextStyle {
+            letter_spacing: -7.5,
+            ..Default::default()
+        };
+        assert_eq!(canvas_cluster_fit_scale(&style, 7.5, 15.0, false), None);
+        assert_eq!(canvas_cluster_fit_scale(&style, 7.5, 15.0, true), None);
+    }
+
+    #[test]
+    fn non_negative_letter_spacing_keeps_existing_canvas_font_fit_policy() {
+        let style = TextStyle::default();
+        assert_eq!(
+            canvas_cluster_fit_scale(&style, 7.5, 15.0, false),
+            Some(0.5)
+        );
+        assert_eq!(canvas_cluster_fit_scale(&style, 7.5, 15.0, true), Some(0.5));
+        assert_eq!(canvas_cluster_fit_scale(&style, 15.0, 14.9, false), None);
+    }
+
+    #[test]
+    fn distribution_spacing_does_not_resize_ascii_canvas_glyph() {
+        let positive = TextStyle {
+            extra_char_spacing: 12.0,
+            ..Default::default()
+        };
+        assert_eq!(
+            canvas_cluster_fit_scale(&positive, 20.0, 8.0, true),
+            Some(1.0)
+        );
+
+        let negative = TextStyle {
+            extra_char_spacing: -3.0,
+            ..Default::default()
+        };
+        assert_eq!(canvas_cluster_fit_scale(&negative, 5.0, 8.0, true), None);
     }
 
     #[test]

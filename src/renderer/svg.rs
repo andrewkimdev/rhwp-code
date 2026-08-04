@@ -2860,9 +2860,11 @@ impl Renderer for SvgRenderer {
                 }
                 let char_x = x + char_positions[*char_idx] + dx;
                 let char_y = y + dy;
-                let length_attrs = svg_text_length_attrs(
+                let length_attrs = svg_cluster_text_length_attrs(
                     cluster_str,
-                    cluster_advance(*char_idx, cluster_str) * script_advance_scale,
+                    cluster_advance(*char_idx, cluster_str),
+                    style,
+                    script_advance_scale,
                     ratio,
                 );
                 let shadow_attrs = attrs_for_cluster(cluster_str, &shadow_color);
@@ -2925,15 +2927,23 @@ impl Renderer for SvgRenderer {
                     y,
                     font_size,
                     color,
-                    svg_text_length_attrs(cluster_str, adv * script_advance_scale, ratio),
+                    svg_cluster_text_length_attrs(
+                        cluster_str,
+                        adv,
+                        style,
+                        script_advance_scale,
+                        ratio,
+                    ),
                     escape_xml(cluster_str),
                 ));
                 continue;
             }
             let char_x = x + char_positions[*char_idx];
-            let length_attrs = svg_text_length_attrs(
+            let length_attrs = svg_cluster_text_length_attrs(
                 cluster_str,
-                cluster_advance(*char_idx, cluster_str) * script_advance_scale,
+                cluster_advance(*char_idx, cluster_str),
+                style,
+                script_advance_scale,
                 ratio,
             );
             let common_attrs = attrs_for_cluster(cluster_str, &color);
@@ -3290,6 +3300,32 @@ fn svg_text_length_attrs(cluster_str: &str, cluster_advance: f64, scale_x: f64) 
         " textLength=\"{:.4}\" lengthAdjust=\"spacingAndGlyphs\"",
         text_length
     )
+}
+
+fn svg_cluster_text_length_attrs(
+    cluster_str: &str,
+    layout_cluster_advance: f64,
+    style: &TextStyle,
+    script_advance_scale: f64,
+    scale_x: f64,
+) -> String {
+    let glyph_advance = if let Some(glyph_advance) = style.glyph_fit_advance(layout_cluster_advance)
+    {
+        glyph_advance
+    } else if cluster_str.chars().any(is_halfwidth_cjk_quote) {
+        // 낫표는 Canvas의 전용 0.5 scale 경로와 달리 SVG `textLength`가 반각
+        // 강제를 담당한다. 음수 배분 간격에서 일반 glyph fit을 꺼도 이 계약은
+        // 유지해야 하므로, 간격 0인 같은 style로 intrinsic advance만 재측정한다.
+        let mut unspaced_style = style.clone();
+        unspaced_style.extra_char_spacing = 0.0;
+        compute_char_positions(cluster_str, &unspaced_style)
+            .last()
+            .copied()
+            .unwrap_or(0.0)
+    } else {
+        return String::new();
+    };
+    svg_text_length_attrs(cluster_str, glyph_advance * script_advance_scale, scale_x)
 }
 
 /// XML 특수문자 이스케이프
