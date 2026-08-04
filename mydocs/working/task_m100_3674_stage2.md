@@ -215,3 +215,20 @@ fresh 쪽에 통째 들어가면 이월). 유력 시나리오: 표 14 의 첫 �
 - 로그: `scratchpad/diag_drift.log`·`diag_split.log`. 다음 세션: TABLE_DRIFT →
   TABLE_SPLIT_AVAIL 사이 분기 조건 식별(eff_h 553.3 vs 440.3, host_sp 1.3 vs 8.0,
   declared 175.2 vs 159.8 중 어느 입력이 갈랐는지) → 수정 설계.
+
+## 9보 — 게이트 포위: pi=14 는 분할 준비 코드 이전에 탈출 (2026-08-04)
+
+브래킷 프로브(`DIAG_PRESPLIT`, typeset.rs:18563 직전) 실측:
+
+- **pi=12**: 통과 — remaining=161.1, 첫 블록=(0,3, 81.1px), items=2 → 스캔 → 분할.
+- **pi=14**: **프로브 미도달** — fit 분기(18188)와 18520 사이에서 이탈. #2439 분기(0건)·
+  18579 분기(RHWP_DIAG_SCAN 0건)도 아님.
+- 탈출 구간 18219~18505 의 유력 용의자: **declared 신뢰 경로** — pi=14 는
+  declared=175.2px vs remaining=174.1px 로 **1.1px 차**. declared_table_whole_fits
+  류 조건이 관용치로 통짜 배치를 선택하면 place 내부에서 새 쪽 이월로 이어질 수 있다.
+  (참고: 한컴 head 178.6px ≈ declared 175.2 + host_sp — 한컴은 declared 근방을 잘라
+  넣었고, rhwp 는 declared 를 "통째 들어감" 판정에 썼다는 대비 구도.)
+- 다음: `declared_table_whole_fits`·`single_row_object_declared_fits_current` 정의부
+  (17880~17960 추정) 판독 + 18219~18505 각 분기 입구 프로브 1회전 → 게이트 확정.
+
+프로브 3종(DIAG_SPLITSCAN·DIAG_2439_DEFER·DIAG_PRESPLIT)은 env 가드로 동작 불변.
