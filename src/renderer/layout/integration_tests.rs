@@ -972,6 +972,136 @@ mod tests {
         );
     }
 
+    /// #3821: page-tail Square 그림의 wrap band는 첫 vpos-reset 문단에서 끊기면 안
+    /// 된다. 실물 HWP p156에서 그림 64(pi=1692, ci=1) 옆의 visible p1697 text는
+    /// 그림 왼쪽 narrow band 안에 끝나야 한다.
+    #[test]
+    fn issue_3821_page_tail_square_picture_wrap_reaches_visible_text_after_guides() {
+        let Some(core) = load_document(
+            "samples/정책연구용역사업 중간진도보고서(살아있는 간장 기증자의 의학적 선별기준 연구).hwp",
+        ) else {
+            return;
+        };
+        // `build_page_render_tree`는 0-based page index를 받는다. 기준 PDF human p156.
+        let tree = core
+            .build_page_render_tree(155)
+            .expect("#3821 fixture human p156 render failed");
+
+        fn find_image<'a>(node: &'a RenderNode, result: &mut Option<&'a RenderNode>) {
+            if let RenderNodeType::Image(image) = &node.node_type {
+                if image.para_index == Some(1692) && image.control_index == Some(1) {
+                    *result = Some(node);
+                }
+            }
+            for child in &node.children {
+                find_image(child, result);
+            }
+        }
+
+        fn collect_visible_lines<'a>(node: &'a RenderNode, out: &mut Vec<&'a RenderNode>) {
+            if node.visible {
+                if let RenderNodeType::TextLine(line) = &node.node_type {
+                    let has_visible_text = node.children.iter().any(|child| {
+                        matches!(&child.node_type, RenderNodeType::TextRun(run) if !run.display_or_text().trim().is_empty())
+                    });
+                    if line.para_index == Some(1697) && has_visible_text {
+                        out.push(node);
+                    }
+                }
+            }
+            for child in &node.children {
+                collect_visible_lines(child, out);
+            }
+        }
+
+        let mut image_node = None;
+        find_image(&tree.root, &mut image_node);
+        let image = image_node.expect("#3821: p156 pi=1692 ci=1 image not found");
+        let image_top = image.bbox.y;
+        let image_bottom = image.bbox.y + image.bbox.height;
+        let image_left = image.bbox.x;
+
+        let mut visible_lines = Vec::new();
+        collect_visible_lines(&tree.root, &mut visible_lines);
+        let lines_in_image_band: Vec<_> = visible_lines
+            .into_iter()
+            .filter(|line| {
+                line.bbox.y < image_bottom - 0.5 && line.bbox.y + line.bbox.height > image_top + 0.5
+            })
+            .collect();
+        assert!(
+            !lines_in_image_band.is_empty(),
+            "#3821: p1697 visible lines in picture vertical band not found",
+        );
+
+        let overlapping: Vec<_> = lines_in_image_band
+            .into_iter()
+            .filter(|line| line.bbox.x + line.bbox.width > image_left + 0.5)
+            .map(|line| (line.bbox.x, line.bbox.y, line.bbox.width))
+            .collect();
+        assert!(
+            overlapping.is_empty(),
+            "#3821: p1697 line band crosses deferred Square picture left edge x={image_left:.1}: {overlapping:?}",
+        );
+    }
+
+    /// #3820: stored-vpos rewind를 가진 native HWP5 RowBreak 표는 선언 높이가 아니라
+    /// 실제 paint 행 높이로 first fragment를 판단한다. 이 fixture에서 p94 표 28은 0–2행,
+    /// p95는 마지막 3행이며, p106 표 29는 0–2행 뒤 p107에서 재개해야 한다.
+    #[test]
+    fn issue_3820_rewinding_rowbreak_uses_painted_first_fragment_boundary() {
+        let Some(core) = load_document(
+            "samples/정책연구용역사업 중간진도보고서(살아있는 간장 기증자의 의학적 선별기준 연구).hwp",
+        ) else {
+            return;
+        };
+
+        fn rows_for_table(node: &RenderNode, para_index: usize, out: &mut Vec<u16>) {
+            if matches!(
+                &node.node_type,
+                RenderNodeType::Table(table) if table.para_index == Some(para_index)
+            ) {
+                for child in &node.children {
+                    if let RenderNodeType::TableCell(cell) = &child.node_type {
+                        if !out.contains(&cell.row) {
+                            out.push(cell.row);
+                        }
+                    }
+                }
+            }
+            for child in &node.children {
+                rows_for_table(child, para_index, out);
+            }
+        }
+
+        fn page_rows(
+            core: &crate::document_core::DocumentCore,
+            page: usize,
+            pi: usize,
+        ) -> Vec<u16> {
+            let tree = core
+                .build_page_render_tree(page as u32)
+                .unwrap_or_else(|err| panic!("#3820: p{} render failed: {err}", page + 1));
+            let mut rows = Vec::new();
+            rows_for_table(&tree.root, pi, &mut rows);
+            rows.sort_unstable();
+            rows
+        }
+
+        assert_eq!(page_rows(&core, 93, 1000), vec![0, 1, 2], "#3820 p94 표 28");
+        assert_eq!(page_rows(&core, 94, 1000), vec![3], "#3820 p95 표 28");
+        assert_eq!(
+            page_rows(&core, 105, 1136),
+            vec![0, 1, 2],
+            "#3820 p106 표 29"
+        );
+        assert_eq!(
+            page_rows(&core, 106, 1136),
+            vec![3, 4, 5, 6, 7],
+            "#3820 p107 표 29",
+        );
+    }
+
     /// Issue #1230: Square-wrap(어울림) 비-TAC 그림에서 `shape_attr.current_*` 가
     /// `common`(개체 틀)보다 부풀려진 경우(KICE EMF 그래프 패턴: common=198px,
     /// current=367px), 텍스트는 파일 LINE_SEG(sw) 기준 common 만큼만 좁혀지는데

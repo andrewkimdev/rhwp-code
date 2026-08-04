@@ -124,6 +124,12 @@ struct BlockTableContinuationPreparedState {
     layout_engine: crate::renderer::layout::LayoutEngine,
     rowspan_touched: Vec<bool>,
     cut_row_heights: Vec<f64>,
+    /// 행 전체가 fragment에 남는지 판정할 때의 paint footprint. RowBreak의 실제
+    /// intra-row cut 계산은 `cut_row_heights`를 계속 사용한다.
+    whole_row_fit_heights: Vec<f64>,
+    /// native HWP5 rewind 표의 첫 whole-row fragment가 footer 경계에 남겨야 하는
+    /// paint-local slack. continuation과 intra-row cut에는 적용하지 않는다.
+    first_fragment_painted_row_footer_guard: f64,
     caption_is_top: bool,
     caption_overhead: f64,
     total_rows_height: f64,
@@ -629,9 +635,9 @@ struct DeferredSquarePictureControl {
     para_index: usize,
     control_index: usize,
     /// 그림이 다음 physical page를 소유할 때 같은 page에서 narrow line band를 써야 하는
-    /// 후속 본문 문단. 그림 PageItem만 이월하면 layout은 이 source contract를 알 수 없어
-    /// 본문을 전폭으로 그리고 Square 그림과 교차시킨다.
-    wrap_target_para_index: usize,
+    /// 연속 후속 본문 문단. 그림 PageItem만 이월하면 layout은 이 source contract를 알 수 없어
+    /// 첫 문단 뒤의 본문을 전폭으로 그리고 Square 그림과 교차시킨다.
+    wrap_target_para_indices: Vec<usize>,
     wrap_anchor: crate::renderer::pagination::WrapAnchorRef,
 }
 
@@ -3425,10 +3431,10 @@ impl TypesetState {
             // typeset_wrap_around_paragraph는 next paragraph가 page break를 일으키기
             // 전에 호출된다. 따라서 이 지점에서 다음 page column에 직접 anchor를
             // 등록해야 p1356처럼 whole-narrow paragraph도 stored cs/sw를 보존한다.
-            self.current_column_wrap_anchors.insert(
-                deferred.wrap_target_para_index,
-                deferred.wrap_anchor.clone(),
-            );
+            for wrap_target_para_index in &deferred.wrap_target_para_indices {
+                self.current_column_wrap_anchors
+                    .insert(*wrap_target_para_index, deferred.wrap_anchor.clone());
+            }
             self.page_start_square_pictures.push(deferred);
         }
         // Task #321: 새 페이지에서는 body-wide top reserve 초기화
@@ -3933,6 +3939,39 @@ impl Issue2424TypesetProfile {
     fn ms(duration: std::time::Duration) -> f64 {
         duration.as_secs_f64() * 1000.0
     }
+}
+
+/// 다음 physical page를 소유한 Square 그림의 저장 wrap band에 속하는 연속 문단을 찾는다.
+///
+/// 한 문단에 full-width tail과 `vpos=0` reset band가 공존할 수 있으므로 문단의 첫
+/// LineSeg만 보지 않는다. 그림의 실제 세로 범위를 벗어나거나 cs/sw 계약이 달라지는
+/// 첫 문단에서 즉시 멈춰, 뒤 일반 본문으로 wrap anchor가 전파되지 않게 한다.
+fn square_picture_wrap_band_target_paragraphs(
+    paragraphs: &[Paragraph],
+    first_para_index: usize,
+    band_start_vpos: i32,
+    band_end_vpos: i32,
+    expected_column_start: i32,
+    expected_segment_width: i32,
+) -> Vec<usize> {
+    if band_end_vpos <= band_start_vpos {
+        return Vec::new();
+    }
+
+    let mut targets = Vec::new();
+    for (para_index, para) in paragraphs.iter().enumerate().skip(first_para_index) {
+        let belongs_to_band = para.line_segs.iter().any(|seg| {
+            band_start_vpos <= seg.vertical_pos
+                && seg.vertical_pos < band_end_vpos
+                && seg.column_start == expected_column_start
+                && (i64::from(seg.segment_width) - i64::from(expected_segment_width)).abs() <= 200
+        });
+        if !belongs_to_band {
+            break;
+        }
+        targets.push(para_index);
+    }
+    targets
 }
 
 impl TypesetEngine {
@@ -4616,7 +4655,7 @@ impl TypesetEngine {
         paragraphs: &[Paragraph],
         ctrl: &Control,
         styles: &ResolvedStyleSet,
-    ) -> Option<(usize, crate::renderer::pagination::WrapAnchorRef)> {
+    ) -> Option<(Vec<usize>, crate::renderer::pagination::WrapAnchorRef)> {
         use crate::model::shape::{HorzAlign, HorzRelTo, TextWrap, VertAlign, VertRelTo};
 
         let Control::Picture(picture) = ctrl else {
@@ -4685,6 +4724,27 @@ impl TypesetEngine {
             return None;
         }
 
+        // `vertical_offset + height`는 그림 자체가 차지하는 저장 vpos 구간의 끝이다.
+        // 같은 cs/sw인 문단만이라도 이 범위를 넘어가면 다음 일반 본문까지 wrap이
+        // 새어 나간다. 반대로 blank guide 문단은 실제 글자가 없어도 다음 visible
+        // 문단에 wrap contract를 전달하므로 포함해야 한다. #3821의 p156은
+        // p1693..p1697이 이 band에 속하고 p1698은 바로 뒤에서 제외되는 실물 사례다.
+        let image_wrap_bottom_vpos = common
+            .vertical_offset
+            .saturating_add(common.height)
+            .min(i32::MAX as u32) as i32;
+        let wrap_target_para_indices = square_picture_wrap_band_target_paragraphs(
+            paragraphs,
+            para_idx + 1,
+            reset_seg.vertical_pos,
+            image_wrap_bottom_vpos,
+            reset_seg.column_start,
+            reset_seg.segment_width,
+        );
+        if wrap_target_para_indices.is_empty() {
+            return None;
+        }
+
         // Square는 layout cursor를 전진시키지 않지만, 이 저장 contract에서는 다음
         // page top의 그림+caption을 위해 현재 page tail에 적어도 그림 frame만큼의
         // 여유가 있어야 한다. image frame만으로도 기존 각주가 있는 p155에 들어가지
@@ -4702,7 +4762,7 @@ impl TypesetEngine {
             .unwrap_or(0.0);
         let frame_height = image_frame_height + caption_height + caption_spacing;
         (st.current_height + frame_height > st.available_height() + 0.5).then_some((
-            para_idx + 1,
+            wrap_target_para_indices,
             crate::renderer::pagination::WrapAnchorRef {
                 anchor_para_index: para_idx,
                 anchor_cs: reset_seg.column_start,
@@ -6339,7 +6399,7 @@ impl TypesetEngine {
                             // 현재 쪽에 남기되 그림만 다음 physical page의 narrow wrap
                             // band에 배치한다. p155 그림 64처럼 현재 PageItem에 넣으면
                             // caption이 기존 FootnoteArea와 겹친다.
-                            if let Some((wrap_target_para_index, wrap_anchor)) = self
+                            if let Some((wrap_target_para_indices, wrap_anchor)) = self
                                 .native_hwp5_square_picture_next_page_owner(
                                     &st, para_idx, para, paragraphs, ctrl, styles,
                                 )
@@ -6348,7 +6408,7 @@ impl TypesetEngine {
                                     DeferredSquarePictureControl {
                                         para_index: para_idx,
                                         control_index: ctrl_idx,
-                                        wrap_target_para_index,
+                                        wrap_target_para_indices,
                                         wrap_anchor,
                                     },
                                 );
@@ -17212,6 +17272,7 @@ impl TypesetEngine {
         table: &crate::model::table::Table,
         styles: &ResolvedStyleSet,
         cut_row_h: &[f64],
+        whole_row_fit_h: &[f64],
         rowspan_touched: &[bool],
         start_cut: &[usize],
         v: BlockRowScanVars,
@@ -17632,11 +17693,12 @@ impl TypesetEngine {
                 break;
             }
 
-            // [Task #1022] 일반 행 r — 배치 높이는 row_cut_content_height
-            // (=cut_row_h)로, 분할 컷 산정만 advance_row_cut 으로 수행한다.
+            // [Task #1022] 일반 행 r — 부분 행은 row_cut_content_height
+            // (`cut_row_h`)로 자르되, #3820의 native HWP5 rewind 형상에서 온전한
+            // 행을 남길지 판단할 때는 renderer가 paint할 footprint를 사용한다.
             let row_start_cut: &[usize] = if r == cursor_row { &start_cut } else { &[] };
             let row_total = if row_start_cut.is_empty() {
-                cut_row_h[r]
+                whole_row_fit_h[r]
             } else {
                 // 연속분 cursor_row — 시작 컷 적용. row_cut_content_height 가
                 // 셀별 (content+pad) 행 max 를 반환(분할 행이므로 cell.height
@@ -18725,6 +18787,51 @@ impl TypesetEngine {
                 .all(|item| matches!(item, PageItem::Shape { .. }));
         let fits_after_overlay_shapes =
             current_column_has_only_overlay_shapes && table_total <= available + 12.0;
+        // [#3820] native HWP5의 page-tail ordinary RowBreak 표는 whole-fit gate가
+        // 저장 common.height(`table_total`)만 보면, renderer가 실제로 paint할 행
+        // footprint보다 작게 판정해 footer 아래까지 행을 보존한다. source의 다음
+        // 문단 vpos rewind가 physical fragment 경계를 명시하고, rowspan/cell-footnote가
+        // 없는 ordinary-row 형상에서만 measured row footprint를 권위로 삼는다.
+        // 일반 HWPX, page-top 표, rowspan 및 실제 intra-row cut은 기존 경로를 유지한다.
+        let native_hwp5_rewinding_rowbreak_uses_painted_row_footprint =
+            st.profile.native_hwp5_layout()
+                && !table.common.treat_as_char
+                && is_para_topbottom_float(&table.common)
+                && matches!(
+                    table.page_break,
+                    crate::model::table::TablePageBreak::RowBreak
+                )
+                && table.row_count > 1
+                && ft.table_footnotes.is_empty()
+                && st.current_height >= st.base_available_height() * 0.5
+                && table.cells.iter().all(|cell| cell.row_span == 1)
+                && next_rewinds_after_table;
+        let measured_row_table_height = mt.as_ref().and_then(|measured| {
+            (!measured.row_heights.is_empty()).then(|| {
+                measured.row_heights.iter().sum::<f64>()
+                    + measured.cell_spacing * measured.row_heights.len().saturating_sub(1) as f64
+            })
+        });
+        let uses_painted_row_footprint_for_whole_fit =
+            native_hwp5_rewinding_rowbreak_uses_painted_row_footprint
+                && measured_row_table_height
+                    .is_some_and(|height| height > ft.effective_height + 0.5);
+        let whole_fit_table_total = if uses_painted_row_footprint_for_whole_fit {
+            table_total.max(measured_row_table_height.unwrap_or(0.0) + host_spacing_total)
+        } else {
+            table_total
+        };
+        if std::env::var("RHWP_TABLE_DRIFT").is_ok() {
+            eprintln!(
+                "TABLE_PAINT_FOOTPRINT pi={} native={} rewind={} measured={:.1} effective={:.1} whole_fit={}",
+                para_idx,
+                st.profile.native_hwp5_layout(),
+                next_rewinds_after_table,
+                measured_row_table_height.unwrap_or(0.0),
+                ft.effective_height,
+                uses_painted_row_footprint_for_whole_fit,
+            );
+        }
         // [#2097/#2105] 한글의 실제 행높이 합은 저장 선언 높이와 일치한다(1730000
         // 새만금 COM 3자 비교: 저장 910.5px = 한글 910.6px vs rhwp 실측 954.1px).
         // 셀 내용 실측 팽창으로 측정 fit 이 실패해도 선언 높이가 현재 쪽에 들어가면
@@ -18752,7 +18859,7 @@ impl TypesetEngine {
         const MIDPAGE_ROWBREAK_DECLARED_TRUST_EXCESS_TOLERANCE_PX: f64 = 20.0;
         const MIDPAGE_ROWBREAK_NEAR_FIT_OVERSHOOT_TOLERANCE_PX: f64 = 4.0;
         const MIDPAGE_ROWBREAK_NEAR_FIT_EXCESS_TOLERANCE_PX: f64 = 48.0;
-        let midpage_overshoot = st.current_height + table_total - available;
+        let midpage_overshoot = st.current_height + whole_fit_table_total - available;
         let midpage_excess = table_total - declared_object_total;
         let declared_fit_scope_ok = match table.page_break {
             crate::model::table::TablePageBreak::None => true,
@@ -18772,7 +18879,8 @@ impl TypesetEngine {
         let measured_excess = table_total - declared_object_total;
         let declared_excess_within_drift =
             measured_excess <= (declared_object_total * 0.10).min(64.0);
-        let declared_table_whole_fits = declared_fit_scope_ok
+        let declared_table_whole_fits = !uses_painted_row_footprint_for_whole_fit
+            && declared_fit_scope_ok
             && declared_excess_within_drift
             && !ft.strict_following_plain_text_fit
             && !table.common.treat_as_char
@@ -18783,7 +18891,7 @@ impl TypesetEngine {
             // 스택 첫 표 배치 전에 걸려야 렌더 순서가 표→줄로 나온다.
             st.defer_host_line_item_para = Some(para_idx);
         }
-        if st.current_height + table_total <= available
+        if st.current_height + whole_fit_table_total <= available
             || fits_after_overlay_shapes
             || single_row_object_height_advance.is_some()
             || declared_table_whole_fits
@@ -18794,12 +18902,12 @@ impl TypesetEngine {
                 eprintln!(
                     "DIAG_FIT pi={} sec={} plain={} overlay={} single={} declared={} saved={} cur_h={:.1} total={:.1} avail={:.1}",
                     para_idx, st.section_index,
-                    st.current_height + table_total <= available,
+                    st.current_height + whole_fit_table_total <= available,
                     fits_after_overlay_shapes,
                     single_row_object_height_advance.is_some(),
                     declared_table_whole_fits,
                     saved_host_line_after_stack_fits,
-                    st.current_height, table_total, available,
+                    st.current_height, whole_fit_table_total, available,
                 );
             }
             self.place_table_with_text(
@@ -19015,6 +19123,36 @@ impl TypesetEngine {
                 }
             })
             .collect();
+        // #3820의 narrow whole-row contract: first fragment에서 행을 통째로 남길
+        // 때만 renderer의 paint footprint를 함께 본다. 부분 행의 line/cell cut은
+        // `cut_row_h`가 표현하는 실제 content offset을 그대로 써야 다음 fragment의
+        // 재개 위치가 변하지 않는다.
+        let whole_row_fit_h: Vec<f64> = if native_hwp5_rewinding_rowbreak_uses_painted_row_footprint
+        {
+            cut_row_h
+                .iter()
+                .zip(&mt.row_heights)
+                .map(|(cut, painted)| cut.max(*painted))
+                .collect()
+        } else {
+            cut_row_h.clone()
+        };
+        // p106은 paint footprint 기준 row 0–3이 body bottom보다 3.9px 앞에서
+        // 끝나지만, 한컴은 다음 row를 continuation으로 소유한다. 이 4px은 native
+        // HWP5 stored-rewind first fragment의 footer-local slack이며 전역 safety
+        // margin이 아니다. partial row와 continuation에는 적용하지 않는다.
+        const NATIVE_REWIND_FIRST_FRAGMENT_PAINT_FOOTER_GUARD_PX: f64 = 4.0;
+        let first_fragment_painted_row_footer_guard =
+            if native_hwp5_rewinding_rowbreak_uses_painted_row_footprint
+                && whole_row_fit_h
+                    .iter()
+                    .zip(&cut_row_h)
+                    .any(|(painted, cut)| painted > &(cut + 0.5))
+            {
+                NATIVE_REWIND_FIRST_FRAGMENT_PAINT_FOOTER_GUARD_PX
+            } else {
+                0.0
+            };
 
         // [Task #1046 Stage 1] 분할 표 cut 행높이 vs 렌더러 MeasuredTable 행높이 비교.
         if std::env::var("RHWP_TABLE_DRIFT").is_ok() {
@@ -19380,7 +19518,7 @@ impl TypesetEngine {
         // 즉 같은 앵커 문단의 float 스택 멤버만 통째-이월 그룹으로 다뤄진다.
         // 단 상단 시작 표(18151945 별표7)와 텍스트 선행 표는 기존 분할 유지.
         let total_rows_h: f64 =
-            cut_row_h.iter().sum::<f64>() + cs * row_count.saturating_sub(1) as f64;
+            whole_row_fit_h.iter().sum::<f64>() + cs * row_count.saturating_sub(1) as f64;
         // [Task #1853] 이월 그룹은 같은 문단의 **진짜 flow 스택 float**(자리차지·문단
         // 앵커·글자처럼 아님)로 한정한다. 선행 항목의 소스 컨트롤을 조회해
         // is_para_topbottom(!tac && TopAndBottom && vert=Para) 인 표만 선행 float 로
@@ -19467,6 +19605,8 @@ impl TypesetEngine {
             layout_engine,
             rowspan_touched,
             cut_row_heights: cut_row_h,
+            whole_row_fit_heights: whole_row_fit_h,
+            first_fragment_painted_row_footer_guard,
             caption_is_top,
             caption_overhead,
             total_rows_height: total_rows_h,
@@ -19711,6 +19851,9 @@ impl TypesetEngine {
             let layout_engine = &prepared.layout_engine;
             let rowspan_touched = &prepared.rowspan_touched;
             let cut_row_h = &prepared.cut_row_heights;
+            let whole_row_fit_h = &prepared.whole_row_fit_heights;
+            let first_fragment_painted_row_footer_guard =
+                prepared.first_fragment_painted_row_footer_guard;
             let caption_is_top = prepared.caption_is_top;
             let caption_overhead = prepared.caption_overhead;
             let total_rows_h = prepared.total_rows_height;
@@ -19869,6 +20012,11 @@ impl TypesetEngine {
                     - fragment_outer_bottom_overhead)
                     .max(0.0)
             };
+            let page_avail = if !is_continuation && start_cut.is_empty() {
+                (page_avail - first_fragment_painted_row_footer_guard).max(0.0)
+            } else {
+                page_avail
+            };
 
             // [Task #1022] 머리행 반복 overhead — 렌더러(layout_partial_table)는
             // start_row 이전의 반복 제목행을 다시 그리므로(다중 머리행: rs>=2 헤더 셀 등),
@@ -19979,6 +20127,7 @@ impl TypesetEngine {
                 table,
                 styles,
                 cut_row_h,
+                whole_row_fit_h,
                 rowspan_touched,
                 &start_cut,
                 BlockRowScanVars {
@@ -20086,6 +20235,7 @@ impl TypesetEngine {
                             table,
                             styles,
                             cut_row_h,
+                            whole_row_fit_h,
                             rowspan_touched,
                             &start_cut,
                             BlockRowScanVars {
@@ -21958,6 +22108,8 @@ mod tests {
             layout_engine: crate::renderer::layout::LayoutEngine::new(DEFAULT_DPI),
             rowspan_touched: vec![false; 3],
             cut_row_heights: vec![10.0; 3],
+            whole_row_fit_heights: vec![10.0; 3],
+            first_fragment_painted_row_footer_guard: 0.0,
             caption_is_top: false,
             caption_overhead: 0.0,
             total_rows_height: 30.0,
@@ -23251,6 +23403,55 @@ mod tests {
             "[#1995] 전면 non-TAC 이미지 3장은 각각 한 페이지에 단독 배치되어야 함(>= 3 페이지). \
              실제 {} 페이지 — 미수정 시 한 앵커에 스택",
             typeset_result.pages.len(),
+        );
+    }
+
+    /// #3821: page-tail Square 그림은 첫 reset 문단뿐 아니라 그림 높이 안의 연속
+    /// guide/visible 문단까지 같은 narrow band를 유지해야 한다. 범위 밖 첫 문단은
+    /// 즉시 끊어 다음 일반 본문으로 anchor가 새지 않아야 한다.
+    #[test]
+    fn issue_3821_square_picture_wrap_band_is_bounded_and_contiguous() {
+        let seg = |vertical_pos, column_start, segment_width| LineSeg {
+            vertical_pos,
+            column_start,
+            segment_width,
+            ..Default::default()
+        };
+        let paragraphs = vec![
+            // p1693 형상: 앞쪽 full-width tail 뒤에 vpos reset narrow line가 공존.
+            Paragraph {
+                line_segs: vec![seg(-2000, 0, 45352), seg(0, 0, 25139), seg(2000, 0, 25139)],
+                ..Default::default()
+            },
+            // p1694..1696 형상: 빈 guide 문단도 이후 visible text까지 contract를 잇는다.
+            Paragraph {
+                line_segs: vec![seg(4000, 0, 25139)],
+                ..Default::default()
+            },
+            Paragraph {
+                line_segs: vec![seg(4600, 0, 25139)],
+                ..Default::default()
+            },
+            Paragraph {
+                line_segs: vec![seg(5200, 0, 25139)],
+                ..Default::default()
+            },
+            // p1697 visible text의 마지막 줄 시작점.
+            Paragraph {
+                line_segs: vec![seg(21800, 0, 25139)],
+                ..Default::default()
+            },
+            // p1698: 그림 실제 bottom(23231 HU) 밖 — 반드시 제외.
+            Paragraph {
+                line_segs: vec![seg(23800, 0, 25139)],
+                ..Default::default()
+            },
+        ];
+
+        assert_eq!(
+            square_picture_wrap_band_target_paragraphs(&paragraphs, 0, 0, 23231, 0, 25139),
+            vec![0, 1, 2, 3, 4],
+            "actual image band must include p1693..p1697 and stop before p1698",
         );
     }
 }
