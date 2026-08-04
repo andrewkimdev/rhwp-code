@@ -17726,11 +17726,12 @@ impl TypesetEngine {
                 None => (f64::NAN, 0, 0.0),
             };
             eprintln!(
-                "TABLE_DRIFT: pi={} sec={} eff_h={:.1} host_sp={:.1} table_total={:.1} mt_sum={:.1} mt_rows={} cs={:.1} cur_h={:.1} tac={} rows={} avail={:.1} base={:.1} fn={:.1} zone={:.1} declared={:.1} pb={:?}",
+                "TABLE_DRIFT: pi={} sec={} eff_h={:.1} host_sp={:.1} table_total={:.1} mt_sum={:.1} mt_rows={} cs={:.1} cur_h={:.1} tac={} rows={} avail={:.1} base={:.1} fn={:.1} zone={:.1} declared={:.1} pb={:?} mt_row_heights={:?}",
                 para_idx, st.section_index, ft.effective_height, host_spacing_total, table_total,
                 mt_sum, mt_rows, mt_cs, st.current_height, table.common.treat_as_char, table.row_count,
                 available, st.base_available_height(), total_footnote, st.current_zone_y_offset,
                 declared_object_total, table.page_break,
+                mt.map(|m| m.row_heights.clone()).unwrap_or_default(),
             );
         }
         // [Task #1027 Stage E1] treat_as_char 인라인 표 advance 정합.
@@ -17964,6 +17965,12 @@ impl TypesetEngine {
                     st.current_height = sync_h;
                 } else if !st.current_items.is_empty() {
                     // 배타 영역 침범 → 발신명의 블록을 통째로 다음 쪽에 단독 배치(분할 부적절).
+                    if std::env::var("RHWP_DIAG_SPLITSCAN").is_ok() {
+                        eprintln!(
+                            "DIAG_ADVA pi={} sec={} cur_h={:.1}",
+                            para_idx, st.section_index, st.current_height
+                        );
+                    }
                     st.advance_column_or_new_page();
                 }
                 let flow_before = st.current_height;
@@ -18104,6 +18111,12 @@ impl TypesetEngine {
                     has_preceding_coanchored_float,
                 );
             }
+            if std::env::var("RHWP_DIAG_SPLITSCAN").is_ok() {
+                eprintln!(
+                    "DIAG_ADVB pi={} sec={} cur_h={:.1}",
+                    para_idx, st.section_index, st.current_height
+                );
+            }
             st.advance_column_or_new_page();
             placement_para_start_height = st.current_height;
         }
@@ -18207,6 +18220,12 @@ impl TypesetEngine {
                 && (saved_span.is_some() || measured_fits_current)
                 && declared_total <= available
             {
+                if std::env::var("RHWP_DIAG_SPLITSCAN").is_ok() {
+                    eprintln!(
+                        "DIAG_ADVC pi={} sec={} cur_h={:.1}",
+                        para_idx, st.section_index, st.current_height
+                    );
+                }
                 st.advance_column_or_new_page();
                 reserve_declared_table_total = true;
             }
@@ -18305,8 +18324,8 @@ impl TypesetEngine {
             // [#3674 진단] fit 분기 발동 사유 — 동작 불변.
             if std::env::var("RHWP_DIAG_SPLITSCAN").is_ok() {
                 eprintln!(
-                    "DIAG_FIT pi={} plain={} overlay={} single={} declared={} saved={} cur_h={:.1} total={:.1} avail={:.1}",
-                    para_idx,
+                    "DIAG_FIT pi={} sec={} plain={} overlay={} single={} declared={} saved={} cur_h={:.1} total={:.1} avail={:.1}",
+                    para_idx, st.section_index,
                     st.current_height + table_total <= available,
                     fits_after_overlay_shapes,
                     single_row_object_height_advance.is_some(),
@@ -18691,8 +18710,8 @@ impl TypesetEngine {
         // [#3674 진단] 분할 경로 도달 브래킷 — 동작 불변.
         if std::env::var("RHWP_DIAG_SPLITSCAN").is_ok() {
             eprintln!(
-                "DIAG_PRESPLIT pi={} remaining={:.1} unit_h={:.1} blk=({},{},{:.1}) items={}",
-                para_idx,
+                "DIAG_PRESPLIT pi={} sec={} remaining={:.1} unit_h={:.1} blk=({},{},{:.1}) items={}",
+                para_idx, st.section_index,
                 remaining_on_page,
                 split_unit_h,
                 first_block_start,
@@ -19513,8 +19532,8 @@ impl TypesetEngine {
             // [#3674 진단] 표 행 분할 스캔 입력/결과 — 동작 불변.
             if std::env::var("RHWP_DIAG_SPLITSCAN").is_ok() {
                 eprintln!(
-                    "DIAG_SPLITSCAN pi={} cursor={} end_row={} consumed={:.1} avail={:.1} hdr={:.1} rows={} intra={} cont={}",
-                    para_idx, cursor_row, end_row, consumed, avail_for_rows,
+                    "DIAG_SPLITSCAN pi={} sec={} cursor={} end_row={} consumed={:.1} avail={:.1} hdr={:.1} rows={} intra={} cont={}",
+                    para_idx, st.section_index, cursor_row, end_row, consumed, avail_for_rows,
                     header_overhead, row_count, can_intra_split, is_continuation,
                 );
             }
