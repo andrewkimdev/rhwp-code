@@ -2,19 +2,20 @@
 
 - 이슈: [#3822](https://github.com/edwardkim/rhwp/issues/3822)
 - 브랜치: stack/issue-3822-overlong-token-wrap
-- 최신 기준: upstream/devel ec1b21096
+- 최신 기준: upstream/devel aeb5805cb
 - code candidate: 7d6c5d625
 - 작성일: 2026-08-04
 
 ## 최신 기준 focused 결과
 
-- cargo test renderer::composer::tests --lib: 52 / 52 통과
-- #3822 전용 Latin·숫자·잔여 폭·hanging indent: 4 / 4 통과
+- cargo test renderer::composer::tests --lib: 53 / 53 통과
+- #3822 전용 Latin·한글·숫자·잔여 폭·hanging indent: 5 / 5 통과
 - git diff --check: 통과
 
-최종 검증 뒤 devel이 ec1b21096로 전진했다. composer 파일과 직접 겹치지 않았지만
-typeset 쪽 경계 수정이 실제 문서의 page count에 영향을 줄 수 있어 composer 52 / 52와
-#3822 전용 4건을 다시 실행해 모두 통과했다.
+최종 검증 뒤 devel이 aeb5805cb로 전진했다. composer 파일과 직접 겹치지 않았지만
+typeset 쪽 경계 수정이 실제 문서의 page count에 영향을 줄 수 있어 composer 53 / 53과
+#3822 전용 5건을 다시 실행해 모두 통과했다. 리뷰에서 지적된 한글 무공백 어절도 별도
+회귀로 고정해 Latin·숫자와 같은 prior-break 반복 분할 계약을 확인했다.
 
 ## 기존 실제 문서 증적
 

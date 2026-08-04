@@ -904,6 +904,15 @@ fn issue_3822_reflow_overlong_latin_token_after_prior_break() {
 }
 
 #[test]
+fn issue_3822_reflow_overlong_korean_word_after_prior_break() {
+    assert_eq!(
+        reflow_after_prior_break_line_starts("A 가나다라마바사", 0.0),
+        vec![0, 2, 4, 6, 8],
+        "이전 공백 뒤 긴 한글 어절도 새 줄 폭을 넘을 때 계속 글자 단위로 분할해야 함"
+    );
+}
+
+#[test]
 fn issue_3822_reflow_overlong_digit_token_after_prior_break() {
     assert_eq!(
         reflow_after_prior_break_line_starts("A 123456789012", 0.0),
