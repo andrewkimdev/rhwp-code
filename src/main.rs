@@ -319,6 +319,9 @@ fn main() {
         Some("hwp5-anchor-trace") => {
             exit_with(rhwp::diagnostics::hwp5_anchor_trace::run(&args[2..]))
         }
+        Some("hwp5-char-shape-audit") => {
+            exit_with(rhwp::diagnostics::hwp5_char_shape_audit::run(&args[2..]))
+        }
         Some("hwp5-cell-header-probe") => {
             exit_with(rhwp::diagnostics::hwp5_cell_header_probe::run(&args[2..]))
         }
@@ -2306,6 +2309,7 @@ fn capabilities_command_entries() -> Vec<serde_json::Value> {
             "첫 문단 컨트롤 프로브",
         ),
         cmd("hwp5-anchor-trace", "diagnostic", "앵커 추적"),
+        cmd("hwp5-char-shape-audit", "diagnostic", "CHAR_SHAPE provenance audit"),
         cmd("hwp5-cell-header-probe", "diagnostic", "셀 헤더 프로브"),
         // ── 내부 개발용 ──
         cmd("test-shape", "internal", "도형 왕복 테스트"),
@@ -2917,6 +2921,9 @@ fn print_help() {
     println!();
     println!("  hwp5-anchor-trace <파일.hwp> --needle <텍스트> [--section N] [--window N] [--out <path>]");
     println!("      특정 텍스트를 포함한 PARA_TEXT 주변의 raw HWP5 record를 추적");
+    println!();
+    println!("  hwp5-char-shape-audit <hancom-oracle.hwp> <generated.hwp> --out <보고서.md> [--source-hwpx <원본.hwpx>]");
+    println!("      CHAR_SHAPE sentinel 차이와 PARA_CHAR_SHAPE 사용 위치를 분석");
     println!();
     println!("  hwp5-cell-header-probe <oracle.hwp> <generated.hwp> --out-dir <폴더>");
     println!("      표 셀 LIST_HEADER/PARA_HEADER 계약 축별 판정용 HWP probe 생성");
