@@ -1,6 +1,6 @@
 ---
 kind: pr_review
-status: local-validation-passed
+status: code-ci-success-review-only-fast-pass-pending
 canonical: mydocs/manual/pr_review_workflow.md
 last_verified: 2026-08-05
 ---
@@ -14,8 +14,8 @@ last_verified: 2026-08-05
 사용자 review의 F1–F4를 보정 commit `1f12a5fe0`에 반영했고, F5는 기존 결함
 #4040으로 분리했으며, F6으로 이 review 문서와 오늘 기록을 추가한다.
 
-보정 head와 최신 devel을 포함한 current-base head 둘 다 full CI·Canvas·3개 언어 CodeQL이
-통과했고, current-base aggregate에서 5,232건의 default-feature test가 누락·중복 없이
+보정 head, current-base head, 그리고 최종 code head `5eeab15fd` 셋 모두 full CI·Canvas·3개 언어
+CodeQL이 통과했다. 최종 head aggregate에서 5,252건의 default-feature test가 누락·중복 없이
 실행됐다. 이 문서 commit의 review-only fast-pass 통과와 작업지시자 승인을 최종 merge
 조건으로 남긴다.
 
@@ -32,7 +32,8 @@ loaded documents: pr_review_workflow.md, pr_review/README.md,
 reviewed user head: 61a616769c48a6124934a9ce4294e4ee143e1849
 functional correction: 1f12a5fe0dbd8a39c7e585c56b4829affab65aef
 current-base candidate: b0be8673149bbd00ebb67f6d5e62b70025cfa612
-current devel: d3fb9de7c0c0648e3d8126c25467e2c78a054337
+final code head: 5eeab15fd291b2b4b27d3b8a77498fcc0ca5723b
+current devel: 955910136a33ff7d3438b661c27a1c114acf78bc
 ```
 
 ## 메타데이터
@@ -41,18 +42,20 @@ current devel: d3fb9de7c0c0648e3d8126c25467e2c78a054337
 | --- | --- |
 | PR | [#4032](https://github.com/edwardkim/rhwp/pull/4032) |
 | 작성자 | `postmelee` (collaborator self-merge) |
-| 대상 / head | `devel` / `issue-3790-stage4-rust-native` |
+| 대상 / head | `devel` / `postmelee:issue-3790-stage4-rust-native` (cross-repository) |
 | 문서 작성 전 원격 상태 | draft, `MERGEABLE`, `CLEAN` |
 | review | [pullrequestreview-4855664704](https://github.com/edwardkim/rhwp/pull/4032#pullrequestreview-4855664704), `COMMENTED` |
 | review 대상 head | `61a616769c48a6124934a9ce4294e4ee143e1849` |
 | 기능 보정 | `1f12a5fe0dbd8a39c7e585c56b4829affab65aef` |
-| 최신 devel merge | `b0be8673149bbd00ebb67f6d5e62b70025cfa612` |
-| 문서 작성 전 PR 고유 규모 | 11 files, +512 / -102 |
+| 첫 devel merge | `b0be8673149bbd00ebb67f6d5e62b70025cfa612` |
+| 최종 code head | `5eeab15fd291b2b4b27d3b8a77498fcc0ca5723b` |
+| 문서 작성 전 PR 고유 규모 | 13 files, +707 / -104 |
 | 관련 issue | [#3790](https://github.com/edwardkim/rhwp/issues/3790), [#4040](https://github.com/edwardkim/rhwp/issues/4040) |
 | metadata | label·milestone·assignee·review request 없음 |
 
-draft, mergeability, head SHA와 CI는 작성 시점 참고값이다. review request는 보내지 않았고,
-사용자 지시대로 ready 전환과 merge도 수행하지 않는다.
+draft, mergeability, head SHA와 CI는 작성 시점 참고값이다. review request는 보내지 않는다.
+작업지시자 지시에 따라 이 문서 commit push와 함께 draft를 ready로 전환하고, merge는 이후
+작업지시자의 별도 지시로 수행한다.
 
 ## 변경 범위와 안전 계약
 
@@ -106,8 +109,8 @@ workflow↔classifier 소유 목록 계약, classifier fixture 완료 조건을 
 
 ### F6. collaborator self-merge review 기록
 
-이 문서와 `mydocs/orders/20260805.md`, #3790 수행·구현·Stage 4 기록 갱신을 current-base
-green head `b0be86731`의 단순 trailing review-only commit으로 올린다. 기능 보정은 단일 commit
+이 문서와 `mydocs/orders/20260805.md`, #3790 수행·구현·Stage 4 기록 갱신을 green code head
+`5eeab15fd`의 단순 trailing review-only commit으로 올린다. 기능 보정은 단일 commit
 `1f12a5fe0`으로 분리되어 별도 `pr_4032_review_impl.md`는 만들지 않는다.
 
 ## 검증
@@ -129,16 +132,51 @@ green head `b0be86731`의 단순 trailing review-only commit으로 올린다. �
 | head | CI | Render Diff | CodeQL | 결과 |
 | --- | --- | --- | --- | --- |
 | `1f12a5fe0` 기능 보정 | [30923071182](https://github.com/edwardkim/rhwp/actions/runs/30923071182) | [30923070493](https://github.com/edwardkim/rhwp/actions/runs/30923070493) | [30923070506](https://github.com/edwardkim/rhwp/actions/runs/30923070506) | full lane 전체 통과 |
-| `b0be86731` current-base | [30924641673](https://github.com/edwardkim/rhwp/actions/runs/30924641673) | [30924638772](https://github.com/edwardkim/rhwp/actions/runs/30924638772) | [30924638749](https://github.com/edwardkim/rhwp/actions/runs/30924638749) | full lane 전체 통과 |
+| `b0be86731` 첫 devel merge | [30924641673](https://github.com/edwardkim/rhwp/actions/runs/30924641673) | [30924638772](https://github.com/edwardkim/rhwp/actions/runs/30924638772) | [30924638749](https://github.com/edwardkim/rhwp/actions/runs/30924638749) | full lane 전체 통과 |
+| `5eeab15fd` 최종 code head | [31004297167](https://github.com/edwardkim/rhwp/actions/runs/31004297167) | [31004296886](https://github.com/edwardkim/rhwp/actions/runs/31004296886) | [31004296907](https://github.com/edwardkim/rhwp/actions/runs/31004296907) | full lane 전체 통과 |
 
-current-base aggregate는 `fail-closed:classifier-contract`, `rust=true`, `native=true`, `frontend=package`를
-기록했다. shard별 `3698 + 693 + 840 + 1 = 5232`건이 archive expected `5232`건과 일치했다.
+첫 devel merge head `b0be86731`의 aggregate는 `fail-closed:classifier-contract`, `rust=true`,
+`native=true`, `frontend=package`를 기록했다. shard별 `3698 + 693 + 840 + 1 = 5232`건이
+archive expected `5232`건과 일치했다.
+
+### 최종 code head `5eeab15fd`
+
+이 문서 commit이 올라가는 base다. 세 workflow가 모두 `success`이고, 실패·취소된 job이 없다.
+
+| 항목 | 값 |
+| --- | --- |
+| CI run 소요 | 830s (12:07:51Z → 12:21:41Z) |
+| CodeQL run 소요 | 639s, `javascript-typescript` 121s / `python` 86s / `rust` 621s 모두 통과 |
+| Render Diff run 소요 | 367s, Canvas visual diff 343s 통과 |
+| preflight | `fast_pass=false`, `reason=no-trailing-review-only-commits`, `candidate_sha=` |
+| 영향 축 | `rust_required=true`, `native_skia_required=true`, `render_required=true`, `frontend_mode=package` |
+| 분류 근거 | `fail-closed:classifier-contract` |
+| aggregate | `fast_pass=false`, `impact_reason=fail-closed:classifier-contract` |
+| shard 합계 | `3714 + 753 + 784 + 1 = 5252`, archive expected `5252`와 일치 |
+| skip된 job | Frontend unit gates (`frontend_mode=package`), WASM Build (tag 전용) |
+
+`no-trailing-review-only-commits`는 이 head가 code를 포함한 update-branch merge이기 때문이며,
+설계된 fail-closed 경로다. workflow·classifier 변경 PR이 스스로 full lane을 닫고 통과했다는 뜻이므로
+Stage 4 조건화가 자기 자신을 우회하지 않았음을 확인한다.
+
+### 이 문서 commit의 fast-pass 후보
+
+[#4070·PR #4071](https://github.com/edwardkim/rhwp/pull/4071)이 current-base 조상 조건을 PR identity
+조건으로 대체했으므로, base가 `955910136`(#4072 merge)까지 전진했다는 사실만으로는 재사용을 거부하지
+않는다. `review_only_fast_pass.md` A 경로가 "base가 전진했더라도 source·test가 바뀌지 않았다면 문서
+기록만을 위해 Update branch, merge, rebase를 수행하지 않는다"고 규정하므로 이 문서 commit에서는
+devel을 다시 merge하지 않는다.
+
+따라서 후보 순서는 `[이 문서 commit, 5eeab15fd]`이고, 앞의 후보는 자신의 run이 진행 중이라 pending으로
+건너뛴 뒤 `5eeab15fd`의 완료된 `Build & Test` `success`를 재사용해야 한다. 기대 결과는
+`fast_pass=true`, `reason=build-and-test-green:success`, `candidate_sha=5eeab15fd…`이며 heavy worker는
+skipped다. 실제 결과가 다르면 fast-pass로 단정하지 않고 full CI aggregate를 기다린다.
 
 ## 시각·fixture 판단
 
 별도 시각 증적은 적용하지 않았다. PR 고유 기능 변경은 CI workflow, classifier,
 계약 테스트이며 renderer·layout·paint·pagination·golden 출력을 바꾸지 않는다. Render Diff
-조건 변경의 full 경로는 두 기능 head의 Canvas Actions 통과로 확인했다.
+조건 변경의 full 경로는 세 head의 Canvas Actions 통과로 확인했다.
 
 ## 잔여 위험과 후속
 
@@ -152,6 +190,10 @@ current-base aggregate는 `fail-closed:classifier-contract`, `rust=true`, `nativ
 
 ## 최종 권고
 
-review-only trailing commit의 preflight fast-pass와 required `Build & Test`가 최신 head에서 성공하고
-작업지시자가 승인하면 PR #4032를 ready로 전환한 뒤 collaborator self-merge한다. 이 문서
-commit에서는 review request, ready 전환, merge를 수행하지 않는다.
+이 문서 commit을 push하면서 PR #4032를 draft에서 ready로 전환한다. 이후 review-only trailing
+commit의 preflight fast-pass와 required `Build & Test` aggregate가 최신 head에서 성공하고 작업지시자가
+승인하면 collaborator self-merge한다. 이 문서 commit에서는 review request와 merge를 수행하지 않는다.
+
+merge 뒤 후속은 [post_merge.md](../../manual/pr_review/post_merge.md)를 따른다. #3790은 Stage 5–7이
+남아 close하지 않고 진행 기록만 갱신하며, #4040은 이 PR과 무관하게 열어 둔다. frontend-only 절감량은
+merge 뒤 최신 `devel` 기준의 별도 검증 PR에서 실행·skip job과 소요시간으로 실측한다.

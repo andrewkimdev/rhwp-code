@@ -3,8 +3,10 @@
 - **이슈**: [#3790](https://github.com/edwardkim/rhwp/issues/3790)
 - **브랜치**: `issue-3790-stage4-rust-native`
 - **최신 동기화 기준**: `upstream/devel` `d3fb9de7c0c0648e3d8126c25467e2c78a054337`
-- **current-base code head**: `b0be8673149bbd00ebb67f6d5e62b70025cfa612`
-- **상태**: draft PR #4032 review F1–F6 보정, current-base full CI 통과, review-only 기록 준비
+- **첫 devel merge head**: `b0be8673149bbd00ebb67f6d5e62b70025cfa612`
+- **최종 code head**: `5eeab15fd291b2b4b27d3b8a77498fcc0ca5723b`
+- **상태**: PR #4032 review F1–F6 보정 완료, 최종 code head full CI 통과, ready 전환과 review-only
+  기록 push 단계
 - **기록일**: 2026-08-05 KST
 
 ## 선행 canary
@@ -76,13 +78,17 @@ Rust lane을 넓히지 않는다. workflow·classifier·Cargo·WASM·rename·미
 full lane에서 확인했다.
 
 - 보정 head `1f12a5fe0`: CI 30923071182, Render Diff 30923070493, CodeQL 30923070506 통과
-- current-base head `b0be86731`: CI 30924641673, Render Diff 30924638772, CodeQL 30924638749 통과
-- current-base aggregate: shard `3698+693+840+1=5232`, expected runnable `5232` 일치
+- 첫 devel merge head `b0be86731`: CI 30924641673, Render Diff 30924638772, CodeQL 30924638749 통과
+- 그 aggregate: shard `3698+693+840+1=5232`, expected runnable `5232` 일치
+- 최종 code head `5eeab15fd`: CI 31004297167, Render Diff 31004296886, CodeQL 31004296907 통과
+- 최종 aggregate: shard `3714+753+784+1=5252`, expected runnable `5252` 일치, preflight
+  `no-trailing-review-only-commits`로 full lane 진입, `frontend_mode=package`로 Frontend unit gates만 skip
 
 ## 다음 단계
 
-1. review-only trailing commit push 뒤 preflight fast-pass와 required `Build & Test` 성공을 확인한다.
-2. 사용자가 CI 통과 후 요청하면 ready 전환·collaborator self-merge 절차를 진행한다.
+1. review-only trailing commit push와 ready 전환 뒤 preflight fast-pass와 required `Build & Test`
+   성공을 확인한다. 기대 candidate는 `5eeab15fd`다.
+2. 사용자가 CI 통과 후 요청하면 collaborator self-merge 절차를 진행한다.
 3. merge 뒤 frontend-only canary에서 Rust lint·세 builder·네 worker·Native Skia가 모두 `skipped`되고
    `Build & Test` aggregate가 성공하는지 실측한다.
 4. #3810 직후 4.73GB cache 기준선과 다음 cache sweep 직후 총량을 대조한 뒤 Stage 5 CodeQL 언어
