@@ -649,6 +649,35 @@ fn issue_2007_single_cell_continuation_does_not_repaint_boundary_fragments() {
 }
 
 #[test]
+fn issue_2007_completed_multiline_table_keeps_following_heading_in_next_viewport() {
+    let repo_root = env!("CARGO_MANIFEST_DIR");
+    let hwp_path =
+        Path::new(repo_root).join("samples/basic/issue2007_nested_cell_pagination_42065.hwp");
+    let bytes = fs::read(&hwp_path).unwrap_or_else(|e| panic!("read {}: {e}", hwp_path.display()));
+    let doc = rhwp::wasm_api::HwpDocument::from_bytes(&bytes)
+        .expect("parse issue2007_nested_cell_pagination_42065.hwp");
+
+    // p9는 직전 7×3 표가 끝난 뒤 빈 spacer를 거쳐 새 제목이 시작한다. 일반 1×1
+    // continuation처럼 첫 가시 unit을 소비하면 제목이 ancestor clip 위(y=100)로
+    // 밀려 SVG/Canvas에서 사라진다. 한컴 PDF의 물리 p9처럼 새 viewport 안에
+    // `<국내 유사입법례 분석>`이 나타나야 한다.
+    let p9 = doc
+        .build_page_render_tree(8)
+        .expect("issue2007 p9 render tree");
+    let p9_clip = Some(ClipRect::from_node(&p9.root));
+    let heading = "국내 유사입법례 분석";
+    assert!(
+        contains_painted_text(&p9.root, heading, p9_clip),
+        "p9 completed-table boundary clips the following heading"
+    );
+    let heading_top = first_text_run_top(&p9.root, heading).expect("p9 continuation heading");
+    assert!(
+        (125.0..=140.0).contains(&heading_top),
+        "p9 heading must start inside the new physical viewport, got y={heading_top}"
+    );
+}
+
+#[test]
 fn issue_2007_continuation_frame_restarts_and_drops_previous_page_residual() {
     let repo_root = env!("CARGO_MANIFEST_DIR");
     let hwp_path =

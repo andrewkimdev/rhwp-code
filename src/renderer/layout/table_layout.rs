@@ -777,6 +777,10 @@ pub(super) struct CellUnit {
     /// [#4069] 이 mixed fragment가 자식 1×1 표의 canonical CellUnit을 그대로
     /// 투영한 것인지 표시한다. true이면 렌더도 같은 자식 컷 범위를 재귀 사용한다.
     mixed_nested_recursive: bool,
+    /// 이 fragment의 첫 실제 콘텐츠가 직전 중첩 표 다음 문단에서 시작하는가.
+    /// 새 block은 이전 viewport의 예약 줄이 아니므로 continuation origin에서
+    /// 건너뛰지 않는다(42065 p9).
+    mixed_nested_starts_after_table: bool,
     top_and_bottom_flow: bool,
     empty_spacer: bool,
 }
@@ -794,6 +798,7 @@ struct NestedFlowFragment {
     trailing: bool,
     content_height: f64,
     recursive: bool,
+    starts_after_table: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -5705,13 +5710,14 @@ impl LayoutEngine {
                                 0.0
                             },
                             recursive: true,
+                            starts_after_table: unit.mixed_nested_starts_after_table,
                         }
                     })
                     .collect();
             }
         }
 
-        let mut row_units: Vec<(f64, bool, f64)> = Vec::new();
+        let mut row_units: Vec<(f64, bool, f64, bool)> = Vec::new();
         for cell in table.cells.iter().filter(|cell| cell.row == 0) {
             let (pad_left, pad_right, pad_top, pad_bottom) = self.resolve_cell_padding(cell, table);
             let cell_w = if cell.width < 0x8000_0000 {
@@ -5721,7 +5727,11 @@ impl LayoutEngine {
             };
             let inner_width = (cell_w - pad_left - pad_right).max(0.0);
             let mut cell_units = Vec::new();
+            let mut after_completed_multiline_table = false;
             for (pi, para) in cell.paragraphs.iter().enumerate() {
+                let para_is_empty_spacer = para.text.trim().is_empty() && para.controls.is_empty();
+                let starts_after_completed_multiline_table =
+                    after_completed_multiline_table && !para_is_empty_spacer;
                 let mut comp = compose_paragraph(para);
                 crate::renderer::composer::recompose_for_cell_width(
                     &mut comp,
@@ -5772,12 +5782,12 @@ impl LayoutEngine {
 
                 let para_style = styles.para_styles.get(para.para_shape_id as usize);
                 if pi == 0 && pad_top > 0.5 {
-                    cell_units.push((pad_top, false, 0.0));
+                    cell_units.push((pad_top, false, 0.0, false));
                 }
                 if pi > 0 {
                     let spacing_before = para_style.map(|s| s.spacing_before).unwrap_or(0.0);
                     if spacing_before > 0.5 {
-                        cell_units.push((spacing_before, false, 0.0));
+                        cell_units.push((spacing_before, false, 0.0, false));
                     }
                 }
                 for (li, line) in comp.lines.iter().enumerate() {
@@ -5821,28 +5831,52 @@ impl LayoutEngine {
                     } else {
                         hwpunit_to_px(line.line_spacing, self.dpi)
                     };
-                    cell_units.push((corrected_h + line_spacing, false, corrected_h));
+                    cell_units.push((
+                        corrected_h + line_spacing,
+                        false,
+                        corrected_h,
+                        starts_after_completed_multiline_table && li == 0,
+                    ));
                 }
                 if nested_h > 0.5 {
-                    cell_units.push((nested_h, false, nested_h));
+                    cell_units.push((
+                        nested_h,
+                        false,
+                        nested_h,
+                        starts_after_completed_multiline_table,
+                    ));
                 }
                 if empty_line_box > 0.5 {
-                    cell_units.push((empty_line_box, false, empty_line_box));
+                    cell_units.push((
+                        empty_line_box,
+                        false,
+                        empty_line_box,
+                        starts_after_completed_multiline_table,
+                    ));
                 }
                 if pi + 1 < cell.paragraphs.len() {
                     let spacing_after = para_style.map(|s| s.spacing_after).unwrap_or(0.0);
                     if spacing_after > 0.5 {
-                        cell_units.push((spacing_after, true, 0.0));
+                        cell_units.push((spacing_after, true, 0.0, false));
                     }
+                }
+                let completed_multiline_table = para
+                    .controls
+                    .iter()
+                    .any(|control| matches!(control, Control::Table(table) if table.row_count > 1));
+                if completed_multiline_table {
+                    after_completed_multiline_table = true;
+                } else if !para_is_empty_spacer {
+                    after_completed_multiline_table = false;
                 }
             }
             if pad_bottom > 0.5 {
-                cell_units.push((pad_bottom, true, 0.0));
+                cell_units.push((pad_bottom, true, 0.0, false));
             }
             // [#2279 진단] 1×1 중첩 셀 프래그먼트 분해 — 동작 불변.
             if let Ok(pat) = std::env::var("RHWP_DIAG_MIXFRAG") {
                 if cell.paragraphs.iter().any(|p| p.text.contains(&pat)) {
-                    let total: f64 = cell_units.iter().map(|(h, _, _)| *h).sum();
+                    let total: f64 = cell_units.iter().map(|(h, _, _, _)| *h).sum();
                     eprintln!(
                         "DIAG_MIXFRAG cell paras={} units={} total={:.1} inner_w={:.2}",
                         cell.paragraphs.len(),
@@ -5871,27 +5905,33 @@ impl LayoutEngine {
                 }
             }
             if cell_units.len() > row_units.len() {
-                row_units.resize(cell_units.len(), (0.0, true, 0.0));
+                row_units.resize(cell_units.len(), (0.0, true, 0.0, false));
             }
-            for (idx, (h, trailing, content_h)) in cell_units.into_iter().enumerate() {
+            for (idx, (h, trailing, content_h, starts_after_table)) in
+                cell_units.into_iter().enumerate()
+            {
                 if h > row_units[idx].0 {
-                    row_units[idx] = (h, trailing, content_h);
+                    row_units[idx] = (h, trailing, content_h, starts_after_table);
                 } else if (h - row_units[idx].0).abs() <= 0.5 {
                     row_units[idx].1 = row_units[idx].1 && trailing;
                     row_units[idx].2 = row_units[idx].2.max(content_h);
+                    row_units[idx].3 = row_units[idx].3 || starts_after_table;
                 }
             }
         }
         row_units
             .into_iter()
-            .map(|(height, trailing, content_height)| NestedFlowFragment {
-                height,
-                hard_break_before: false,
-                stored_frame_break_before: false,
-                trailing,
-                content_height,
-                recursive: false,
-            })
+            .map(
+                |(height, trailing, content_height, starts_after_table)| NestedFlowFragment {
+                    height,
+                    hard_break_before: false,
+                    stored_frame_break_before: false,
+                    trailing,
+                    content_height,
+                    recursive: false,
+                    starts_after_table,
+                },
+            )
             .collect()
     }
 
@@ -6205,6 +6245,7 @@ impl LayoutEngine {
                         mixed_nested_trailing: false,
                         mixed_nested_content_height: 0.0,
                         mixed_nested_recursive: false,
+                        mixed_nested_starts_after_table: false,
                         top_and_bottom_flow: false,
                         empty_spacer: false,
                     });
@@ -6229,6 +6270,7 @@ impl LayoutEngine {
                 mixed_nested_trailing: false,
                 mixed_nested_content_height: 0.0,
                 mixed_nested_recursive: false,
+                mixed_nested_starts_after_table: false,
                 top_and_bottom_flow: true,
                 empty_spacer: false,
             });
@@ -6757,6 +6799,7 @@ impl LayoutEngine {
                                         mixed_nested_trailing: false,
                                         mixed_nested_content_height: 0.0,
                                         mixed_nested_recursive: false,
+                                        mixed_nested_starts_after_table: false,
                                         top_and_bottom_flow: false,
                                         empty_spacer: false,
                                     });
@@ -6802,6 +6845,7 @@ impl LayoutEngine {
                             mixed_nested_trailing: false,
                             mixed_nested_content_height: 0.0,
                             mixed_nested_recursive: false,
+                            mixed_nested_starts_after_table: false,
                             top_and_bottom_flow: false,
                             empty_spacer: false,
                         });
@@ -6882,6 +6926,7 @@ impl LayoutEngine {
                                 mixed_nested_trailing: fragment.trailing,
                                 mixed_nested_content_height: fragment.content_height,
                                 mixed_nested_recursive: fragment.recursive,
+                                mixed_nested_starts_after_table: fragment.starts_after_table,
                                 top_and_bottom_flow: false,
                                 empty_spacer: false,
                             });
@@ -6974,6 +7019,7 @@ impl LayoutEngine {
                             mixed_nested_trailing: false,
                             mixed_nested_content_height: 0.0,
                             mixed_nested_recursive: false,
+                            mixed_nested_starts_after_table: false,
                             top_and_bottom_flow: false,
                             empty_spacer: false,
                         });
@@ -7014,6 +7060,7 @@ impl LayoutEngine {
                                     trailing: false,
                                     content_height: h,
                                     recursive: false,
+                                    starts_after_table: false,
                                 });
                                 remaining -= h;
                             }
@@ -7075,6 +7122,7 @@ impl LayoutEngine {
                                 mixed_nested_trailing: fragment.trailing,
                                 mixed_nested_content_height: fragment.content_height,
                                 mixed_nested_recursive: fragment.recursive,
+                                mixed_nested_starts_after_table: fragment.starts_after_table,
                                 top_and_bottom_flow: false,
                                 empty_spacer: false,
                             });
@@ -7224,6 +7272,7 @@ impl LayoutEngine {
                     mixed_nested_trailing: false,
                     mixed_nested_content_height: 0.0,
                     mixed_nested_recursive: false,
+                    mixed_nested_starts_after_table: false,
                     top_and_bottom_flow: para_top_and_bottom_flow_unit,
                     empty_spacer: is_empty_spacer_para,
                 });
@@ -7314,6 +7363,7 @@ impl LayoutEngine {
                         mixed_nested_trailing: false,
                         mixed_nested_content_height: 0.0,
                         mixed_nested_recursive: false,
+                        mixed_nested_starts_after_table: false,
                         top_and_bottom_flow: para_top_and_bottom_flow_unit,
                         empty_spacer: is_empty_spacer_para,
                     });
@@ -8743,6 +8793,16 @@ impl LayoutEngine {
             .iter()
             .find_map(|(height, trailing, _)| (!*trailing).then_some(*height))
             .unwrap_or(0.0);
+        let first_visible_starts_after_table = units
+            .iter()
+            .skip(lo)
+            .take(hi.saturating_sub(lo))
+            .find(|unit| {
+                unit.para_idx == para_idx
+                    && unit.mixed_nested_fragment
+                    && !unit.mixed_nested_trailing
+            })
+            .is_some_and(|unit| unit.mixed_nested_starts_after_table);
         // 1×1 host 안의 1×1 표 continuation은 이전 조각의 첫 unit을 물리
         // reservation으로 이미 전진시킨다. 다음 조각의 content origin까지 원래
         // `offset`만 쓰면 그 unit이 다시 페이지 상단에 그려져 이후 제목/표가 한 줄씩
@@ -8759,8 +8819,10 @@ impl LayoutEngine {
             });
         // PR #4122가 만든 재귀 child cursor가 있으면 그 cursor가 소유권의
         // 권위다. scalar offset 보정은 재귀 투영이 없는 기존 fallback에만 쓴다.
-        let compensate_first_visible =
-            recursive_cut.is_none() && offset > 0.5 && single_cell_nested_continuation;
+        let compensate_first_visible = recursive_cut.is_none()
+            && offset > 0.5
+            && single_cell_nested_continuation
+            && !first_visible_starts_after_table;
         let offset_within_start = if recursive_cut.is_some() {
             (offset - first_visible_content_height).max(0.0)
         } else if compensate_first_visible {
