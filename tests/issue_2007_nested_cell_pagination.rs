@@ -851,6 +851,30 @@ fn issue_2007_continuation_viewport_does_not_center_nested_cell_content() {
         table.bbox.y,
     );
 
+    // p11은 같은 1×1 셀의 다음 viewport다. 셀의 위쪽이 parent viewport에 의해
+    // 잘렸는데도 원본 1,296px 전체 높이를 Center 기준으로 쓰면, p10에서 이미
+    // paint한 "사용목적" 문단군을 이 페이지 상단에 다시 끌어온다. p11 PDF는 그
+    // 다음 문장("행하여야 하며 …")부터 시작한다. render tree에 clip 밖의 source
+    // text가 남는 것은 허용하지만 SVG/Canvas가 실제 paint하면 안 된다.
+    let p11 = doc
+        .build_page_render_tree(10)
+        .expect("issue2007 p11 render tree");
+    let p11_clip = Some(ClipRect::from_node(&p11.root));
+    assert!(
+        !contains_painted_text(&p11.root, "사용목적", p11_clip),
+        "p11 replays the p10-owned 사용목적 paragraph because an upper-clipped nested cell is centered"
+    );
+    assert!(
+        contains_painted_text(&p11.root, "행하여야 하며, 다른 목적", p11_clip),
+        "p11 must begin from its own visible continuation text after the p10-owned paragraph"
+    );
+    let p11_continuation_top = first_text_run_top(&p11.root, "행하여야 하며, 다른 목적")
+        .expect("p11 first visible continuation line");
+    assert!(
+        (117.0..=140.0).contains(&p11_continuation_top),
+        "p11 first continuation line must be positioned inside the physical nested-cell clip, not above it: {p11_continuation_top}"
+    );
+
     // 마지막 조각도 첫 visible unit의 reservation을 다시 content origin에 남기면
     // 제목이 한 단위(32px) 아래로 내려간다. PDF p17의 첫 제목은 body top 직후에
     // 있으므로 terminal 여부와 무관하게 같은 보정을 적용해야 한다.

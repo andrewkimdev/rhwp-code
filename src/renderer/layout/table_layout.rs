@@ -78,9 +78,14 @@ fn cell_para_line_anchor_y(
     vertical_pos_hu: i32,
     dpi: f64,
     use_top_vpos_anchor: bool,
+    upper_clip_line_reservation: f64,
 ) -> f64 {
     if use_top_vpos_anchor {
-        content_cell_y + pad_top + hwpunit_to_px(vertical_pos_hu, dpi)
+        // Top/vpos 앵커는 평상시 `base_y`의 vertical-align offset을 의도적으로
+        // 무시한다. 단, RowBreak continuation의 page-clip 보정은 바로 이
+        // absolute vpos 경로에도 적용해야 한다. 그렇지 않으면 text_y_start에
+        // 예약값을 더해도 실제 문단은 종전 y에 남아 첫 줄이 clip 밖에서 사라진다.
+        content_cell_y + pad_top + hwpunit_to_px(vertical_pos_hu, dpi) + upper_clip_line_reservation
     } else {
         base_y + hwpunit_to_px(vertical_pos_hu, dpi)
     }
@@ -931,6 +936,8 @@ struct HorizontalCellVars {
     inner_height: f64,
     text_y_start: f64,
     use_top_vpos_anchor: bool,
+    /// Physical page-clip continuation이 저장 vpos 앵커도 함께 내려야 하는 높이.
+    upper_clip_line_reservation: f64,
     /// [Task #2211] 저장 LINE_SEG 흐름이 자체 스택 합보다 압축된 셀 —
     /// 문단 배치를 저장 vpos 스냅으로 강제한다 (valign 무관).
     trust_stored_cell_flow: bool,
@@ -3178,6 +3185,7 @@ impl LayoutEngine {
             inner_height,
             text_y_start,
             use_top_vpos_anchor,
+            upper_clip_line_reservation,
             trust_stored_cell_flow,
             has_nested_table,
             section_index,
@@ -3284,6 +3292,7 @@ impl LayoutEngine {
                             first_seg.vertical_pos,
                             self.dpi,
                             use_top_vpos_anchor,
+                            upper_clip_line_reservation,
                         );
                         // layout_composed_paragraph()가 spacing_before를 더하므로
                         // 호출 전에 그 값을 빼서 최종 line top이 vpos와 일치하게 한다.
@@ -4901,17 +4910,57 @@ impl LayoutEngine {
             });
             // 이 표 자신은 `nested_split`을 받지 않아도, 현재 표가 부모 1×1
             // RowBreak continuation의 남은 viewport 안에서 호출될 수 있다. 이때 큰
-            // 하위 셀은 부모 Cell clip에 의해 아래가 잘리는데 원래 Center/Bottom
-            // 정렬을 유지하면, 아직 보이지 않는 셀 하단을 기준으로 첫 본문까지
-            // 아래로 밀린다(42065 p10–p16). `col_area`는 호출자가 넘긴 물리
-            // viewport이므로, 그 하단을 실제로 넘는 중첩 셀만 Top으로 수렴시킨다.
-            // 일반 완전 셀 및 최상위 표(depth=0)는 영향이 없다.
+            // 하위 셀은 부모 Cell clip에 의해 위나 아래가 잘린다. 원래 Center/Bottom
+            // 정렬을 유지하면 잘린 반대쪽의 보이지 않는 공간을 기준으로 본문이 다시
+            // 밀린다. 특히 위쪽만 잘린 p11에서는 앞 쪽에 이미 그린 문단군을 다시
+            // 현재 페이지로 끌어내려 중복했다(42065). `col_area`는 호출자가 넘긴
+            // 물리 viewport이므로, 그와 교차하면서 한쪽이라도 벗어난 중첩 셀만
+            // Top으로 수렴시킨다. 다만 p11처럼 호출자가 전한 `col_area`가 직전
+            // 조각까지 포함할 수 있으므로, 실제 페이지 viewport에서도 같은 판정을
+            // 한다. 일반 완전 셀 및 최상위 표(depth=0)는 영향이 없다.
+            let parent_view_top = col_area.y;
+            let parent_view_bottom = col_area.y + col_area.height;
+            let cell_intersects_parent_viewport =
+                cell_y < parent_view_bottom - 0.5 && cell_y + cell_h > parent_view_top + 0.5;
             let cell_clipped_by_parent_viewport = depth > 0
                 && !table.common.treat_as_char
                 && col_area.height > 0.5
-                && cell_y < col_area.y + col_area.height - 0.5
-                && cell_y + cell_h > col_area.y + col_area.height + 0.5;
-            let effective_valign = if cell_clipped_by_row_filter || cell_clipped_by_parent_viewport
+                && cell_intersects_parent_viewport
+                && (cell_y < parent_view_top - 0.5 || cell_y + cell_h > parent_view_bottom + 0.5);
+            // nested continuation은 부모 `col_area`가 이전 페이지의 logical
+            // viewport를 포함한 채 호출될 수 있다. 렌더 트리의 page bbox는 실제
+            // SVG/Canvas clip이므로, 그 밖으로 나간 셀은 그 logical viewport 안에
+            // 있더라도 Center/Bottom 기준으로 배치하면 안 된다.
+            let page_view_top = tree.root.bbox.y;
+            let page_view_bottom = tree.root.bbox.y + tree.root.bbox.height;
+            let cell_intersects_page_viewport =
+                cell_y < page_view_bottom - 0.5 && cell_y + cell_h > page_view_top + 0.5;
+            let cell_clipped_by_page_viewport = depth > 0
+                && !table.common.treat_as_char
+                && cell_intersects_page_viewport
+                && (cell_y < page_view_top - 0.5 || cell_y + cell_h > page_view_bottom + 0.5);
+            // 위쪽 continuation에서는 source의 첫 가시 줄이 page clip 직전까지
+            // 내려와 있다. Top을 셀의 논리 원점에 그대로 맞추면 그 줄의 잉크가
+            // clip 바로 위에서 잘리고 다음 줄부터 나타난다(42065 p11: PDF의
+            // "행하여야 하며 …"가 사라지고 "제50조의4"부터 시작). 첫 *유효*
+            // 저장 줄의 물리 line-height만큼 예약해 그 줄을 clip 안으로 되돌린다.
+            // HWP는 표 안의 빈 anchor line을 line_height=0으로 먼저 저장할 수 있어
+            // 단순 first()를 쓰면 이 보정이 무효가 된다. 아래쪽 잘림이나 정상 완전
+            // 셀에는 적용하지 않는다.
+            let upper_page_clip_line_reservation = (cell_clipped_by_page_viewport
+                && cell_y < page_view_top - 0.5)
+                .then(|| {
+                    cell.paragraphs
+                        .iter()
+                        .flat_map(|para| para.line_segs.iter())
+                        .find(|seg| seg.line_height > 0)
+                        .map(|seg| hwpunit_to_px(seg.line_height, self.dpi))
+                        .unwrap_or(0.0)
+                })
+                .unwrap_or(0.0);
+            let effective_valign = if cell_clipped_by_row_filter
+                || cell_clipped_by_parent_viewport
+                || cell_clipped_by_page_viewport
             {
                 VerticalAlign::Top
             } else {
@@ -5016,6 +5065,7 @@ impl LayoutEngine {
                     }
                 }
             };
+            let text_y_start = text_y_start + upper_page_clip_line_reservation;
             // 세로쓰기 셀
             if cell.text_direction != 0 {
                 let vert_inner_area = LayoutRect {
@@ -5065,6 +5115,7 @@ impl LayoutEngine {
                         inner_height,
                         text_y_start,
                         use_top_vpos_anchor,
+                        upper_clip_line_reservation: upper_page_clip_line_reservation,
                         trust_stored_cell_flow,
                         has_nested_table,
                         section_index,
@@ -8708,9 +8759,8 @@ impl LayoutEngine {
             });
         // PR #4122가 만든 재귀 child cursor가 있으면 그 cursor가 소유권의
         // 권위다. scalar offset 보정은 재귀 투영이 없는 기존 fallback에만 쓴다.
-        let compensate_first_visible = recursive_cut.is_none()
-            && offset > 0.5
-            && single_cell_nested_continuation;
+        let compensate_first_visible =
+            recursive_cut.is_none() && offset > 0.5 && single_cell_nested_continuation;
         let offset_within_start = if recursive_cut.is_some() {
             (offset - first_visible_content_height).max(0.0)
         } else if compensate_first_visible {
