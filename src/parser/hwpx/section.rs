@@ -2938,11 +2938,24 @@ fn materialize_shape_hwp_storage_defaults(
 
     if shape_attr.flip == 0 {
         let mut flip = match kind {
-            ShapeStorageKind::Picture => 0x2400_0000,
+            // HWPX에는 HWP5 SHAPE_COMPONENT의 저장 전용 상위 비트가 없다. Hancom
+            // 2020이 같은 HWPX를 HWP5로 저장한 값은 그림=0x2000_0000, 글상자
+            // 도형=0x0100_0000이다. 그룹 자식에는 0x0003_0000도 함께 붙는다.
+            // 0x2400_0000을 쓴 종전 값은 표지 묶음의 자식 좌표계를 다르게 해석하게
+            // 하여 한컴 PDF에서 축척·위치를 틀리게 만들었다(#3930).
+            ShapeStorageKind::Picture => 0x2000_0000,
             ShapeStorageKind::Group => 0x0009_0000,
             ShapeStorageKind::TextBoxDrawing => 0x0100_0000,
             ShapeStorageKind::Drawing => 0,
         };
+        if shape_attr.group_level > 0
+            && matches!(
+                kind,
+                ShapeStorageKind::Picture | ShapeStorageKind::TextBoxDrawing
+            )
+        {
+            flip |= 0x0003_0000;
+        }
         if shape_attr.horz_flip {
             flip |= 0x01;
         }
@@ -3012,6 +3025,14 @@ fn parse_object_element_attrs(
 
     if common.instance_id == 0 && ids.instid != 0 {
         common.instance_id = ids.instid;
+    }
+
+    // HWP5 공통 개체 attr bit 28은 한컴 2020이 `numberingType="PICTURE"`인
+    // 일반 도형/그림/묶음을 HWP로 저장할 때 함께 기록한다. 차트·OLE 경로는 이미
+    // 같은 보정을 하지만, 공용 개체 경로에서 빠지면 HWPX -> HWP 저장본의 바탕쪽과
+    // 본문 PICTURE 개체가 한컴 저장본과 다른 attr을 갖는다.
+    if common.numbering_type == crate::model::shape::ObjectNumberingType::Picture {
+        common.hwp5_gen_shape_attr_bit28 = true;
     }
 
     ids
@@ -7582,6 +7603,44 @@ mod tests {
     }
 
     #[test]
+    fn hwpx_storage_flip_defaults_follow_hancom_group_contract() {
+        let mut top_level_picture = ShapeComponentAttr {
+            rotate_image: true,
+            ..Default::default()
+        };
+        materialize_shape_hwp_storage_defaults(
+            &mut CommonObjAttr::default(),
+            &mut top_level_picture,
+            ShapeStorageKind::Picture,
+        );
+        assert_eq!(top_level_picture.flip, 0x2008_0000);
+
+        let mut grouped_picture = ShapeComponentAttr {
+            group_level: 1,
+            rotate_image: true,
+            ..Default::default()
+        };
+        materialize_shape_hwp_storage_defaults(
+            &mut CommonObjAttr::default(),
+            &mut grouped_picture,
+            ShapeStorageKind::Picture,
+        );
+        assert_eq!(grouped_picture.flip, 0x200b_0000);
+
+        let mut grouped_text_box = ShapeComponentAttr {
+            group_level: 1,
+            rotate_image: true,
+            ..Default::default()
+        };
+        materialize_shape_hwp_storage_defaults(
+            &mut CommonObjAttr::default(),
+            &mut grouped_text_box,
+            ShapeStorageKind::TextBoxDrawing,
+        );
+        assert_eq!(grouped_text_box.flip, 0x010b_0000);
+    }
+
+    #[test]
     fn test_rendering_info_quantizes_fractional_matrix_values_like_hwp5() {
         let xml = r#"<hp:renderingInfo xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph"
             xmlns:hc="http://www.hancom.co.kr/hwpml/2011/core">
@@ -8112,7 +8171,7 @@ mod tests {
         xmlns:hs="http://www.hancom.co.kr/hwpml/2011/section">
   <hp:p id="0" paraPrIDRef="0" styleIDRef="0">
     <hp:run charPrIDRef="0">
-      <hp:rect id="1" zOrder="0" ratio="50">
+      <hp:rect id="1" zOrder="0" ratio="50" numberingType="PICTURE">
         <hp:sz width="100" height="50"/>
         <hp:pos treatAsChar="0" vertRelTo="PARA" horzRelTo="PARA"/>
       </hp:rect>
@@ -8129,6 +8188,10 @@ mod tests {
             panic!("expected rectangle shape");
         };
         assert_eq!(rect.round_rate, 50);
+        assert!(
+            rect.common.hwp5_gen_shape_attr_bit28,
+            "numberingType=PICTURE는 한컴 HWP5 공통 개체 bit 28로 저장돼야 한다"
+        );
     }
 
     #[test]

@@ -3,9 +3,11 @@
 use std::fs;
 use std::path::Path;
 
-use rhwp::document_core::DocumentCore;
 use rhwp::model::control::Control;
 use rhwp::model::header_footer::{HeaderFooterApply, MasterPage};
+use rhwp::model::shape::ShapeObject;
+use rhwp::model::style::BorderLineType;
+use rhwp::wasm_api::HwpDocument;
 
 const FIXTURE: &str = "samples/2025 행정업무운영 편람(최종).hwpx";
 
@@ -35,11 +37,56 @@ fn master_page_text(master_page: &MasterPage) -> String {
 fn issue_3930_preserves_page_count_and_inherited_even_master_page() {
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(FIXTURE);
     let bytes = fs::read(&path).unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
-    let mut source = DocumentCore::from_bytes(&bytes).expect("HWPX fixture parse");
+    // CLI가 사용하는 native HwpDocument 래퍼까지 동일하게 통과해야 한다.
+    let mut source = HwpDocument::from_bytes(&bytes).expect("HWPX fixture parse");
 
     assert_eq!(source.page_count(), 387, "원본 편람 쪽수");
+    let source_border_fill = &source.document().doc_info.border_fills[67];
+    assert_eq!(
+        source_border_fill.borders[0].line_type,
+        BorderLineType::Dot,
+        "HWPX DASH 테두리는 Hancom HWP5 code 3 점선으로 읽어야 한다"
+    );
+    // CLI/MCP 저장 경로도 배포용 해제 단계를 먼저 거치므로 같은 순서로 검증한다.
+    source
+        .convert_to_editable_native()
+        .expect("편집 가능 문서 정규화");
     let saved = source.export_hwp_with_adapter().expect("HWP 저장");
-    let reloaded = DocumentCore::from_bytes(&saved).expect("저장 HWP 재로드");
+
+    // HWPX에는 HWP5 SECTION_DEF의 raw tail이 없지만, HWP 2020은 바탕쪽이 있는
+    // 구역에 19 byte tail(CTRL_HEADER 전체 47 byte)을 쓴다. 이 값이 10 byte
+    // 기본값으로 남으면 HWP 2020이 LIST_HEADER 바탕쪽을 무시할 수 있다.
+    for section_index in [10] {
+        let section = &source.document().sections[section_index];
+        assert_eq!(
+            section.section_def.raw_ctrl_extra.len(),
+            19,
+            "구역 {section_index} root SectionDef HWP5 바탕쪽 tail"
+        );
+        let inline_section_def = section.paragraphs[0]
+            .controls
+            .iter()
+            .find_map(|control| match control {
+                Control::SectionDef(section_def) => Some(section_def.as_ref()),
+                _ => None,
+            })
+            .expect("첫 문단 SectionDef");
+        assert_eq!(
+            inline_section_def.raw_ctrl_extra.len(),
+            19,
+            "구역 {section_index} inline SectionDef HWP5 바탕쪽 tail"
+        );
+    }
+    let reloaded = HwpDocument::from_bytes(&saved).expect("저장 HWP 재로드");
+
+    assert_eq!(
+        reloaded.document().sections[10]
+            .section_def
+            .raw_ctrl_extra
+            .len(),
+        19,
+        "직렬화된 구역 10 SectionDef도 HWP 2020 바탕쪽 tail을 보존해야 한다"
+    );
 
     assert_eq!(
         reloaded.page_count(),
@@ -53,15 +100,61 @@ fn issue_3930_preserves_page_count_and_inherited_even_master_page() {
         .iter()
         .filter(|master_page| !master_page.is_extension)
         .collect();
-    assert_eq!(base_master_pages.len(), 2, "HWP5 Both/Odd 저장 슬롯");
-    assert_eq!(base_master_pages[0].apply_to, HeaderFooterApply::Both);
+    assert_eq!(base_master_pages.len(), 1, "HWP 2020 단일 Odd 저장 슬롯");
+    assert_eq!(base_master_pages[0].apply_to, HeaderFooterApply::Odd);
+    // 한컴 2020은 아래 SECTION_DEF 0x80000000 플래그로 이전 구역의 짝수 바탕쪽을
+    // 상속한다. HWP5 parser도 이 단일 Odd 계약을 그대로 복원해야 한다.
     assert!(
-        master_page_text(base_master_pages[0]).contains("2025 행정업무운영 편람"),
-        "p30 짝수 쪽은 앞 구역 책 제목 바탕쪽을 유지해야 한다"
-    );
-    assert_eq!(base_master_pages[1].apply_to, HeaderFooterApply::Odd);
-    assert!(
-        master_page_text(base_master_pages[1]).contains("제2장. 공문서 관리"),
+        master_page_text(base_master_pages[0]).contains("제2장. 공문서 관리"),
         "홀수 쪽은 현재 구역 장 제목 바탕쪽을 사용해야 한다"
     );
+    assert_eq!(
+        section.flags & 0xe000_0000,
+        0x8000_0000,
+        "단일 Odd 슬롯은 한컴 2020의 이전 짝수 쪽 상속 플래그여야 한다"
+    );
+    assert_eq!(
+        reloaded.document().doc_info.border_fills[67].borders[0].line_type,
+        BorderLineType::Dot,
+        "저장 HWP도 날인 상자의 점선 BORDER_FILL을 유지해야 한다"
+    );
+
+    let first_picture = reloaded.document().sections[0]
+        .paragraphs
+        .iter()
+        .flat_map(|paragraph| paragraph.controls.iter())
+        .find_map(|control| match control {
+            Control::Picture(picture) => Some(picture.as_ref()),
+            _ => None,
+        })
+        .expect("첫 그림");
+    let grouped_picture = reloaded.document().sections[0]
+        .paragraphs
+        .iter()
+        .flat_map(|paragraph| paragraph.controls.iter())
+        .find_map(|control| match control {
+            Control::Shape(shape) => match shape.as_ref() {
+                ShapeObject::Group(group) => group.children.iter().find_map(|child| match child {
+                    ShapeObject::Picture(picture) => Some(picture.as_ref()),
+                    _ => None,
+                }),
+                _ => None,
+            },
+            _ => None,
+        })
+        .expect("묶음 내부 그림");
+    for picture in [first_picture, grouped_picture] {
+        assert_eq!(
+            picture.raw_picture_extra.len(),
+            18,
+            "HWPX 그림의 HWP5 SC_PICTURE extra 길이"
+        );
+        assert_eq!(
+            &picture.raw_picture_extra[9..17],
+            &[0; 8],
+            "한컴 HWPX 저장본처럼 SC_PICTURE original image size는 0으로 쓴다"
+        );
+    }
+    assert_eq!(grouped_picture.image_attr.brightness, 0);
+    assert_eq!(grouped_picture.image_attr.contrast, 8);
 }

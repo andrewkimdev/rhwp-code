@@ -1,9 +1,8 @@
 //! HWPX 바탕쪽 적용 범위를 HWP5 저장 슬롯으로 정규화한다.
 //!
 //! HWPX는 `Both`/`Odd`/`Even` 바탕쪽을 희소하게 선언하고 없는 쪽은 앞 구역의
-//! 바탕쪽을 상속할 수 있다. 반면 HWP5 `LIST_HEADER`는 저장 순서가 적용 범위다.
-//! HWP5에서 같은 결과를 내려면 짝수 쪽의 유효 바탕쪽을 `Both`, 홀수 쪽의 유효
-//! 바탕쪽을 `Odd` 슬롯에 물질화해야 한다.
+//! 바탕쪽을 상속할 수 있다. HWP5 `LIST_HEADER`도 이 희소 선언을 표현할 수 있지만,
+//! 여러 적용 범위가 함께 있을 때는 저장 순서가 적용 범위를 결정한다.
 
 use crate::model::document::Document;
 use crate::model::header_footer::{HeaderFooterApply, MasterPage};
@@ -14,11 +13,14 @@ struct TrackedMasterPage {
     master_page: MasterPage,
 }
 
-/// HWPX의 희소 바탕쪽 선언을 HWP5 저장 순서가 표현할 수 있는 `Both`/`Odd` 쌍으로
-/// 바꾼다. 반환값은 실제로 바뀐 구역 수다.
+/// HWPX의 다중 바탕쪽 선언을 HWP5 저장 순서가 표현할 수 있는 슬롯으로 정규화한다.
+/// 반환값은 실제로 바뀐 구역 수다.
 ///
-/// HWP5는 `Both`를 먼저 적용하고 `Odd`가 홀수 쪽에서 이를 덮으므로, 서로 다른
-/// 짝수/홀수 결과를 정확히 표현할 수 있다. 이 경로는 HWPX 출처 어댑터에서만 호출한다.
+/// 한컴 2020은 단일 `Odd` 선언을 `Odd` 하나와 SECTION_DEF `0x8000_0000` 플래그로
+/// 저장한다. 이 표현은 이전 구역의 짝수 바탕쪽을 계속 상속한다. 따라서 단일 선언을
+/// 인위적으로 `Both + Odd`로 확장하면 안 된다. 서로 다른 적용 범위가 함께 있을 때만
+/// `Both`를 먼저 두고 `Odd`가 홀수 쪽을 덮는 HWP5 순서로 물질화한다. 이 경로는 HWPX
+/// 출처 어댑터에서만 호출한다.
 pub(crate) fn materialize_hwp5_master_page_slots(document: &mut Document) -> u32 {
     let mut changed_sections = 0;
     let mut carry_odd: Option<TrackedMasterPage> = None;
@@ -37,6 +39,14 @@ pub(crate) fn materialize_hwp5_master_page_slots(document: &mut Document) -> u32
             .collect();
 
         if base_pages.is_empty() {
+            continue;
+        }
+
+        // HWP 2020의 HWPX -> HWP 저장본은 단일 Both/Odd/Even 선언을 그대로
+        // LIST_HEADER 하나로 둔다. 특히 단일 Odd를 Both+Odd로 확장하면 한컴의
+        // SECTION_DEF 0x80000000 상속 계약을 잃어 짝수 쪽 바탕쪽과 개체 출력이 달라진다.
+        if base_pages.len() == 1 {
+            update_carry(&base_pages, &mut carry_odd, &mut carry_even);
             continue;
         }
 
@@ -157,7 +167,7 @@ mod tests {
     }
 
     #[test]
-    fn sparse_odd_master_keeps_previous_even_master_in_hwp5_slots() {
+    fn sparse_odd_master_keeps_hancom_single_slot_contract() {
         let mut document = Document {
             sections: vec![
                 Section {
@@ -181,13 +191,11 @@ mod tests {
             ..Default::default()
         };
 
-        assert_eq!(materialize_hwp5_master_page_slots(&mut document), 2);
+        assert_eq!(materialize_hwp5_master_page_slots(&mut document), 1);
         let saved = &document.sections[1].section_def.master_pages;
-        assert_eq!(saved.len(), 2);
-        assert_eq!(saved[0].apply_to, HeaderFooterApply::Both);
-        assert_eq!(saved[0].paragraphs[0].text, "책 제목");
-        assert_eq!(saved[1].apply_to, HeaderFooterApply::Odd);
-        assert_eq!(saved[1].paragraphs[0].text, "제2장");
+        assert_eq!(saved.len(), 1);
+        assert_eq!(saved[0].apply_to, HeaderFooterApply::Odd);
+        assert_eq!(saved[0].paragraphs[0].text, "제2장");
 
         assert_eq!(materialize_hwp5_master_page_slots(&mut document), 0);
     }
