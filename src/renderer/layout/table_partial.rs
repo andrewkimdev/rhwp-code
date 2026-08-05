@@ -2361,7 +2361,7 @@ impl LayoutEngine {
         // after the fragment cell loop. Preserve direct nested outer vertical
         // borders in the horizontal clip without widening the RowBreak
         // continuation viewport (issue2007 p2-p3).
-        extend_completed_nested_table_border_clips(&mut table_node);
+        extend_completed_nested_table_border_clips(tree, &mut table_node);
 
         // [Task #1860/#3820] 노드-자식 포섭 불변: 분할 표 조각의 셀 내 절대위치 shape
         // (as-char 텍스트박스/그림 등)가 유닛 기반 셀 높이를 초과해 그려지면 표 노드

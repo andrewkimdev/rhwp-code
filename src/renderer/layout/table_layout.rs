@@ -277,6 +277,186 @@ fn extend_table_horizontal_bbox_to_direct_cell_paint(table_node: &mut RenderNode
     table_node.bbox.width = (right - left).max(0.0);
 }
 
+const NESTED_FRAGMENT_EDGE_EPSILON_PX: f64 = 0.5;
+/// A table that leaks less than this distance into a clipped continuation cell
+/// is the terminal border of the previous fragment, not content for this page.
+/// Keeping it paints a stray horizontal line at the next page's top (42065
+/// p13), while the corresponding text is already correctly clipped away.
+const NESTED_FRAGMENT_RESIDUAL_BORDER_PX: f64 = 4.0;
+
+fn push_fragment_border_line(
+    tree: &mut PageRenderTree,
+    table_node: &mut RenderNode,
+    x1: f64,
+    y1: f64,
+    x2: f64,
+    y2: f64,
+    style: crate::renderer::LineStyle,
+) {
+    let width = style.width.max(NESTED_FRAGMENT_EDGE_EPSILON_PX);
+    let bbox = BoundingBox::new(
+        x1.min(x2),
+        y1.min(y2),
+        (x2 - x1).abs().max(width),
+        (y2 - y1).abs().max(width),
+    );
+    table_node.children.push(RenderNode::new(
+        tree.next_id(),
+        RenderNodeType::Line(LineNode::new(x1, y1, x2, y2, style)),
+        bbox,
+    ));
+}
+
+fn has_fragment_border_line(table_node: &RenderNode, x1: f64, y1: f64, x2: f64, y2: f64) -> bool {
+    table_node.children.iter().any(|child| {
+        matches!(
+            &child.node_type,
+            RenderNodeType::Line(line)
+                if (line.x1 - x1).abs() <= NESTED_FRAGMENT_EDGE_EPSILON_PX
+                    && (line.y1 - y1).abs() <= NESTED_FRAGMENT_EDGE_EPSILON_PX
+                    && (line.x2 - x2).abs() <= NESTED_FRAGMENT_EDGE_EPSILON_PX
+                    && (line.y2 - y2).abs() <= NESTED_FRAGMENT_EDGE_EPSILON_PX
+        )
+    })
+}
+
+/// Repair only the frame geometry of a true nested-table continuation.
+///
+/// A direct nested table keeps its document-global coordinates even when its
+/// owning 1×1 RowBreak cell is a clipped page fragment. SVG/Canvas therefore
+/// naturally retains the old table's bottom/side lines, but loses the new
+/// fragment's top edge: the source top is still above the clip rectangle. A
+/// few-pixel terminal remnant is the inverse case and must be suppressed.
+///
+/// Do not alter the table bbox or its flow height here. This is deliberately a
+/// paint-only correction after all native table borders have been emitted, so
+/// it cannot reveal text from the preceding/following fragment (42065
+/// p11/p13/p15).
+fn repair_clipped_nested_table_fragment_frame(tree: &mut PageRenderTree, node: &mut RenderNode) {
+    let is_clipped_cell = matches!(
+        &node.node_type,
+        RenderNodeType::TableCell(TableCellNode { clip: true, .. })
+    );
+    if !is_clipped_cell {
+        return;
+    }
+
+    let clip_top = node.bbox.y;
+    let clip_bottom = node.bbox.y + node.bbox.height;
+    for table_node in &mut node.children {
+        if !matches!(table_node.node_type, RenderNodeType::Table(_)) {
+            continue;
+        }
+
+        let table_top = table_node.bbox.y;
+        let table_bottom = table_top + table_node.bbox.height;
+        if table_top >= clip_top - NESTED_FRAGMENT_EDGE_EPSILON_PX
+            || table_bottom <= clip_top + NESTED_FRAGMENT_EDGE_EPSILON_PX
+        {
+            continue;
+        }
+        let fragment_bottom = table_bottom.min(clip_bottom);
+        let fragment_height = fragment_bottom - clip_top;
+        if fragment_height <= NESTED_FRAGMENT_EDGE_EPSILON_PX {
+            continue;
+        }
+
+        if fragment_height < NESTED_FRAGMENT_RESIDUAL_BORDER_PX {
+            // Only a sub-line tail reaches this page. Hiding its source edge
+            // prevents the previous table's bottom border from appearing as a
+            // false top border without affecting any current-page content.
+            for child in &mut table_node.children {
+                if matches!(child.node_type, RenderNodeType::Line(_)) {
+                    child.visible = false;
+                }
+            }
+            continue;
+        }
+
+        let table_left = table_node.bbox.x;
+        let table_right = table_left + table_node.bbox.width;
+        let mut horizontal_style = None;
+        let mut left_style = None;
+        let mut right_style = None;
+        for child in &table_node.children {
+            let RenderNodeType::Line(line) = &child.node_type else {
+                continue;
+            };
+            let horizontal = (line.y2 - line.y1).abs() <= NESTED_FRAGMENT_EDGE_EPSILON_PX;
+            let vertical = (line.x2 - line.x1).abs() <= NESTED_FRAGMENT_EDGE_EPSILON_PX;
+            if horizontal
+                && (line.x1.min(line.x2) - table_left).abs() <= NESTED_FRAGMENT_EDGE_EPSILON_PX
+                && (line.x1.max(line.x2) - table_right).abs() <= NESTED_FRAGMENT_EDGE_EPSILON_PX
+                && horizontal_style.is_none()
+            {
+                horizontal_style = Some(line.style.clone());
+            }
+            if vertical && (line.x1 - table_left).abs() <= NESTED_FRAGMENT_EDGE_EPSILON_PX {
+                left_style.get_or_insert_with(|| line.style.clone());
+            }
+            if vertical && (line.x1 - table_right).abs() <= NESTED_FRAGMENT_EDGE_EPSILON_PX {
+                right_style.get_or_insert_with(|| line.style.clone());
+            }
+        }
+
+        // The original vertical sides already intersect the cell clip in most
+        // renderers. Emit them again at the fragment boundary nevertheless:
+        // an SVG clip exactly on the right edge otherwise drops that side,
+        // yielding a three-sided table in the browser canvas.
+        if let Some(style) = horizontal_style {
+            if !has_fragment_border_line(table_node, table_left, clip_top, table_right, clip_top) {
+                push_fragment_border_line(
+                    tree,
+                    table_node,
+                    table_left,
+                    clip_top,
+                    table_right,
+                    clip_top,
+                    style,
+                );
+            }
+        }
+        if let Some(style) = left_style {
+            if !has_fragment_border_line(
+                table_node,
+                table_left,
+                clip_top,
+                table_left,
+                fragment_bottom,
+            ) {
+                push_fragment_border_line(
+                    tree,
+                    table_node,
+                    table_left,
+                    clip_top,
+                    table_left,
+                    fragment_bottom,
+                    style,
+                );
+            }
+        }
+        if let Some(style) = right_style {
+            if !has_fragment_border_line(
+                table_node,
+                table_right,
+                clip_top,
+                table_right,
+                fragment_bottom,
+            ) {
+                push_fragment_border_line(
+                    tree,
+                    table_node,
+                    table_right,
+                    clip_top,
+                    table_right,
+                    fragment_bottom,
+                    style,
+                );
+            }
+        }
+    }
+}
+
 /// Run the narrow horizontal clip correction only after every nested table in
 /// the current subtree has emitted its border edges. Calling the single-cell
 /// helper during the parent cell loop is too early for normal edge rendering:
@@ -284,12 +464,16 @@ fn extend_table_horizontal_bbox_to_direct_cell_paint(table_node: &mut RenderNode
 /// retained the undersized wrapper clip. The traversal stays post-order and
 /// only delegates to the direct-child-table helper above, so it cannot widen a
 /// continuation's vertical viewport or reveal a future-page text tail.
-pub(super) fn extend_completed_nested_table_border_clips(node: &mut RenderNode) {
+pub(super) fn extend_completed_nested_table_border_clips(
+    tree: &mut PageRenderTree,
+    node: &mut RenderNode,
+) {
     for child in &mut node.children {
-        extend_completed_nested_table_border_clips(child);
+        extend_completed_nested_table_border_clips(tree, child);
     }
     extend_table_horizontal_bbox_to_direct_cell_paint(node);
     extend_clipped_cell_horizontal_clip_to_nested_table_borders(node);
+    repair_clipped_nested_table_fragment_frame(tree, node);
 }
 
 fn should_render_table_caption(table: &crate::model::table::Table, depth: usize) -> bool {
@@ -1685,7 +1869,7 @@ impl LayoutEngine {
         // Cell children may complete normal table-edge rendering only after
         // the parent cell loop. Correct their horizontal clip at this point
         // without changing the vertical continuation viewport.
-        extend_completed_nested_table_border_clips(&mut table_node);
+        extend_completed_nested_table_border_clips(tree, &mut table_node);
 
         col_node.children.push(table_node);
 
@@ -8460,7 +8644,13 @@ impl LayoutEngine {
                 ));
             }
         }
-        if offset > 0.5 {
+        // A non-terminal fragment must not paint the synthetic trailing unit:
+        // its successor owns that source window.  The terminal fragment is
+        // different — that trailing unit can contain the final ordinary
+        // paragraphs after the nested table, so discarding it clips the
+        // document's last content (42065 p17's section 4).
+        let terminal = end_unit >= units.len();
+        if offset > 0.5 && !terminal {
             while visible_units
                 .last()
                 .is_some_and(|(_, trailing, _)| *trailing)
@@ -8502,12 +8692,45 @@ impl LayoutEngine {
             .iter()
             .find_map(|(height, trailing, _)| (!*trailing).then_some(*height))
             .unwrap_or(0.0);
-        // PR #4122의 재귀 cursor는 첫 visible unit을 현재 조각의 물리
-        // reservation으로 보존한다. 콘텐츠 원점에서는 그 unit을 한 번 빼야
-        // 첫 fragment와 continuation이 같은 canonical child cursor를 공유한다.
-        let offset_within_start = (offset - first_visible_content_height).max(0.0);
+        // 1×1 host 안의 1×1 표 continuation은 이전 조각의 첫 unit을 물리
+        // reservation으로 이미 전진시킨다. 다음 조각의 content origin까지 원래
+        // `offset`만 쓰면 그 unit이 다시 페이지 상단에 그려져 이후 제목/표가 한 줄씩
+        // 아래로 drift한다(42065 p12–p16). 종료 조각은 남은 tail만 clip해야 하므로
+        // 이 보정을 적용하지 않는다.
+        let single_cell_nested_continuation = table.row_count == 1
+            && table.col_count == 1
+            && cell.paragraphs.get(para_idx).is_some_and(|paragraph| {
+                paragraph.controls.iter().any(|control| {
+                    matches!(control, Control::Table(nested) if nested.row_count == 1 && nested.col_count == 1)
+                })
+            });
+        // PR #4122가 만든 재귀 child cursor가 있으면 그 cursor가 소유권의
+        // 권위다. scalar offset 보정은 재귀 투영이 없는 기존 fallback에만 쓴다.
+        let compensate_first_visible = recursive_cut.is_none()
+            && offset > 0.5
+            && !terminal
+            && single_cell_nested_continuation;
+        let offset_within_start = if recursive_cut.is_some() {
+            (offset - first_visible_content_height).max(0.0)
+        } else if compensate_first_visible {
+            offset + first_visible_content_height
+        } else {
+            offset
+        };
         let is_offset_continuation = offset_within_start > 0.5;
-        let visible_height = if is_offset_continuation {
+        let terminal_single_cell_tail = recursive_cut.is_none()
+            && terminal
+            && is_offset_continuation
+            && single_cell_nested_continuation;
+        let visible_height = if terminal_single_cell_tail {
+            // The terminal 1×1 fragment has no successor to reserve space
+            // for. Its final ordinary paragraphs are still laid out one
+            // first-unit below the fragment origin, however, so both the
+            // nested cell clip and its host RowBreak cell must retain that
+            // physical tail. Otherwise the source remains in export-text but
+            // SVG/Canvas clips it (42065 p17 section 4).
+            flow_visible + first_visible_content_height * 2.0 + 4.0
+        } else if is_offset_continuation && !compensate_first_visible {
             // Mixed text+nested-table units include a small layout allowance
             // (`nested_h + 4.0`) so pagination has enough flow room. That
             // allowance must not expand the visible nested border, otherwise
@@ -8522,7 +8745,9 @@ impl LayoutEngine {
         let remaining = (total - offset).max(0.0);
         let flow_height = if recursive_cut.is_some() {
             flow_visible
-        } else if is_offset_continuation {
+        } else if terminal_single_cell_tail {
+            visible_height
+        } else if is_offset_continuation && !compensate_first_visible {
             flow_visible + first_visible_content_height
         } else {
             flow_visible.min(remaining)
@@ -8852,8 +9077,17 @@ impl LayoutEngine {
                         matches!(control, Control::Table(nested) if nested.row_count == 1 && nested.col_count == 1)
                     })
                 });
-            if offset_within_start > 0.5 && !(single_cell_nested_continuation && !terminal) {
-                extra += first_visible_content_height;
+            if offset_within_start > 0.5 {
+                if terminal && single_cell_nested_continuation {
+                    // Keep the parent RowBreak cell in lockstep with the
+                    // terminal nested-cell viewport.  Reserving only one
+                    // unit leaves the parent clip above the nested tail, so
+                    // the last ordinary paragraphs exist in the tree but
+                    // disappear in SVG/Canvas (42065 p17 section 4).
+                    extra += first_visible_content_height * 2.0 + 4.0;
+                } else if !single_cell_nested_continuation {
+                    extra += first_visible_content_height;
+                }
             }
         }
 

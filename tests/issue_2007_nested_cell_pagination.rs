@@ -210,6 +210,45 @@ fn nested_table_right_border_paint_extent(table: &RenderNode) -> Option<f64> {
         .max_by(|left, right| left.total_cmp(right))
 }
 
+/// A RowBreak host clips its direct nested table at the page boundary.  The
+/// continuation therefore needs a newly painted top edge at the clip origin;
+/// the source table's own top edge remains on the preceding page.
+fn has_direct_full_width_horizontal_line_at(table: &RenderNode, y: f64) -> bool {
+    let left = table.bbox.x;
+    let right = table.bbox.x + table.bbox.width;
+    table.children.iter().any(|child| {
+        matches!(
+            &child.node_type,
+            RenderNodeType::Line(line)
+                if child.visible
+                    && (line.y1 - line.y2).abs() <= 0.1
+                    && (line.y1 - y).abs() <= 0.6
+                    && (line.x1.min(line.x2) - left).abs() <= 0.6
+                    && (line.x1.max(line.x2) - right).abs() <= 0.6
+        )
+    })
+}
+
+fn has_visible_full_width_horizontal_line_near(
+    node: &RenderNode,
+    left: f64,
+    right: f64,
+    y: f64,
+) -> bool {
+    matches!(
+        &node.node_type,
+        RenderNodeType::Line(line)
+            if node.visible
+                && (line.y1 - line.y2).abs() <= 0.1
+                && (line.y1 - y).abs() <= 0.6
+                && (line.x1.min(line.x2) - left).abs() <= 0.6
+                && (line.x1.max(line.x2) - right).abs() <= 0.6
+    ) || node
+        .children
+        .iter()
+        .any(|child| has_visible_full_width_horizontal_line_near(child, left, right, y))
+}
+
 /// Wrapper Cell이 직접 포함한 중첩 표의 바깥 우측선을 모두 검사한다.
 ///
 /// issue2007 p2에는 4×2와 9×2 표가 한 wrapper Cell 안에 연달아 있고, p3에는
@@ -598,6 +637,59 @@ fn issue_2007_single_cell_continuation_does_not_repaint_boundary_fragments() {
             Some(ClipRect::from_node(&p17.root)),
         ),
         "p17 must retain its terminal heading"
+    );
+    assert!(
+        contains_painted_text(
+            &p17.root,
+            "선호된 대안의 이해관계자 의견 및 조치",
+            Some(ClipRect::from_node(&p17.root)),
+        ),
+        "p17 terminal nested-cell clip drops the source's final section 4"
+    );
+}
+
+#[test]
+fn issue_2007_continuation_frame_restarts_and_drops_previous_page_residual() {
+    let repo_root = env!("CARGO_MANIFEST_DIR");
+    let hwp_path =
+        Path::new(repo_root).join("samples/basic/issue2007_nested_cell_pagination_42065.hwp");
+    let bytes = fs::read(&hwp_path).unwrap_or_else(|e| panic!("read {}: {e}", hwp_path.display()));
+    let doc = rhwp::wasm_api::HwpDocument::from_bytes(&bytes)
+        .expect("parse issue2007_nested_cell_pagination_42065.hwp");
+
+    // p11 and p15 start in the middle of a dotted 1×1 nested table. Their
+    // source top edge is on the preceding page, so SVG/Canvas must receive a
+    // new full-width top edge at the continuation viewport instead of only
+    // retaining the old bottom/side lines.
+    for (page_index, needle) in [
+        (10, "금융거래정보를 요구하는 경우에는"),
+        (14, "금융위원회는 관계자에 대한 조사실적"),
+    ] {
+        let tree = doc
+            .build_page_render_tree(page_index)
+            .unwrap_or_else(|e| panic!("issue2007 p{} render tree: {e}", page_index + 1));
+        let table = find_innermost_table_containing_text(&tree.root, needle).unwrap_or_else(|| {
+            panic!(
+                "p{} continuation table containing {needle:?}",
+                page_index + 1
+            )
+        });
+        assert!(
+            has_direct_full_width_horizontal_line_at(table, 117.15),
+            "p{} continuation table is missing its reconstructed top frame",
+            page_index + 1
+        );
+    }
+
+    // p13 follows a table that ends only 2.5px into the new page. That remnant
+    // is a previous-page border, not a new table frame; it must not cross the
+    // heading at the top of p13.
+    let p13 = doc
+        .build_page_render_tree(12)
+        .expect("issue2007 p13 render tree");
+    assert!(
+        !has_visible_full_width_horizontal_line_near(&p13.root, 84.23, 727.47, 119.68),
+        "p13 paints the previous fragment's residual bottom border as a false top frame"
     );
 }
 
