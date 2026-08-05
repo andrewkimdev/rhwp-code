@@ -2355,22 +2355,59 @@ impl LayoutEngine {
             ));
         }
 
-        // [Task #1860] 노드-자식 포섭 불변: 분할 표 조각의 셀 내 절대위치 shape
+        // [Task #1860/#3820] 노드-자식 포섭 불변: 분할 표 조각의 셀 내 절대위치 shape
         // (as-char 텍스트박스/그림 등)가 유닛 기반 셀 높이를 초과해 그려지면 표 노드
         // bbox 가 자식을 clip 한다(page17 pi=28 텍스트박스 하단 잘림). 렌더 완료 후 모든
-        // 자손의 최하단을 구해 표 노드 높이를 그만큼 확장한다(확장만, 축소 없음).
+        // **가시** 자손의 최하단을 구해 표 노드 높이를 그만큼 확장한다(확장만, 축소 없음).
+        //
+        // 단, RowBreak 조각의 `TableCell { clip: true }` 아래 일반 흐름 자손은 그 물리
+        // cell viewport 밖에서 다음/이전 쪽의 흐름을 보유할 수 있다. 그 invisible tail까지
+        // Table bbox에 포함하면 body clip도 수천 px로 확대되어 Canvas/WASM replay가
+        // 현재 쪽 밖의 내용을 paint 후보로 보게 된다(42065 p8 이후). 반면 직접 배치된
+        // 도형은 clip cell의 현재 쪽 표시물일 수 있으므로, **현재 column body 안에서 끝나는
+        // 경우에만** 그 도형 subtree를 계속 포함한다. 이 경계는 p17의 textbox-backed
+        // rectangle은 보존하면서, 다른 문서의 다음 쪽 밖 도형을 table/body clip으로
+        // 역류시키지 않는다.
         {
-            fn descendant_bottom(node: &RenderNode) -> f64 {
+            let physical_page_bottom = col_area.y + col_area.height;
+            fn descendant_bottom(node: &RenderNode, physical_page_bottom: f64) -> f64 {
                 let mut b = node.bbox.y + node.bbox.height;
+                if matches!(
+                    node.node_type,
+                    RenderNodeType::TableCell(TableCellNode { clip: true, .. })
+                ) {
+                    for child in &node.children {
+                        let is_direct_drawing = matches!(
+                            child.node_type,
+                            RenderNodeType::Rectangle(_)
+                                | RenderNodeType::Ellipse(_)
+                                | RenderNodeType::Path(_)
+                                | RenderNodeType::Image(_)
+                                | RenderNodeType::Group(_)
+                                | RenderNodeType::TextBox
+                                | RenderNodeType::Equation(_)
+                                | RenderNodeType::FormObject(_)
+                                | RenderNodeType::Placeholder(_)
+                                | RenderNodeType::RawSvg(_)
+                        );
+                        if is_direct_drawing {
+                            let drawing_bottom = descendant_bottom(child, physical_page_bottom);
+                            if drawing_bottom <= physical_page_bottom + 0.5 {
+                                b = b.max(drawing_bottom);
+                            }
+                        }
+                    }
+                    return b;
+                }
                 for c in &node.children {
-                    b = b.max(descendant_bottom(c));
+                    b = b.max(descendant_bottom(c, physical_page_bottom));
                 }
                 b
             }
             let content_bottom = table_node
                 .children
                 .iter()
-                .map(descendant_bottom)
+                .map(|child| descendant_bottom(child, physical_page_bottom))
                 .fold(table_node.bbox.y + table_node.bbox.height, f64::max);
             let grown = content_bottom - table_node.bbox.y;
             if grown > table_node.bbox.height {

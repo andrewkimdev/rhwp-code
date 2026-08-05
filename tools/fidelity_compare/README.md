@@ -97,6 +97,14 @@ python3 tools/fidelity_compare/fidelity_compare.py 0 214 \
   표↔footer·page frame 후보, 또는 쪽 하단 표와 24자 이상 PDF↔SVG text delta가 함께 있는 경우를 한 행에
   묶는다. rows/cols·각 쪽 bbox·하단 여백·text delta를 남기지만 **PDF table row owner나 올바른 표 분할을
   판정하지 않는 candidate**다.
+- `svg-table-border-clip-candidates.tsv`: render tree의 Table 외곽 vertical edge와 SVG의 실제 `<line>`을
+  연결해, 그 선이 Body/TableCell clip에 의해 가시 폭 20% 이하로 잘린 경우를 남긴다. 즉 선이 **생성은 됐지만
+  최종 SVG/Canvas paint에서는 사라진** 외곽선 결함을 빠른 text-only pass에서도 후보화한다. source에 원래
+  테두리가 없을 수 있으므로 PDF 시각 대조 전에는 결함 확정이 아닌 candidate다.
+- `table-cell-text-overlap-candidates.tsv`: 한 `TableCell`이 소유한 실제 paint `TextLine` 둘이
+  수직 band와 가로 영역을 함께 크게 공유하면 기록한다. PDF/SVG text가 모두 존재해도 p2처럼 문단이
+  같은 좌표에 중복 paint되는 결함을 찾기 위한 구조 후보이며, 의도적 도형 text layer는 PDF 시각 대조로
+  제외한다.
 
 `--source`, `--reference-pdf`, `--label`을 모두 지정하면 등록 fixture 대신 임의의 HWP/HWPX와 기준 PDF를
 비교한다. 이 direct-pair 형식의 positional은 `<시작쪽> <끝쪽>`뿐이다. 기존 등록 fixture 형식
@@ -129,7 +137,8 @@ candidate와 successor-page의 상단 Body float를 결합해, 그림 앞 문단
 기록한다. 선택 page SVG cache 수는 partial run과 stale cache를 구분할 수 없어서 전체 수로 가장하지 않는다.
 
 `--layout-ledger`는 `export-render-tree`를 한 번 실행해 `layout-candidates.tsv`,
-`table-fragment-candidates.tsv`, `float-owner-shift-candidates.tsv`를 만든다.
+`table-fragment-candidates.tsv`, `svg-table-border-clip-candidates.tsv`,
+`float-owner-shift-candidates.tsv`를 만든다.
 `body_footnote_lines`는 Body `TextLine`의 하단이
 `FootnoteArea` 상단보다 1px 이상 아래인 경우, `table_footer`는 Body 표의 하단이 Footer 상단보다 1px 이상 아래인
 경우다. `*_outside_frame`은 Body 표/그림이 page frame 밖에 나간 경우다. 표 fragment ledger는 source `(pi, ci)`가
@@ -141,6 +150,12 @@ PDF↔SVG text delta를 함께 기록한다. 이것은 rhwp 쪽의 source-table 
 margin 유실처럼 glyph가 그림 테두리와 접촉하는 결함을 빠르게 후보화한다. BehindText/InFrontOfText 그림은 의도된
 overlay일 수 있어 제외한다. stroke 반올림과 zero-margin source도 후보가 될 수 있으므로, 0이 아닌 값은 곧바로 결함이
 아니라 PDF visual review 대상으로 해석한다.
+
+`svg-table-border-clip-candidates.tsv`는 page raster diff와 별개로, SVG가 emit한 Table outer vertical
+border의 stroke interval이 ancestor `body-clip-*` 또는 `cell-clip-*`과 만나 가시 폭 20% 이하가 된 경우를
+찾는다. line이 실제 Table의 direct border node와 일치해야 하므로 임의의 shape line을 표 결함으로 분류하지
+않는다. 이 구조 신호는 p4처럼 큰 표의 우측선 한 면만 사라져도 픽셀 diff 순위·text ledger가 놓치는 경우를
+보완하지만, PDF가 의도적으로 해당 border를 생략한 source를 구분하지 못하므로 반드시 review PNG로 확정한다.
 
 `scripts/visual_sweep.py`는 자신의 render tree 분석에서 이 Square/Tight/Through 후보 함수를
 재사용해 `square_wrap_text_overlap` flag와 annotation을 남긴다. 따라서 sweep의 `flagged=0`이 이 특정

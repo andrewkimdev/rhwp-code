@@ -756,6 +756,119 @@ def text_line_has_visible_paint(node: Mapping[str, object]) -> bool:
     return visible or not found_text_run
 
 
+def table_cell_text_overlap_candidates(
+    tree: Mapping[str, object],
+) -> list[dict[str, object]]:
+    """Find physically overlapping painted TextLines owned by one table cell.
+
+    Text-only PDF/SVG comparison cannot see a line duplicated at the same
+    coordinates: all characters may still be present on the correct page.
+    This render-tree rule therefore groups painted TextLine boxes by their
+    owning TableCell (never across nested cells) and records a candidate when
+    two substantial lines share both a material vertical band and most of the
+    narrower line's horizontal extent.  It deliberately remains candidate-only
+    because a document can intentionally layer text inside a drawing object.
+    """
+    minimum_horizontal_overlap_px = 24.0
+    minimum_horizontal_overlap_ratio = 0.45
+    minimum_vertical_overlap_px = 3.0
+    minimum_vertical_overlap_ratio = 0.35
+    candidates: list[dict[str, object]] = []
+
+    def collect_owned_text_lines(cell: Mapping[str, object]) -> list[tuple[float, float, float, float]]:
+        lines: list[tuple[float, float, float, float]] = []
+
+        def walk(node: Mapping[str, object], *, is_owner: bool) -> None:
+            if not is_owner and node.get("type") == "Cell":
+                # Nested table cells own their own text; mixing them with the
+                # outer cell would manufacture false overlaps.
+                return
+            if node.get("type") == "TextLine" and text_line_has_visible_paint(node):
+                box = bbox_from_node(node)
+                if box is not None and box[2] > 0.0 and box[3] > 0.0:
+                    lines.append(box)
+            children = node.get("children")
+            if isinstance(children, list):
+                for child in children:
+                    if isinstance(child, Mapping):
+                        walk(child, is_owner=False)
+
+        walk(cell, is_owner=True)
+        return lines
+
+    def inspect_cell(
+        cell: Mapping[str, object], table: Mapping[str, object] | None
+    ) -> None:
+        cell_box = bbox_from_node(cell)
+        if cell_box is None:
+            return
+        lines = sorted(collect_owned_text_lines(cell), key=lambda box: (box[1], box[0]))
+        overlaps: list[tuple[tuple[float, float, float, float], tuple[float, float, float, float], float, float]] = []
+        for index, first in enumerate(lines):
+            first_bottom = first[1] + first[3]
+            for second in lines[index + 1 :]:
+                if second[1] >= first_bottom - minimum_vertical_overlap_px:
+                    break
+                overlap_y = min(first_bottom, second[1] + second[3]) - max(first[1], second[1])
+                overlap_x = min(first[0] + first[2], second[0] + second[2]) - max(first[0], second[0])
+                if overlap_y < max(minimum_vertical_overlap_px, min(first[3], second[3]) * minimum_vertical_overlap_ratio):
+                    continue
+                if overlap_x < max(minimum_horizontal_overlap_px, min(first[2], second[2]) * minimum_horizontal_overlap_ratio):
+                    continue
+                overlaps.append((first, second, overlap_x, overlap_y))
+
+        if not overlaps:
+            return
+        first, second, overlap_x, overlap_y = overlaps[0]
+        candidates.append(
+            {
+                "pi": table.get("pi") if table is not None else None,
+                "ci": table.get("ci") if table is not None else None,
+                "rows": table.get("rows") if table is not None else None,
+                "cols": table.get("cols") if table is not None else None,
+                "row": cell.get("row"),
+                "col": cell.get("col"),
+                "cell_bbox": [round(value, 1) for value in cell_box],
+                "overlap_pair_count": len(overlaps),
+                "max_overlap_x_px": round(max(pair[2] for pair in overlaps), 1),
+                "max_overlap_y_px": round(max(pair[3] for pair in overlaps), 1),
+                "first_line_bbox": [round(value, 1) for value in first],
+                "second_line_bbox": [round(value, 1) for value in second],
+                "first_overlap_x_px": round(overlap_x, 1),
+                "first_overlap_y_px": round(overlap_y, 1),
+            }
+        )
+
+    def walk(
+        node: Mapping[str, object],
+        table: Mapping[str, object] | None = None,
+        source_table: Mapping[str, object] | None = None,
+    ) -> None:
+        node_type = node.get("type")
+        if node_type == "Table":
+            table = node
+            if node.get("pi") is not None or node.get("ci") is not None:
+                source_table = node
+        if node_type == "Cell":
+            inspect_cell(node, source_table or table)
+        children = node.get("children")
+        if isinstance(children, list):
+            for child in children:
+                if isinstance(child, Mapping):
+                    walk(child, table, source_table)
+
+    walk(tree)
+    return sorted(
+        candidates,
+        key=lambda candidate: (
+            float(candidate["cell_bbox"][1]),
+            float(candidate["cell_bbox"][0]),
+            str(candidate["pi"]),
+            str(candidate["ci"]),
+        ),
+    )
+
+
 def square_wrap_text_overlap_candidates(
     tree: Mapping[str, object],
 ) -> list[dict[str, object]]:
@@ -954,11 +1067,11 @@ def deferred_square_picture_page_top_drift_candidates(
     return candidates
 
 
-def layout_candidates(tree: Mapping[str, object]) -> tuple[int, int, int, int, int, int]:
-    """(body↔각주, table↔footer, table/frame, image/frame, Square/text, deferred Square) 후보 수."""
+def layout_candidates(tree: Mapping[str, object]) -> tuple[int, int, int, int, int, int, int]:
+    """(body↔각주, table↔footer, table/frame, image/frame, Square/text, deferred Square, cell/text) 후보 수."""
     page_bbox = bbox_from_node(tree)
     if page_bbox is None:
-        return (0, 0, 0, 0, 0)
+        return (0, 0, 0, 0, 0, 0, 0)
     _, _, page_width, page_height = page_bbox
     footnote_tops: list[float] = []
     footer_tops: list[float] = []
@@ -1009,6 +1122,7 @@ def layout_candidates(tree: Mapping[str, object]) -> tuple[int, int, int, int, i
     image_outside_frame = sum(outside_page(image) for image in body_images)
     square_wrap_text_overlap = len(square_wrap_text_overlap_candidates(tree))
     deferred_square_page_top_drift = len(deferred_square_picture_page_top_drift_candidates(tree))
+    table_cell_text_overlap = len(table_cell_text_overlap_candidates(tree))
     return (
         body_footnote_lines,
         table_footer,
@@ -1016,6 +1130,7 @@ def layout_candidates(tree: Mapping[str, object]) -> tuple[int, int, int, int, i
         image_outside_frame,
         square_wrap_text_overlap,
         deferred_square_page_top_drift,
+        table_cell_text_overlap,
     )
 
 
@@ -1240,7 +1355,7 @@ def table_fragment_candidates(
 
 
 def format_bbox(box: object) -> str:
-    if not isinstance(box, tuple) or len(box) != 4:
+    if not isinstance(box, (tuple, list)) or len(box) != 4:
         return "-"
     return ",".join(f"{float(value):.1f}" for value in box)
 
@@ -1428,13 +1543,13 @@ def write_layout_ledger(
         report.write(
             "page\tbody_footnote_lines\ttable_footer\ttable_outside_frame\t"
             "image_outside_frame\tsquare_wrap_text_overlap\t"
-            "deferred_square_page_top_drift\tnote\n"
+            "deferred_square_page_top_drift\ttable_cell_text_overlap\tnote\n"
         )
         for page_index in requested_pages:
             tree_path = tree_path_for_page(tree_dir, page_index)
             if tree_path is None:
                 missing_pages.append(page_index)
-                report.write(f"{page_index + 1}\t0\t0\t0\t0\t0\t0\trender tree 없음\n")
+                report.write(f"{page_index + 1}\t0\t0\t0\t0\t0\t0\t0\trender tree 없음\n")
                 continue
             try:
                 tree = json.loads(tree_path.read_text(encoding="utf-8"))
@@ -1443,13 +1558,362 @@ def write_layout_ledger(
                 candidates = layout_candidates(tree)
             except (OSError, ValueError, json.JSONDecodeError) as error:
                 missing_pages.append(page_index)
-                report.write(f"{page_index + 1}\t0\t0\t0\t0\t0\t0\trender tree 읽기 실패: {error}\n")
+                report.write(f"{page_index + 1}\t0\t0\t0\t0\t0\t0\t0\trender tree 읽기 실패: {error}\n")
                 continue
             report.write(
                 f"{page_index + 1}\t{candidates[0]}\t{candidates[1]}\t"
-                f"{candidates[2]}\t{candidates[3]}\t{candidates[4]}\t{candidates[5]}\t-\n"
+                f"{candidates[2]}\t{candidates[3]}\t{candidates[4]}\t{candidates[5]}\t"
+                f"{candidates[6]}\t-\n"
             )
     return missing_pages
+
+
+def write_table_cell_text_overlap_ledger(
+    work_dir: Path,
+    tree_dir: Path,
+    requested_pages: Sequence[int],
+) -> Path:
+    """Write table-cell TextLine overlap candidates for visual PDF review."""
+    report_path = work_dir / "table-cell-text-overlap-candidates.tsv"
+    with report_path.open("w", encoding="utf-8") as report:
+        report.write(
+            "page\tpi\tci\trows\tcols\trow\tcol\tcell_bbox\toverlap_pairs\t"
+            "max_overlap_x_px\tmax_overlap_y_px\tfirst_line_bbox\tsecond_line_bbox\t"
+            "note\n"
+        )
+        for page_index in requested_pages:
+            tree_path = tree_path_for_page(tree_dir, page_index)
+            if tree_path is None:
+                continue
+            try:
+                tree = json.loads(tree_path.read_text(encoding="utf-8"))
+            except (OSError, ValueError, json.JSONDecodeError):
+                continue
+            if not isinstance(tree, Mapping):
+                continue
+            for candidate in table_cell_text_overlap_candidates(tree):
+                report.write(
+                    f"{page_index + 1}\t{format_number(candidate['pi'])}\t"
+                    f"{format_number(candidate['ci'])}\t{format_number(candidate['rows'])}\t"
+                    f"{format_number(candidate['cols'])}\t{format_number(candidate['row'])}\t"
+                    f"{format_number(candidate['col'])}\t{format_bbox(candidate['cell_bbox'])}\t"
+                    f"{candidate['overlap_pair_count']}\t{candidate['max_overlap_x_px']:.1f}\t"
+                    f"{candidate['max_overlap_y_px']:.1f}\t"
+                    f"{format_bbox(candidate['first_line_bbox'])}\t"
+                    f"{format_bbox(candidate['second_line_bbox'])}\t"
+                    "candidate only; two painted TextLine bands overlap within one TableCell\n"
+                )
+    return report_path
+
+
+def _svg_local_name(element: ET.Element) -> str:
+    return element.tag.rsplit("}", 1)[-1]
+
+
+def _svg_float(element: ET.Element, name: str) -> float | None:
+    value = element.get(name)
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except ValueError:
+        return None
+
+
+def _svg_clip_rectangles(root: ET.Element) -> dict[str, tuple[float, float, float, float]]:
+    """Read axis-aligned SVG clipPath rectangles used by rhwp page/cell clips."""
+    clips: dict[str, tuple[float, float, float, float]] = {}
+    for element in root.iter():
+        if _svg_local_name(element) != "clipPath":
+            continue
+        clip_id = element.get("id")
+        if not clip_id:
+            continue
+        rect = next(
+            (child for child in element if _svg_local_name(child) == "rect"), None
+        )
+        if rect is None:
+            continue
+        x = _svg_float(rect, "x")
+        y = _svg_float(rect, "y")
+        width = _svg_float(rect, "width")
+        height = _svg_float(rect, "height")
+        if None in {x, y, width, height} or width is None or height is None:
+            continue
+        if width <= 0.0 or height <= 0.0:
+            continue
+        assert x is not None and y is not None
+        clips[clip_id] = (x, y, x + width, y + height)
+    return clips
+
+
+def _intersect_svg_rectangles(
+    first: tuple[float, float, float, float] | None,
+    second: tuple[float, float, float, float],
+) -> tuple[float, float, float, float] | None:
+    if first is None:
+        return second
+    x0 = max(first[0], second[0])
+    y0 = max(first[1], second[1])
+    x1 = min(first[2], second[2])
+    y1 = min(first[3], second[3])
+    if x1 <= x0 or y1 <= y0:
+        return None
+    return (x0, y0, x1, y1)
+
+
+def _clip_id_from_attr(value: str | None) -> str | None:
+    if not value:
+        return None
+    match = re.fullmatch(r"\s*url\(#([^)]+)\)\s*", value)
+    return match.group(1) if match else None
+
+
+def svg_vertical_lines_with_clips(
+    svg_path: Path,
+) -> list[dict[str, object]]:
+    """Collect painted vertical SVG lines and their effective rhwp clip intersection.
+
+    This is deliberately structural rather than a generic pixel threshold.  A
+    border can be emitted into the SVG and still be completely invisible when
+    a body or TableCell clip rectangle excludes its stroke.  That exact class
+    of error is lost by text ledgers and may be drowned out in a page pixel
+    score, while the SVG retains enough geometry to identify it deterministically.
+    """
+    root = ET.parse(svg_path).getroot()
+    clip_rectangles = _svg_clip_rectangles(root)
+    lines: list[dict[str, object]] = []
+
+    def walk(
+        element: ET.Element,
+        active_clip: tuple[float, float, float, float] | None,
+        active_clip_ids: tuple[str, ...],
+    ) -> None:
+        tag = _svg_local_name(element)
+        if tag in {"defs", "clipPath"}:
+            return
+        clip_id = _clip_id_from_attr(element.get("clip-path"))
+        next_clip = active_clip
+        next_clip_ids = active_clip_ids
+        if clip_id is not None and clip_id in clip_rectangles:
+            next_clip = _intersect_svg_rectangles(next_clip, clip_rectangles[clip_id])
+            next_clip_ids = (*next_clip_ids, clip_id)
+
+        if tag == "line":
+            x1 = _svg_float(element, "x1")
+            y1 = _svg_float(element, "y1")
+            x2 = _svg_float(element, "x2")
+            y2 = _svg_float(element, "y2")
+            stroke_width = _svg_float(element, "stroke-width") or 1.0
+            if None not in {x1, y1, x2, y2}:
+                assert x1 is not None and y1 is not None and x2 is not None and y2 is not None
+                if abs(x1 - x2) <= 0.01 and abs(y1 - y2) >= 1.0:
+                    half_stroke = stroke_width / 2.0
+                    lines.append(
+                        {
+                            "x": x1,
+                            "y0": min(y1, y2),
+                            "y1": max(y1, y2),
+                            "stroke_width": stroke_width,
+                            "paint_left": x1 - half_stroke,
+                            "paint_right": x1 + half_stroke,
+                            "clip": next_clip,
+                            "clip_ids": next_clip_ids,
+                        }
+                    )
+
+        for child in element:
+            walk(child, next_clip, next_clip_ids)
+
+    walk(root, None, ())
+    return lines
+
+
+def table_records(tree: Mapping[str, object]) -> list[dict[str, object]]:
+    """Return all render-tree table boxes used to identify SVG outer edges."""
+    records: list[dict[str, object]] = []
+
+    def walk(node: Mapping[str, object]) -> None:
+        box = bbox_from_node(node)
+        if node.get("type") == "Table" and box is not None:
+            table_x, table_y, table_width, table_height = box
+            own_outer_vertical_lines: list[tuple[str, float, float, float, float]] = []
+            children = node.get("children")
+            if isinstance(children, list):
+                for child in children:
+                    if not isinstance(child, Mapping) or child.get("type") != "Line":
+                        continue
+                    line_box = bbox_from_node(child)
+                    if line_box is None:
+                        continue
+                    line_x, line_y, line_width, line_height = line_box
+                    if line_height <= max(1.0, line_width):
+                        continue
+                    edge = (
+                        "left"
+                        if abs(line_x - table_x) <= 0.2
+                        else "right"
+                        if abs(line_x - (table_x + table_width)) <= 0.2
+                        else None
+                    )
+                    if edge is not None:
+                        own_outer_vertical_lines.append(
+                            (edge, line_x, line_y, line_y + line_height, line_width)
+                        )
+            records.append(
+                {
+                    "pi": node.get("pi"),
+                    "ci": node.get("ci"),
+                    "rows": node.get("rows"),
+                    "cols": node.get("cols"),
+                    "bbox": box,
+                    "own_outer_vertical_lines": own_outer_vertical_lines,
+                }
+            )
+        children = node.get("children")
+        if isinstance(children, list):
+            for child in children:
+                if isinstance(child, Mapping):
+                    walk(child)
+
+    walk(tree)
+    return records
+
+
+def svg_table_border_clip_candidates(
+    svg_path: Path,
+    tree: Mapping[str, object],
+) -> list[dict[str, object]]:
+    """Find table outer vertical borders emitted wholly outside a parent clip.
+
+    A candidate requires both signals: a render-tree Table outer edge and an
+    SVG vertical stroke on that edge whose horizontal paint interval is almost
+    entirely excluded by an ancestor clip.  This avoids treating ordinary
+    clipped drawings as table-border defects.  It is candidate-only: PDFs can
+    legitimately omit a source border, so the generated ledger never declares
+    a visual failure on its own.
+    """
+    candidates: list[dict[str, object]] = []
+    for line in svg_vertical_lines_with_clips(svg_path):
+        clip = line["clip"]
+        if not isinstance(clip, tuple):
+            continue
+        paint_left = float(line["paint_left"])
+        paint_right = float(line["paint_right"])
+        visible_width = max(0.0, min(paint_right, clip[2]) - max(paint_left, clip[0]))
+        visible_width_ratio = visible_width / max(paint_right - paint_left, 0.01)
+        if visible_width_ratio > 0.2:
+            continue
+
+        x = float(line["x"])
+        line_y0 = float(line["y0"])
+        line_y1 = float(line["y1"])
+        stroke_width = float(line["stroke_width"])
+        for table in table_records(tree):
+            table_box = table["bbox"]
+            assert isinstance(table_box, tuple)
+            _, table_y, _, table_height = table_box
+            own_outer_lines = table["own_outer_vertical_lines"]
+            assert isinstance(own_outer_lines, list)
+            matching_edges = [
+                edge
+                for edge, expected_x, expected_y0, expected_y1, expected_width in own_outer_lines
+                if abs(x - expected_x)
+                <= max(0.25, expected_width / 2.0 + 0.2)
+                and max(0.0, min(line_y1, expected_y1) - max(line_y0, expected_y0))
+                >= min(16.0, table_height * 0.2)
+            ]
+            if not matching_edges:
+                continue
+            overlap_height = max(
+                0.0,
+                min(line_y1, table_y + table_height) - max(line_y0, table_y),
+            )
+            if overlap_height < min(16.0, table_height * 0.2):
+                continue
+            for edge in sorted(set(matching_edges)):
+                candidates.append(
+                    {
+                        "pi": table.get("pi"),
+                        "ci": table.get("ci"),
+                        "rows": table.get("rows"),
+                        "cols": table.get("cols"),
+                        "bbox": table_box,
+                        "edge": edge,
+                        "line_x": x,
+                        "line_y0": line_y0,
+                        "line_y1": line_y1,
+                        "stroke_width": stroke_width,
+                        "visible_width_ratio": visible_width_ratio,
+                        "clip_ids": line["clip_ids"],
+                        "clip_rect": clip,
+                    }
+                )
+
+    return sorted(
+        candidates,
+        key=lambda candidate: (
+            float(candidate["bbox"][1]),
+            float(candidate["bbox"][0]),
+            str(candidate["edge"]),
+            float(candidate["line_y0"]),
+        ),
+    )
+
+
+def write_svg_table_border_clip_ledger(
+    work_dir: Path,
+    svg_dir: Path,
+    tree_dir: Path,
+    requested_pages: Sequence[int],
+) -> None:
+    """Write structural candidates for table outer strokes hidden by SVG clips."""
+    report_path = work_dir / "svg-table-border-clip-candidates.tsv"
+    with report_path.open("w", encoding="utf-8") as report:
+        report.write(
+            "page\tpi\tci\trows\tcols\tedge\ttable_bbox\tline_x\tline_y0\tline_y1\t"
+            "stroke_width\tvisible_width_ratio\tclip_ids\tclip_rect\tnote\n"
+        )
+        for page_index in requested_pages:
+            svg_paths = list(svg_dir.glob(f"*_{page_index + 1:03}.svg"))
+            tree_path = tree_path_for_page(tree_dir, page_index)
+            if not svg_paths or tree_path is None:
+                report.write(
+                    f"{page_index + 1}\t-\t-\t-\t-\t-\t-\t-\t-\t-\t-\t-\t-\t"
+                    "SVG 또는 render tree 없음\n"
+                )
+                continue
+            try:
+                tree = json.loads(tree_path.read_text(encoding="utf-8"))
+                if not isinstance(tree, Mapping):
+                    raise ValueError("render tree root가 object가 아님")
+                candidates = svg_table_border_clip_candidates(svg_paths[0], tree)
+            except (ET.ParseError, OSError, ValueError, json.JSONDecodeError) as error:
+                report.write(
+                    f"{page_index + 1}\t-\t-\t-\t-\t-\t-\t-\t-\t-\t-\t-\t-\t-\t"
+                    f"SVG/tree 읽기 실패: {error}\n"
+                )
+                continue
+            if not candidates:
+                report.write(
+                    f"{page_index + 1}\t-\t-\t-\t-\t-\t-\t-\t-\t-\t-\t-\t-\t-\t"
+                    "-\n"
+                )
+                continue
+            for candidate in candidates:
+                clip_ids = candidate["clip_ids"]
+                assert isinstance(clip_ids, tuple)
+                report.write(
+                    f"{page_index + 1}\t{format_number(candidate['pi'])}\t"
+                    f"{format_number(candidate['ci'])}\t{format_number(candidate['rows'])}\t"
+                    f"{format_number(candidate['cols'])}\t{candidate['edge']}\t"
+                    f"{format_bbox(candidate['bbox'])}\t{float(candidate['line_x']):.1f}\t"
+                    f"{float(candidate['line_y0']):.1f}\t{float(candidate['line_y1']):.1f}\t"
+                    f"{float(candidate['stroke_width']):.1f}\t"
+                    f"{float(candidate['visible_width_ratio']):.3f}\t"
+                    f"{','.join(clip_ids) or '-'}\t{format_bbox(candidate['clip_rect'])}\t"
+                    "candidate only; outer table stroke is emitted but hidden by SVG clip\n"
+                )
 
 
 def write_text_owner_shift_ledger(
@@ -1803,6 +2267,17 @@ def main(argv: Sequence[str] | None = None) -> int:
             requested_pages,
             text_differences,
         )
+        write_table_cell_text_overlap_ledger(
+            work_dir,
+            tree_dir,
+            requested_pages,
+        )
+        write_svg_table_border_clip_ledger(
+            work_dir,
+            svg_dir,
+            tree_dir,
+            requested_pages,
+        )
         write_successor_float_owner_shift_ledger(
             work_dir,
             tree_dir,
@@ -1844,6 +2319,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.layout_ledger:
         print("layout ledger:", work_dir / "layout-candidates.tsv")
         print("table fragment candidates:", work_dir / "table-fragment-candidates.tsv")
+        print("table cell text-overlap candidates:", work_dir / "table-cell-text-overlap-candidates.tsv")
+        print(
+            "SVG table-border clip candidates:",
+            work_dir / "svg-table-border-clip-candidates.tsv",
+        )
         print(
             "float owner-shift candidates:",
             work_dir / "float-owner-shift-candidates.tsv",

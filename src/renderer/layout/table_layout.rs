@@ -180,6 +180,62 @@ fn caption_has_topbottom_picture(caption: &Caption) -> bool {
     })
 }
 
+/// A clipped table cell still has to expose an immediately nested table's
+/// *outer vertical border*.  A nested table can begin after the host cell's
+/// left padding while retaining its stored width, which puts that right border
+/// just beyond the host cell's logical content rectangle.  Clipping at the
+/// logical rectangle then removes the entire border even though the table
+/// layout emitted it (issue2007 p4).
+///
+/// Do not expand to every descendant: a RowBreak continuation deliberately
+/// keeps future-page text below its physical cell clip.  This is restricted to
+/// direct nested `Table` outer vertical `Line`s and changes only the
+/// horizontal clip extent needed for their stroke paint.
+fn extend_clipped_cell_horizontal_clip_to_nested_table_borders(cell_node: &mut RenderNode) {
+    if !matches!(
+        cell_node.node_type,
+        RenderNodeType::TableCell(TableCellNode { clip: true, .. })
+    ) {
+        return;
+    }
+
+    let mut clip_left = cell_node.bbox.x;
+    let mut clip_right = cell_node.bbox.x + cell_node.bbox.width;
+
+    for table_node in &cell_node.children {
+        if !matches!(table_node.node_type, RenderNodeType::Table(_)) {
+            continue;
+        }
+        let table_left = table_node.bbox.x;
+        let table_right = table_node.bbox.x + table_node.bbox.width;
+
+        for border_node in &table_node.children {
+            let RenderNodeType::Line(line) = &border_node.node_type else {
+                continue;
+            };
+            // Cell-content lines can be arbitrary.  Only a near-vertical
+            // table edge that sits on the nested table's left/right boundary
+            // is eligible to enlarge the clipping viewport.
+            if (line.x1 - line.x2).abs() > 0.01 || (line.y1 - line.y2).abs() < 1.0 {
+                continue;
+            }
+            let x = line.x1;
+            let outer_edge_tolerance = (line.style.width + 1.0).max(2.0);
+            if (x - table_left).abs() > outer_edge_tolerance
+                && (x - table_right).abs() > outer_edge_tolerance
+            {
+                continue;
+            }
+            let half_stroke = line.style.width / 2.0;
+            clip_left = clip_left.min(x - half_stroke);
+            clip_right = clip_right.max(x + half_stroke);
+        }
+    }
+
+    cell_node.bbox.x = clip_left;
+    cell_node.bbox.width = (clip_right - clip_left).max(0.0);
+}
+
 fn should_render_table_caption(table: &crate::model::table::Table, depth: usize) -> bool {
     depth == 0
         || (depth == 1
@@ -2947,7 +3003,24 @@ impl LayoutEngine {
             // 겹쳐 그려진다. 첫 문단의 vpos == 0 은 "셀 상단"이라는 유효한 값이므로
             // 그대로 두고, 두 번째 이후 문단은 양수 vpos 가 저장돼 있을 때만 앵커로
             // 쓴다. (같은 파일의 text_y_start 계산도 `v > 0.0` 을 앵커 조건으로 쓴다)
-            let has_stored_para_anchor = crate::renderer::first_seg_vpos_is_anchor(para, cp_idx);
+            // 셀 안의 문단 또는 문단 내부 줄이 중간에 `vpos=0`으로 다시 시작한 뒤,
+            // 그 다음 양수 vpos를 cell top 기준 절대 좌표로 해석하면 앞 문단 위로
+            // 되감겨 겹친다. 이 reset은 RowBreak continuation에만 한정되지 않는다.
+            // 예컨대 42065 p2의 일반 9×2 표 우측 셀과 p10--p16의 손자 1×1 셀은
+            // 모두 같은 저장 형식이다. reset 뒤에는 저장 anchor 대신 누적 flow를
+            // 쓴다. 첫 문단 첫 줄의 0은 정상적인 cell-top anchor이므로 제외한다.
+            let local_vpos_restart_seen = cell
+                .paragraphs
+                .iter()
+                .take(cp_idx.saturating_add(1))
+                .enumerate()
+                .any(|(prior_para_idx, prior)| {
+                    prior.line_segs.iter().enumerate().any(|(line_idx, seg)| {
+                        seg.vertical_pos == 0 && (prior_para_idx > 0 || line_idx > 0)
+                    })
+                });
+            let has_stored_para_anchor =
+                !local_vpos_restart_seen && crate::renderer::first_seg_vpos_is_anchor(para, cp_idx);
             let use_saved_cell_para_vpos = use_top_vpos_anchor
                 || trust_stored_cell_flow
                 || has_initial_tac_shape_host(&cell.paragraphs);
@@ -4773,6 +4846,11 @@ impl LayoutEngine {
                 }
             }
 
+            // A nested table may keep its stored width after the enclosing
+            // cell's left padding.  Preserve its outer vertical border in the
+            // physical cell clip without admitting the continuation's hidden
+            // vertical tail (issue2007 p4).
+            extend_clipped_cell_horizontal_clip_to_nested_table_borders(&mut cell_node);
             table_node.children.push(cell_node);
 
             // (c) 셀 대각선 렌더링 (셀 콘텐츠 위에 그림)
@@ -8356,6 +8434,9 @@ impl LayoutEngine {
             .iter()
             .find_map(|(height, trailing, _)| (!*trailing).then_some(*height))
             .unwrap_or(0.0);
+        // PR #4122의 재귀 cursor는 첫 visible unit을 현재 조각의 물리
+        // reservation으로 보존한다. 콘텐츠 원점에서는 그 unit을 한 번 빼야
+        // 첫 fragment와 continuation이 같은 canonical child cursor를 공유한다.
         let offset_within_start = (offset - first_visible_content_height).max(0.0);
         let is_offset_continuation = offset_within_start > 0.5;
         let visible_height = if is_offset_continuation {
@@ -8446,7 +8527,9 @@ impl LayoutEngine {
             flow_height,
             // Keep one visible content unit reserved in bbox/flow so the
             // border wraps only that tail line and the following paragraph in
-            // the host cell starts below it.
+            // the host cell starts below it. This reservation is physical
+            // space only; `offset_within_start` above remains the full
+            // consumed content origin.
             offset_within_start: row_offset_within_start,
             terminal,
             recursive_cut,

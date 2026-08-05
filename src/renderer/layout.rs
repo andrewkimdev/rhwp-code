@@ -2648,8 +2648,13 @@ impl LayoutEngine {
                         | RenderNodeType::RawSvg(_)
                 )
             }
-            // clip 을 자식 bbox 로 확장. `float_subtree` 가 참이면 그 서브트리는
+            // clip 을 **가시** 자식 bbox 로 확장. `float_subtree` 가 참이면 그 서브트리는
             // 부동 그림으로 취급해 상한 적용 대상 clip 만 넓힌다.
+            //
+            // TableCell 자체가 clip이면 그 cell 밖의 자손은 현재 PageRenderTree에는
+            // 존재해도 이전/다음 페이지용 연속 흐름일 뿐 paint되지 않는다. 그 tail을
+            // body clip 확장에 재귀 반영하면 Canvas/WASM이 물리 쪽 밖을 재생할 수 있고,
+            // SVG의 cell clip과도 의미가 달라진다(42065 RowBreak 1×1 중첩 표).
             fn expand_clip(
                 flow: &mut BoundingBox,
                 float: &mut BoundingBox,
@@ -2675,8 +2680,14 @@ impl LayoutEngine {
                     target.height += target.y - cb.y;
                     target.y = cb.y;
                 }
-                for child in &node.children {
-                    expand_clip(flow, float, child, is_float);
+                let clips_descendants = matches!(
+                    node.node_type,
+                    RenderNodeType::TableCell(ref cell) if cell.clip
+                );
+                if !clips_descendants {
+                    for child in &node.children {
+                        expand_clip(flow, float, child, is_float);
+                    }
                 }
             }
             let mut flow_clip = body_bbox;

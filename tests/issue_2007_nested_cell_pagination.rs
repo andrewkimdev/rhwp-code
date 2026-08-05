@@ -79,6 +79,147 @@ fn svg_number_attr(tag: &str, name: &str) -> f64 {
         .unwrap_or_else(|error| panic!("SVG attribute {name}={value}: {error}"))
 }
 
+/// 지정한 원본 표 control의 렌더 조각을 깊이와 무관하게 찾는다.
+fn find_table_fragment(
+    node: &RenderNode,
+    para_index: usize,
+    control_index: usize,
+) -> Option<&RenderNode> {
+    if matches!(
+        node.node_type,
+        RenderNodeType::Table(ref table)
+            if table.para_index == Some(para_index) && table.control_index == Some(control_index)
+    ) {
+        return Some(node);
+    }
+    node.children
+        .iter()
+        .find_map(|child| find_table_fragment(child, para_index, control_index))
+}
+
+#[derive(Clone, Copy)]
+struct ClipRect {
+    x: f64,
+    y: f64,
+    right: f64,
+    bottom: f64,
+}
+
+impl ClipRect {
+    fn from_node(node: &RenderNode) -> Self {
+        Self {
+            x: node.bbox.x,
+            y: node.bbox.y,
+            right: node.bbox.x + node.bbox.width,
+            bottom: node.bbox.y + node.bbox.height,
+        }
+    }
+
+    fn intersect(self, other: Self) -> Option<Self> {
+        let clipped = Self {
+            x: self.x.max(other.x),
+            y: self.y.max(other.y),
+            right: self.right.min(other.right),
+            bottom: self.bottom.min(other.bottom),
+        };
+        (clipped.right > clipped.x && clipped.bottom > clipped.y).then_some(clipped)
+    }
+
+    fn intersects_node(self, node: &RenderNode) -> bool {
+        self.intersect(Self::from_node(node)).is_some()
+    }
+}
+
+/// SVG와 Canvas가 공통으로 지키는 TableCell clip을 적용한 뒤의 가시 text만 센다.
+fn contains_painted_text(node: &RenderNode, needle: &str, clip: Option<ClipRect>) -> bool {
+    let clip = match &node.node_type {
+        RenderNodeType::TableCell(cell) if cell.clip => {
+            clip.and_then(|active| active.intersect(ClipRect::from_node(node)))
+        }
+        _ => clip,
+    };
+    if matches!(
+        node.node_type,
+        RenderNodeType::TextRun(ref run) if run.text.contains(needle)
+    ) && clip.is_some_and(|active| active.intersects_node(node))
+    {
+        return true;
+    }
+    node.children
+        .iter()
+        .any(|child| contains_painted_text(child, needle, clip))
+}
+
+/// Return the painted right extent of a nested table's own outer vertical
+/// border.  `LineNode` stores its centerline, so account for half its stroke.
+fn nested_table_right_border_paint_extent(table: &RenderNode) -> Option<f64> {
+    let table_right = table.bbox.x + table.bbox.width;
+    table
+        .children
+        .iter()
+        .filter_map(|child| match &child.node_type {
+            RenderNodeType::Line(line)
+                if (line.x1 - line.x2).abs() < 0.01
+                    && (line.y1 - line.y2).abs() > 1.0
+                    && (line.x1 - table_right).abs() <= (line.style.width + 1.0).max(2.0) =>
+            {
+                Some(line.x1 + line.style.width / 2.0)
+            }
+            _ => None,
+        })
+        .max_by(|left, right| left.total_cmp(right))
+}
+
+/// 한 TableCell의 직접 콘텐츠에서만 실제 TextLine 상자들을 수집한다. 중첩 셀은
+/// 별도 좌표계이므로 여기서 섞으면 정상적인 열/중첩 표를 거짓 양성으로 판정한다.
+fn collect_direct_cell_text_lines(node: &RenderNode, lines: &mut Vec<ClipRect>) {
+    if matches!(node.node_type, RenderNodeType::TableCell(_)) {
+        return;
+    }
+    if matches!(node.node_type, RenderNodeType::TextLine(_))
+        && node.visible
+        && !node.editor_only
+        && node.bbox.width > 0.0
+        && node.bbox.height > 0.0
+    {
+        lines.push(ClipRect::from_node(node));
+    }
+    for child in &node.children {
+        collect_direct_cell_text_lines(child, lines);
+    }
+}
+
+/// 같은 셀의 실제 TextLine 두 줄이 충분히 큰 면적으로 겹치는지 검사한다.
+///
+/// 이 문서 p10--p16의 결함은 nested 1×1 continuation 안에서 LINE_SEG `vpos=0`
+/// 재시작을 새 셀의 원점으로 오인해, 앞 문단 위로 뒤 문단을 재배치한 경우였다.
+/// 단순 bbox 교차만으로는 정상적인 인접 줄 간 anti-aliasing까지 잡으므로,
+/// `fidelity_compare.py`와 같은 문턱(세로 3px 또는 작은 줄의 35%, 가로 24px 또는
+/// 작은 줄의 45%)을 쓴다.
+fn has_substantial_direct_text_line_overlap(cell: &RenderNode) -> bool {
+    let mut lines = Vec::new();
+    for child in &cell.children {
+        collect_direct_cell_text_lines(child, &mut lines);
+    }
+    lines.iter().enumerate().any(|(index, first)| {
+        lines[index + 1..].iter().any(|second| {
+            let overlap_x = (first.right.min(second.right) - first.x.max(second.x)).max(0.0);
+            let overlap_y = (first.bottom.min(second.bottom) - first.y.max(second.y)).max(0.0);
+            let min_width = (first.right - first.x).min(second.right - second.x);
+            let min_height = (first.bottom - first.y).min(second.bottom - second.y);
+            overlap_x >= 24.0_f64.max(min_width * 0.45)
+                && overlap_y >= 3.0_f64.max(min_height * 0.35)
+        })
+    })
+}
+
+/// 표 조각 아래 어느 nested TableCell에서도 같은 셀 내부의 줄 겹침이 없어야 한다.
+fn has_nested_cell_text_overlap(node: &RenderNode) -> bool {
+    matches!(node.node_type, RenderNodeType::TableCell(_))
+        && has_substantial_direct_text_line_overlap(node)
+        || node.children.iter().any(has_nested_cell_text_overlap)
+}
+
 #[test]
 fn issue_2007_nested_cell_content_paginates() {
     let repo_root = env!("CARGO_MANIFEST_DIR");
@@ -192,6 +333,115 @@ fn issue_2007_saved_frame_tail_nested_table_starts_before_next_frame() {
         page16.contains(NEXT_FRAME),
         "16쪽이 이해관계자 협의 저장 프레임에서 재개하지 않았다"
     );
+
+    // p8(0-based 7)은 큰 1×1 RowBreak 표의 continuation이다. 이전에는 cell clip 밖에
+    // 남아 있는 수천 px 자손까지 partial Table bbox/body clip을 확장해 Canvas/WASM
+    // paint 후보가 현재 쪽을 벗어났다. 페이지 수 17만으로는 이 구조 결함을 못 잡는다.
+    let tree = doc
+        .build_page_render_tree(7)
+        .expect("issue2007 p8 render tree");
+    let fragment =
+        find_table_fragment(&tree.root, 7, 1).expect("issue2007 p8의 원본 pi=7 ci=1 표 조각");
+    let fragment_bottom = fragment.bbox.y + fragment.bbox.height;
+    assert!(
+        fragment_bottom <= tree.root.bbox.height + 0.5,
+        "p8 RowBreak 표 조각 bbox가 쪽 밖으로 새어 Canvas/WASM paint 범위를 오염한다: \
+         bottom={fragment_bottom:.1}, page_height={:.1}",
+        tree.root.bbox.height
+    );
+    assert!(
+        !contains_painted_text(
+            &tree.root,
+            "및 정치부문에 존재하는 것으로 인식되는 부패의 정도를 측정",
+            Some(ClipRect::from_node(&tree.root)),
+        ),
+        "p8 continuation이 p7 마지막 줄을 다시 paint한다 — mixed nested split의 콘텐츠 원점이 한 unit 앞서 있다"
+    );
+}
+
+#[test]
+fn issue_2007_nested_table_right_outer_border_is_not_clipped() {
+    let repo_root = env!("CARGO_MANIFEST_DIR");
+    let hwp_path =
+        Path::new(repo_root).join("samples/basic/issue2007_nested_cell_pagination_42065.hwp");
+    let bytes =
+        fs::read(&hwp_path).unwrap_or_else(|e| panic!("read {}: {}", hwp_path.display(), e));
+    let doc = rhwp::wasm_api::HwpDocument::from_bytes(&bytes)
+        .expect("parse issue2007_nested_cell_pagination_42065.hwp");
+
+    // p4의 outer 1×1 RowBreak 표(pi=6, ci=0) 안에는 stored width를 유지하는
+    // 12×5 nested table이 있다. 종전에는 parent TableCell/Body clip이 nested
+    // table의 우측 vertical border보다 좁아 SVG/Canvas에서 선 전체가 사라졌다.
+    let tree = doc
+        .build_page_render_tree(3)
+        .expect("issue2007 p4 render tree");
+    let outer = find_table_fragment(&tree.root, 6, 0).expect("issue2007 p4의 outer pi=6 ci=0 표");
+    let cell = outer
+        .children
+        .iter()
+        .find(|child| matches!(child.node_type, RenderNodeType::TableCell(_)))
+        .expect("outer table's clipped cell");
+    let nested = cell
+        .children
+        .iter()
+        .find(|child| matches!(child.node_type, RenderNodeType::Table(_)))
+        .expect("outer cell's nested table");
+    let border_right =
+        nested_table_right_border_paint_extent(nested).expect("nested table right outer border");
+    let cell_clip_right = cell.bbox.x + cell.bbox.width;
+
+    assert!(
+        cell_clip_right + 0.01 >= border_right,
+        "p4 nested table right border is outside its parent cell clip: \
+         clip_right={cell_clip_right:.2}, border_right={border_right:.2}"
+    );
+}
+
+#[test]
+fn issue_2007_cell_vpos_reset_does_not_overlap_following_paragraphs() {
+    let repo_root = env!("CARGO_MANIFEST_DIR");
+    let hwp_path =
+        Path::new(repo_root).join("samples/basic/issue2007_nested_cell_pagination_42065.hwp");
+    let bytes =
+        fs::read(&hwp_path).unwrap_or_else(|e| panic!("read {}: {}", hwp_path.display(), e));
+    let doc = rhwp::wasm_api::HwpDocument::from_bytes(&bytes)
+        .expect("parse issue2007_nested_cell_pagination_42065.hwp");
+
+    // p2(0-based 1)의 pi=2, ci=1에는 일반 nested 9×2 표의 우측 cell이 있다. 세 번째
+    // paragraph가 다시 vpos=0으로 시작한 뒤의 positive vpos를 cell-top anchor로 쓰면
+    // 5쌍의 본문 줄이 겹친다. continuation만의 예외가 아니라 일반 셀에도 같은 저장
+    // 형식이 있으므로 먼저 이 구간을 고정한다.
+    let p2_tree = doc
+        .build_page_render_tree(1)
+        .expect("issue2007 p2 render tree");
+    let p2_fragment =
+        find_table_fragment(&p2_tree.root, 2, 1).expect("issue2007 p2의 원본 pi=2 ci=1 표 조각");
+    assert!(
+        !has_nested_cell_text_overlap(p2_fragment),
+        "p2 nested 9×2 table has overlapping painted text lines after a cell-local vpos reset"
+    );
+
+    // p10--p16(0-based 9--15)은 원본 pi=7, ci=1의 1×1 RowBreak 표가 계속되는
+    // 구간이다. 과거에는 손자 셀의 중간 LINE_SEG `vpos=0`을 새 셀 시작으로 해석해
+    // 각 쪽마다 최대 28쌍의 본문 줄을 겹쳐 paint했다. 쪽수/clip만으로는 이를 못
+    // 잡으므로 같은 TableCell 내부의 가시 TextLine 기하를 직접 고정한다.
+    for page_index in 9..=15 {
+        let tree = doc
+            .build_page_render_tree(page_index)
+            .unwrap_or_else(|e| panic!("issue2007 p{} render tree: {e}", page_index + 1));
+        let fragment = find_table_fragment(&tree.root, 7, 1).unwrap_or_else(|| {
+            panic!(
+                "issue2007 p{}의 원본 pi=7 ci=1 continuation 표 조각",
+                page_index + 1
+            )
+        });
+        assert!(
+            !has_nested_cell_text_overlap(fragment),
+            "p{} nested-cell continuation has overlapping painted text lines; \
+             descendant LINE_SEG vpos reset must not rebase to the cell top",
+            page_index + 1
+        );
+    }
 }
 
 #[test]
