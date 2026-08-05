@@ -119,8 +119,10 @@ CI가 끝난 뒤 또는 contributor가 새 commit을 push한 뒤에는 head SHA,
 [다수 PR과 update branch](pr_review/multi_pr_update_branch.md)의 "2.6 검토 중 기준선 갱신"을 따른다.
 collaborator가 contributor PR head에 review-only 기록을 직접 push할 예정이면, 최종 archive review·오늘할일·
 증적 commit은 새 head를 fetch하고 reviewer 기록을 그 위의 단순 trailing commit으로 정렬한 뒤에만 만든다.
-기존 reviewer 기록 위로 새 contributor head를 일반 merge하면 fast-pass의 안전한 current-base merge 조건을
-충족하지 못해 full CI로 분기한다.
+문서 기록만 만들기 위해 최신 `devel`을 contributor branch에 merge하거나 rebase하지 않는다. branch가 최신
+base 반영을 강제하지 않는 정책이면, 같은 PR·같은 source repository·같은 code candidate SHA의 녹색 aggregate를
+재사용해 trailing review-only commit을 fast-pass할 수 있다. contributor가 source·test를 새로 push한 경우에는
+그 새 code head의 CI를 먼저 통과시킨 뒤 review 기록을 한 번만 이어 붙인다.
 
 ### 3.3 순차로 유지할 일
 
