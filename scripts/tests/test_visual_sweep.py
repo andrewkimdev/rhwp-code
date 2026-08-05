@@ -478,6 +478,47 @@ class LegacyGlyphVisualCandidateTests(unittest.TestCase):
 
 
 class FrameDetectionTests(unittest.TestCase):
+    def test_frame_tail_uses_raster_coordinates_and_skips_off_page_nodes(self) -> None:
+        tree = {
+            "type": "Page",
+            "bbox": {"x": 0, "y": 0, "w": 100, "h": 100},
+            "children": [
+                {
+                    "type": "Body",
+                    "children": [
+                        {
+                            "type": "TextLine",
+                            "pi": 7,
+                            "bbox": {"x": 10, "y": 94, "w": 80, "h": 4},
+                            "children": [{"type": "TextRun", "text": "보이는 꼬리"}],
+                        },
+                        {
+                            "type": "TextLine",
+                            "pi": 8,
+                            "bbox": {"x": 10, "y": 140, "w": 80, "h": 4},
+                            "children": [{"type": "TextRun", "text": "clip 밖 잔여 노드"}],
+                        },
+                    ],
+                }
+            ],
+        }
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "tree.json"
+            path.write_text(json.dumps(tree, ensure_ascii=False), encoding="utf-8")
+            raster = Image.new("RGB", (200, 200), "white")
+            ImageDraw.Draw(raster).line((20, 190, 180, 190), fill="black", width=1)
+            candidates = SWEEP.render_tree_frame_tail_candidates(
+                path,
+                (0, 0, 200, 190),
+                page_tree=tree,
+                raster_image=raster,
+            )
+
+        self.assertEqual(len(candidates), 1)
+        self.assertEqual(candidates[0]["pi"], 7)
+        self.assertEqual(candidates[0]["bbox"], [18.0, 186.0, 164.0, 12.0])
+        self.assertEqual(candidates[0]["render_tree_bbox"], [10.0, 94.0, 80.0, 4.0])
+
     def test_centered_footnote_separator_is_not_treated_as_page_bottom(self) -> None:
         image = Image.new("RGB", (794, 1123), "white")
         draw = ImageDraw.Draw(image)

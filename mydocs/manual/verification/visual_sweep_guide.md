@@ -427,6 +427,10 @@ summary: /path/to/rhwp/output/task1274/summary.json
 - PR 의 실제 변경 목적을 먼저 확인한다. 렌더링 개선 PR 이 아니면 visual sweep 차이는 참고 자료이며,
   그 차이만으로 merge 보류나 reject 결론을 내리지 않는다.
 - `frame`, `question`, `title`, `tail`, `eq` 후보는 우선 검토 대상이다.
+- `tail`은 render tree의 page bbox를 **현재 raster DPI 좌표**로 투영한 뒤, 해당 bbox에
+  실제 rhwp 잉크가 있는 TextLine만 세어 만든다. 페이지 밖에만 남은 continuation node나
+  ancestor clip으로 보이지 않는 node는 tail 후보가 아니다. 따라서 고 DPI sweep의 `tail`은
+  render-tree 논리 좌표만으로는 재현·판정하지 않는다.
 - `wrap`은 Square/Tight/Through 그림이 본문 흐름 영역과 outer clearance를 예약해야 하는 계약의 강한
   후보다. annotation의 `candidate_kind`가 `physical_overlap`이면 image/첫·마지막 교차 line bbox를,
   `edge_clearance_loss`이면 image edge와 최소 clearance를 PDF review와 즉시 대조한다. 후자는 HWP

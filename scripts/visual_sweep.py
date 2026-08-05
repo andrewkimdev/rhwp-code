@@ -3225,18 +3225,53 @@ def render_tree_line_order_overlap_candidates(tree_path: Path) -> list[dict[str,
 def render_tree_frame_tail_candidates(
     tree_path: Path,
     frame: tuple[int, int, int, int],
+    *,
+    page_tree: dict[str, object] | None = None,
+    raster_image: Image.Image | None = None,
 ) -> list[dict[str, object]]:
-    tree = load_render_tree(tree_path)
+    tree = page_tree or load_render_tree(tree_path)
     if tree is None:
         return []
 
     left, top, right, bottom = frame
     mid_x = (left + right) / 2.0
     candidates: list[dict[str, object]] = []
+    raster_pixels = raster_image.convert("RGB").load() if raster_image is not None else None
     for line in collect_render_tree_text_lines(tree):
-        box = line["bbox"]
-        assert isinstance(box, tuple)
-        x, y, w, h = box
+        tree_box = line["bbox"]
+        assert isinstance(tree_box, tuple)
+        # Render-tree coordinates are CSS-pixel page coordinates, whereas the
+        # frame belongs to the selected raster DPI.  Comparing them directly
+        # works accidentally at 96dpi but turns off-page, ancestor-clipped
+        # continuation nodes into false tail overflows at 144dpi and above.
+        # Project first; a box wholly outside the raster has no visible paint
+        # on this physical page and cannot be a frame-tail defect.
+        if raster_image is not None:
+            raster_box = raster_bbox_for_render_tree_bbox(tree, tree_box, raster_image)
+            if raster_box is None:
+                continue
+            raster_left, raster_top, raster_width, raster_height = raster_box
+            # The render tree intentionally retains some continuation nodes
+            # beyond an ancestor Cell clip. Their projected box can still
+            # intersect the paper, but there is no actual paint at that box.
+            # Such a node must not turn a clean high-DPI page into a tail
+            # overflow candidate.
+            assert raster_pixels is not None
+            has_visible_ink = any(
+                is_content_pixel(raster_pixels[px, py])
+                for py in range(raster_top, raster_top + raster_height)
+                for px in range(raster_left, raster_left + raster_width)
+            )
+            if not has_visible_ink:
+                continue
+            x, y, w, h = (
+                float(raster_left),
+                float(raster_top),
+                float(raster_width),
+                float(raster_height),
+            )
+        else:
+            x, y, w, h = tree_box
         if y < top or x + w < left + 2 or x > right - 2:
             continue
         overflow_px = y + h - bottom
@@ -3256,7 +3291,8 @@ def render_tree_frame_tail_candidates(
                 "overflow_px": round(overflow_px, 1),
                 "frame_bottom": bottom,
                 "column": 0 if x + w / 2.0 < mid_x else 1,
-                "bbox": [round(v, 1) for v in box],
+                "bbox": [round(v, 1) for v in (x, y, w, h)],
+                "render_tree_bbox": [round(v, 1) for v in tree_box],
             }
         )
     candidates.sort(key=lambda item: item["overflow_px"], reverse=True)
@@ -3494,7 +3530,12 @@ def analyze_page(
     equation_overlaps = render_tree_equation_overlap_candidates(tree_path, rhwp_path)
     question_title_overlaps = render_tree_question_title_overlap_candidates(tree_path)
     line_order_overlaps = render_tree_line_order_overlap_candidates(tree_path)
-    frame_tail_overflows = render_tree_frame_tail_candidates(tree_path, rhwp_frame)
+    frame_tail_overflows = render_tree_frame_tail_candidates(
+        tree_path,
+        rhwp_frame,
+        page_tree=page_tree,
+        raster_image=rhwp,
+    )
     legacy_glyph_visual_candidates = render_tree_legacy_glyph_visual_candidates(
         page_tree,
         rhwp,
