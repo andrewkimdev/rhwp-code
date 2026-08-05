@@ -102,7 +102,9 @@ Stage 3 merge 직후 frontend-only canary PR #3951에서 unit/package/render 진
 4. Rust 변경 중 render 비영향 경로는 Native Skia를 생략한다.
 5. Rust formatter·passthrough invalidation·IR baseline 회귀가 필요한 경로는 기존 전체 검증을 유지한다.
 6. #3684를 완료한 #3810의 정리 직후 cache 기준선 4.73GB와 조건화 이후 다음 sweep 직후 총량을
-   같은 시점 조건으로 대조한다.
+   같은 시점 조건으로 대조한다. **수행 결과**: 스윕 직후 8.84GB(50개)로 기준선 대비 +87% 회귀했으나
+   Stage 4가 원인이 아니다. 추세가 Stage 4 merge 이전에 이미 완성됐고, 원인은 (그룹, ref) 쌍 수 증가와
+   삭제된 브랜치의 고아 캐시다. 대응은 [#4080](https://github.com/edwardkim/rhwp/issues/4080)으로 분리했다.
 7. Native Skia가 직접 실행하는 `tests/issue_2225_missing_picture_placeholder.rs`와
    `tests/render_p37_direct_pdf_export.rs`는 일반 Rust 비렌더 경로와 달리 `native_skia_required=true`로
    고정한다.
@@ -117,7 +119,8 @@ Stage 3 merge 직후 frontend-only canary PR #3951에서 unit/package/render 진
 
 ## Stage 5 이후
 
-- #3810의 4.73GB cache 기준선 회귀 여부를 확인하며 CodeQL 언어별 matrix를 활성화한다.
+- CodeQL 언어별 matrix를 활성화한다. cache 총량은 #4080의 새 기준선을 따르고 더는 유효하지 않은
+  4.73GB를 게이트로 쓰지 않는다.
 - Stage 3 merge 직후 첫 canary, Stage 5 merge 뒤 두 번째 canary에서 동일 SHA의 수동 full/selective를
   대조한다.
 - default-branch controller는 Stage 3~5 진리표가 확정된 뒤 축소 구현하고 정상 릴리즈로 main에 등록한다.
