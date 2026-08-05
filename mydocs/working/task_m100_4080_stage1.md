@@ -16,7 +16,8 @@
 2. 브랜치가 삭제되거나 PR이 닫혀도 **그 ref의 캐시 최신 N개는 영구히 정리 대상이 아니었다.** GitHub의
    7일 미사용 만료까지 자리를 차지한다.
 
-총량이 한도의 88%까지 올라가는 동안 아무 신호도 없었다는 점도 문제였다.
+조사 시점의 **실제** 총량은 53개 10.01GB로 무료 한도의 100.1%였고, GitHub의 LRU 축출이 이미 도는
+구간이었다. 그동안 아무 신호도 없었다는 점도 문제였다.
 
 ## 2. 이번 범위
 
@@ -33,7 +34,7 @@
 
 ### 3.1 고아 판정
 
-살아 있는 ref 집합 = 열린 PR의 `refs/pull/<n>/merge` + 실재 branch의 `refs/heads/<name>` +
+살아 있는 ref 집합 = 열린 PR의 `refs/pull/<n>/{merge,head}` + 실재 branch의 `refs/heads/<name>` +
 실재 tag의 `refs/tags/<name>`. 이 집합에 없는 ref의 캐시는 세대와 무관하게 삭제 대상이다.
 
 권한은 ref 목록 조회를 위해 `contents: read`를 더했다. `actions: write`와 함께 둘뿐이다.
@@ -62,7 +63,8 @@
 살아 있는 ref 목록 수집이 실패하거나 branch가 0건이면 고아 정리를 통째로 건너뛴다. 목록을 못 믿는
 상태에서 삭제하면 전량 삭제가 되기 때문이다. 이때 세대 상한 정리는 그대로 동작한다.
 
-`sweep_orphan_refs` 입력으로 수동 비활성화도 가능하다(기본 true).
+`sweep_orphan_refs` 입력으로 수동 비활성화도 가능하다(기본 true). 이 스위치는 최초 구현에서 boolean
+입력 표현식 오류로 죽어 있었고, 작업지시자 리뷰와 dispatch 실측으로 드러나 보정했다 — 4.4절.
 
 ### 3.4 한도 경보
 
@@ -74,7 +76,7 @@
 
 ### 4.1 로컬 시뮬레이션 — 실제 저장소 스냅샷
 
-2026-08-06 KST 시점의 실제 캐시 53개, branch 3건, tag 23건, 열린 PR 12건을 workflow에서 추출한
+2026-08-06 KST 시점의 실제 캐시 53개, branch 3건, tag 23건, 열린 PR 13건을 workflow에서 추출한
 스크립트에 그대로 넣어 dry-run으로 돌렸다.
 
 | 항목 | 값 |
@@ -85,7 +87,7 @@
 | 정리 예정 | 26개 / 3.67GB |
 | 정리 후(추정) | **27개 / 6.34GB** |
 | 한도 대비 | **63.4%** |
-| 보호한 열린 PR | 12 |
+| 보호한 열린 PR | 13 |
 
 고아 23건의 내역은 **닫힌 PR의 `refs/pull/<n>/merge` 19건, 삭제된 branch 4건**이다.
 
@@ -100,7 +102,8 @@
 
 | 검증 | 결과 |
 | --- | --- |
-| `python3 -m unittest scripts/tests/test_cache_sweep_workflow.py` | 17 passed / 0 failed |
+| `python3 -m unittest scripts/tests/test_cache_sweep_workflow.py` | 22 passed / 0 failed |
+| `python3 -m unittest scripts/tests/test_workflow_contract_wiring.py` | 3 passed / 0 failed |
 | `actionlint .github/workflows/cache-generation-sweep.yml` | 통과, 진단 없음 |
 | `python3 -c "yaml.safe_load(...)"` | 통과 |
 | `git diff --check` | 통과 |
@@ -114,15 +117,31 @@ node 스텁은 `pulls.list`의 `state` 파라미터를 실제 API처럼 존중�
 
 ### 4.3 RED 재현
 
-다섯 가지 뮤테이션이 모두 테스트에 잡히는 것을 확인했다.
+여덟 가지 뮤테이션이 모두 테스트에 잡히는 것을 확인했다. `/head` 보호 제거는 처음에 잡히지 않아
+전용 테스트를 추가한 뒤 다시 확인했다.
 
 | 뮤테이션 | 결과 |
 | --- | --- |
-| 고아 판정 제거 | 4건 실패 |
+| 고아 판정 제거 | 5건 실패 |
 | 빈 branch 목록 가드 제거 | 1건 실패 |
 | 임계 판정을 정리 전 총량으로 | 1건 실패 |
 | 캐시 읽기를 ref 조회 뒤로 이동 | 1건 실패 |
 | PR 보호 기준을 `state: 'open'` → `'all'` | 1건 실패 |
+| `SWEEP_ORPHAN_REFS` 를 버그 형태로 되돌림 | 2건 실패 |
+| `ci.yml` 배선 한 줄 제거 | 2건 실패 |
+| `/head` 보호 제거 | 1건 실패 |
+
+### 4.4 작업지시자 리뷰 보정
+
+[issuecomment-5195819402](https://github.com/edwardkim/rhwp/pull/4082#issuecomment-5195819402)의 지적
+5건을 전부 검증해 사실로 확인하고 반영했다. 상세는
+[PR #4082 검토](../pr/archives/pr_4082_review.md)에 있다.
+
+- `sweep_orphan_refs: false`가 무시되던 boolean 입력 표현식 오류 — dispatch
+  [run 31036061226](https://github.com/edwardkim/rhwp/actions/runs/31036061226)으로 실증 후 보정
+- 새 계약 테스트가 `ci.yml`에 배선되지 않아 한 번도 돌지 않던 문제 — Lint job 배선과 배선 강제 테스트
+- 열린 PR의 `refs/pull/<n>/head` 미보호 — 리뷰 권고(주석)보다 강하게 코드로 고정
+- 본문·기록의 뒤처진 수치 갱신
 
 ## 5. 이번에 하지 않은 것과 이유
 

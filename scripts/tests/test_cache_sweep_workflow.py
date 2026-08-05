@@ -8,6 +8,7 @@ github-script 본문을 추출해 node 스텁 위에서 실행하고 판정만 �
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import tempfile
 import textwrap
@@ -199,6 +200,23 @@ class CacheSweepWorkflowTests(unittest.TestCase):
         )
         self.assertEqual(sorted(out["deleted"]), [2, 3, 4])
 
+    def test_protects_both_merge_and_head_refs_of_open_pull_requests(self):
+        """열린 PR 은 `/merge` 뿐 아니라 `/head` 캐시도 보호한다.
+
+        이 저장소의 캐시 ref 는 실측상 `/merge` 뿐이지만(2026-08-06), 고아 정리가
+        생기면서 `/head` 캐시는 세대 상한이 아니라 전량 삭제 대상이 됐다. 가정이
+        깨지는 날 조용히 열린 PR 의 캐시가 사라지지 않도록 계약으로 고정한다.
+        """
+        out = self.run_sweep(
+            openPrs=[{"number": 7}],
+            caches=[
+                cache(1, "grp-aaaaaaaa", "refs/pull/7/merge", "2026-08-05T00:00:00Z"),
+                cache(2, "grp-bbbbbbbb", "refs/pull/7/head", "2026-08-05T00:00:00Z"),
+                cache(3, "grp-cccccccc", "refs/pull/8/head", "2026-08-05T00:00:00Z"),
+            ],
+        )
+        self.assertEqual(out["deleted"], [3], "닫힌 PR 의 /head 만 지운다")
+
     def test_keeps_cache_on_existing_tag_ref(self):
         out = self.run_sweep(
             tags=[{"name": "v1.2.3"}],
@@ -336,6 +354,77 @@ class CacheSweepWorkflowTests(unittest.TestCase):
         labels = [row[0] for row in out["summary"] if isinstance(row[0], str)]
         for expected in ["고아 ref", "구 세대", "한도 대비", "고아 ref 정리"]:
             self.assertIn(expected, labels)
+
+
+class BooleanInputExpressionTests(unittest.TestCase):
+    """[#4080] boolean 입력의 YAML 표현식 형태를 단언한다.
+
+    JS 하네스는 env 를 직접 주입하므로 YAML 표현식은 그 검증 범위 밖이다. 실제로
+    `SWEEP_ORPHAN_REFS` 가 `A && inputs.x || 'true'` 형태여서 false 를 넣어도 켜졌는데,
+    `test_orphan_sweep_can_be_disabled` 는 통과했다. 스위치가 죽은 것을 테스트가
+    못 잡은 것이다.
+
+    GitHub Actions 표현식에서 `A && B` 는 A 가 truthy 면 B, 아니면 A 를 준다.
+    `X || Y` 는 X 가 truthy 면 X, 아니면 Y 다. 따라서 기본값이 true 인 boolean 입력에
+    `A && inputs.x || 'true'` 를 쓰면 `true && false` → `false` → `|| 'true'` → `'true'`
+    가 되어 끄려던 값이 켠 값이 된다.
+
+    안전한 형태는 fallback 없이 쓰는 것이다. 표현식의 falsy 결과가 그대로 'false' 로
+    렌더되므로 기본값이 저절로 맞는다.
+    """
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
+
+    def _boolean_inputs(self) -> list[str]:
+        """`type: boolean` 으로 선언된 workflow_dispatch 입력 이름."""
+        block = self.workflow.split("  workflow_dispatch:", maxsplit=1)[1]
+        block = block.split("\npermissions:", maxsplit=1)[0]
+        names = []
+        for match in re.finditer(
+            r"(?m)^      (?P<name>[a-z0-9_]+):\n(?P<body>(?:^        .*\n)+)", block
+        ):
+            if "type: boolean" in match.group("body"):
+                names.append(match.group("name"))
+        return names
+
+    def _env_expression(self, env_name: str) -> str:
+        match = re.search(
+            rf"(?m)^\s*{re.escape(env_name)}:\s*(\$\{{\{{.*?\}}\}})\s*$", self.workflow
+        )
+        self.assertIsNotNone(match, f"{env_name} env 를 찾지 못했다")
+        return match.group(1) if match else ""
+
+    def test_boolean_inputs_are_declared(self):
+        self.assertEqual(
+            sorted(self._boolean_inputs()), ["dry_run", "sweep_orphan_refs"]
+        )
+
+    def test_boolean_input_expressions_have_no_literal_fallback(self):
+        """`|| '<literal>'` fallback 이 붙으면 false 가 되살아난다."""
+        for input_name in self._boolean_inputs():
+            expression = self._env_expression(input_name.upper())
+            self.assertIn(f"inputs.{input_name}", expression)
+            self.assertNotRegex(
+                expression,
+                r"\|\|\s*'(?:true|false)'",
+                f"{input_name}: boolean 입력에 리터럴 fallback 을 쓰면 dispatch 에서 "
+                f"false 가 무시된다. `event == 'workflow_dispatch' && inputs.x` 또는 "
+                f"`event != 'workflow_dispatch' || inputs.x` 형태로 쓴다. 표현식: {expression}",
+            )
+
+    def test_sweep_orphan_refs_defaults_on_for_cron_and_can_be_turned_off(self):
+        expression = self._env_expression("SWEEP_ORPHAN_REFS")
+        # cron 기본 true 이므로 `!=` 형태여야 한다.
+        self.assertIn("github.event_name != 'workflow_dispatch'", expression)
+        self.assertIn("|| inputs.sweep_orphan_refs", expression)
+
+    def test_dry_run_defaults_off_for_cron(self):
+        expression = self._env_expression("DRY_RUN")
+        # cron 기본 false 이므로 `==` 형태여야 한다.
+        self.assertIn("github.event_name == 'workflow_dispatch'", expression)
+        self.assertIn("&& inputs.dry_run", expression)
 
 
 if __name__ == "__main__":

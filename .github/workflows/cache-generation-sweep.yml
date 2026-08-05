@@ -71,9 +71,20 @@ jobs:
       - name: Sweep stale cache generations
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         env:
-          DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run || 'false' }}
+          # [#4080] boolean 입력에 `A && inputs.x || <기본>` 관용구를 쓰지 않는다.
+          # 기본이 true 인 입력에 false 를 넣으면 `true && false` → falsy → `|| 'true'` 로
+          # 되살아나 **끄려던 값이 켠 값이 된다**. `dry_run` 이 멀쩡했던 건 fallback 이
+          # 마침 'false' 라 우연히 일치해서일 뿐이다.
+          #
+          # boolean 입력은 fallback 없이 쓴다. 표현식의 falsy 결과가 그대로 'false' 로
+          # 렌더되므로 기본값이 저절로 맞는다.
+          #   cron 기본 false → `event == 'workflow_dispatch' && inputs.x`
+          #   cron 기본 true  → `event != 'workflow_dispatch' || inputs.x`
+          # 후자의 선례는 npm-publish.yml 의 `publish_extensions` 다.
+          DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
+          SWEEP_ORPHAN_REFS: ${{ github.event_name != 'workflow_dispatch' || inputs.sweep_orphan_refs }}
+          # string 입력은 빈 값이 falsy 라 fallback 관용구가 유효하다.
           KEEP_GENERATIONS: ${{ github.event_name == 'workflow_dispatch' && inputs.keep_generations || '2' }}
-          SWEEP_ORPHAN_REFS: ${{ github.event_name == 'workflow_dispatch' && inputs.sweep_orphan_refs || 'true' }}
           # 무료 한도 10GB. warn 이상이면 경고, fail 이상이면 job 을 실패시켜 드러낸다.
           LIMIT_GB: "10"
           WARN_PERCENT: "80"
@@ -110,7 +121,14 @@ jobs:
             const openPrs = await github.paginate(
               github.rest.pulls.list, { ...context.repo, state: 'open', per_page: 100 },
             );
-            const openPrRefs = new Set(openPrs.map((pr) => `refs/pull/${pr.number}/merge`));
+            // `/merge` 와 `/head` 를 함께 보호한다. 2026-08-06 실측 스냅샷의 캐시 ref 는
+            // `refs/heads/*` 34건과 `refs/pull/<n>/merge` 19건뿐이라 `/head` 는 지금
+            // 존재하지 않지만, 세대 상한만 받던 이전과 달리 이제는 열린 PR 것이어도
+            // 고아로 전량 삭제되므로 가정을 코드로 고정한다.
+            const openPrRefs = new Set(openPrs.flatMap((pr) => [
+              `refs/pull/${pr.number}/merge`,
+              `refs/pull/${pr.number}/head`,
+            ]));
 
             // 실재하는 branch·tag 를 모아 살아 있는 ref 집합을 만든다. 여기 없는 ref 의
             // 캐시는 브랜치 삭제·PR close 로 남은 고아다.
@@ -132,7 +150,7 @@ jobs:
                 } else {
                   for (const b of branches) liveRefs.add(`refs/heads/${b.name}`);
                   for (const t of tags) liveRefs.add(`refs/tags/${t.name}`);
-                  core.info(`살아 있는 ref ${liveRefs.size}건 (branch ${branches.length}, tag ${tags.length}, 열린 PR ${openPrRefs.size})`);
+                  core.info(`살아 있는 ref ${liveRefs.size}건 (branch ${branches.length}, tag ${tags.length}, 열린 PR ${openPrs.length})`);
                 }
               } catch (error) {
                 liveRefsUsable = false;
@@ -141,7 +159,7 @@ jobs:
             }
 
             const before = caches.reduce((n, c) => n + c.size_in_bytes, 0);
-            core.info(`현재 캐시 ${caches.length}개 / ${gb(before)}GB (열린 PR ${openPrRefs.size}건 보호)`);
+            core.info(`현재 캐시 ${caches.length}개 / ${gb(before)}GB (열린 PR ${openPrs.length}건 보호)`);
 
             // 키에서 후행 해시를 떼어 논리 그룹으로 묶는다.
             const groupOf = (key) => key.replace(/[-_][0-9a-f]{8,}$/, '');
@@ -213,7 +231,7 @@ jobs:
                 [dryRun ? '정리 후(추정)' : '정리 후', `${caches.length - removedCount}개 / ${gb(after)}GB`],
                 ['한도 대비', `${afterPercent.toFixed(1)}% (${gb(limitBytes)}GB 중)`],
                 ['그룹별 유지 세대', String(keep)],
-                ['보호한 열린 PR', String(openPrRefs.size)],
+                ['보호한 열린 PR', String(openPrs.length)],
                 ['고아 ref 정리', liveRefsUsable ? '적용' : '건너뜀'],
               ])
               .write();
