@@ -101,6 +101,12 @@ jobs:
             );
 
             // 열린 PR 의 ref 는 보호한다 — 머지 전에 재사용된다.
+            //
+            // 판정 기준은 **지금 열려 있는가**이지 merge 되었는가가 아니다. merge 된 PR,
+            // 그냥 닫은 PR, 체리픽·통합 PR 로 내용만 반영하고 닫은 PR 은 전부 같다 —
+            // `refs/pull/<n>/merge` 로는 더 이상 CI 가 돌지 않고, 그 캐시는 다른 ref 가
+            // 읽지도 못한다(캐시 scope 는 생성 ref 와 base 로 제한된다). 전부 고아다.
+            // 닫힌 PR 이 다시 열리면 캐시는 cold 로 시작한다 — 받아들이는 비용이다.
             const openPrs = await github.paginate(
               github.rest.pulls.list, { ...context.repo, state: 'open', per_page: 100 },
             );

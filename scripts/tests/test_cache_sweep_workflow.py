@@ -68,8 +68,15 @@ const github = {
       },
     },
   },
-  paginate: async (fn) => {
-    if (fn === listPulls) { result.calls.push('pulls'); return fixture.openPrs; }
+  paginate: async (fn, params) => {
+    if (fn === listPulls) {
+      result.calls.push('pulls');
+      // 실제 API 처럼 state 를 존중한다. `state: 'open'` 이 아니면 닫힌 PR 도 섞여
+      // 돌아오므로, 보호 기준을 열림에서 전체로 넓히는 회귀가 테스트에 잡힌다.
+      const state = params && params.state;
+      if (state !== 'open') return [...fixture.openPrs, ...(fixture.closedPrs || [])];
+      return fixture.openPrs;
+    }
     if (fn === listBranches) {
       result.calls.push('branches');
       if (fixture.branchesThrow) throw new Error('stub listBranches failure');
@@ -121,6 +128,7 @@ class CacheSweepWorkflowTests(unittest.TestCase):
                 "FAIL_PERCENT": "95",
             },
             "openPrs": [],
+            "closedPrs": [],
             "branches": [{"name": "devel"}],
             "tags": [],
             "caches": [],
@@ -167,6 +175,29 @@ class CacheSweepWorkflowTests(unittest.TestCase):
             ],
         )
         self.assertEqual(out["deleted"], [2], "열린 PR 은 보호하고 닫힌 PR 만 지운다")
+
+    def test_open_state_not_merge_state_decides_protection(self):
+        """merge·단순 close·체리픽 후 close 를 구분하지 않는다.
+
+        열려 있지 않은 PR 의 `refs/pull/<n>/merge` 로는 더 이상 CI 가 돌지 않고 그
+        캐시를 다른 ref 가 읽지도 못한다. 실제로 #3779·#3775 는 내용이 통합 PR #3801 로
+        반영되고 CLOSED 된 경우인데, 캐시는 merge 된 #3919 와 똑같이 고아여야 한다.
+        """
+        out = self.run_sweep(
+            openPrs=[{"number": 40}],
+            closedPrs=[{"number": 41}, {"number": 42}, {"number": 43}],
+            caches=[
+                # 열려 있음 — 보호
+                cache(1, "grp-aaaaaaaa", "refs/pull/40/merge", "2026-08-05T00:00:00Z"),
+                # merge 후 닫힘
+                cache(2, "grp-bbbbbbbb", "refs/pull/41/merge", "2026-08-05T00:00:00Z"),
+                # 체리픽·통합 PR 로 반영되고 merge 없이 닫힘
+                cache(3, "grp-cccccccc", "refs/pull/42/merge", "2026-08-05T00:00:00Z"),
+                # 그냥 닫힘
+                cache(4, "grp-dddddddd", "refs/pull/43/merge", "2026-08-05T00:00:00Z"),
+            ],
+        )
+        self.assertEqual(sorted(out["deleted"]), [2, 3, 4])
 
     def test_keeps_cache_on_existing_tag_ref(self):
         out = self.run_sweep(

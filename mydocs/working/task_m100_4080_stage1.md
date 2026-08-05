@@ -38,6 +38,19 @@
 
 권한은 ref 목록 조회를 위해 `contents: read`를 더했다. `actions: write`와 함께 둘뿐이다.
 
+### 3.1.1 PR 보호 기준은 merge 여부가 아니라 열림 여부다
+
+`pulls.list`를 `state: 'open'`으로 조회하므로, merge된 PR·그냥 닫은 PR·**체리픽이나 통합 PR로
+내용만 반영하고 닫은 PR**이 전부 같게 취급된다. 셋 다 `refs/pull/<n>/merge`로는 더 이상 CI가 돌지
+않고, 그 캐시를 다른 ref가 읽지도 못한다(캐시 scope는 생성 ref와 base로 제한된다). 따라서 전부
+고아다.
+
+실제 표본이 이 구분을 요구한다. 시뮬레이션에서 고아로 잡힌 PR ref 19건에 merge된 #3919·#3868·
+#3816·#3801·#3690와 merge 없이 닫힌 #3951·#3858·#3853 등이 섞여 있고, 그중 #3779·#3775는 내용이
+통합 PR #3801로 반영된 뒤 닫힌 경우다.
+
+닫힌 PR이 다시 열리면 캐시는 cold로 시작한다. 받아들이는 비용으로 문서에 남긴다.
+
 ### 3.2 조회 순서가 안전 계약이다
 
 **캐시를 먼저 읽고 ref를 나중에 읽는다.** 캐시는 자기 ref보다 먼저 생길 수 없으므로, 캐시 스냅샷
@@ -87,18 +100,21 @@
 
 | 검증 | 결과 |
 | --- | --- |
-| `python3 -m unittest scripts/tests/test_cache_sweep_workflow.py` | 16 passed / 0 failed |
+| `python3 -m unittest scripts/tests/test_cache_sweep_workflow.py` | 17 passed / 0 failed |
 | `actionlint .github/workflows/cache-generation-sweep.yml` | 통과, 진단 없음 |
 | `python3 -c "yaml.safe_load(...)"` | 통과 |
 | `git diff --check` | 통과 |
 
-테스트가 다루는 계약은 고아 삭제(삭제된 branch·닫힌 PR), tag ref 보존, 열린 PR 보호, ref별 독립
-세대 상한, dry-run 무삭제, 삭제 실패의 경고 처리, 빈 branch 목록·조회 실패의 fail-closed, 조회 순서,
-임계 경고·실패, summary 항목이다.
+테스트가 다루는 계약은 고아 삭제(삭제된 branch·닫힌 PR), merge 여부와 무관한 열림 기준, tag ref
+보존, 열린 PR 보호, ref별 독립 세대 상한, dry-run 무삭제, 삭제 실패의 경고 처리, 빈 branch 목록·
+조회 실패의 fail-closed, 조회 순서, 임계 경고·실패, summary 항목이다.
+
+node 스텁은 `pulls.list`의 `state` 파라미터를 실제 API처럼 존중한다. 처음에는 파라미터를 무시해서
+`state: 'open'` → `'all'` 뮤테이션이 잡히지 않았고, 스텁을 고쳐 잡히게 했다.
 
 ### 4.3 RED 재현
 
-네 가지 뮤테이션이 모두 테스트에 잡히는 것을 확인했다.
+다섯 가지 뮤테이션이 모두 테스트에 잡히는 것을 확인했다.
 
 | 뮤테이션 | 결과 |
 | --- | --- |
@@ -106,6 +122,7 @@
 | 빈 branch 목록 가드 제거 | 1건 실패 |
 | 임계 판정을 정리 전 총량으로 | 1건 실패 |
 | 캐시 읽기를 ref 조회 뒤로 이동 | 1건 실패 |
+| PR 보호 기준을 `state: 'open'` → `'all'` | 1건 실패 |
 
 ## 5. 이번에 하지 않은 것과 이유
 
