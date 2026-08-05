@@ -850,4 +850,21 @@ fn issue_2007_continuation_viewport_does_not_center_nested_cell_content() {
          table_y={:.1}, text_y={text_top:.1}",
         table.bbox.y,
     );
+
+    // 마지막 조각도 첫 visible unit의 reservation을 다시 content origin에 남기면
+    // 제목이 한 단위(32px) 아래로 내려간다. PDF p17의 첫 제목은 body top 직후에
+    // 있으므로 terminal 여부와 무관하게 같은 보정을 적용해야 한다.
+    let p17 = doc
+        .build_page_render_tree(16)
+        .expect("issue2007 p17 render tree");
+    let terminal_table = find_innermost_table_containing_text(&p17.root, "선호된 대안의 기대효과")
+        .expect("p17 nested table containing terminal heading");
+    let terminal_text_top = first_text_run_top(terminal_table, "선호된 대안의 기대효과")
+        .expect("p17 terminal heading text run");
+    assert!(
+        terminal_text_top <= terminal_table.bbox.y + 14.0,
+        "p17 terminal continuation retained the first visible-unit reservation: \
+         table_y={:.1}, text_y={terminal_text_top:.1}",
+        terminal_table.bbox.y,
+    );
 }

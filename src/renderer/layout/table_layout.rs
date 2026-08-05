@@ -8695,8 +8695,10 @@ impl LayoutEngine {
         // 1×1 host 안의 1×1 표 continuation은 이전 조각의 첫 unit을 물리
         // reservation으로 이미 전진시킨다. 다음 조각의 content origin까지 원래
         // `offset`만 쓰면 그 unit이 다시 페이지 상단에 그려져 이후 제목/표가 한 줄씩
-        // 아래로 drift한다(42065 p12–p16). 종료 조각은 남은 tail만 clip해야 하므로
-        // 이 보정을 적용하지 않는다.
+        // 아래로 drift한다. 이 중복은 종료 조각에도 남는다. terminal tail의 물리
+        // clip 높이는 아래 `terminal_single_cell_tail` 분기가 별도로 보존하므로,
+        // 여기서는 종료 여부와 관계없이 content origin을 같은 기준으로 전진시킨다
+        // (42065 p12–p17).
         let single_cell_nested_continuation = table.row_count == 1
             && table.col_count == 1
             && cell.paragraphs.get(para_idx).is_some_and(|paragraph| {
@@ -8708,7 +8710,6 @@ impl LayoutEngine {
         // 권위다. scalar offset 보정은 재귀 투영이 없는 기존 fallback에만 쓴다.
         let compensate_first_visible = recursive_cut.is_none()
             && offset > 0.5
-            && !terminal
             && single_cell_nested_continuation;
         let offset_within_start = if recursive_cut.is_some() {
             (offset - first_visible_content_height).max(0.0)
