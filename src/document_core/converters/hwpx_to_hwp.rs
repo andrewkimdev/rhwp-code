@@ -29,6 +29,7 @@ use crate::model::table::{Cell, Table, TablePageBreak};
 use crate::parser::FileFormat;
 
 use super::common_obj_attr_writer::{pack_common_attr_bits, serialize_common_obj_attr};
+use super::hwpx_master_page_slots::materialize_hwp5_master_page_slots;
 
 /// 어댑터 실행 보고서.
 ///
@@ -104,6 +105,8 @@ pub struct AdapterReport {
     pub master_page_autonum_placeholder_removed: u32,
     /// HWPX 바탕쪽 line shape rendering matrix를 HWP5 size ratio contract로 보정한 횟수
     pub master_page_line_rendering_size_ratio_materialized: u32,
+    /// HWPX 희소 바탕쪽을 HWP5 `Both`/`Odd` 저장 슬롯으로 명시화한 구역 수 (#3930)
+    pub master_page_apply_slots_materialized: u32,
     /// [#2767] 캡션이 있는 그림(gso `$pic`) CTRL_HEADER 의 한컴 캡션 비트(bit 29,
     /// 0x2000_0000) 보강 횟수. 표는 이미 `materialize_table_ctrl_header_attr` 로
     /// 보강되지만 그림은 빠져 있었다(전 코퍼스 실측 80/80 이 개체 종류와 무관하게
@@ -157,6 +160,7 @@ impl AdapterReport {
                 + self.header_footer_fwspace_control_materialized
                 + self.master_page_autonum_placeholder_removed
                 + self.master_page_line_rendering_size_ratio_materialized
+                + self.master_page_apply_slots_materialized
                 + self.picture_caption_common_attr_materialized)
                 > 0
     }
@@ -182,7 +186,10 @@ impl AdapterReport {
 /// 정확한 vpos 가 채워져 있어 추가 사전계산이 불필요. 직렬화 → 재로드 시에도 vpos 가 그대로
 /// 보존된다 (정수 필드 라운드트립).
 pub fn convert_hwpx_to_hwp_ir(doc: &mut Document) -> AdapterReport {
-    convert_to_hwp_ir(doc)
+    let master_page_apply_slots_materialized = materialize_hwp5_master_page_slots(doc);
+    let mut report = convert_to_hwp_ir(doc, true);
+    report.master_page_apply_slots_materialized = master_page_apply_slots_materialized;
+    report
 }
 
 /// HWPX/HWP3 출처 IR 을 HWP 직렬화기가 기대하는 형태로 정규화한다.
@@ -190,12 +197,12 @@ pub fn convert_hwpx_to_hwp_ir(doc: &mut Document) -> AdapterReport {
 /// 한컴 HWP5 스트림은 출처와 관계없이 구역당 `PAGE_BORDER_FILL` 레코드 세 개를
 /// 요구한다. HWPX 원본의 단일 BOTH XML 구조 보존은 이 변환을 생략하는 대신,
 /// `DocumentCore` HWP export 경계에서 저장 뒤 PBF overlay를 되돌려 보장한다.
-fn convert_to_hwp_ir(doc: &mut Document) -> AdapterReport {
+fn convert_to_hwp_ir(doc: &mut Document, source_is_hwpx: bool) -> AdapterReport {
     let mut report = AdapterReport::new();
 
     normalize_file_header_for_hwp(doc, &mut report);
     normalize_page_border_fills_for_hwp(doc);
-    normalize_picture_geometry_for_hwp(doc);
+    normalize_picture_geometry_for_hwp(doc, source_is_hwpx);
     normalize_doc_properties_for_hwp(doc, &mut report);
     materialize_hwp5_bin_data_order(doc, &mut report);
     normalize_bin_data_for_hwp(doc, &mut report);
@@ -205,6 +212,11 @@ fn convert_to_hwp_ir(doc: &mut Document) -> AdapterReport {
         adapt_section_def(&mut section.section_def, &mut report);
         insert_section_def_control(section, &mut report);
         materialize_following_section_break_type(section_idx, section, &mut report);
+
+        // HWPX -> HWP 어댑터가 SectionDef, 바탕쪽, 문단 제어를 물질화했으므로
+        // 이전 BodyText raw stream이 있다면 재사용하면 안 된다. HWP5 저장본은
+        // 반드시 동기화된 inline SectionDef와 master-page LIST_HEADER에서 다시 쓴다.
+        section.raw_stream = None;
     }
 
     normalize_paragraph_char_border_fills(doc, &mut report);
@@ -616,8 +628,31 @@ fn shape_attr_mut(
 /// 크기는 `SHAPE_COMPONENT` 가 이미 갖고 있다(현재 폭/높이). 그것으로 사각형을
 /// 만들고, 자르기는 원본 크기 기준 전체 영역으로 둔다. 이미 채워진 그림은
 /// 건드리지 않으므로 HWPX·HWP5 경로는 무영향이다.
-fn normalize_picture_geometry_for_hwp(doc: &mut Document) {
-    fn fill(pic: &mut crate::model::image::Picture) {
+fn normalize_picture_geometry_for_hwp(doc: &mut Document, source_is_hwpx: bool) {
+    fn fill(pic: &mut crate::model::image::Picture, source_is_hwpx: bool) {
+        // HWPX `hp:imgDim`은 논리 원본 이미지 크기이며 IR에 그대로 보존한다. 다만
+        // 한컴 2020의 HWPX -> HWP 저장본은 SC_PICTURE extra(18 byte) 속의 별도
+        // original-width/height 칸을 0으로 쓴다. 이 칸에 imgDim을 복사하면 묶음
+        // 그림을 인쇄할 때 한컴이 크기를 다시 해석해 표지가 크게 어긋난다.
+        if source_is_hwpx && pic.raw_picture_extra.is_empty() {
+            // HWPX hc:img는 bright, contrast 순서지만 한컴 2020이 HWP5
+            // SC_PICTURE에 저장하는 두 i8 칸은 반대 순서다. HWP5 serializer는
+            // 모델 순서대로 기록하므로 이 경계에서만 바꾼다. raw extra를 함께
+            // 채워 두므로 adapter 재호출 시 다시 교환되지 않는다.
+            std::mem::swap(&mut pic.image_attr.brightness, &mut pic.image_attr.contrast);
+            pic.raw_picture_extra.reserve_exact(18);
+            pic.raw_picture_extra.push(pic.border_opacity);
+            pic.raw_picture_extra
+                .extend_from_slice(&pic.instance_id.to_le_bytes());
+            pic.raw_picture_extra
+                .extend_from_slice(&0_u32.to_le_bytes());
+            pic.raw_picture_extra
+                .extend_from_slice(&0_u32.to_le_bytes());
+            pic.raw_picture_extra
+                .extend_from_slice(&0_u32.to_le_bytes());
+            pic.raw_picture_extra
+                .push(pic.image_attr.transparency_alpha_byte());
+        }
         // `SHAPE_COMPONENT` 의 local file version. 한컴 저장본은 1, HWP3 변환본은 0 이다
         // (같은 그림의 바이트 대조로 확인). 기하와 무관하게 항상 맞춘다.
         if pic.shape_attr.local_file_version == 0 {
@@ -665,32 +700,35 @@ fn normalize_picture_geometry_for_hwp(doc: &mut Document) {
     // 빠뜨리면 그 안의 그림 또는 도형만 HWP5 계약(geometry/local-file-version)을
     // 잃고, 한컴은 문서 전체를 거부할 수 있다. 각 변환 단계가 독자 walker를 조금씩
     // 달리 두지 않도록 여기서는 모든 paragraph container를 하나의 재귀로 방문한다.
-    fn walk_paragraphs(paragraphs: &mut [Paragraph]) {
+    fn walk_paragraphs(paragraphs: &mut [Paragraph], source_is_hwpx: bool) {
         for para in paragraphs {
-            walk_controls(&mut para.controls);
+            walk_controls(&mut para.controls, source_is_hwpx);
         }
     }
 
-    fn walk_caption(caption: &mut crate::model::shape::Caption) {
-        walk_paragraphs(&mut caption.paragraphs);
+    fn walk_caption(caption: &mut crate::model::shape::Caption, source_is_hwpx: bool) {
+        walk_paragraphs(&mut caption.paragraphs, source_is_hwpx);
     }
 
-    fn walk_master_pages(master_pages: &mut [crate::model::header_footer::MasterPage]) {
+    fn walk_master_pages(
+        master_pages: &mut [crate::model::header_footer::MasterPage],
+        source_is_hwpx: bool,
+    ) {
         for master_page in master_pages {
-            walk_paragraphs(&mut master_page.paragraphs);
+            walk_paragraphs(&mut master_page.paragraphs, source_is_hwpx);
         }
     }
 
-    fn walk_drawing(drawing: &mut crate::model::shape::DrawingObjAttr) {
+    fn walk_drawing(drawing: &mut crate::model::shape::DrawingObjAttr, source_is_hwpx: bool) {
         if let Some(text_box) = &mut drawing.text_box {
-            walk_paragraphs(&mut text_box.paragraphs);
+            walk_paragraphs(&mut text_box.paragraphs, source_is_hwpx);
         }
         if let Some(caption) = &mut drawing.caption {
-            walk_caption(caption);
+            walk_caption(caption, source_is_hwpx);
         }
     }
 
-    fn walk_shape(shape: &mut ShapeObject) {
+    fn walk_shape(shape: &mut ShapeObject, source_is_hwpx: bool) {
         // local file version 은 그림뿐 아니라 **모든 개체 요소**가 1 이어야 한다.
         // 한컴 저장본은 예외 없이 1 이고, HWP3 변환본은 도형(`$con`/`$rec` 등)만
         // 0 으로 남아 문서 전체가 거부됐다(그림만 고쳤을 때 20건 중 2건 잔존).
@@ -702,72 +740,80 @@ fn normalize_picture_geometry_for_hwp(doc: &mut Document) {
 
         match shape {
             ShapeObject::Picture(pic) => {
-                fill(pic);
+                fill(pic, source_is_hwpx);
                 if let Some(caption) = &mut pic.caption {
-                    walk_caption(caption);
+                    walk_caption(caption, source_is_hwpx);
                 }
             }
             ShapeObject::Group(group) => {
                 for child in &mut group.children {
-                    walk_shape(child);
+                    walk_shape(child, source_is_hwpx);
                 }
                 if let Some(caption) = &mut group.caption {
-                    walk_caption(caption);
+                    walk_caption(caption, source_is_hwpx);
                 }
             }
             // Chart/OLE은 DrawingObjAttr의 caption과 별개로 HWP3 parser가 채우는
             // own caption을 가진다. 특히 HWP3 OLE fixup은 picture caption을
             // `ole.caption`으로 옮긴다. 둘 다 누락하면 0 geometry picture가 남는다.
             ShapeObject::Chart(chart) => {
-                walk_drawing(&mut chart.drawing);
+                walk_drawing(&mut chart.drawing, source_is_hwpx);
                 if let Some(caption) = &mut chart.caption {
-                    walk_caption(caption);
+                    walk_caption(caption, source_is_hwpx);
                 }
             }
             ShapeObject::Ole(ole) => {
-                walk_drawing(&mut ole.drawing);
+                walk_drawing(&mut ole.drawing, source_is_hwpx);
                 if let Some(caption) = &mut ole.caption {
-                    walk_caption(caption);
+                    walk_caption(caption, source_is_hwpx);
                 }
             }
             _ => {
                 // Line/Rectangle/Ellipse/Arc/Polygon/Curve의 text box와 caption은
                 // 모두 동일한 paragraph container이므로 같은 walker로 재귀한다.
                 if let Some(drawing) = shape.drawing_mut() {
-                    walk_drawing(drawing);
+                    walk_drawing(drawing, source_is_hwpx);
                 }
             }
         }
     }
 
-    fn walk_controls(controls: &mut [Control]) {
+    fn walk_controls(controls: &mut [Control], source_is_hwpx: bool) {
         for control in controls {
             match control {
                 Control::Picture(pic) => {
-                    fill(pic);
+                    fill(pic, source_is_hwpx);
                     if let Some(caption) = &mut pic.caption {
-                        walk_caption(caption);
+                        walk_caption(caption, source_is_hwpx);
                     }
                 }
-                Control::Shape(shape) => walk_shape(shape),
+                Control::Shape(shape) => walk_shape(shape, source_is_hwpx),
                 Control::Table(table) => {
                     for cell in &mut table.cells {
-                        walk_paragraphs(&mut cell.paragraphs);
+                        walk_paragraphs(&mut cell.paragraphs, source_is_hwpx);
                     }
                     if let Some(caption) = &mut table.caption {
-                        walk_caption(caption);
+                        walk_caption(caption, source_is_hwpx);
                     }
                 }
-                Control::Header(header) => walk_paragraphs(&mut header.paragraphs),
-                Control::Footer(footer) => walk_paragraphs(&mut footer.paragraphs),
-                Control::Footnote(footnote) => walk_paragraphs(&mut footnote.paragraphs),
-                Control::Endnote(endnote) => walk_paragraphs(&mut endnote.paragraphs),
-                Control::HiddenComment(comment) => walk_paragraphs(&mut comment.paragraphs),
+                Control::Header(header) => walk_paragraphs(&mut header.paragraphs, source_is_hwpx),
+                Control::Footer(footer) => walk_paragraphs(&mut footer.paragraphs, source_is_hwpx),
+                Control::Footnote(footnote) => {
+                    walk_paragraphs(&mut footnote.paragraphs, source_is_hwpx)
+                }
+                Control::Endnote(endnote) => {
+                    walk_paragraphs(&mut endnote.paragraphs, source_is_hwpx)
+                }
+                Control::HiddenComment(comment) => {
+                    walk_paragraphs(&mut comment.paragraphs, source_is_hwpx)
+                }
                 // HWPX memo field와 HWP3의 SectionDef control도 문단을 품을 수 있다.
                 // 본문 SectionDef와는 별개 IR 인스턴스이므로 여기서도 안전하게 덮는다.
-                Control::Field(field) => walk_paragraphs(&mut field.memo_paragraphs),
+                Control::Field(field) => {
+                    walk_paragraphs(&mut field.memo_paragraphs, source_is_hwpx)
+                }
                 Control::SectionDef(section_def) => {
-                    walk_master_pages(&mut section_def.master_pages)
+                    walk_master_pages(&mut section_def.master_pages, source_is_hwpx)
                 }
                 _ => {}
             }
@@ -775,8 +821,8 @@ fn normalize_picture_geometry_for_hwp(doc: &mut Document) {
     }
 
     for section in doc.sections.iter_mut() {
-        walk_paragraphs(&mut section.paragraphs);
-        walk_master_pages(&mut section.section_def.master_pages);
+        walk_paragraphs(&mut section.paragraphs, source_is_hwpx);
+        walk_master_pages(&mut section.section_def.master_pages, source_is_hwpx);
     }
 }
 
@@ -1445,42 +1491,54 @@ fn materialize_master_page_autonum_placeholder(
 }
 
 fn materialize_single_master_page_flags(section_def: &mut SectionDef, report: &mut AdapterReport) {
-    const HWPX_SINGLE_MASTER_PAGE_FLAGS: u32 = 0x4000_0000;
-    const HANCOM_SINGLE_MASTER_PAGE_FLAGS: u32 = 0x2000_0000;
+    const HANCOM_SINGLE_BOTH_MASTER_PAGE_FLAGS: u32 = 0x2000_0000;
+    const HANCOM_SINGLE_ODD_MASTER_PAGE_FLAGS: u32 = 0x8000_0000;
     const MASTER_PAGE_FLAGS_MASK: u32 = 0xe000_0000;
 
-    if section_def.master_pages.len() != 1
-        || section_def.flags & MASTER_PAGE_FLAGS_MASK != HWPX_SINGLE_MASTER_PAGE_FLAGS
-    {
+    // 희소 HWPX 바탕쪽은 직전 슬롯 정규화에서 1→2개로 늘 수 있으므로 입력 flags가 아니라
+    // 최종 슬롯 개수만 HWP5 SECTION_DEF 계약의 기준으로 쓴다.
+    if section_def.master_pages.len() != 1 {
         return;
     }
 
-    section_def.flags =
-        (section_def.flags & !MASTER_PAGE_FLAGS_MASK) | HANCOM_SINGLE_MASTER_PAGE_FLAGS;
-    report.section_def_single_master_page_flags_materialized += 1;
+    // HWP 2020 HWPX -> HWP 저장본의 단일 Odd LIST_HEADER는 0x80000000이다.
+    // 이 비트는 이전 구역의 짝수 바탕쪽을 유지한 채 현재 구역의 홀수 바탕쪽만
+    // 교체하는 저장 계약이다. 단일 Both(기존 한컴 저장 계약)는 0x20000000을 쓴다.
+    let single_master = &section_def.master_pages[0];
+    let master_page_flags = match single_master.apply_to {
+        crate::model::header_footer::HeaderFooterApply::Odd => HANCOM_SINGLE_ODD_MASTER_PAGE_FLAGS,
+        crate::model::header_footer::HeaderFooterApply::Both
+        | crate::model::header_footer::HeaderFooterApply::Even => {
+            HANCOM_SINGLE_BOTH_MASTER_PAGE_FLAGS
+        }
+    };
+    let expected = (section_def.flags & !MASTER_PAGE_FLAGS_MASK) | master_page_flags;
+    if section_def.flags != expected {
+        section_def.flags = expected;
+        report.section_def_single_master_page_flags_materialized += 1;
+    }
 }
 
 fn materialize_multi_master_page_flags(section_def: &mut SectionDef, report: &mut AdapterReport) {
-    const HWPX_TWO_MASTER_PAGE_FLAGS: u32 = 0x8000_0000;
     const HANCOM_MULTI_MASTER_PAGE_FLAGS: u32 = 0xC000_0000;
     const MASTER_PAGE_FLAGS_MASK: u32 = 0xe000_0000;
 
-    if section_def.master_pages.len() < 2
-        || section_def.flags & MASTER_PAGE_FLAGS_MASK != HWPX_TWO_MASTER_PAGE_FLAGS
-    {
+    if section_def.master_pages.len() < 2 {
         return;
     }
 
-    section_def.flags =
-        (section_def.flags & !MASTER_PAGE_FLAGS_MASK) | HANCOM_MULTI_MASTER_PAGE_FLAGS;
-    report.section_def_multi_master_page_flags_materialized += 1;
+    let expected = (section_def.flags & !MASTER_PAGE_FLAGS_MASK) | HANCOM_MULTI_MASTER_PAGE_FLAGS;
+    if section_def.flags != expected {
+        section_def.flags = expected;
+        report.section_def_multi_master_page_flags_materialized += 1;
+    }
 }
 
 fn materialize_section_def_master_page_tail(
     section_def: &mut SectionDef,
     report: &mut AdapterReport,
 ) {
-    if section_def.master_pages.is_empty() || !section_def.raw_ctrl_extra.is_empty() {
+    if section_def.master_pages.is_empty() {
         return;
     }
 
@@ -1497,8 +1555,10 @@ fn materialize_section_def_master_page_tail(
     if section_def.master_pages.len() >= 3 {
         extra[2..4].copy_from_slice(&1u16.to_le_bytes());
     }
-    section_def.raw_ctrl_extra = extra;
-    report.section_def_master_page_tail_materialized += 1;
+    if section_def.raw_ctrl_extra != extra {
+        section_def.raw_ctrl_extra = extra;
+        report.section_def_master_page_tail_materialized += 1;
+    }
 }
 
 /// [Task #1061] HWPX 수식 control 의 한컴 호환 contract 정정.
@@ -2035,6 +2095,11 @@ pub fn convert_if_hwpx_source(doc: &mut Document, source_format: FileFormat) -> 
     }
     // [Issue #1770] HWPX 출처만 마커 부여 (HWP3 은 자체 variant 시멘틱 유지).
     // idempotent — 이미 있으면 추가하지 않는다.
+    let master_page_apply_slots_materialized = if matches!(source_format, FileFormat::Hwpx) {
+        materialize_hwp5_master_page_slots(doc)
+    } else {
+        0
+    };
     if matches!(source_format, FileFormat::Hwpx)
         && !doc
             .extra_streams
@@ -2056,7 +2121,9 @@ pub fn convert_if_hwpx_source(doc: &mut Document, source_format: FileFormat) -> 
         doc.extra_streams
             .push((HWP3_ORIGIN_STREAM_PATH.to_string(), b"1".to_vec()));
     }
-    convert_to_hwp_ir(doc)
+    let mut report = convert_to_hwp_ir(doc, matches!(source_format, FileFormat::Hwpx));
+    report.master_page_apply_slots_materialized = master_page_apply_slots_materialized;
+    report
 }
 
 #[cfg(test)]
@@ -3258,6 +3325,24 @@ mod tests {
     }
 
     #[test]
+    fn single_odd_master_page_flags_preserve_hancom_inherited_even_contract() {
+        let mut section_def = SectionDef {
+            flags: 0x2000_0000,
+            master_pages: vec![crate::model::header_footer::MasterPage {
+                apply_to: crate::model::header_footer::HeaderFooterApply::Odd,
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        let mut report = AdapterReport::new();
+        adapt_section_def(&mut section_def, &mut report);
+
+        assert_eq!(section_def.flags & 0xe000_0000, 0x8000_0000);
+        assert_eq!(report.section_def_single_master_page_flags_materialized, 1);
+    }
+
+    #[test]
     fn two_master_page_flags_materialize_hancom_save_contract() {
         let mut section_def = SectionDef {
             flags: 0x8000_0000,
@@ -3274,6 +3359,22 @@ mod tests {
         let mut second = AdapterReport::new();
         adapt_section_def(&mut section_def, &mut second);
         assert_eq!(second.section_def_multi_master_page_flags_materialized, 0);
+    }
+
+    #[test]
+    fn materialized_second_master_page_updates_stale_single_master_flag() {
+        let mut section_def = SectionDef {
+            flags: 0x4000_0000,
+            master_pages: vec![Default::default(), Default::default()],
+            ..Default::default()
+        };
+
+        let mut report = AdapterReport::new();
+        adapt_section_def(&mut section_def, &mut report);
+
+        assert_eq!(section_def.flags & 0xe000_0000, 0xc000_0000);
+        assert_eq!(report.section_def_multi_master_page_flags_materialized, 1);
+        assert_eq!(report.section_def_single_master_page_flags_materialized, 0);
     }
 
     #[test]

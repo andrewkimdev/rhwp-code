@@ -528,6 +528,20 @@ pub fn strip_cross_format_noise(diff: IrDiff) -> IrDiff {
     }
 }
 
+/// HWPX를 HWP5로 저장한 뒤에만 적용하는 추가 비교 불능 항목을 걷어낸다.
+///
+/// 한컴 2020은 HWPX 그림을 HWP5 `SC_PICTURE`로 저장할 때 extra의 original width/height
+/// 두 칸을 의도적으로 `0`으로 둔다. 이 값은 `curSz`나 `imgRect`처럼 실제 배치·자르기
+/// 기하를 뜻하지 않으며, HWPX `hp:imgDim`의 원본 이미지 메타와도 동등 비교할 수 없다.
+/// 실제 물리 크기·자르기 차이가 함께 있으면 `detail`에 세미콜론으로 남으므로 절대 걷지
+/// 않는다. HWP3/HML 등 다른 출처에는 적용하지 않는다.
+pub fn strip_hwpx_to_hwp_noise(diff: IrDiff) -> IrDiff {
+    let mut diff = strip_cross_format_noise(diff);
+    diff.differences
+        .retain(|difference| !is_hwpx_to_hwp_incomparable(difference));
+    diff
+}
+
 fn is_cross_format_incomparable(d: &IrDifference) -> bool {
     match d {
         // HWPX verbatim parameters 소실 — 대상 포맷에 자리가 없다.
@@ -537,6 +551,19 @@ fn is_cross_format_incomparable(d: &IrDifference) -> bool {
         // 원본이 값을 안 가진 imgDim 만 — 다른 크기 필드가 섞여 있으면 남긴다.
         IrDifference::PictureSize { detail, .. } => {
             detail.starts_with("imgDim: expected=(0, 0)") && !detail.contains(';')
+        }
+        _ => false,
+    }
+}
+
+fn is_hwpx_to_hwp_incomparable(d: &IrDifference) -> bool {
+    match d {
+        // 한컴 HWPX→HWP5 저장 계약의 SC_PICTURE original dimension 0 sentinel만 허용한다.
+        // curSz/imgRect 등 다른 그림 기하가 함께 달라진 경우에는 세미콜론이 있으므로 남긴다.
+        IrDifference::PictureSize { detail, .. } => {
+            detail.starts_with("imgDim: expected=(")
+                && detail.ends_with(" actual=(0, 0)")
+                && !detail.contains(';')
         }
         _ => false,
     }
@@ -2596,6 +2623,37 @@ mod tests {
             }
             other => panic!("PictureSize 여야 함: {other:?}"),
         }
+    }
+
+    #[test]
+    fn hwpx_to_hwp_zero_img_dim_sentinel_is_not_a_layout_loss() {
+        let diff = IrDiff {
+            differences: vec![
+                IrDifference::PictureSize {
+                    section: 0,
+                    paragraph: 0,
+                    path: "/ctrl[0]pic".to_string(),
+                    detail: "imgDim: expected=(76800, 42240) actual=(0, 0)".to_string(),
+                },
+                IrDifference::PictureSize {
+                    section: 0,
+                    paragraph: 1,
+                    path: "/ctrl[1]pic".to_string(),
+                    detail: "curSz: expected=2400x1800 actual=0x0; imgDim: expected=(76800, 42240) actual=(0, 0)".to_string(),
+                },
+            ],
+        };
+
+        let filtered = strip_hwpx_to_hwp_noise(diff);
+        assert_eq!(
+            filtered.differences.len(),
+            1,
+            "실제 기하 손실은 남겨야 한다"
+        );
+        assert!(matches!(
+            &filtered.differences[0],
+            IrDifference::PictureSize { detail, .. } if detail.starts_with("curSz:")
+        ));
     }
 
     #[test]

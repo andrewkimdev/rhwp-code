@@ -14436,7 +14436,7 @@ impl TypesetEngine {
         };
         let mt = fitted_visible_mt.as_ref().or(mt);
 
-        let is_tac = table.attr & 0x01 != 0;
+        let is_tac = self.uses_tac_table_flow(table);
         // [#1880] 자리차지(TopAndBottom) 판정: 종전 원시 attr 비트((attr>>21)&7==1)는
         // HWPX 파스가 table.attr 를 미채움(bit0 만 미러, section.rs:1831)이라 항상
         // false, HWP5 재파스는 원시 attr 전체(control.rs:153)라 true — 같은 IR 의
@@ -16442,7 +16442,7 @@ impl TypesetEngine {
             .count();
         let post_table_start = if tac_wrap_split {
             (pre_table_end_line + 1).min(total_lines).max(1)
-        } else if table.attr & 0x01 != 0 {
+        } else if self.uses_tac_table_flow(table) {
             pre_table_end_line.max(1)
         } else if table.common.treat_as_char && total_lines > pre_table_end_line + 1 {
             // HWPX TAC 표(attr 비트0=0): 표줄(pre_table_end_line) 다음에 실제 본문 줄이
@@ -16573,7 +16573,19 @@ impl TypesetEngine {
         table: &crate::model::table::Table,
         fmt: &FormattedParagraph,
     ) -> bool {
-        table.attr & 0x01 != 0 || self.tac_table_line_index(para, table, fmt) == Some(0)
+        self.uses_tac_table_flow(table) || self.tac_table_line_index(para, table, fmt) == Some(0)
+    }
+
+    /// HWPX 계보 HWP는 HWP5 CTRL_HEADER를 다시 읽으면서 `table.attr` bit 0을
+    /// `treatAsChar`로 채운다. 하지만 HWPX의 inline 의미는 `treatAsChar`와
+    /// `flowWithText`가 모두 참일 때만 성립한다. 후자가 거짓인 표를 TAC으로
+    /// 오인하면 큰 표가 통째로 배치되어 저장 직후 쪽 경계가 압축된다 (#3930).
+    fn uses_tac_table_flow(&self, table: &crate::model::table::Table) -> bool {
+        if self.profile.get().hwpx_stored_layout() {
+            table.common.treat_as_char && table.common.flow_with_text
+        } else {
+            table.attr & 0x01 != 0
+        }
     }
 
     /// 비-TAC 블록 표의 조판: fits → place / split(Break Token 기반).

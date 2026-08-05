@@ -319,6 +319,9 @@ fn main() {
         Some("hwp5-anchor-trace") => {
             exit_with(rhwp::diagnostics::hwp5_anchor_trace::run(&args[2..]))
         }
+        Some("hwp5-char-shape-audit") => {
+            exit_with(rhwp::diagnostics::hwp5_char_shape_audit::run(&args[2..]))
+        }
         Some("hwp5-cell-header-probe") => {
             exit_with(rhwp::diagnostics::hwp5_cell_header_probe::run(&args[2..]))
         }
@@ -2306,6 +2309,7 @@ fn capabilities_command_entries() -> Vec<serde_json::Value> {
             "첫 문단 컨트롤 프로브",
         ),
         cmd("hwp5-anchor-trace", "diagnostic", "앵커 추적"),
+        cmd("hwp5-char-shape-audit", "diagnostic", "CHAR_SHAPE provenance audit"),
         cmd("hwp5-cell-header-probe", "diagnostic", "셀 헤더 프로브"),
         // ── 내부 개발용 ──
         cmd("test-shape", "internal", "도형 왕복 테스트"),
@@ -2917,6 +2921,9 @@ fn print_help() {
     println!();
     println!("  hwp5-anchor-trace <파일.hwp> --needle <텍스트> [--section N] [--window N] [--out <path>]");
     println!("      특정 텍스트를 포함한 PARA_TEXT 주변의 raw HWP5 record를 추적");
+    println!();
+    println!("  hwp5-char-shape-audit <hancom-oracle.hwp> <generated.hwp> --out <보고서.md> [--source-hwpx <원본.hwpx>]");
+    println!("      CHAR_SHAPE sentinel 차이와 PARA_CHAR_SHAPE 사용 위치를 분석");
     println!();
     println!("  hwp5-cell-header-probe <oracle.hwp> <generated.hwp> --out-dir <폴더>");
     println!("      표 셀 LIST_HEADER/PARA_HEADER 계약 축별 판정용 HWP probe 생성");
@@ -7168,11 +7175,13 @@ fn batch_convert_record_inner(
     if verify_options.verify {
         let diff =
             rhwp::serializer::hwpx::roundtrip::diff_documents(doc.document(), reloaded.document());
-        // [#3505] 포맷을 넘는 변환이면 대상 포맷에 자리가 없는 항목을 걷어낸다.
-        let diff = if source_format == rhwp::parser::FileFormat::Hwp {
-            diff
-        } else {
-            rhwp::serializer::hwpx::roundtrip::strip_cross_format_noise(diff)
+        // [#3505, #3930] 출처별로 대상 포맷에 표현 자리가 없는 항목만 걷어낸다.
+        let diff = match source_format {
+            rhwp::parser::FileFormat::Hwp => diff,
+            rhwp::parser::FileFormat::Hwpx => {
+                rhwp::serializer::hwpx::roundtrip::strip_hwpx_to_hwp_noise(diff)
+            }
+            _ => rhwp::serializer::hwpx::roundtrip::strip_cross_format_noise(diff),
         };
         verify_report = serde_json::json!({
             "identical": diff.is_empty(), "diffCount": diff.differences.len(),
@@ -11083,12 +11092,14 @@ fn convert_hwp(args: &[String]) -> i32 {
                             doc.document(),
                             reloaded.document(),
                         );
-                        // [#3505] 포맷을 넘는 변환이면 대상 포맷에 자리가 없는 항목을
-                        // 걷어낸다. 같은 포맷(HWP5→HWP5) 왕복은 엄격 비교 그대로.
-                        let diff = if source_format == rhwp::parser::FileFormat::Hwp {
-                            diff
-                        } else {
-                            rhwp::serializer::hwpx::roundtrip::strip_cross_format_noise(diff)
+                        // [#3505, #3930] 출처별로 대상 포맷에 표현 자리가 없는 항목만
+                        // 걷어낸다. 같은 포맷(HWP5→HWP5) 왕복은 엄격 비교 그대로다.
+                        let diff = match source_format {
+                            rhwp::parser::FileFormat::Hwp => diff,
+                            rhwp::parser::FileFormat::Hwpx => {
+                                rhwp::serializer::hwpx::roundtrip::strip_hwpx_to_hwp_noise(diff)
+                            }
+                            _ => rhwp::serializer::hwpx::roundtrip::strip_cross_format_noise(diff),
                         };
                         if !diff.is_empty() {
                             print_ir_verify_failure(&diff, output_path);
@@ -13577,11 +13588,11 @@ fn edit_output_format(input_bytes: &[u8], explicit_out: Option<&str>) -> EditOut
 /// 호환 형태로 옮기는 #178 어댑터를 건너뛰면 한컴 호환성과 이미지·차트가 깨진다.
 /// [#3702] 편집 저장본 자기검증 — 편집 후 IR 과 저장본 재파싱 IR 을 내부 대조한다.
 /// 반환: (verify 봉투 값, exit 3 여부). 비교기는 diff_documents 재사용(신규 로직 없음).
-/// HWPX 소스→HWP5 산출 같은 교차 포맷은 #3505 노이즈 제거를 승계한다.
+/// HWPX 소스→HWP5 산출은 #3505/#3930 출처 전용 노이즈 제거를 승계한다.
 fn edit_verify_report(
     doc: &rhwp::wasm_api::HwpDocument,
     out_bytes: &[u8],
-    cross_format: bool,
+    source_is_hwpx: bool,
 ) -> (serde_json::Value, bool) {
     let reloaded = match rhwp::wasm_api::HwpDocument::from_bytes(out_bytes) {
         Ok(d) => d,
@@ -13595,8 +13606,8 @@ fn edit_verify_report(
     };
     let diff =
         rhwp::serializer::hwpx::roundtrip::diff_documents(doc.document(), reloaded.document());
-    let diff = if cross_format {
-        rhwp::serializer::hwpx::roundtrip::strip_cross_format_noise(diff)
+    let diff = if source_is_hwpx {
+        rhwp::serializer::hwpx::roundtrip::strip_hwpx_to_hwp_noise(diff)
     } else {
         diff
     };
