@@ -533,8 +533,11 @@ fn border_line_type_str(t: BorderLineType) -> &'static str {
     match t {
         None => "NONE",
         Solid => "SOLID",
-        Dash => "DASH",
-        Dot => "DOT",
+        // HWPX LineType2의 DASH/DOT 표기는 HWP5 BORDER_FILL 코드 2/3과 역순이다.
+        // parser::hwpx::header::parse_border_line_type와 짝을 맞춰 HWPX 왕복에서도
+        // 코드 2(파선), 3(점선)을 보존한다.
+        Dash => "DOT",
+        Dot => "DASH",
         DashDot => "DASH_DOT",
         DashDotDot => "DASH_DOT_DOT",
         LongDash => "LONG_DASH",
@@ -1839,6 +1842,32 @@ mod tests {
         assert!(
             xml.contains(r#"<hh:backSlash type="CENTER_BELOW" Crooked="0" isCounter="0"/>"#),
             "backSlash 방향 비트가 CENTER_BELOW로 보존되어야 함: {xml}"
+        );
+    }
+
+    #[test]
+    fn write_border_fill_uses_hwpx_dash_dot_contract() {
+        let mut bf = BorderFill::default();
+        bf.borders[0].line_type = BorderLineType::Dash;
+        bf.borders[1].line_type = BorderLineType::Dot;
+
+        let mut writer = Writer::new(Vec::new());
+        write_border_fill(
+            &mut writer,
+            0,
+            &bf,
+            &SerializeContext::collect_from_document(&Default::default()),
+        )
+        .expect("write borderFill");
+        let xml = String::from_utf8(writer.into_inner()).unwrap();
+
+        assert!(
+            xml.contains(r#"<hh:leftBorder type="DOT""#),
+            "HWP5 code 2(Dash)는 HWPX DOT으로 방출돼야 함: {xml}"
+        );
+        assert!(
+            xml.contains(r#"<hh:rightBorder type="DASH""#),
+            "HWP5 code 3(Dot)는 HWPX DASH로 방출돼야 함: {xml}"
         );
     }
 

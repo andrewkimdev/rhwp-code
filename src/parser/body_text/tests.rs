@@ -33,6 +33,16 @@ fn make_para_text_data(text: &str) -> Vec<u8> {
 }
 
 #[test]
+fn hancom_single_odd_master_flag_is_not_parsed_as_both() {
+    assert_eq!(
+        master_page_apply_to(0x8008_0000, 1, 0),
+        Some(HeaderFooterApply::Odd)
+    );
+    assert_eq!(master_page_apply_to(0x2008_0000, 1, 0), None);
+    assert_eq!(master_page_apply_to(0xc008_0000, 2, 0), None);
+}
+
+#[test]
 fn test_parse_para_text_simple() {
     let (text, offsets, _, _) = parse_para_text(&make_para_text_data("Hello, World!"));
     assert_eq!(text, "Hello, World!");

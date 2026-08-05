@@ -6,6 +6,7 @@
 pub mod body_text;
 pub mod byte_writer;
 pub mod cfb_writer;
+pub(crate) mod char_shape;
 pub mod control;
 pub mod doc_info;
 pub mod header;

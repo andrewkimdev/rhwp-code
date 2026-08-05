@@ -110,7 +110,7 @@ pub fn parse_body_text_section(data: &[u8]) -> Result<Section, BodyTextError> {
                             data: r.data.clone(),
                         })
                         .collect();
-                    let ext_mps = parse_master_pages_from_raw(&tail);
+                    let ext_mps = parse_master_pages_from_raw(&tail, 0);
                     section.section_def.master_pages.extend(ext_mps);
                     break;
                 }
@@ -655,7 +655,7 @@ fn parse_section_def(ctrl_data: &[u8], child_records: &[Record], ctrl_level: u16
     }
 
     // extra_child_records에서 바탕쪽 (LIST_HEADER) 파싱
-    sd.master_pages = parse_master_pages_from_raw(&sd.extra_child_records);
+    sd.master_pages = parse_master_pages_from_raw(&sd.extra_child_records, sd.flags);
 
     sd
 }
@@ -663,8 +663,11 @@ fn parse_section_def(ctrl_data: &[u8], child_records: &[Record], ctrl_level: u16
 /// extra_child_records에서 바탕쪽 LIST_HEADER를 파싱한다.
 ///
 /// LIST_HEADER(tag 66)가 나타나면 바탕쪽으로 파싱.
-/// 순서: 1번째=양쪽(Both), 2번째=홀수(Odd), 3번째=짝수(Even)
-fn parse_master_pages_from_raw(raw_records: &[RawRecord]) -> Vec<MasterPage> {
+/// 기본 순서: 1번째=양쪽(Both), 2번째=홀수(Odd), 3번째=짝수(Even).
+/// 단, 한컴 2020이 HWPX의 희소 Odd 바탕쪽을 HWP5로 저장할 때는 LIST_HEADER 하나와
+/// SECTION_DEF 상위 플래그 `0x80000000`을 쓴다. 이 조합은 앞 구역의 짝수 쪽을
+/// 상속하고 현재 구역의 홀수 쪽만 바꾸므로 첫 목록을 Both로 해석하면 안 된다.
+fn parse_master_pages_from_raw(raw_records: &[RawRecord], section_flags: u32) -> Vec<MasterPage> {
     let mut master_pages = Vec::new();
 
     // RawRecord를 Record로 변환
@@ -703,9 +706,8 @@ fn parse_master_pages_from_raw(raw_records: &[RawRecord]) -> Vec<MasterPage> {
     ];
 
     for (mp_idx, &start) in list_header_positions.iter().enumerate() {
-        let apply_to = apply_order
-            .get(mp_idx)
-            .copied()
+        let apply_to = master_page_apply_to(section_flags, list_header_positions.len(), mp_idx)
+            .or_else(|| apply_order.get(mp_idx).copied())
             .unwrap_or(HeaderFooterApply::Both);
 
         // LIST_HEADER 데이터 파싱
@@ -772,6 +774,20 @@ fn parse_master_pages_from_raw(raw_records: &[RawRecord]) -> Vec<MasterPage> {
     }
 
     master_pages
+}
+
+fn master_page_apply_to(
+    section_flags: u32,
+    list_header_count: usize,
+    master_page_index: usize,
+) -> Option<HeaderFooterApply> {
+    const MASTER_PAGE_FLAGS_MASK: u32 = 0xe000_0000;
+    const HANCOM_SINGLE_ODD_MASTER_PAGE_FLAGS: u32 = 0x8000_0000;
+
+    (list_header_count == 1
+        && master_page_index == 0
+        && section_flags & MASTER_PAGE_FLAGS_MASK == HANCOM_SINGLE_ODD_MASTER_PAGE_FLAGS)
+        .then_some(HeaderFooterApply::Odd)
 }
 
 /// 단 정의 파싱 ('cold' 컨트롤)

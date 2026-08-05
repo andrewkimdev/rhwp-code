@@ -2243,8 +2243,11 @@ fn parse_border_line_type(attr: &quick_xml::events::attributes::Attribute) -> Bo
     match attr_str(attr).as_str() {
         "NONE" => BorderLineType::None,
         "SOLID" => BorderLineType::Solid,
-        "DASH" => BorderLineType::Dash,
-        "DOT" => BorderLineType::Dot,
+        // HWPX LineType2의 DASH/DOT 이름은 HWP5 BORDER_FILL 선 코드와 반대다.
+        // Hancom 2020이 저장한 HWP의 실제 레코드도 `DASH`를 code 3(점선)으로
+        // 기록한다. 이름만 보고 2(파선)로 저장하면 점선 표 테두리가 파선으로 바뀐다.
+        "DASH" => BorderLineType::Dot,
+        "DOT" => BorderLineType::Dash,
         "DASH_DOT" => BorderLineType::DashDot,
         "DASH_DOT_DOT" => BorderLineType::DashDotDot,
         "LONG_DASH" => BorderLineType::LongDash,
@@ -2862,6 +2865,32 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn parse_border_fill_line_type_uses_hwp5_dash_dot_contract() {
+        use crate::model::style::BorderLineType;
+
+        let xml = r##"<hh:head xmlns:hh="http://www.hancom.co.kr/hwpml/2011/head">
+  <hh:refList>
+    <hh:borderFills itemCnt="1">
+      <hh:borderFill id="1" threeD="0" shadow="0" centerLine="NONE" breakCellSeparateLine="0">
+        <hh:leftBorder type="DASH" width="0.12 mm" color="#000000"/>
+        <hh:rightBorder type="DOT" width="0.12 mm" color="#000000"/>
+      </hh:borderFill>
+    </hh:borderFills>
+  </hh:refList>
+</hh:head>"##;
+
+        let (doc_info, _) = parse_hwpx_header(xml).expect("HWPX borderFill parse");
+        assert_eq!(
+            doc_info.border_fills[0].borders[0].line_type,
+            BorderLineType::Dot
+        );
+        assert_eq!(
+            doc_info.border_fills[0].borders[1].line_type,
+            BorderLineType::Dash
+        );
     }
 
     #[test]
