@@ -5,7 +5,8 @@
 - **브랜치**: Stage 1 `codex/issue-3790-ci-impact-shadow`, Stage 2·2.5
   `codex/issue-3790-shadow-observation`, Stage 3 `codex/issue-3790-stage3-frontend`, Stage 4
   `issue-3790-stage4-rust-native`
-- **절차 상태**: Stage 3 merge·canary 완료, Stage 4 로컬 구현·집중 검증 완료
+- **절차 상태**: Stage 3 merge·canary 완료, Stage 4 draft PR #4032 review F1–F6 보정·current-base
+  full CI 통과
 
 ## Stage 1 — shadow classifier
 
@@ -105,10 +106,14 @@ Stage 3 merge 직후 frontend-only canary PR #3951에서 unit/package/render 진
 7. Native Skia가 직접 실행하는 `tests/issue_2225_missing_picture_placeholder.rs`와
    `tests/render_p37_direct_pdf_export.rs`는 일반 Rust 비렌더 경로와 달리 `native_skia_required=true`로
    고정한다.
-8. Native Skia는 Rust renderer뿐 아니라 font 등 비-Rust render 입력에서도 필요할 수 있으므로
-   `rust_required=false`, `native_skia_required=true` 조합을 지원한다.
+8. Native Skia는 Rust renderer뿐 아니라 frontend font asset·render 생성 도구 같은 비-Rust 입력에서도
+   필요할 수 있으므로 `rust_required=false`, `native_skia_required=true` 조합을 지원한다.
+   다만 default-feature 테스트가 소비하는 `ttfs/**`·`tests/fixtures/fonts/**`의 글꼴 파일과
+   `samples/render-p35-font-native-bitmap.hwpx`는 `rust_required=true`를 함께 설정한다.
 9. aggregate는 Rust false일 때 lint·세 builder·네 worker가 모두 `skipped`, Native false일 때 Native
    job이 `skipped`인지 독립 검증하고 알 수 없는 축 값은 실패시킨다.
+10. `tests/issue_2293_chart_png_text.rs`가 어떤 CI job에서도 실행되지 않던 기존 누락은
+    #4040으로 분리하고 Stage 4 영향축 활성화의 blocker로 취급하지 않는다.
 
 ## Stage 5 이후
 

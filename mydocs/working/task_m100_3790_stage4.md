@@ -2,9 +2,10 @@
 
 - **이슈**: [#3790](https://github.com/edwardkim/rhwp/issues/3790)
 - **브랜치**: `issue-3790-stage4-rust-native`
-- **분기 기준**: `upstream/devel` `9aa0ec8b61fad2b1401341af36b562fae1529813`
-- **상태**: 로컬 구현·집중 검증 완료, push·draft PR 생성 승인 대기
-- **기록일**: 2026-08-04 KST
+- **최신 동기화 기준**: `upstream/devel` `d3fb9de7c0c0648e3d8126c25467e2c78a054337`
+- **current-base code head**: `b0be8673149bbd00ebb67f6d5e62b70025cfa612`
+- **상태**: draft PR #4032 review F1–F6 보정, current-base full CI 통과, review-only 기록 준비
+- **기록일**: 2026-08-05 KST
 
 ## 선행 canary
 
@@ -37,10 +38,27 @@ Native Skia job의 실제 `cargo test --test` 대상과 classifier 경로를 전
 - `tests/issue_2225_missing_picture_placeholder.rs`
 - `tests/render_p37_direct_pdf_export.rs`
 
-두 파일은 `rust_required=true`, `native_skia_required=true`, `render_required=false`로 판정한다. font 같은
-비-Rust render 입력도 Native Skia가 필요하므로 `rust=false`, `native=true` 조합은 정상 조합으로 지원한다.
-workflow·classifier·Cargo·WASM·rename·미분류 변경은 계속 full로 닫히므로 Stage 4 PR 자체는 원격 CI에서
-전체 lane을 실행한다.
+두 파일은 `rust_required=true`, `native_skia_required=true`, `render_required=false`로 판정한다.
+
+review F1에서 default-feature 테스트가 직접 소비하는 데이터 경계를 추가로 확인했다.
+
+- `ttfs/**`·`tests/fixtures/fonts/**`의 `.otf|.ttc|.ttf|.woff|.woff2`
+- `samples/render-p35-font-native-bitmap.hwpx`
+
+이 경로는 `rust=true`, `native=true`, `render=true`, data-only이므로 `codeql=none`으로 판정한다.
+`assets/fonts/**`, render 생성 Python, render 문서는 `rust=false`, `native=true`를 유지해 불필요하게
+Rust lane을 넓히지 않는다. workflow·classifier·Cargo·WASM·rename·미분류 변경은 계속 full로 닫힌다.
+
+## review F1–F6 보정
+
+| 항목 | 대응 |
+| --- | --- |
+| F1 | Rust test-owned font/HWPX 입력을 `rust-test-input`으로 분리하고 과대 분류 방지 테스트를 추가 |
+| F2 | Native Skia job의 frontend `none|unit|package` 진리표 정적 단언 복구 |
+| F3 | aggregate harness를 다음 step 또는 job 경계에서 자르고 GitHub과 같이 `bash -e -o pipefail`로 실행 |
+| F4 | canonical `pr_review_workflow.md` §3.1을 Stage 4 조건부 그래프로 갱신 |
+| F5 | 기존 Native Skia test 누락을 [#4040](https://github.com/edwardkim/rhwp/issues/4040)으로 분리 |
+| F6 | `mydocs/pr/archives/pr_4032_review.md`와 2026-08-05 오늘 기록을 trailing commit으로 준비 |
 
 ## 검증
 
@@ -48,21 +66,24 @@ workflow·classifier·Cargo·WASM·rename·미분류 변경은 계속 full로 �
 | --- | --- |
 | `actionlint .github/workflows/ci.yml .github/workflows/render-diff.yml` | 통과 |
 | `node --check scripts/ci-impact-classifier.cjs` | 통과 |
-| `node --test scripts/tests/ci-impact-classifier.test.cjs` | 25/25 통과 |
-| `python3 -m unittest scripts/tests/test_ci_impact_workflow.py scripts/tests/test_render_diff_workflow.py` | 21/21 통과 |
+| `node --test scripts/tests/ci-impact-classifier.test.cjs` | 27/27 통과 |
+| `python3 -m unittest scripts/tests/test_ci_impact_workflow.py scripts/tests/test_render_diff_workflow.py` | 22/22 통과 |
 | aggregate shell 진리표 실행 — frontend-only, Rust 비렌더, Rust render, 비-Rust Native | 모두 통과 |
 | aggregate shell 불일치·unknown 축 입력 | 모두 의도대로 실패 |
 | `git diff --check` | 통과 |
 
-장시간 Rust 전체 CI는 workflow/classifier 변경으로 인해 draft PR 자체가 fail-closed full lane에 들어가므로
-원격에서 확인한다. 로컬에서는 새 조건과 aggregate 진리표, classifier/job 소유 경계에 집중했다.
+장시간 Rust 전체 CI는 workflow/classifier 변경이 `fail-closed:classifier-contract`로 진입한 원격
+full lane에서 확인했다.
+
+- 보정 head `1f12a5fe0`: CI 30923071182, Render Diff 30923070493, CodeQL 30923070506 통과
+- current-base head `b0be86731`: CI 30924641673, Render Diff 30924638772, CodeQL 30924638749 통과
+- current-base aggregate: shard `3698+693+840+1=5232`, expected runnable `5232` 일치
 
 ## 다음 단계
 
-1. 사용자 승인 뒤 브랜치를 push하고 Stage 4 draft PR을 만든다.
-2. 원격 full CI에서 기존 Rust·frontend·Native Skia·Render Diff·CodeQL 전체 회귀가 없는지 확인한다.
-3. collaborator 직접 merge 절차에 따라 review 문서를 PR head에 커밋하고 최신 CI를 통과시킨다.
-4. merge 뒤 frontend-only canary에서 Rust lint·세 builder·네 worker·Native Skia가 모두 `skipped`되고
+1. review-only trailing commit push 뒤 preflight fast-pass와 required `Build & Test` 성공을 확인한다.
+2. 사용자가 CI 통과 후 요청하면 ready 전환·collaborator self-merge 절차를 진행한다.
+3. merge 뒤 frontend-only canary에서 Rust lint·세 builder·네 worker·Native Skia가 모두 `skipped`되고
    `Build & Test` aggregate가 성공하는지 실측한다.
-5. #3810 직후 4.73GB cache 기준선과 다음 cache sweep 직후 총량을 대조한 뒤 Stage 5 CodeQL 언어
+4. #3810 직후 4.73GB cache 기준선과 다음 cache sweep 직후 총량을 대조한 뒤 Stage 5 CodeQL 언어
    조건화로 진행한다.
