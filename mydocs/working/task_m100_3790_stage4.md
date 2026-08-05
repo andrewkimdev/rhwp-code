@@ -128,9 +128,30 @@ Stage 5 범위라 3개 언어를 그대로 분석했다.
 
 측정 뒤 #4078은 merge하지 않고 close했고 branch·worktree를 정리했다.
 
+## cache 기준선 대조 — 완료
+
+스윕 직후 동일 조건으로 대조했다.
+
+| 시점 (UTC) | 정리 전 | 정리 대상 | 정리 후 |
+| --- | --- | --- | --- |
+| #3810 기준선 08-02 14:43 수동 | 42개 / 10.13GB | 18개 / 5.40GB | 24개 / 4.73GB |
+| 08-02 19:39 cron | 31개 / 5.91GB | 1개 / 0.06GB | 30개 / 5.85GB |
+| 08-03 20:03 cron | 50개 / 10.24GB | 10개 / 3.08GB | 40개 / 7.16GB |
+| 08-04 20:03 cron | 50개 / 8.64GB | 1개 / 0.18GB | 49개 / 8.46GB |
+| 08-05 17:28 dry-run | 53개 / 10.01GB | 3개 / 1.17GB | 50개 / 8.84GB |
+
+기준선 대비 +4.11GB(+87%), 무료 한도 10GB의 88%다. 마지막 값은 비파괴
+`workflow_dispatch dry_run=true` 실행 [31030157435](https://github.com/edwardkim/rhwp/actions/runs/31030157435)의
+예상치이며 삭제는 일어나지 않았다.
+
+Stage 4는 원인이 아니다. Stage 4 merge는 08-05 16:42 UTC인데 회귀 추세는 그 전에 완성돼 있었고,
+Stage 4는 오히려 frontend-only PR에서 Rust lane 캐시 생성을 줄인다. 세대 상한도 정상으로,
+(그룹, ref) 쌍 42개 중 2세대 초과는 3개뿐이며 전부 마지막 스윕 이후 생성분이다. 실제 원인은
+쌍 수 증가로 KEEP=2의 하한이 올라간 것과 삭제된 브랜치의 고아 캐시(약 0.53GB)다. 대응은
+[#4080](https://github.com/edwardkim/rhwp/issues/4080)으로 분리했다.
+
 ## 다음 단계
 
-1. #3810 직후 4.73GB cache 기준선과 다음 cache sweep 직후 총량을 대조한다.
-2. Stage 5 CodeQL 언어 조건화로 진행한다. Stage 4 이후 frontend-only PR의 critical path가 CI에서
+1. Stage 5 CodeQL 언어 조건화로 진행한다. Stage 4 이후 frontend-only PR의 critical path가 CI에서
    CodeQL로 옮겨갔고, wall clock 575초 중 `Analyze (rust)` 단독이 563초를 차지한다. 언어 조건화가
    적용되면 `Analyze (javascript-typescript)` 수준(약 140초)까지 내려갈 여지가 있다.
