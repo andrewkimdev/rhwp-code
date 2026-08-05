@@ -3,8 +3,10 @@
 - **이슈**: [#3790](https://github.com/edwardkim/rhwp/issues/3790)
 - **수행계획서**: `mydocs/plans/task_m100_3790.md`
 - **브랜치**: Stage 1 `codex/issue-3790-ci-impact-shadow`, Stage 2·2.5
-  `codex/issue-3790-shadow-observation`, Stage 3 `codex/issue-3790-stage3-frontend`
-- **절차 상태**: Stage 2.5 merge 완료, Stage 2.6 enforcement 분리 결정 및 Stage 3 PR #3943 리뷰 보정 완료
+  `codex/issue-3790-shadow-observation`, Stage 3 `codex/issue-3790-stage3-frontend`, Stage 4
+  `issue-3790-stage4-rust-native`
+- **절차 상태**: Stage 3 merge·canary 완료, Stage 4 draft PR #4032 review F1–F6 보정·current-base
+  full CI 통과
 
 ## Stage 1 — shadow classifier
 
@@ -88,8 +90,9 @@ policy를 미채택하기로 결정할 때까지 보존한다. 이후 재사용�
 
 ## Stage 4 — Rust·Native Skia 조건화
 
-Stage 3 merge 직후 frontend-only canary에서 unit/package/render 진리표와 수동 full 대조군을 먼저
-확인한 뒤 착수한다.
+Stage 3 merge 직후 frontend-only canary PR #3951에서 unit/package/render 진리표를 확인했다. 같은 SHA의
+수동 full은 기존 cold release archive timeout으로 전체 완료되지 않았지만, 성공한 frontend와 Canvas
+구간에서 직접 runner time 7분 47초 절감을 확인했다. timeout은 #4029에서 분리해 추적한다.
 
 1. Rust 비영향 PR에서 lint와 #3892의 `build-test-archive-slow`, `build-test-archive-a`,
    `build-test-archive-b` 세 builder를 생략한다.
@@ -100,6 +103,17 @@ Stage 3 merge 직후 frontend-only canary에서 unit/package/render 진리표와
 5. Rust formatter·passthrough invalidation·IR baseline 회귀가 필요한 경로는 기존 전체 검증을 유지한다.
 6. #3684를 완료한 #3810의 정리 직후 cache 기준선 4.73GB와 조건화 이후 다음 sweep 직후 총량을
    같은 시점 조건으로 대조한다.
+7. Native Skia가 직접 실행하는 `tests/issue_2225_missing_picture_placeholder.rs`와
+   `tests/render_p37_direct_pdf_export.rs`는 일반 Rust 비렌더 경로와 달리 `native_skia_required=true`로
+   고정한다.
+8. Native Skia는 Rust renderer뿐 아니라 frontend font asset·render 생성 도구 같은 비-Rust 입력에서도
+   필요할 수 있으므로 `rust_required=false`, `native_skia_required=true` 조합을 지원한다.
+   다만 default-feature 테스트가 소비하는 `ttfs/**`·`tests/fixtures/fonts/**`의 글꼴 파일과
+   `samples/render-p35-font-native-bitmap.hwpx`는 `rust_required=true`를 함께 설정한다.
+9. aggregate는 Rust false일 때 lint·세 builder·네 worker가 모두 `skipped`, Native false일 때 Native
+   job이 `skipped`인지 독립 검증하고 알 수 없는 축 값은 실패시킨다.
+10. `tests/issue_2293_chart_png_text.rs`가 어떤 CI job에서도 실행되지 않던 기존 누락은
+    #4040으로 분리하고 Stage 4 영향축 활성화의 blocker로 취급하지 않는다.
 
 ## Stage 5 이후
 
@@ -123,4 +137,5 @@ git diff --check
 
 Stage 1 검증 결과는 `mydocs/working/task_m100_3790_stage1.md`, Stage 2·2.5 결과는
 `mydocs/working/task_m100_3790_stage2.md`, Stage 3 결과는
-`mydocs/working/task_m100_3790_stage3.md`에 명령과 종료 상태를 기록한다.
+`mydocs/working/task_m100_3790_stage3.md`, Stage 4 결과는
+`mydocs/working/task_m100_3790_stage4.md`에 명령과 종료 상태를 기록한다.

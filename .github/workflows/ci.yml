@@ -66,8 +66,9 @@ jobs:
       fast_pass: ${{ steps.detect.outputs.fast_pass || 'false' }}
       reason: ${{ steps.detect.outputs.reason || 'preflight-unavailable' }}
       candidate_sha: ${{ steps.detect.outputs.candidate_sha || '' }}
-      # [#3790 Stage 3] frontend_mode와 render_required를 실제 frontend/Canvas 조건에 사용한다.
-      # 나머지 축은 Stage 4·5까지 관찰 상태를 유지한다. 모든 기본값은 full lane이다.
+      # [#3790 Stage 4] frontend_mode·render_required에 더해 rust_required와
+      # native_skia_required를 실제 worker 조건에 사용한다. CodeQL은 Stage 5까지 유지한다.
+      # 모든 기본값은 full lane이다.
       rust_required: ${{ steps.impact.outputs.rust_required || 'true' }}
       frontend_mode: ${{ steps.impact.outputs.frontend_mode || 'package' }}
       render_required: ${{ steps.impact.outputs.render_required || 'true' }}
@@ -301,8 +302,8 @@ jobs:
               setResult(false, 'preflight-error');
             }
 
-      # [#3790 Stage 3] PR의 classifier 구현은 PR head가 아닌 base SHA에 고정한다.
-      # frontend_mode와 render_required는 활성화하며 나머지 축은 후속 단계까지 관찰한다.
+      # [#3790 Stage 4] PR의 classifier 구현은 PR head가 아닌 base SHA에 고정한다.
+      # frontend·Rust·Native Skia 축은 활성화하며 CodeQL은 Stage 5까지 관찰한다.
       - name: Check out trusted CI impact classifier
         id: checkout-impact-classifier
         if: ${{ steps.detect.outputs.fast_pass != 'true' }}
@@ -446,7 +447,7 @@ jobs:
           {
             echo '### CI impact classification'
             echo
-            echo '> Stage 3 activates frontend_mode and render_required. Rust, Native Skia, and CodeQL remain unchanged.'
+            echo '> Stage 4 activates frontend_mode, render_required, rust_required, and native_skia_required. CodeQL remains unchanged.'
             echo '> Pull requests classify with the base SHA classifier; workflow_dispatch and all failures select the full lane.'
             echo
             echo '| Axis | Value |'
@@ -462,7 +463,8 @@ jobs:
             printf '| reason | %s |\n' "${IMPACT_REASON}"
           } >> "${GITHUB_STEP_SUMMARY}"
 
-  # [#2393] 기본 테스트 병렬화 — CI impact preflight가 frontend gate와 worker 조건을 나누는 경계다.
+  # [#2393] 기본 테스트 병렬화 — CI impact preflight가 frontend·Rust·Native Skia
+  # gate와 worker 조건을 나누는 경계다.
   # [#3888] slow builder는 archive 2를 함께 만들어 runner 네 개 안에서 compile 부하를 균형화한다.
   # regular target은 archive 1/2/3에 직접 배정하고, 네 worker는 정확히 자기 archive 하나만 내려받는다.
   # required check 는 집계 job "Build & Test" 로 불변이다.
@@ -474,6 +476,7 @@ jobs:
         always()
         && needs.preflight.result == 'success'
         && needs.preflight.outputs.fast_pass != 'true'
+        && needs.preflight.outputs.rust_required == 'true'
         && needs.lint.result == 'success'
         && (
           (needs.preflight.outputs.frontend_mode == 'none'
@@ -502,6 +505,7 @@ jobs:
         always()
         && needs.preflight.result == 'success'
         && needs.preflight.outputs.fast_pass != 'true'
+        && needs.preflight.outputs.rust_required == 'true'
         && needs.lint.result == 'success'
         && (
           (needs.preflight.outputs.frontend_mode == 'none'
@@ -530,6 +534,7 @@ jobs:
         always()
         && needs.preflight.result == 'success'
         && needs.preflight.outputs.fast_pass != 'true'
+        && needs.preflight.outputs.rust_required == 'true'
         && needs.lint.result == 'success'
         && (
           (needs.preflight.outputs.frontend_mode == 'none'
@@ -558,7 +563,13 @@ jobs:
         always()
         && needs.preflight.result == 'success'
         && needs.preflight.outputs.fast_pass != 'true'
-        && needs['native-skia-tests'].result == 'success'
+        && needs.preflight.outputs.rust_required == 'true'
+        && (
+          (needs.preflight.outputs.native_skia_required == 'true'
+            && needs['native-skia-tests'].result == 'success')
+          || (needs.preflight.outputs.native_skia_required == 'false'
+            && needs['native-skia-tests'].result == 'skipped')
+        )
         && needs['build-test-archive-slow'].result == 'success'
       }}
     permissions:
@@ -576,7 +587,13 @@ jobs:
         always()
         && needs.preflight.result == 'success'
         && needs.preflight.outputs.fast_pass != 'true'
-        && needs['native-skia-tests'].result == 'success'
+        && needs.preflight.outputs.rust_required == 'true'
+        && (
+          (needs.preflight.outputs.native_skia_required == 'true'
+            && needs['native-skia-tests'].result == 'success')
+          || (needs.preflight.outputs.native_skia_required == 'false'
+            && needs['native-skia-tests'].result == 'skipped')
+        )
         && needs['build-test-archive-a'].result == 'success'
       }}
     permissions:
@@ -594,7 +611,13 @@ jobs:
         always()
         && needs.preflight.result == 'success'
         && needs.preflight.outputs.fast_pass != 'true'
-        && needs['native-skia-tests'].result == 'success'
+        && needs.preflight.outputs.rust_required == 'true'
+        && (
+          (needs.preflight.outputs.native_skia_required == 'true'
+            && needs['native-skia-tests'].result == 'success')
+          || (needs.preflight.outputs.native_skia_required == 'false'
+            && needs['native-skia-tests'].result == 'skipped')
+        )
         && needs['build-test-archive-slow'].result == 'success'
       }}
     permissions:
@@ -612,7 +635,13 @@ jobs:
         always()
         && needs.preflight.result == 'success'
         && needs.preflight.outputs.fast_pass != 'true'
-        && needs['native-skia-tests'].result == 'success'
+        && needs.preflight.outputs.rust_required == 'true'
+        && (
+          (needs.preflight.outputs.native_skia_required == 'true'
+            && needs['native-skia-tests'].result == 'success')
+          || (needs.preflight.outputs.native_skia_required == 'false'
+            && needs['native-skia-tests'].result == 'skipped')
+        )
         && needs['build-test-archive-b'].result == 'success'
       }}
     permissions:
@@ -629,7 +658,7 @@ jobs:
     # [#3284] 러너 hang 을 실패로 드러내는 상한 (성능 목표 아님) — 실험 종료 후에도 유지
     timeout-minutes: 20
     needs: preflight
-    if: ${{ always() && needs.preflight.outputs.fast_pass != 'true' }}
+    if: ${{ always() && needs.preflight.result == 'success' && needs.preflight.outputs.fast_pass != 'true' && needs.preflight.outputs.rust_required == 'true' }}
     permissions:
       contents: read
 
@@ -685,14 +714,20 @@ jobs:
     # [#3284] 러너 hang 을 실패로 드러내는 상한 (성능 목표 아님) — 실험 종료 후에도 유지
     timeout-minutes: 30
     needs: [preflight, lint, frontend-unit-gates, frontend-package-gates]
-    # frontend 비대상 job의 skipped는 정상 경로다. 대상 job의 실패/취소와 lint 실패는
-    # native-skia 이후 worker 전체에 전파한다.
+    # Rust 비영향 render input은 lint=skipped/native=success가 정상이다. Rust renderer 변경은
+    # lint=success/native=success를 요구하며 대상 job의 실패·취소를 shard까지 전파한다.
     if: >-
       ${{
         always()
         && needs.preflight.result == 'success'
         && needs.preflight.outputs.fast_pass != 'true'
-        && needs.lint.result == 'success'
+        && needs.preflight.outputs.native_skia_required == 'true'
+        && (
+          (needs.preflight.outputs.rust_required == 'true'
+            && needs.lint.result == 'success')
+          || (needs.preflight.outputs.rust_required == 'false'
+            && needs.lint.result == 'skipped')
+        )
         && (
           (needs.preflight.outputs.frontend_mode == 'none'
             && needs['frontend-unit-gates'].result == 'skipped'
@@ -916,6 +951,7 @@ jobs:
         if: >-
           ${{
             needs.preflight.outputs.fast_pass != 'true'
+            && needs.preflight.outputs.rust_required == 'true'
             && needs['test-slow-shard'].result == 'success'
             && needs['test-regular-shard-1'].result == 'success'
             && needs['test-regular-shard-2'].result == 'success'
@@ -930,6 +966,7 @@ jobs:
         if: >-
           ${{
             needs.preflight.outputs.fast_pass != 'true'
+            && needs.preflight.outputs.rust_required == 'true'
             && needs['test-slow-shard'].result == 'success'
             && needs['test-regular-shard-1'].result == 'success'
             && needs['test-regular-shard-2'].result == 'success'
@@ -944,6 +981,7 @@ jobs:
         if: >-
           ${{
             needs.preflight.outputs.fast_pass != 'true'
+            && needs.preflight.outputs.rust_required == 'true'
             && needs['test-slow-shard'].result == 'success'
             && needs['test-regular-shard-1'].result == 'success'
             && needs['test-regular-shard-2'].result == 'success'
@@ -990,6 +1028,8 @@ jobs:
         env:
           PREFLIGHT_RESULT: ${{ needs.preflight.result }}
           FAST_PASS: ${{ needs.preflight.outputs.fast_pass }}
+          RUST_REQUIRED: ${{ needs.preflight.outputs.rust_required }}
+          NATIVE_SKIA_REQUIRED: ${{ needs.preflight.outputs.native_skia_required }}
           FRONTEND_MODE: ${{ needs.preflight.outputs.frontend_mode }}
           IMPACT_REASON: ${{ needs.preflight.outputs.impact_reason }}
           BUILD_SLOW_RESULT: ${{ needs['build-test-archive-slow'].result }}
@@ -1006,6 +1046,8 @@ jobs:
         run: |
           printf 'preflight=%s\n' "${PREFLIGHT_RESULT}"
           printf 'fast_pass=%s\n' "${FAST_PASS}"
+          printf 'rust_required=%s\n' "${RUST_REQUIRED}"
+          printf 'native_skia_required=%s\n' "${NATIVE_SKIA_REQUIRED}"
           printf 'frontend_mode=%s\n' "${FRONTEND_MODE}"
           printf 'impact_reason=%s\n' "${IMPACT_REASON}"
           printf 'build_slow=%s\n' "${BUILD_SLOW_RESULT}"
@@ -1031,42 +1073,44 @@ jobs:
           fi
 
           failed=0
-          if [[ "${BUILD_SLOW_RESULT}" != "success" ]]; then
-            echo "::error::Build slow/2 test archives result: ${BUILD_SLOW_RESULT}"
-            failed=1
-          fi
-          if [[ "${BUILD_A_RESULT}" != "success" ]]; then
-            echo "::error::Build regular test archive 1 result: ${BUILD_A_RESULT}"
-            failed=1
-          fi
-          if [[ "${BUILD_B_RESULT}" != "success" ]]; then
-            echo "::error::Build regular test archive 3 result: ${BUILD_B_RESULT}"
-            failed=1
-          fi
-          if [[ "${TEST_SLOW_RESULT}" != "success" ]]; then
-            echo "::error::Default-feature slow shard result: ${TEST_SLOW_RESULT}"
-            failed=1
-          fi
-          if [[ "${TEST_REGULAR_1_RESULT}" != "success" ]]; then
-            echo "::error::Default-feature regular shard 1/3 result: ${TEST_REGULAR_1_RESULT}"
-            failed=1
-          fi
-          if [[ "${TEST_REGULAR_2_RESULT}" != "success" ]]; then
-            echo "::error::Default-feature regular shard 2/3 result: ${TEST_REGULAR_2_RESULT}"
-            failed=1
-          fi
-          if [[ "${TEST_REGULAR_3_RESULT}" != "success" ]]; then
-            echo "::error::Default-feature regular shard 3/3 result: ${TEST_REGULAR_3_RESULT}"
-            failed=1
-          fi
-          if [[ "${LINT_RESULT}" != "success" ]]; then
-            echo "::error::Lint result: ${LINT_RESULT}"
-            failed=1
-          fi
-          if [[ "${NATIVE_SKIA_RESULT}" != "success" ]]; then
-            echo "::error::Native Skia tests result: ${NATIVE_SKIA_RESULT}"
-            failed=1
-          fi
+          rust_results="${LINT_RESULT}/${BUILD_SLOW_RESULT}/${BUILD_A_RESULT}/${BUILD_B_RESULT}/${TEST_SLOW_RESULT}/${TEST_REGULAR_1_RESULT}/${TEST_REGULAR_2_RESULT}/${TEST_REGULAR_3_RESULT}"
+          case "${RUST_REQUIRED}" in
+            true)
+              if [[ "${rust_results}" != "success/success/success/success/success/success/success/success" ]]; then
+                echo "::error::Rust lane expected success for lint/builders/workers, got: ${rust_results}"
+                failed=1
+              fi
+              ;;
+            false)
+              if [[ "${rust_results}" != "skipped/skipped/skipped/skipped/skipped/skipped/skipped/skipped" ]]; then
+                echo "::error::Rust lane expected skipped for lint/builders/workers, got: ${rust_results}"
+                failed=1
+              fi
+              ;;
+            *)
+              echo "::error::Unknown rust_required: ${RUST_REQUIRED}"
+              failed=1
+              ;;
+          esac
+
+          case "${NATIVE_SKIA_REQUIRED}" in
+            true)
+              if [[ "${NATIVE_SKIA_RESULT}" != "success" ]]; then
+                echo "::error::Native Skia lane expected success, got: ${NATIVE_SKIA_RESULT}"
+                failed=1
+              fi
+              ;;
+            false)
+              if [[ "${NATIVE_SKIA_RESULT}" != "skipped" ]]; then
+                echo "::error::Native Skia lane expected skipped, got: ${NATIVE_SKIA_RESULT}"
+                failed=1
+              fi
+              ;;
+            *)
+              echo "::error::Unknown native_skia_required: ${NATIVE_SKIA_REQUIRED}"
+              failed=1
+              ;;
+          esac
           case "${FRONTEND_MODE}" in
             none)
               if [[ "${FRONTEND_UNIT_RESULT}" != "skipped" || "${FRONTEND_PACKAGE_RESULT}" != "skipped" ]]; then

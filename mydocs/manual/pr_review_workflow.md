@@ -76,26 +76,27 @@ current head: <작성 시점 참고 SHA 또는 재확인 필요>
 
 ~~~text
 CI preflight
-    ├─ Lint (fmt, clippy, WASM check) ─┐
-    └─ Frontend package gates ─────────┴─ gate 충족
-       (영향 있음: success, 영향 없음: skipped) │
-                         ┌────────────────────┴───────────────────┐
-                         │                                        │
-        Build slow+2 archive / regular 1 / regular 3             Native Skia tests
-                         └───────────────────────────────┬───────────────────────────────┘
-                                                         │
-          Default-feature tests: slow + 일반 shard 1/3, 2/3, 3/3 (조건 충족 즉시 병렬)
-                                              │
-                                      Build & Test 집계
+    ├─ Frontend unit/package gate (해당 mode만 실행)
+    ├─ Lint (rust=true일 때만)
+    ├─ Native Skia tests (native=true, lint 결과를 조건부 확인)
+    └─ Rust builders (rust=true, lint success, frontend 예상 결과)
+                         │
+          Default-feature tests: slow + 일반 shard 1/3, 2/3, 3/3
+          (자기 builder success, Native는 required→success / 미해당→skipped)
+                         │
+                 Build & Test 영향축 집계
 ~~~
 
-- Lint와 Frontend package gates는 preflight 뒤 병렬이다.
-- slow+`2` builder, regular `1` builder, regular `3` builder, Native Skia tests는 Lint가 성공하고,
-  Frontend가 필요한 경우 success이거나 영향이 없어 skipped인 뒤 병렬이다. 각 builder는 자기 Cargo test
+- Frontend unit/package gate는 `frontend_mode`에 맞는 job 하나만 실행하고, Rust lint는
+  `rust_required=true`일 때만 실행한다. 둘은 preflight 뒤 서로 독립적으로 시작할 수 있다.
+- slow+`2` builder, regular `1` builder, regular `3` builder는 Rust가 필요하고 lint가 성공했으며,
+  frontend job이 mode에 맞게 success 또는 skipped인 뒤 실행한다. 각 builder는 자기 Cargo test
   target만 빌드해 `slow`, `1`, `2`, `3` archive 중 맡은 항목만 upload한다.
-- `slow shard`와 일반 `2/3`은 slow+`2` builder와 Native Skia, 일반 `1/3`은 regular `1` builder와 Native
-  Skia, 일반 `3/3`은 regular `3` builder와 Native Skia 성공 뒤 시작한다. 총 worker 수는 4개이고, worker는
-  각자 archive 하나만 download한다. 네 worker는 독립 job이며 집계 job이 성공 여부를 각각 확인한다.
+- Native Skia job은 `native_skia_required=true`일 때만 실행한다. Rust lane이 같이 필요하면 lint success,
+  Rust가 불필요하면 lint skipped를 요구하고 frontend mode의 예상 결과도 확인한다.
+- `slow shard`와 일반 `2/3`은 slow+`2` builder, 일반 `1/3`은 regular `1` builder, 일반 `3/3`은
+  regular `3` builder 성공 뒤 시작한다. Native가 필요하면 Native success, 필요하지 않으면
+  skipped를 요구한다. 네 worker는 독립 job이며 집계 job이 각 영향축의 `success|skipped` 조합을 확인한다.
 - review-only fast-pass는 heavy job이 skipped일 수 있다. 이때도 preflight와 branch protection이
   요구하는 집계 상태를 최신 PR head 기준으로 확인한다.
 
