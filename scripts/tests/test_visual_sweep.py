@@ -477,6 +477,144 @@ class LegacyGlyphVisualCandidateTests(unittest.TestCase):
         self.assertEqual(candidates[0]["codepoints"], ["U+E001"])
 
 
+class FrameDetectionTests(unittest.TestCase):
+    def test_centered_footnote_separator_is_not_treated_as_page_bottom(self) -> None:
+        image = Image.new("RGB", (794, 1123), "white")
+        draw = ImageDraw.Draw(image)
+
+        # Chrome's 794px page raster lets a 368px centered footnote separator
+        # cross the old 45% row-coverage threshold.  It must not shrink the
+        # frame to the footnote line and contaminate all bottom-flow metrics.
+        draw.line((213, 1014, 580, 1014), fill="black", width=1)
+
+        _left, _top, _right, bottom = SWEEP.detect_frame(image)
+
+        self.assertEqual(bottom, round(image.height * 0.977))
+
+    def test_bottom_table_border_is_not_treated_as_page_bottom(self) -> None:
+        image = Image.new("RGB", (794, 1123), "white")
+        draw = ImageDraw.Draw(image)
+
+        # A wide table can exceed the coverage threshold but still sits inside
+        # the content area, well above the physical page footer.
+        draw.line((81, 1020, 555, 1020), fill="black", width=1)
+
+        _left, _top, _right, bottom = SWEEP.detect_frame(image)
+
+        self.assertEqual(bottom, round(image.height * 0.977))
+
+    def test_matching_page_number_footer_is_not_a_tail_overflow(self) -> None:
+        candidates = [
+            {
+                "text": "- 94 -",
+                "overflow_px": 52.1,
+                "bbox": [373.9, 1053.1, 46.0, 16.0],
+            }
+        ]
+
+        active, suppressed = SWEEP.suppress_tolerated_frame_tail_candidates(
+            candidates,
+            rhwp_out_pixels=87,
+            rhwp_outside_frame_bleed_px=62,
+            pdf_outside_frame_bleed_px=59,
+            content_bottom_delta=-3.0,
+            question_marker_drifts=[],
+        )
+
+        self.assertEqual(active, [])
+        self.assertEqual(suppressed[0]["suppressed_reason"], "page_number_footer_bleed")
+
+
+class RenderTreeLineOrderTests(unittest.TestCase):
+    @staticmethod
+    def line(pi: int, y: int, text: str) -> dict[str, object]:
+        return {
+            "type": "TextLine",
+            "pi": pi,
+            "bbox": {"x": 90, "y": y, "w": 600, "h": 12},
+            "children": [{"type": "TextRun", "text": text}],
+        }
+
+    def test_does_not_compare_body_and_footnote_area_as_one_flow(self) -> None:
+        tree = {
+            "type": "Page",
+            "children": [
+                {"type": "Body", "children": [self.line(1, 963, "본문 마지막 줄")]},
+                {"type": "FootnoteArea", "children": [self.line(2, 965, "175) 각주")]},
+            ],
+        }
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "tree.json"
+            path.write_text(json.dumps(tree, ensure_ascii=False), encoding="utf-8")
+
+            candidates = SWEEP.render_tree_line_order_overlap_candidates(path)
+
+        self.assertEqual(candidates, [])
+
+    def test_keeps_overlapping_lines_in_one_flow_as_candidates(self) -> None:
+        tree = {
+            "type": "Page",
+            "children": [
+                {
+                    "type": "Body",
+                    "children": [
+                        self.line(1, 963, "본문 첫 줄"),
+                        self.line(2, 965, "본문 겹친 줄"),
+                    ],
+                }
+            ],
+        }
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "tree.json"
+            path.write_text(json.dumps(tree, ensure_ascii=False), encoding="utf-8")
+
+            candidates = SWEEP.render_tree_line_order_overlap_candidates(path)
+
+        self.assertEqual(len(candidates), 1)
+
+
+class QuestionMarkerFlowTests(unittest.TestCase):
+    def test_coloured_chart_is_not_question_flow_without_semantic_marker_drift(self) -> None:
+        red_drift = {
+            "rhwp_count": 0,
+            "pdf_count": 3,
+            "max_abs_delta_px": None,
+            "mean_abs_delta_px": None,
+            "p90_abs_delta_px": None,
+        }
+        line_drift = {"mean_abs_delta_px": 88.1, "p90_abs_delta_px": 174.0}
+        large_region_drift = {"rhwp_count": 3, "pdf_count": 5, "max_abs_delta_px": 301.0}
+
+        self.assertFalse(
+            SWEEP.is_question_marker_flow_drift(
+                red_drift,
+                line_drift,
+                large_region_drift,
+                has_question_marker_drift=False,
+            )
+        )
+
+    def test_semantic_question_marker_drift_keeps_structural_signal(self) -> None:
+        red_drift = {
+            "rhwp_count": 0,
+            "pdf_count": 3,
+            "max_abs_delta_px": None,
+            "mean_abs_delta_px": None,
+            "p90_abs_delta_px": None,
+        }
+        line_drift = {"mean_abs_delta_px": 88.1, "p90_abs_delta_px": 174.0}
+        large_region_drift = {"rhwp_count": 3, "pdf_count": 5, "max_abs_delta_px": 301.0}
+
+        self.assertTrue(
+            SWEEP.is_question_marker_flow_drift(
+                red_drift,
+                line_drift,
+                large_region_drift,
+                has_question_marker_drift=True,
+            )
+        )
+
+
 class ColumnTextFlowCollapseCandidateTests(unittest.TestCase):
     def test_detects_large_single_column_band_count_and_y_flow_divergence(self) -> None:
         drifts = [
@@ -491,7 +629,10 @@ class ColumnTextFlowCollapseCandidateTests(unittest.TestCase):
             }
         ]
 
-        candidates = SWEEP.column_text_flow_collapse_candidates(drifts)
+        candidates = SWEEP.column_text_flow_collapse_candidates(
+            drifts,
+            has_reflowing_float=True,
+        )
 
         self.assertEqual(len(candidates), 1)
         self.assertEqual(candidates[0]["column"], 1)
@@ -512,6 +653,47 @@ class ColumnTextFlowCollapseCandidateTests(unittest.TestCase):
         ]
 
         self.assertEqual(SWEEP.column_text_flow_collapse_candidates(drifts), [])
+
+    def test_requires_a_reflowing_float_to_avoid_toc_page_number_rail_false_positive(self) -> None:
+        drifts = [
+            {
+                "column": 1,
+                "drift": {
+                    "rhwp_count": 48,
+                    "pdf_count": 36,
+                    "mean_abs_delta_px": 147.5,
+                    "p90_abs_delta_px": 237.0,
+                },
+            }
+        ]
+
+        self.assertEqual(
+            SWEEP.column_text_flow_collapse_candidates(
+                drifts,
+                has_reflowing_float=False,
+            ),
+            [],
+        )
+
+    def test_detects_square_tight_and_through_image_float_in_render_tree(self) -> None:
+        square_tree = {
+            "type": "Page",
+            "children": [{"type": "Image", "textWrap": "Square"}],
+        }
+        toc_tree = {
+            "type": "Page",
+            "children": [
+                {
+                    "type": "Column",
+                    "children": [
+                        {"type": "TextRun", "text": "목차\t104"},
+                    ],
+                }
+            ],
+        }
+
+        self.assertTrue(SWEEP.render_tree_has_reflowing_text_flow_float(square_tree))
+        self.assertFalse(SWEEP.render_tree_has_reflowing_text_flow_float(toc_tree))
 
     def test_masks_centered_table_strokes_before_column_text_flow_comparison(self) -> None:
         rhwp = Image.new("RGB", (200, 200), "white")

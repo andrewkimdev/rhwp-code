@@ -25,6 +25,15 @@ FRAME_OVERFLOW_PIXEL_LIMIT = 20
 FRAME_OVERFLOW_EXTRA_PIXEL_LIMIT = 12
 FRAME_OVERFLOW_TOLERATED_BLEED_PX = 12
 FRAME_BOTTOM_GLYPH_BLEED_TOLERANCE_PX = 6
+# A centered endnote separator can span almost half of a Chrome-size page
+# raster.  It is not a page boundary, so use a stronger coverage requirement
+# only when selecting the *bottom* frame line.
+FRAME_BOTTOM_RULE_MIN_COVERAGE = 0.60
+# A rule inside the content area (for example, a bottom table border) cannot
+# define the paper boundary.  Actual page-frame rules, if present, are at the
+# physical footer edge; otherwise the known page-raster fallback is safer.
+FRAME_BOTTOM_CANDIDATE_MIN_PAGE_FRACTION = 0.94
+FRAME_PAGE_NUMBER_FOOTER_BLEED_DELTA_TOLERANCE_PX = 4
 CONTENT_BOTTOM_DELTA_LIMIT_PX = 36.0
 RED_MARKER_DRIFT_LIMIT_PX = 18.0
 RED_MARKER_CLUSTER_GAP_PX = 8
@@ -1281,7 +1290,7 @@ def detect_frame(image: Image.Image) -> tuple[int, int, int, int]:
     bottom_candidates = [
         (count, y)
         for y, count in enumerate(row_counts[int(h * 0.60) :], start=int(h * 0.60))
-        if count > w * 0.45
+        if count > w * FRAME_BOTTOM_RULE_MIN_COVERAGE
     ]
     left_candidates = [
         (count, x)
@@ -1296,7 +1305,7 @@ def detect_frame(image: Image.Image) -> tuple[int, int, int, int]:
 
     top = max(top_candidates)[1] if top_candidates else round(h * 0.067)
     bottom = max(bottom_candidates, key=lambda item: item[1])[1] if bottom_candidates else round(h * 0.977)
-    if bottom < h * 0.90:
+    if bottom < h * FRAME_BOTTOM_CANDIDATE_MIN_PAGE_FRACTION:
         bottom = round(h * 0.977)
     left = max(left_candidates)[1] if left_candidates else round(w * 0.033)
     right = max(right_candidates)[1] if right_candidates else round(w * 0.967)
@@ -1765,15 +1774,22 @@ def column_line_band_drift_candidates(drifts: list[dict[str, object]]) -> list[d
 
 def column_text_flow_collapse_candidates(
     drifts: list[dict[str, object]],
+    *,
+    has_reflowing_float: bool = True,
 ) -> list[dict[str, object]]:
     """Return high-confidence one-column text-flow collapse candidates.
 
     A regular font/raster difference can move many baselines by a small amount.
     This rule additionally requires a material line-band count change in the same
     column, so it is aimed at failures such as text being reflowed into narrow
-    vertical strips beside a floating drawing.  It is still a review candidate,
-    not an automatic pass/fail decision.
+    vertical strips beside a Square/Tight/Through drawing.  A single-column
+    table of contents has a visually similar right-side page-number rail, but
+    has no reflowing float and must not be promoted to this stronger candidate.
+    It is still a review candidate, not an automatic pass/fail decision.
     """
+    if not has_reflowing_float:
+        return []
+
     candidates: list[dict[str, object]] = []
     for item in drifts:
         drift = item.get("drift")
@@ -1796,6 +1812,32 @@ def column_text_flow_collapse_candidates(
             candidate["reason"] = "column_line_count_and_y_flow_diverge"
             candidates.append(candidate)
     return candidates
+
+
+def render_tree_has_reflowing_text_flow_float(tree: dict[str, object]) -> bool:
+    """Whether a page has a float capable of narrowing adjacent body text.
+
+    ``column_line_band_drifts`` always splits a raster into two halves.  That
+    makes it sensitive to a real narrow flow beside a float even on a
+    single-column page, but it also sees a table-of-contents page-number rail
+    as a fake second column.  The render tree carries the authoritative
+    ``textWrap`` mode, so only arm the collapse heuristic when the page owns an
+    image whose mode can actually reflow body text.
+    """
+    reflowing_wraps = {"Square", "Tight", "Through"}
+
+    def walk(node: object) -> bool:
+        if not isinstance(node, dict):
+            return False
+        if (
+            node.get("type") == "Image"
+            and node.get("textWrap") in reflowing_wraps
+        ):
+            return True
+        children = node.get("children")
+        return isinstance(children, list) and any(walk(child) for child in children)
+
+    return walk(tree)
 
 
 def compare_adjacent_marker_gaps(
@@ -1874,8 +1916,16 @@ def is_question_marker_flow_drift(
     red_drift: dict[str, float | int | None],
     line_drift: dict[str, float | int | None],
     large_region_drift: dict[str, object],
+    *,
+    has_question_marker_drift: bool = True,
 ) -> bool:
     """문항 marker가 page/column 흐름 자체를 다르게 타는 강한 후보인지 판정한다."""
+    # Coloured charts and SmartArt can satisfy the raster-only red/ink rule.
+    # Keep this detector semantic: there must also be a render-tree/PDF
+    # ``문N`` marker drift on the page.
+    if not has_question_marker_drift:
+        return False
+
     rhwp_count = int(red_drift.get("rhwp_count") or 0)
     pdf_count = int(red_drift.get("pdf_count") or 0)
     count_delta = abs(rhwp_count - pdf_count)
@@ -3109,6 +3159,14 @@ def render_tree_line_order_overlap_candidates(tree_path: Path) -> list[dict[str,
     candidates: list[dict[str, object]] = []
     for index, prev_line in enumerate(lines[:-1]):
         next_line = lines[index + 1]
+        # ``collect_render_tree_text_lines`` is document-order flattened.  Two
+        # adjacent entries may therefore be the last body line and the first
+        # FootnoteArea line.  Those top-level siblings do not form one text
+        # flow, even if their logical bboxes touch or overlap.
+        prev_root_child = str(prev_line["path"]).split("/", 2)[:2]
+        next_root_child = str(next_line["path"]).split("/", 2)[:2]
+        if prev_root_child != next_root_child:
+            continue
         prev_box = prev_line["bbox"]
         next_box = next_line["bbox"]
         assert isinstance(prev_box, tuple)
@@ -3261,7 +3319,10 @@ def suppress_tolerated_frame_tail_candidates(
             PAGE_NUMBER_FOOTER_RE.match(text) is not None
             and line_height > 0.0
             and overflow <= 64.0
-            and pdf_outside_frame_bleed_px >= rhwp_outside_frame_bleed_px - 2
+            # Same footer ink may cross the independently detected PDF/RHWP
+            # frame by a few antialiased pixels in either direction.
+            and abs(rhwp_outside_frame_bleed_px - pdf_outside_frame_bleed_px)
+            <= FRAME_PAGE_NUMBER_FOOTER_BLEED_DELTA_TOLERANCE_PX
             and (content_bottom_delta is None or abs(content_bottom_delta) < 16.0)
             and rhwp_out_pixels <= 128
         )
@@ -3362,7 +3423,11 @@ def analyze_page(
         rhwp_mask_rectangles=rhwp_table_masks,
         pdf_mask_rectangles=pdf_table_masks,
     )
-    column_text_flow_collapse = column_text_flow_collapse_candidates(column_text_flow_drifts)
+    has_reflowing_text_flow_float = render_tree_has_reflowing_text_flow_float(page_tree)
+    column_text_flow_collapse = column_text_flow_collapse_candidates(
+        column_text_flow_drifts,
+        has_reflowing_float=has_reflowing_text_flow_float,
+    )
     large_region_drift = compare_large_ink_regions(
         large_ink_regions(rhwp, frame=rhwp_frame),
         large_ink_regions(pdf, frame=pdf_frame),
@@ -3539,7 +3604,12 @@ def analyze_page(
             )
         )
     )
-    if is_question_marker_flow_drift(red_drift, line_drift, large_region_drift):
+    if is_question_marker_flow_drift(
+        red_drift,
+        line_drift,
+        large_region_drift,
+        has_question_marker_drift=bool(question_marker_drifts),
+    ):
         flags.append("question_marker_flow_drift")
     if equation_overlaps:
         flags.append("equation_text_overlap")
@@ -3643,6 +3713,7 @@ def analyze_page(
             "rhwp": list(rhwp_flow_frame),
             "pdf": list(pdf_flow_frame),
         },
+        "column_text_flow_reflowing_float_present": has_reflowing_text_flow_float,
         "column_text_flow_collapse_candidates": column_text_flow_collapse,
         "large_ink_region_drift": large_region_drift,
         "endnote_shape_ui": endnote_shape_ui,
