@@ -1107,6 +1107,64 @@ mod tests {
         );
     }
 
+    /// native HWP의 빈-host 2행 그림+caption RowBreak 표 뒤에 빈 guide 문단들이
+    /// 저장된 경우에도, 다음 실본문은 caption의 실제 paint 하단 뒤에서 시작해야 한다.
+    ///
+    /// 이 fixture의 p182(pi=1904)는 양수 vertical offset을 갖는다. 종전에는 empty
+    /// float의 예약 높이만 소비해 caption 행보다 약 12px 위에서 pi=1911이 시작했다.
+    #[test]
+    fn issue_3738_picture_caption_float_clears_caption_before_next_body_text() {
+        let Some(core) = load_document(
+            "samples/정책연구용역사업 중간진도보고서(살아있는 간장 기증자의 의학적 선별기준 연구).hwp",
+        ) else {
+            return;
+        };
+        let tree = core
+            .build_page_render_tree(181)
+            .unwrap_or_else(|err| panic!("#3738 p182 render failed: {err}"));
+
+        fn collect_bounds(
+            node: &RenderNode,
+            table_bottom: &mut Option<f64>,
+            next_body_top: &mut Option<f64>,
+        ) {
+            match &node.node_type {
+                RenderNodeType::Table(table) if table.para_index == Some(1904) => {
+                    *table_bottom = Some(node.bbox.y + node.bbox.height);
+                }
+                RenderNodeType::TextLine(line) if line.para_index == Some(1911) => {
+                    let has_visible_text = node.children.iter().any(|child| {
+                        matches!(
+                            &child.node_type,
+                            RenderNodeType::TextRun(run) if !run.display_or_text().trim().is_empty()
+                        )
+                    });
+                    if has_visible_text {
+                        *next_body_top = Some(
+                            next_body_top
+                                .map(|top| top.min(node.bbox.y))
+                                .unwrap_or(node.bbox.y),
+                        );
+                    }
+                }
+                _ => {}
+            }
+            for child in &node.children {
+                collect_bounds(child, table_bottom, next_body_top);
+            }
+        }
+
+        let mut table_bottom = None;
+        let mut next_body_top = None;
+        collect_bounds(&tree.root, &mut table_bottom, &mut next_body_top);
+        let table_bottom = table_bottom.expect("#3738 p182 picture+caption table not found");
+        let next_body_top = next_body_top.expect("#3738 p182 next body text not found");
+        assert!(
+            next_body_top >= table_bottom + 0.5,
+            "#3738 p182 next body text overlaps picture caption: table_bottom={table_bottom:.1}, next_body_top={next_body_top:.1}",
+        );
+    }
+
     /// Issue #1230: Square-wrap(어울림) 비-TAC 그림에서 `shape_attr.current_*` 가
     /// `common`(개체 틀)보다 부풀려진 경우(KICE EMF 그래프 패턴: common=198px,
     /// current=367px), 텍스트는 파일 LINE_SEG(sw) 기준 common 만큼만 좁혀지는데

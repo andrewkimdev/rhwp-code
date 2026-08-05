@@ -878,19 +878,22 @@ fn is_two_row_picture_caption_rowbreak_table(table: &crate::model::table::Table)
         return false;
     }
 
-    let has_picture = table.cells.iter().any(|cell| {
+    let has_illustration = table.cells.iter().any(|cell| {
         cell.row == 0
             && cell.paragraphs.iter().any(|para| {
+                // 표 자체가 비-TAC TopAndBottom float이면, 셀 내부의 도형/그림은
+                // 글자처럼 취급돼도 그림 행의 paint 하단을 구성한다. 이 case를
+                // 제외하면 묶음 Shape 다이어그램의 caption만 다음 본문과 겹친다.
                 para.controls
                     .iter()
-                    .any(|control| matches!(control, Control::Picture(_)))
+                    .any(|control| matches!(control, Control::Picture(_) | Control::Shape(_)))
             })
     });
     let has_caption_text = table
         .cells
         .iter()
         .any(|cell| cell.row == 1 && cell.paragraphs.iter().any(para_has_visible_text));
-    has_picture && has_caption_text
+    has_illustration && has_caption_text
 }
 
 /// 일반 RowBreak 데이터 표가 raw page anchor 특례를 타지 않도록, 저장 좌표를
@@ -8170,11 +8173,29 @@ impl LayoutEngine {
                     // 다시 세로로 누적되지 않는다.
                     lanes.max_bottom()
                 } else if is_current_empty_para_float {
+                    let is_native_picture_caption_float = self.profile.get().native_hwp5_layout()
+                        && para.controls.get(control_index).is_some_and(|control| {
+                            matches!(control, Control::Table(table)
+                                    if is_two_row_picture_caption_rowbreak_table(table)
+                                        && signed_hwpunit(table.common.vertical_offset) > 0)
+                        });
                     // Empty-anchor TopAndBottom tables can encode a visual
                     // vertical offset separately from the flow height measured
                     // by pagination. Keep the table painted at lane_top, but
                     // advance following items by the reserved table height only.
-                    global_y_before + reserved_height
+                    //
+                    // 단, native HWP의 2행 그림+caption RowBreak 표는 caption 행까지
+                    // 표의 실제 paint 영역이다. 표 뒤에 빈 guide 문단이 끼고 그 다음
+                    // 본문이 과거 vpos로 되감기는 형상에서는 `global + reserved`가
+                    // 양수 vertical offset만큼 caption 하단보다 위에 남는다. 그 상태로
+                    // 후속 본문을 배치하면 caption과 겹친다(정책연구 p182, pi=1904).
+                    // 이 구조만 lane의 물리 하단을 flow floor로 삼는다. 일반 empty
+                    // float의 offset-only 예약 계약은 그대로 유지한다.
+                    if is_native_picture_caption_float {
+                        lanes.max_bottom()
+                    } else {
+                        global_y_before + reserved_height
+                    }
                 } else {
                     lanes.max_bottom()
                 };
