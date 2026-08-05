@@ -23,10 +23,27 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
 SUPPORTED_SUFFIXES = (".hwp", ".hwpx")
+DEFAULT_MAX_FILES = 10_000
+MAX_FILES_LIMIT = 100_000
+DEFAULT_RHWP_TIMEOUT_SECONDS = 120
+MAX_RHWP_TIMEOUT_SECONDS = 1_800
 
 
 class ToolError(RuntimeError):
     """사용자에게 그대로 보여줄 실행 오류."""
+
+
+def bounded_positive_int(raw: str, argument: str, maximum: int) -> int:
+    """CLI 자원 상한 인자를 양의 정수 범위로 제한한다."""
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(f"{argument} 값은 정수여야 합니다: {raw}") from exc
+    if not 1 <= value <= maximum:
+        raise argparse.ArgumentTypeError(
+            f"{argument} 값은 1 이상 {maximum} 이하여야 합니다: {raw}"
+        )
+    return value
 
 
 def _reconfigure_utf8() -> None:
@@ -71,7 +88,7 @@ def resolve_rhwp_bin(cli_value: str | None) -> str:
     )
 
 
-def rhwp_info(rhwp_bin: str, path: Path) -> dict:
+def rhwp_info(rhwp_bin: str, path: Path, timeout_seconds: int) -> dict:
     """`rhwp info --json <path>`를 실행해 JSON 객체를 반환한다."""
     try:
         proc = subprocess.run(
@@ -80,7 +97,12 @@ def rhwp_info(rhwp_bin: str, path: Path) -> dict:
             text=True,
             encoding="utf-8",
             errors="replace",
+            timeout=timeout_seconds,
         )
+    except subprocess.TimeoutExpired as exc:
+        raise ToolError(
+            f"rhwp info가 {timeout_seconds}초 안에 끝나지 않았습니다: {path}"
+        ) from exc
     except OSError as exc:
         raise ToolError(f"rhwp 실행 실패: {rhwp_bin}: {exc}") from exc
 
@@ -113,9 +135,9 @@ def fonts_from_info(info: dict, path: Path) -> list[str]:
     return list(seen)
 
 
-def analyze_file(rhwp_bin: str, path: Path) -> dict:
+def analyze_file(rhwp_bin: str, path: Path, timeout_seconds: int) -> dict:
     """단일 파일의 글꼴 분석 결과를 반환한다."""
-    info = rhwp_info(rhwp_bin, path)
+    info = rhwp_info(rhwp_bin, path, timeout_seconds)
     fonts = fonts_from_info(info, path)
     return {
         "source": str(path),
@@ -125,17 +147,32 @@ def analyze_file(rhwp_bin: str, path: Path) -> dict:
     }
 
 
-def collect_targets(root: Path, recursive: bool) -> list[Path]:
+def collect_targets(root: Path, recursive: bool, max_files: int) -> list[Path]:
     """디렉터리에서 지원 확장자(.hwp/.hwpx) 파일을 정렬해 모은다."""
     it = root.rglob("*") if recursive else root.glob("*")
-    return sorted(
-        p for p in it if p.is_file() and p.suffix.lower() in SUPPORTED_SUFFIXES
-    )
+    targets: list[Path] = []
+    for path in it:
+        # 심볼릭 링크는 분석 대상의 실제 위치를 사용자가 예측하기 어렵기 때문에 제외한다.
+        if path.is_symlink() or not path.is_file():
+            continue
+        if path.suffix.lower() not in SUPPORTED_SUFFIXES:
+            continue
+        targets.append(path)
+        if len(targets) > max_files:
+            raise ToolError(
+                f"분석 대상이 --max-files 상한({max_files}개)을 초과했습니다: {root}"
+            )
+    return sorted(targets)
 
 
-def analyze_dir(rhwp_bin: str, root: Path, recursive: bool) -> dict:
+def analyze_dir(
+    rhwp_bin: str,
+    root: Path,
+    recursive: bool,
+    targets: list[Path],
+    timeout_seconds: int,
+) -> dict:
     """디렉터리 일괄 분석: 파일별 결과 + 글꼴별 사용 파일 집계 + 실패 목록."""
-    targets = collect_targets(root, recursive)
     if not targets:
         raise ToolError(f"디렉터리에 .hwp/.hwpx 파일이 없습니다: {root}")
 
@@ -144,7 +181,7 @@ def analyze_dir(rhwp_bin: str, root: Path, recursive: bool) -> dict:
     usage: dict[str, list[str]] = {}
     for target in targets:
         try:
-            result = analyze_file(rhwp_bin, target)
+            result = analyze_file(rhwp_bin, target, timeout_seconds)
         except ToolError as exc:
             errors.append({"source": str(target), "error": str(exc)})
             continue
@@ -169,6 +206,32 @@ def analyze_dir(rhwp_bin: str, root: Path, recursive: bool) -> dict:
         "files": files,
         "errors": errors,
     }
+
+
+def paths_alias(left: Path, right: Path) -> bool:
+    """하드링크와 정규화된 경로를 포함해 두 경로가 같은 파일인지 확인한다."""
+    try:
+        return os.path.samefile(left, right)
+    except OSError:
+        return left.resolve() == right.resolve()
+
+
+def ensure_safe_output(
+    output_path: Path, source_paths: list[Path], overwrite: bool
+) -> None:
+    """분석 보고서가 원본을 덮어쓰지 않도록 출력 경로를 검사한다."""
+    if output_path.is_symlink():
+        raise ToolError(f"출력 경로는 심볼릭 링크일 수 없습니다: {output_path}")
+    if any(paths_alias(output_path, source_path) for source_path in source_paths):
+        raise ToolError(f"출력 경로가 분석 원본과 같습니다: {output_path}")
+    if not output_path.exists():
+        return
+    if not output_path.is_file():
+        raise ToolError(f"출력 경로가 일반 파일이 아닙니다: {output_path}")
+    if not overwrite:
+        raise ToolError(
+            f"출력 파일이 이미 있습니다: {output_path} (덮어쓰려면 --overwrite 사용)"
+        )
 
 
 def format_text(result: dict) -> str:
@@ -270,17 +333,53 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="디렉터리 분석에서 실패 파일이 하나라도 있으면 종료 코드 1",
     )
+    parser.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="기존 출력 파일을 명시적으로 덮어쓴다",
+    )
+    parser.add_argument(
+        "--max-files",
+        type=lambda raw: bounded_positive_int(raw, "--max-files", MAX_FILES_LIMIT),
+        default=DEFAULT_MAX_FILES,
+        help=f"디렉터리 분석 최대 파일 수 (기본: {DEFAULT_MAX_FILES})",
+    )
+    parser.add_argument(
+        "--timeout-seconds",
+        type=lambda raw: bounded_positive_int(
+            raw, "--timeout-seconds", MAX_RHWP_TIMEOUT_SECONDS
+        ),
+        default=DEFAULT_RHWP_TIMEOUT_SECONDS,
+        help=(
+            "파일별 rhwp info 제한 시간(초) "
+            f"(기본: {DEFAULT_RHWP_TIMEOUT_SECONDS}, 최대: {MAX_RHWP_TIMEOUT_SECONDS})"
+        ),
+    )
     args = parser.parse_args(argv)
 
     try:
         rhwp_bin = resolve_rhwp_bin(args.rhwp_bin)
         target = Path(args.input)
+        if target.is_symlink():
+            raise ToolError(f"입력 경로는 심볼릭 링크일 수 없습니다: {target}")
         if target.is_dir():
-            result = analyze_dir(rhwp_bin, target, args.recursive)
+            targets = collect_targets(target, args.recursive, args.max_files)
+            source_paths = targets
+            result = analyze_dir(
+                rhwp_bin,
+                target,
+                args.recursive,
+                targets,
+                args.timeout_seconds,
+            )
         elif target.is_file():
-            result = analyze_file(rhwp_bin, target)
+            source_paths = [target]
+            result = analyze_file(rhwp_bin, target, args.timeout_seconds)
         else:
             raise ToolError(f"입력 경로가 존재하지 않습니다: {target}")
+
+        if args.output:
+            ensure_safe_output(Path(args.output), source_paths, args.overwrite)
     except ToolError as exc:
         print(f"오류: {exc}", file=sys.stderr)
         return 1

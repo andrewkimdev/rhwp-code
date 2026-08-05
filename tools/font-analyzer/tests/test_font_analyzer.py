@@ -20,6 +20,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 TESTS_DIR = Path(__file__).resolve().parent
 TOOL_DIR = TESTS_DIR.parent
@@ -93,6 +94,16 @@ class FailureTests(unittest.TestCase):
         self.assertNotEqual(proc.returncode, 0)
         self.assertIn("RHWP_BIN", proc.stderr)
 
+    def test_symbolic_link_input_exits_nonzero(self) -> None:
+        if os.name == "nt":
+            self.skipTest("Windows의 심볼릭 링크 생성 권한은 개발 환경마다 다릅니다")
+        with tempfile.TemporaryDirectory() as tmp:
+            alias = Path(tmp) / "linked.hwp"
+            alias.symlink_to(HWP_FIXTURE)
+            proc = run_tool(str(alias))
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn("심볼릭 링크", proc.stderr)
+
 
 class DirectoryTests(unittest.TestCase):
     def test_directory_aggregation(self) -> None:
@@ -119,6 +130,49 @@ class DirectoryTests(unittest.TestCase):
             proc = run_tool(tmp)
         self.assertNotEqual(proc.returncode, 0)
         self.assertIn("오류", proc.stderr)
+
+    def test_max_files_limit_stops_directory_collection(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "a.hwp").touch()
+            (root / "b.hwpx").touch()
+            with self.assertRaisesRegex(font_analyzer.ToolError, "--max-files 상한"):
+                font_analyzer.collect_targets(root, recursive=False, max_files=1)
+
+
+class OutputSafetyTests(unittest.TestCase):
+    def test_source_file_cannot_be_output_file(self) -> None:
+        original = HWP_FIXTURE.read_bytes()
+        proc = run_tool(str(HWP_FIXTURE), "--output", str(HWP_FIXTURE))
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn("분석 원본", proc.stderr)
+        self.assertEqual(original, HWP_FIXTURE.read_bytes())
+
+    def test_existing_output_requires_explicit_overwrite(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp) / "fonts.txt"
+            output.write_text("keep", encoding="utf-8")
+            denied = run_tool(str(HWP_FIXTURE), "--output", str(output))
+            self.assertNotEqual(denied.returncode, 0)
+            self.assertIn("--overwrite", denied.stderr)
+            self.assertEqual("keep", output.read_text(encoding="utf-8"))
+
+            allowed = run_tool(
+                str(HWP_FIXTURE), "--output", str(output), "--overwrite"
+            )
+            self.assertEqual(allowed.returncode, 0, msg=allowed.stderr)
+            self.assertIn("글꼴", output.read_text(encoding="utf-8"))
+
+
+class TimeoutTests(unittest.TestCase):
+    def test_rhwp_timeout_is_reported_as_tool_error(self) -> None:
+        with mock.patch.object(
+            font_analyzer.subprocess,
+            "run",
+            side_effect=subprocess.TimeoutExpired(["rhwp"], 1),
+        ):
+            with self.assertRaisesRegex(font_analyzer.ToolError, "끝나지 않았습니다"):
+                font_analyzer.rhwp_info("rhwp", Path("sample.hwp"), 1)
 
 
 class FormattingTests(unittest.TestCase):

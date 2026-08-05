@@ -39,6 +39,12 @@ python tools/font-analyzer/font_analyzer.py samples/field-01.hwp --format md
 # 디렉터리 일괄 집계 (하위 디렉터리까지는 --recursive)
 python tools/font-analyzer/font_analyzer.py samples --format md --output out/fonts.md
 
+# 기존 보고서를 명시적으로 덮어쓰기
+python tools/font-analyzer/font_analyzer.py samples --output out/fonts.md --overwrite
+
+# 재귀 분석의 대상 수와 파일별 rhwp 실행 시간을 조정
+python tools/font-analyzer/font_analyzer.py samples -r --max-files 5000 --timeout-seconds 180
+
 # 실패 파일이 하나라도 있으면 종료 코드 1로 처리하고 싶을 때
 python tools/font-analyzer/font_analyzer.py samples --strict
 
@@ -68,6 +74,15 @@ python tools/font-analyzer/font_analyzer.py samples/field-01.hwp --rhwp-bin targ
 디렉터리 모드에서 일부 파일만 실패하면 기본적으로 결과를 출력하고 0으로
 끝나며(깨진 fixture가 섞인 대량 코퍼스 대응), `--strict`일 때만 1을 반환한다.
 
+## 안전 제한
+
+- 입력 및 디렉터리 안의 심볼릭 링크 문서는 분석하지 않는다.
+- 기본 재귀 대상 상한은 10,000개다. `--max-files`로 최대 100,000개까지 명시할 수 있다.
+- 각 `rhwp info` 실행은 기본 120초, 최대 1,800초로 제한한다. 필요하면
+  `--timeout-seconds`로 조정한다.
+- `--output`이 입력 문서(하드링크 포함)와 같거나 심볼릭 링크이면 거부한다.
+- 기존 출력 파일은 `--overwrite`를 명시한 경우에만 덮어쓴다.
+
 ## 테스트
 
 실제 저장소 fixture로 성공·실패 경로를 검증하는 회귀 테스트가 있다.
@@ -80,6 +95,8 @@ RHWP_BIN=target/debug/rhwp python tools/font-analyzer/tests/test_font_analyzer.p
 - `samples/hwp3-sample5-hwpx.hwpx` → 글꼴 1종 이상 (hwpx)
 - 없는 파일 / 잘못된 `RHWP_BIN` / 문서 없는 디렉터리 → 종료 코드 비 0
 - 임시 디렉터리에 fixture 2개를 복사한 일괄 집계 검증
+- 입력·출력 동일 경로, 기존 출력의 무단 덮어쓰기, 심볼릭 링크 입력, 대상 수 상한,
+  `rhwp info` 시간 초과 거부
 
 `RHWP_BIN`을 생략하면 위의 탐색 순서(3→4)로 바이너리를 찾고, 어디에도 없으면
 빌드 방법을 안내하는 메시지와 함께 실패한다.
