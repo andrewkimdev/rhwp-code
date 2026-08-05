@@ -814,6 +814,85 @@ fn editing_only_the_zip_part_diverges_from_the_nested_copy() {
     );
 }
 
+/// 곁다리 관찰 — HWPX→HWP 변환에서 id 60000+N 차트가 어떻게 되는가.
+///
+/// `src/document_core/converters/hwpx_to_hwp.rs` 에 `ooxml_chart`·`60000` 전용 처리가
+/// **0건**이라 미확인 영역이었다. #4055 스파이크의 질문(S1~S4)에는 없지만, 보고서가
+/// 권고한 "편집 시 ①②를 함께 쓴다"의 근거가 여기 걸리므로 **현재 동작만 기록**한다.
+///
+/// 결함이면 별개 이슈로 분리한다 — B1 정의 밖이다.
+#[test]
+fn observation_hwpx_to_hwp_conversion_keeps_the_chart() {
+    use rhwp::document_core::DocumentCore;
+
+    let bytes = std::fs::read(manifest(&format!("{BASE_SAMPLE}.hwpx"))).expect("HWPX 읽기");
+    let before = representations(&bytes);
+
+    let mut core = DocumentCore::from_bytes(&bytes).expect("HWPX 로드");
+    let hwp = core.export_hwp_with_adapter().expect("HWP 로 변환");
+    let after = representations(&hwp);
+
+    println!("  HWPX 원본 : {before:?}");
+    println!("  HWP  변환 : {after:?}");
+
+    // HWP5 에는 zip 파트가 없으므로 ①이 사라지는 것은 정상이다.
+    assert_eq!(after.zip_part, None, "HWP5 에는 zip 차트 파트가 없다");
+
+    // 한컴이 HWP5 에서 읽는 것은 ② 중첩 OOXML 이다(2026-08-05 실측). 변환본에
+    // 그것이 남아 있어야 차트가 산다.
+    assert_eq!(
+        after.nested_ooxml, before.nested_ooxml,
+        "변환 후에도 중첩 OOXML 사본이 값 그대로 남아야 한다 — \
+         한컴이 HWP5 에서 읽는 표현이다"
+    );
+    assert_eq!(
+        after.legacy, before.legacy,
+        "레거시 Contents 도 보존돼야 한다"
+    );
+    assert!(after.has_emf, "EMF 프리뷰도 보존돼야 한다");
+}
+
+/// 보고서 권고 "편집 시 ①②를 함께 쓴다"의 근거를 실측으로 고정한다.
+///
+/// HWPX 에서 ①`Chart/chartN.xml` 만 고치면 한컴 화면은 맞다(X-A 실측). 그러나
+/// HWP 로 저장하면 ①은 사라지고 한컴이 읽는 것은 ②가 되는데, ②는 손대지 않아
+/// 옛 값이다 → **편집이 조용히 되돌아간다.**
+#[test]
+fn editing_only_the_zip_part_is_lost_when_converting_to_hwp() {
+    use rhwp::document_core::DocumentCore;
+
+    let bytes = std::fs::read(manifest(&format!("{BASE_SAMPLE}.hwpx"))).expect("HWPX 읽기");
+    let mut core = DocumentCore::from_bytes(&bytes).expect("HWPX 로드");
+    {
+        let doc = core.document_mut();
+        let slot = doc
+            .bin_data_content
+            .iter_mut()
+            .find(|c| c.extension == "ooxml_chart")
+            .expect("ooxml_chart 항목");
+        let patched = patch_ooxml_first_value(&slot.data.load(), SENTINEL_TEXT).expect("패치");
+        slot.data = patched.into();
+    }
+
+    // HWPX 로 저장하면 편집이 살아 있다 — 한컴이 ①을 읽으므로 화면도 맞다.
+    let saved_hwpx = core.export_hwpx_native().expect("HWPX 저장");
+    assert_eq!(
+        representations(&saved_hwpx).zip_part,
+        Some(SENTINEL),
+        "HWPX 저장본의 zip 파트에는 편집이 남는다"
+    );
+
+    // 그러나 HWP 로 변환하면 ①이 사라지고, 한컴이 읽는 ②는 옛 값 그대로다.
+    let converted = core.export_hwp_with_adapter().expect("HWP 변환");
+    let after = representations(&converted);
+    assert_eq!(after.zip_part, None, "HWP5 에는 zip 파트가 없다");
+    assert_eq!(
+        after.nested_ooxml,
+        Some(4.3),
+        "①만 고치면 HWP 변환에서 편집이 사라진다 — 그래서 ①② 를 함께 써야 한다"
+    );
+}
+
 /// Stage 2 — 한컴 육안 판정용 변종 꾸러미를 만든다 (S2·S3).
 ///
 /// `output/` 에 파일을 쓰는 부작용이 있어 기본 실행에서 뺀다. 판정 직전에만 돌린다:
@@ -1058,26 +1137,36 @@ fn generate_hancom_judgment_bundle() {
          `4.3` → `91.7` 로 바꾼 변종들입니다.\n원본 최대값이 `5` 라 반영되면 \
          **첫 막대가 차트를 뚫고 솟습니다.** 확대해서 숫자를 읽을 필요가 없습니다.\n\n",
     );
-    sheet.push_str("## 진행 상황\n\n");
+    sheet.push_str("## 판정 완료 (2026-08-05, 한컴 오피스)\n\n");
     sheet.push_str(
-        "**HWPX 는 판정 끝났습니다** — `X-A-zip파트만.hwpx` 에서 한컴이 첫 막대를 91.7 로 \
-         그렸습니다(2026-08-05 실측). 중첩 OOXML 사본과 레거시가 옛 값이고 EMF 프리뷰에도 \
-         옛 값이 박혀 있는데 새 값이 나왔으므로, 한컴은 `Chart/chartN.xml` 을 읽고 \
-         **낡은 EMF 는 앞을 가리지 않습니다.**\n\n\
-         **남은 것은 `.hwp` 입니다.** zip 파트가 없으니 한컴이 중첩 OOXML 사본(②)을 읽는지 \
-         레거시 `Contents`(③)를 읽는지가 질문입니다. `H-A` 와 `H-B` 두 개만 열면 갈립니다.\n\n",
+        "전 변종을 열어 PDF 로 저장한 뒤 PDF 페이지 그리기 스트림을 해시로 갈랐습니다\
+         (메타데이터·타임스탬프 제외). 렌더 결과는 **딱 두 그룹**이고 그룹 안에서는 \
+         바이트 동일합니다.\n\n\
+         ```text\n\
+         반영   (91,406 B)  X-A · X-C · X-D · H-A · H-C · H-D\n\
+         미반영 (87,712 B)  00-control ×2 · X-B · H-B\n\
+         ```\n\n\
+         1. **한컴은 OOXML 표현을 읽습니다.** ①(zip 파트) 하나만 고쳐도, ②(중첩 사본) \
+         하나만 고쳐도 반영됩니다.\n\
+         2. **레거시 `Contents` 는 전혀 읽지 않습니다.** `X-B`·`H-B` 는 레거시만 새 값인데 \
+         렌더가 대조군과 바이트 동일합니다.\n\
+         3. **③을 함께 써도 렌더는 달라지지 않습니다** — `X-C`/`H-C` 가 `X-A`/`H-A` 와 \
+         바이트 동일합니다.\n\
+         4. **EMF 프리뷰는 필요조건이 아닙니다.** 낡은 채로 둬도 가리지 않고, 제거해도\
+         (`X-D`·`H-D`) 정상 개봉·렌더됩니다.\n\n\
+         변종 8개 전부 오류·복구 대화상자 없이 열렸습니다.\n\n\
+         상세는 `mydocs/report/task_m100_4055_report.md`.\n\n",
     );
-    sheet.push_str("## 보는 법\n\n");
+    sheet.push_str("## 다시 판정할 때 보는 법\n\n");
     sheet.push_str(
-        "1. `00-control-원본.hwp` 로 정상 모습(막대 4개가 고만고만)을 눈에 익힙니다.\n\
-         2. `H-A-중첩OOXML만.hwp` → `H-B-레거시만.hwp` 순으로 엽니다. **둘 중 하나만 솟습니다.**\n\
-         3. 둘 다 안 솟으면 `H-C` 를, 그것도 아니면 `H-D` 를 엽니다.\n\
-         4. 각 파일마다 함께 봐 주세요:\n   \
+        "1. `00-control-원본` 으로 정상 모습(막대 4개가 고만고만)을 눈에 익힙니다.\n\
+         2. 값이 반영되면 첫 막대가 차트를 뚫고 솟습니다 — 확대해서 숫자를 읽을 필요가 없습니다.\n\
+         3. 각 파일마다 함께 봐 주세요:\n   \
          (a) 열 때 오류·복구 대화상자가 뜨는가  (b) 차트를 더블클릭하면 편집기가 열리는가\n\n",
     );
-    sheet.push_str("## 판정표\n\n");
-    sheet.push_str("| 파일 | 무엇을 바꿨나 | 막대 솟음? | 오류창? | 더블클릭 편집? |\n");
-    sheet.push_str("|---|---|---|---|---|\n");
+    sheet.push_str("## 변종 목록\n\n");
+    sheet.push_str("| 파일 | 무엇을 바꿨나 | 한컴 렌더 |\n");
+    sheet.push_str("|---|---|---|\n");
 
     for (name, bytes, note, expected) in &bundle {
         // 자기 검증 ① rhwp 가 다시 연다.
@@ -1113,20 +1202,26 @@ fn generate_hancom_judgment_bundle() {
             actual.legacy,
             actual.has_emf
         );
-        sheet.push_str(&format!("| `{name}` | {note} |  |  |  |\n"));
+        let verdict = if name.contains("control") {
+            "기준"
+        } else if name.contains("-B-") {
+            "**미반영**"
+        } else {
+            "반영"
+        };
+        sheet.push_str(&format!("| `{name}` | {note} | {verdict} |\n"));
     }
 
-    sheet.push_str("\n## `.hwp` 결과가 뜻하는 것\n\n");
+    sheet.push_str("\n## B1 본구현에 주는 결론\n\n");
     sheet.push_str(
-        "| 솟은 변종 | 해석 | B1 의 `.hwp` 경로 |\n|---|---|---|\n\
-         | **H-A** | 한컴이 중첩 `OOXMLChartContents` 를 읽는다 | HWPX 와 같은 표현을 쓰면 된다. \
-         중첩 CFB 재포장만 새로 필요(무손실 확인됨) |\n\
-         | **H-B** | 한컴이 레거시 `Contents` 를 읽는다 | #3683 원안이 맞다 — 레거시 f64 패치가 \
-         `.hwp` 의 본체. Stage 1 로케이터가 그대로 쓰인다 |\n\
-         | H-C 만 | 둘을 같이 맞춰야 한다 | 편집 시 ②③ 동시 기록 |\n\
-         | H-D 만 | 낡은 EMF 가 앞을 가린다 | `.hwp` 에 한해 EMF 처리가 필요 \
-         (HWPX 에서는 안 가렸다) |\n\
-         | 아무것도 안 솟음 | `.hwp` 는 EMF 만 그린다 | **`.hwp` 편집 범위 재협의 사유** |\n",
+        "| 포맷 | 써야 할 곳 | 필요한 작업 |\n|---|---|---|\n\
+         | HWPX | ① `Chart/chartN.xml` | **직렬화기 수정 0** — `bin_data_content` 의 \
+         `ooxml_chart`(id=60000+N) 바이트만 교체하면 그대로 방출된다 |\n\
+         | HWP5 | ② 중첩 `OOXMLChartContents` | 중첩 CFB 재포장 필요 → **`mini_cfb` 가 루트 \
+         CLSID 를 받도록 선행 수정** (안 하면 한컴이 차트를 비워 그린다) |\n\
+         | 레거시 단독 문서 | ③ 레거시 `Contents` | 8바이트 제자리 패치. 한컴은 안 읽으므로 후순위 |\n\n\
+         **①② 를 함께 쓰기를 권한다.** ①만 고치면 한컴 화면은 맞지만 HWP 로 변환할 때 \
+         ①이 사라지고 ②(옛 값)만 남아 편집이 조용히 되돌아간다 — 테스트로 고정했다.\n",
     );
 
     std::fs::write(out_dir.join("PANJEONG.md"), sheet).expect("판정표 쓰기");
