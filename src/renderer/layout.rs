@@ -1165,11 +1165,14 @@ fn stored_layout_relocated_empty_rowbreak_picture_next_flow_top(
     (top >= col_area.y && top <= col_area.y + col_area.height).then_some(top)
 }
 
-/// HWP5의 본문 포함 TopAndBottom 표 중, 여러 저장 줄 뒤에 그림 표가 이어지는
-/// 형상은 `vertical_offset`이 첫 줄이 아니라 host 본문 끝을 기준으로 한다. 이를
-/// para 시작점에만 더하면 그림이 아직 그려지는 본문 위에 놓인다 (1351000 p13).
-/// 단일 표·3개 이상 저장 줄·양수 offset으로 한정해 제목 한 줄과 표가 공존하는
-/// 기존 visible-float 계약에는 영향을 주지 않는다.
+/// HWP5의 본문 포함 TopAndBottom 표 중, 여러 저장 줄보다 **짧은** 양수
+/// `vertical_offset`을 가진 형상은 offset의 기준이 host 본문 끝이다. 이를 para
+/// 시작점에만 더하면 그림이 아직 그려지는 본문 위에 놓인다 (1351000 p13).
+///
+/// 반대로 offset이 host 저장 높이 이상이면 이미 host 본문 아래를 가리키므로,
+/// 이를 한 번 더 본문 끝에 가산하면 표가 한 문단 높이만큼 아래로 밀린다
+/// (정책연구용역… HWP/HWPX p9, pi=222). 따라서 그 경우는 일반 Para anchor
+/// 경로에 맡긴다.
 fn native_multiline_visible_float_table_top(
     native_hwp5_layout: bool,
     para: &Paragraph,
@@ -1205,6 +1208,9 @@ fn native_multiline_visible_float_table_top(
         .saturating_sub(first.vertical_pos)
         .saturating_add(last.line_height)
         .max(0);
+    if signed_hwpunit(table.common.vertical_offset) >= host_height_hu {
+        return None;
+    }
     Some(
         para_y
             + hwpunit_to_px(host_height_hu, dpi)
