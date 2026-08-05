@@ -48,18 +48,29 @@ loaded documents: pr_review_workflow.md, pr_review/README.md,
 
 ## 로컬 검증
 
-아래 검증은 구현 head `043a2e339`에서 완료됐다.
+아래 검증은 구현 head `043a2e339`에서 완료됐다. 이후 GitHub Actions가 발견한
+Clippy 네 건을 동작 변경 없이 보정한 현재 PR 보정본도 아래 두 검증으로 재확인했다.
 
 | 검증 | 결과 |
 | --- | --- |
 | `CARGO_INCREMENTAL=0 cargo test --profile release-test --test issue_3930_hwpx_hwp_save_layout -- --nocapture` | 1 passed |
 | `CARGO_INCREMENTAL=0 cargo test --lib diagnostics::hwp5_char_shape_audit -- --nocapture` | 5 passed |
 | `target/release-test/rhwp hwp5-char-shape-audit <hancom.hwp> <generated.hwp> --source-hwpx <source.hwpx> --out <report.md>` | 실제 편람 fixture 보고서 생성 성공, source charPr 937개 확인 |
-| `cargo fmt --check` | 통과 |
+| `cargo fmt --check` | 통과 (CI 보정 후 재실행) |
+| `CARGO_INCREMENTAL=0 cargo clippy --workspace --all-targets -- -D warnings` | 통과, 2분 27초 (CI 보정 후 재실행) |
 | `git diff --check` | 통과 |
 
-전체 `cargo test`와 `cargo clippy`는 이번 최신 head에서 재실행하지 않았다. 대형 PR의 최종
-전체 회귀는 최신 GitHub Actions 결과로 확인한다.
+전체 `cargo test`는 이번 최신 head에서 재실행하지 않았다. 대형 PR의 최종 전체 회귀는
+최신 GitHub Actions 결과로 확인한다.
+
+### CI lint 보정
+
+GitHub Actions의 최초 최신 head `70c608e`는 동작 실패가 아니라 Clippy의
+`cloned_ref_to_slice_refs` 세 건과 `single_element_loop` 한 건으로 실패했다. 세 곳의
+테스트 payload는 `std::slice::from_ref`로 바꾸고, 구역 10의 단일 검증 루프는 직접 블록으로
+바꿨다. 저장·조판 로직과 fixture 기대값은 변경하지 않았다. 보정 뒤 workspace Clippy와
+`issue_3930_hwpx_hwp_save_layout` focused release-test는 모두 통과했으며, 새 head의 GitHub
+Actions를 다시 최종 병합 조건으로 삼는다.
 
 ## 시각·fixture 판단
 

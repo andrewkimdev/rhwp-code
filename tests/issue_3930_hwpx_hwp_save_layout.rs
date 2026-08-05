@@ -56,27 +56,26 @@ fn issue_3930_preserves_page_count_and_inherited_even_master_page() {
     // HWPX에는 HWP5 SECTION_DEF의 raw tail이 없지만, HWP 2020은 바탕쪽이 있는
     // 구역에 19 byte tail(CTRL_HEADER 전체 47 byte)을 쓴다. 이 값이 10 byte
     // 기본값으로 남으면 HWP 2020이 LIST_HEADER 바탕쪽을 무시할 수 있다.
-    for section_index in [10] {
-        let section = &source.document().sections[section_index];
-        assert_eq!(
-            section.section_def.raw_ctrl_extra.len(),
-            19,
-            "구역 {section_index} root SectionDef HWP5 바탕쪽 tail"
-        );
-        let inline_section_def = section.paragraphs[0]
-            .controls
-            .iter()
-            .find_map(|control| match control {
-                Control::SectionDef(section_def) => Some(section_def.as_ref()),
-                _ => None,
-            })
-            .expect("첫 문단 SectionDef");
-        assert_eq!(
-            inline_section_def.raw_ctrl_extra.len(),
-            19,
-            "구역 {section_index} inline SectionDef HWP5 바탕쪽 tail"
-        );
-    }
+    let section_index = 10;
+    let section = &source.document().sections[section_index];
+    assert_eq!(
+        section.section_def.raw_ctrl_extra.len(),
+        19,
+        "구역 {section_index} root SectionDef HWP5 바탕쪽 tail"
+    );
+    let inline_section_def = section.paragraphs[0]
+        .controls
+        .iter()
+        .find_map(|control| match control {
+            Control::SectionDef(section_def) => Some(section_def.as_ref()),
+            _ => None,
+        })
+        .expect("첫 문단 SectionDef");
+    assert_eq!(
+        inline_section_def.raw_ctrl_extra.len(),
+        19,
+        "구역 {section_index} inline SectionDef HWP5 바탕쪽 tail"
+    );
     let reloaded = HwpDocument::from_bytes(&saved).expect("저장 HWP 재로드");
 
     assert_eq!(

@@ -29,6 +29,9 @@
    #3820으로 이관한다.
 5. 최신 PR head의 CI·mergeability와 작업지시자 승인을 확인한 뒤 병합한다. #3930만 닫고 #3820은
    계속 열린 상태로 둔다.
+6. 최초 최신 head에서 Clippy가 테스트 코드의 불필요한 clone과 단일 원소 루프를 거부하면,
+   저장 로직을 건드리지 않고 해당 테스트 표현만 보정한다. workspace Clippy와 focused
+   release-test를 다시 통과시킨 head의 CI를 병합 기준으로 사용한다.
 
 ## Rollback 범위
 

@@ -915,7 +915,7 @@ mod tests {
     fn char_shape_defaults_patch_unique_semantic_match() {
         let oracle_payload = char_shape_payload(7, [0xfa, 0, 4, 0x3c], [0xc0; 4]);
         let generated_payload = char_shape_payload(7, [2, 0, 0, 0], [0xb2; 4]);
-        let oracle = doc_info_with_char_shapes(&[oracle_payload.clone()]);
+        let oracle = doc_info_with_char_shapes(std::slice::from_ref(&oracle_payload));
         let generated = doc_info_with_char_shapes(&[generated_payload]);
 
         let (patched, counts) =
@@ -937,7 +937,7 @@ mod tests {
             char_shape_payload(7, [0xf8, 0, 4, 0x3c], [0xb2; 4]),
         ]);
         let generated_payload = char_shape_payload(7, [2, 0, 0, 0], [0xb2; 4]);
-        let generated = doc_info_with_char_shapes(&[generated_payload.clone()]);
+        let generated = doc_info_with_char_shapes(std::slice::from_ref(&generated_payload));
 
         let (patched, counts) =
             patch_doc_info(&oracle, &generated, &[ProbeAxis::CharShapeDefaults]);
@@ -953,7 +953,7 @@ mod tests {
         let oracle =
             doc_info_with_char_shapes(&[char_shape_payload(7, [0xfa, 0, 4, 0x3c], [0xc0; 4])]);
         let generated_payload = char_shape_payload(8, [2, 0, 0, 0], [0xb2; 4]);
-        let generated = doc_info_with_char_shapes(&[generated_payload.clone()]);
+        let generated = doc_info_with_char_shapes(std::slice::from_ref(&generated_payload));
 
         let (patched, counts) =
             patch_doc_info(&oracle, &generated, &[ProbeAxis::CharShapeDefaults]);
