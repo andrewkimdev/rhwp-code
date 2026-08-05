@@ -224,6 +224,16 @@ fn direct_nested_table_right_borders(cell: &RenderNode) -> Vec<f64> {
         .collect()
 }
 
+/// A table fragment's direct host Cell is the ancestor SVG/Canvas clip for
+/// all of its nested descendants.  The deepest nested table can have a valid
+/// border `Line` while that ancestor still silently clips the stroke.
+fn direct_table_cell(table: &RenderNode) -> Option<&RenderNode> {
+    table
+        .children
+        .iter()
+        .find(|child| matches!(child.node_type, RenderNodeType::TableCell(_)))
+}
+
 /// 한 TableCell의 직접 콘텐츠에서만 실제 TextLine 상자들을 수집한다. 중첩 셀은
 /// 별도 좌표계이므로 여기서 섞으면 정상적인 열/중첩 표를 거짓 양성으로 판정한다.
 fn collect_direct_cell_text_lines(node: &RenderNode, lines: &mut Vec<ClipRect>) {
@@ -502,6 +512,93 @@ fn issue_2007_wrapper_clip_keeps_completed_nested_table_right_borders() {
             );
         }
     }
+}
+
+#[test]
+fn issue_2007_continuation_ancestor_clip_keeps_deep_right_border() {
+    let repo_root = env!("CARGO_MANIFEST_DIR");
+    let hwp_path =
+        Path::new(repo_root).join("samples/basic/issue2007_nested_cell_pagination_42065.hwp");
+    let bytes =
+        fs::read(&hwp_path).unwrap_or_else(|e| panic!("read {}: {}", hwp_path.display(), e));
+    let doc = rhwp::wasm_api::HwpDocument::from_bytes(&bytes)
+        .expect("parse issue2007_nested_cell_pagination_42065.hwp");
+
+    // p10's pi=7/ci=1 RowBreak wrapper contains the long 1x1 continuation.
+    // Its deepest table emits the right border, but every enclosing Cell clip
+    // must include that stroke for both SVG and Canvas paint.
+    let tree = doc
+        .build_page_render_tree(9)
+        .expect("issue2007 p10 render tree");
+    let outer =
+        find_table_fragment(&tree.root, 7, 1).expect("issue2007 p10 outer pi=7 ci=1 continuation");
+    let outer_cell = direct_table_cell(outer).expect("p10 outer direct Cell");
+    let deepest = find_innermost_table_containing_text(outer, "독점규제 및 공정거래에 관한 법률")
+        .expect("p10 nested table containing first visible law heading");
+    let right_border =
+        nested_table_right_border_paint_extent(deepest).expect("p10 nested table right border");
+    let outer_clip_right = outer_cell.bbox.x + outer_cell.bbox.width;
+    assert!(
+        outer_clip_right + 0.01 >= right_border,
+        "p10 continuation ancestor Cell clips its deep nested right border: \\
+         ancestor_right={outer_clip_right:.2}, border_right={right_border:.2}"
+    );
+}
+
+#[test]
+fn issue_2007_single_cell_continuation_does_not_repaint_boundary_fragments() {
+    let repo_root = env!("CARGO_MANIFEST_DIR");
+    let hwp_path =
+        Path::new(repo_root).join("samples/basic/issue2007_nested_cell_pagination_42065.hwp");
+    let bytes =
+        fs::read(&hwp_path).unwrap_or_else(|e| panic!("read {}: {}", hwp_path.display(), e));
+    let doc = rhwp::wasm_api::HwpDocument::from_bytes(&bytes)
+        .expect("parse issue2007_nested_cell_pagination_42065.hwp");
+
+    // p12는 직전 1×1 continuation의 마지막 법률 문장이 아니라 다음 표의
+    // "중앙선거관리위원회"에서 시작해야 한다. 첫 visible unit을 content origin에
+    // 반영하지 않으면 그 직전 줄을 재도색하면서 이후 모든 heading이 아래로 drift한다.
+    let p12 = doc
+        .build_page_render_tree(11)
+        .expect("issue2007 p12 render tree");
+    let p12_clip = Some(ClipRect::from_node(&p12.root));
+    assert!(
+        contains_painted_text(&p12.root, "중앙선거관리위원회", p12_clip),
+        "p12 must contain its first reference heading"
+    );
+    assert!(
+        !contains_painted_text(
+            &p12.root,
+            "진술을 하거나 그 직무집행을 거부 또는 기피한 자",
+            p12_clip,
+        ),
+        "p12 repaints the preceding continuation line instead of starting at its own fragment"
+    );
+
+    // 마지막 non-terminal fragment(p16)가 p17 소속 heading을 미리 paint하면,
+    // terminal p17에도 같은 heading이 다시 나타난다. 한컴 기준은 p17만 보유한다.
+    let p16 = doc
+        .build_page_render_tree(15)
+        .expect("issue2007 p16 render tree");
+    assert!(
+        !contains_painted_text(
+            &p16.root,
+            "선호된 대안의 기대효과",
+            Some(ClipRect::from_node(&p16.root)),
+        ),
+        "p16 paints p17-owned heading before the terminal continuation"
+    );
+    let p17 = doc
+        .build_page_render_tree(16)
+        .expect("issue2007 p17 render tree");
+    assert!(
+        contains_painted_text(
+            &p17.root,
+            "선호된 대안의 기대효과",
+            Some(ClipRect::from_node(&p17.root)),
+        ),
+        "p17 must retain its terminal heading"
+    );
 }
 
 #[test]

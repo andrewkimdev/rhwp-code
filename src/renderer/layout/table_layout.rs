@@ -249,6 +249,34 @@ fn extend_clipped_cell_horizontal_clip_to_nested_table_borders(cell_node: &mut R
     cell_node.bbox.width = (clip_right - clip_left).max(0.0);
 }
 
+/// A table's logical stored width can end just inside a direct cell whose
+/// horizontal paint extent was widened for a nested table border.  Preserve
+/// that direct-cell extent on the table node before its parent cell computes
+/// the next clip.  Without the post-order propagation, p10-p16's 1x1
+/// continuation chain stops at the first table: the grandchild right edge is
+/// correct, but the outer Cell and Body clips still cut it away.
+///
+/// Only direct `TableCell` children participate.  This deliberately does not
+/// union arbitrary descendants (which could include next-page continuation
+/// tails); it forwards the same horizontal paint boundary that the immediate
+/// table already owns.
+fn extend_table_horizontal_bbox_to_direct_cell_paint(table_node: &mut RenderNode) {
+    if !matches!(table_node.node_type, RenderNodeType::Table(_)) {
+        return;
+    }
+
+    let mut left = table_node.bbox.x;
+    let mut right = table_node.bbox.x + table_node.bbox.width;
+    for child in &table_node.children {
+        if matches!(child.node_type, RenderNodeType::TableCell(_)) {
+            left = left.min(child.bbox.x);
+            right = right.max(child.bbox.x + child.bbox.width);
+        }
+    }
+    table_node.bbox.x = left;
+    table_node.bbox.width = (right - left).max(0.0);
+}
+
 /// Run the narrow horizontal clip correction only after every nested table in
 /// the current subtree has emitted its border edges. Calling the single-cell
 /// helper during the parent cell loop is too early for normal edge rendering:
@@ -260,6 +288,7 @@ pub(super) fn extend_completed_nested_table_border_clips(node: &mut RenderNode) 
     for child in &mut node.children {
         extend_completed_nested_table_border_clips(child);
     }
+    extend_table_horizontal_bbox_to_direct_cell_paint(node);
     extend_clipped_cell_horizontal_clip_to_nested_table_borders(node);
 }
 
@@ -8513,9 +8542,6 @@ impl LayoutEngine {
                 _ => None,
             })
         });
-        // [#3658] 이 컷이 셀의 마지막 유닛까지 포함하면(end_cut=[] 종료) 이 조각이
-        // 이 셀 콘텐츠의 마지막 조각이다 — 이후 continuation 이 만들어지지 않는다.
-        let terminal = end_unit >= units.len();
         let (start_row, end_row, row_offset_within_start, visible_height) = match nested {
             Some(_) if recursive_cut.is_some() => (0, 1, 0.0, flow_visible),
             Some(nt) if nt.row_count > 1 => {
@@ -8818,7 +8844,15 @@ impl LayoutEngine {
                 .find_map(|(height, trailing)| (!*trailing).then_some(*height))
                 .unwrap_or(0.0);
             let offset_within_start = (offset - first_visible_content_height).max(0.0);
-            if offset_within_start > 0.5 {
+            let terminal = end_unit >= units.len();
+            let single_cell_nested_continuation = table.row_count == 1
+                && table.col_count == 1
+                && cell.paragraphs.get(para_idx).is_some_and(|paragraph| {
+                    paragraph.controls.iter().any(|control| {
+                        matches!(control, Control::Table(nested) if nested.row_count == 1 && nested.col_count == 1)
+                    })
+                });
+            if offset_within_start > 0.5 && !(single_cell_nested_continuation && !terminal) {
                 extra += first_visible_content_height;
             }
         }

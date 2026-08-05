@@ -69,20 +69,45 @@ partial-table 경로는 edge를 fragment cell loop 뒤에 추가하므로 p2–p
 한 outer stroke가 각 wrapper clip 안에 있어야 함을 고정한다. 수정 후 p2–p4
 `svg-table-border-clip-candidates.tsv`는 header만 남아 후보 0건이다.
 
+## 보정 C — 1×1 continuation의 이미 예약된 첫 단위 재도색 방지
+
+contact sheet만으로는 p10–p17의 각 조각이 어느 source window를 실제로 소유하는지 판정할 수 없어,
+각 PDF/SVG pair를 분리해 다시 확인했다. p12는 PDF 기준으로 `중앙선거관리위원회`에서 시작해야 하지만,
+기존에는 직전 조각의 `진술을 하거나 그 직무집행을 거부 또는 기피한 자`를 다시 칠한 뒤 이후 heading을
+아래로 밀었다. 반대로 p16은 마지막 non-terminal 조각인데 p17 소유 heading을 미리 그릴 수 있었다.
+
+원인은 1×1 host 안의 1×1 nested table에서 첫 visible unit이 physical flow reservation에는 이미 반영됐지만,
+다음 조각 content origin과 mixed-flow extra에는 다시 남아 있던 이중 계산이다. non-terminal 1×1
+continuation에서만 다음 content origin을 그 첫 unit만큼 전진시키고, 같은 reservation/extra는 제거했다.
+terminal 조각은 남은 tail을 보존해야 하므로 적용 대상에서 제외했다. 따라서 p8의 재paint 방지 계약이나
+일반 multi-row nested table의 row cut은 바꾸지 않는다.
+
+회귀 `issue_2007_single_cell_continuation_does_not_repaint_boundary_fragments`는 다음을 고정한다.
+
+- p12에는 `중앙선거관리위원회`가 있고 직전 조각의 마지막 문장은 없다.
+- p16에는 p17 소유 `선호된 대안의 기대효과`가 없고, p17에만 있다.
+
+같은 post-order clip 경로에서 table bbox가 직접 Cell의 수평 paint extent를 전달하게 하여 p10–p16의
+깊은 nested table 우측 stroke도 상위 Cell/Body clip에 잘리지 않도록 했다. 이 계약은
+`issue_2007_continuation_ancestor_clip_keeps_deep_right_border`로 고정한다.
+
 ## 재검증과 현재 판정
 
 - 최신 native release-test 출력은 기준 PDF와 동일하게 **17쪽**이다. 전수 page-count ledger의 PDF/SVG/render
   tree 모두 17쪽이다.
-- p2·p3 우측선, p4 우측선, p8 중복 line, p10–p16 visible-content top과 cell-local `vpos=0` reset 회귀를
-  포함한 `issue_2007_nested_cell_pagination` focused executable은 **5 passed, 0 failed**다.
+- p2·p3 우측선, p4 우측선, p8 중복 line, p10–p16 visible-content top과 cell-local `vpos=0` reset,
+  p10 continuation ancestor clip, p12/p16/p17 source-window 경계를 포함한
+  `issue_2007_nested_cell_pagination` focused executable은 **7 passed, 0 failed**다.
 - 17쪽 `--text-only --export-all-svg --layout-ledger` 결과는 text owner-shift 0건,
   text-owner-sequence 0건, float owner-shift 0건, TableCell TextLine overlap 0건이다.
 - p5–p17의 `table_footer`/`table_outside_frame` 및 SVG border-clip 보조 후보는 1×1 RowBreak 표의 page 밖
   continuation tail이다. 이들을 표시하려고 vertical cell clip을 넓히면 p8의 replay 결함이 재발하므로,
   자동 후보로 보관하되 결함으로 승격하지 않았다.
-- PDF pair sheet를 17쪽 모두 직접 확인했다. p10–p16은 수정 전의 대형 상단 공백·문단 겹침 없이 기준과 같은
-  continuation 흐름이고, p2·p3의 표 우측 경계도 보인다. pixel diff는 한컴 PDF와 native 폰트 raster의
-  차이를 포함하므로 합격 기준으로 쓰지 않았다.
+- PDF pair를 p10–p17 각각 분리해 직접 확인했다. p10–p16은 수정 전의 대형 상단 공백·문단 겹침 없이 기준과
+  같은 continuation 흐름이고 p12의 이전 source 재표시, p16의 p17 source 누출도 없다. p2·p3의 표 우측
+  경계도 보인다. p10–p16 raw pixel diff는 한컴 PDF와 native 글꼴 raster/metrics 차이를 포함하므로 단독
+  합격 기준으로 쓰지 않았다. 다만 p10–p17의 outer border·page owner·text order·page count는 별도
+  ledger와 focused 회귀로 확인했다.
 
 HWP fixture와 한컴 2020 PDF는 각각 `samples/basic/`와 `pdf/basic/` canonical 경로에 보관되어 있다.
 생성 증적은 `mydocs/pr/assets/task_m100_3820_stage14_issue2007_continuation/`에 보관했다.
@@ -92,4 +117,6 @@ HWP fixture와 한컴 2020 PDF는 각각 `samples/basic/`와 `pdf/basic/` canoni
 - [p2–p4 border-clip 후보 0건](../pr/assets/task_m100_3820_stage14_issue2007_continuation/p002_p004_svg_table_border_clip_candidates_after.tsv)
 - [p2 수정 후 PDF pair](../pr/assets/task_m100_3820_stage14_issue2007_continuation/review_p002_after_border.png), [p3 수정 후 PDF pair](../pr/assets/task_m100_3820_stage14_issue2007_continuation/review_p003_after_border.png), [p4 guard pair](../pr/assets/task_m100_3820_stage14_issue2007_continuation/review_p004_after_border.png)
 - [p1–p9 직접 대조 sheet](../pr/assets/task_m100_3820_stage14_issue2007_continuation/review_p001_p009_contact.png), [p10–p17 직접 대조 sheet](../pr/assets/task_m100_3820_stage14_issue2007_continuation/review_p010_p017_contact.png)
+- p10–p17 분리 PDF pair: [p10](../pr/assets/task_m100_3820_stage14_issue2007_continuation/review_p010_after_window.png), [p11](../pr/assets/task_m100_3820_stage14_issue2007_continuation/review_p011_after_window.png), [p12](../pr/assets/task_m100_3820_stage14_issue2007_continuation/review_p012_after_window.png), [p13](../pr/assets/task_m100_3820_stage14_issue2007_continuation/review_p013_after_window.png), [p14](../pr/assets/task_m100_3820_stage14_issue2007_continuation/review_p014_after_window.png), [p15](../pr/assets/task_m100_3820_stage14_issue2007_continuation/review_p015_after_window.png), [p16](../pr/assets/task_m100_3820_stage14_issue2007_continuation/review_p016_after_window.png), [p17](../pr/assets/task_m100_3820_stage14_issue2007_continuation/review_p017_after_window.png)
+- p10–p17 [pixel report](../pr/assets/task_m100_3820_stage14_issue2007_continuation/p010_p017_pixel_report_after.tsv), [page-count ledger](../pr/assets/task_m100_3820_stage14_issue2007_continuation/p010_p017_page_count_after.tsv), [SVG border-clip 후보](../pr/assets/task_m100_3820_stage14_issue2007_continuation/p010_p017_svg_table_border_clip_candidates_after.tsv), [provenance](../pr/assets/task_m100_3820_stage14_issue2007_continuation/p010_p017_provenance_after.tsv)
 - [전수 page-count ledger](../pr/assets/task_m100_3820_stage14_issue2007_continuation/all_pages_page_count_after.tsv), [전수 TextLine overlap ledger](../pr/assets/task_m100_3820_stage14_issue2007_continuation/all_pages_table_cell_text_overlap_after.tsv), [전수 border-clip 후보](../pr/assets/task_m100_3820_stage14_issue2007_continuation/all_pages_svg_table_border_clip_candidates_after.tsv), [전수 layout 후보](../pr/assets/task_m100_3820_stage14_issue2007_continuation/all_pages_layout_candidates_after.tsv)
