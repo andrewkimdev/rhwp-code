@@ -15,7 +15,8 @@
 static VERIFIED_HANCOM_PUA_DISPLAY: &[(u32, &str)] = &[
     // `복학원서.hwp` 서명란. Hancom PDF: `(인)`.
     (0xF012B, "(인)"),
-    // `pau-004.hwp`와 한컴 문자표. HCR Dotum: small right-pointing triangle.
+    // `pau-004.hwp`/한컴 문자표와 `issue2007_nested_cell_pagination_42065.hwp` 중첩 표 글머리표.
+    // HCR Dotum/Hancom PDF: small right-pointing triangle. 공개 글꼴에서 raw PUA는 두부가 된다.
     (0xF02FB, "▸"),
     // 2025 행정업무운영 편람 p15 callout bullet. Hancom PDF: right pointer.
     (0xF02FC, "►"),

@@ -73,6 +73,8 @@ python3 tools/fidelity_compare/fidelity_compare.py 0 214 \
 - `cmp-pNNN.png`: 기준 PDF와 rhwp 렌더의 쪽별 비교 시트
 - `report.tsv`: 픽셀 diff% 랭킹
 - `text-report.tsv`: 기준 PDF 텍스트층에만 있는 문자와 SVG에만 있는 문자 수·코드포인트
+- `svg-glyph-risk-report.tsv`: rhwp SVG의 raw PUA/U+FFFD. 한컴 전용 glyph가 공개
+  글꼴에서 두부(□)로 보일 수 있는 독립 후보이며, PDF 텍스트 추출 품질과 무관하게 확인한다.
 - `text-owner-shift-candidates.tsv`: 인접한 두 쪽에서 SVG-only와 PDF-only 문자가 크게 상호 일치한
   page-owner 이동 후보. `rhwp_earlier_than_reference`/`rhwp_later_than_reference` 방향을 기록하며,
   PDF visual owner 대조 전에는 결함 판정이 아니다.
@@ -102,6 +104,8 @@ python3 tools/fidelity_compare/fidelity_compare.py 0 214 \
 
 `--text-only`는 Chrome·PNG·비교 시트를 만들지 않는다. 기준 PDF text와 SVG `<text>`만 비교하므로
 각주/본문/caption의 페이지 owner 이동·누락 후보를 빠르게 전수 수집하는 첫 단계에 적합하다.
+동시에 `svg-glyph-risk-report.tsv`로 raw PUA와 U+FFFD를 전수 수집하므로, PDF가 해당 한컴
+전용 글꼴을 추출하지 못하더라도 두부 문자 후보는 독립적으로 검출한다.
 `text-owner-shift-candidates.tsv`는 인접 쪽의 상호 text difference를 묶어, pN에 너무 이르게 나온
 각주가 기준 PDF에서는 pN+1에 있는 경우처럼 page-owner 후보를 바로 보인다.
 `text-owner-sequence-candidates.tsv`는 p52→p53처럼 다른 본문 문자와 Counter가 상쇄되는 이동도

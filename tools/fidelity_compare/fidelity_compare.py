@@ -294,6 +294,54 @@ def svg_text(svg_path: Path) -> str:
     return "".join(parts)
 
 
+def svg_glyph_risks(text: str) -> Counter[str]:
+    """Return text glyphs that can become a visible tofu in a public font.
+
+    SVG output is consumed by Chrome/Canvas where HWP-only fonts are generally
+    unavailable.  Private-use code points therefore are not harmless text
+    metadata: they are a direct missing-glyph candidate.  U+FFFD is reported
+    separately because it means a decoder already lost the original glyph.
+
+    This is intentionally a *candidate* ledger rather than a PDF text diff.
+    A reference PDF may itself lack the HWP private font, while a raw PUA in
+    rhwp SVG is independently actionable and was the cause of #2007's
+    U+F02FB tofu bullet.
+    """
+
+    def is_private_use(ch: str) -> bool:
+        code_point = ord(ch)
+        return (
+            0xE000 <= code_point <= 0xF8FF
+            or 0xF0000 <= code_point <= 0xFFFFD
+            or 0x100000 <= code_point <= 0x10FFFD
+        )
+
+    return Counter(ch for ch in text if is_private_use(ch) or ch == "\uFFFD")
+
+
+def write_svg_glyph_risk_report(
+    work_dir: Path, glyph_risks: Mapping[int, Counter[str]], requested_pages: Sequence[int]
+) -> Path:
+    """Write every raw PUA/replacement glyph candidate, including zero rows."""
+    report_path = work_dir / "svg-glyph-risk-report.tsv"
+    with report_path.open("w", encoding="utf-8") as report:
+        report.write("page\trisk_count\tglyphs\tnote\n")
+        for page_index in requested_pages:
+            risks = glyph_risks.get(page_index)
+            if risks is None:
+                report.write(f"{page_index + 1}\t-\t-\tSVG 없음 — glyph 미검사\n")
+                continue
+            if not risks:
+                report.write(f"{page_index + 1}\t0\t-\t-\n")
+                continue
+            report.write(
+                f"{page_index + 1}\t{sum(risks.values())}\t"
+                f"{counter_summary(risks)}\t"
+                "raw PUA 또는 U+FFFD — 공개 글꼴에서 두부 후보\n"
+            )
+    return report_path
+
+
 def compare_text_layers(
     reference_text: str, rendered_text: str
 ) -> tuple[Counter[str], Counter[str]]:
@@ -1653,6 +1701,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     text_rows: list[tuple[int, int, int, str, str, str]] = []
     text_differences: dict[int, tuple[Counter[str], Counter[str]]] = {}
     text_layers: dict[int, tuple[str, str]] = {}
+    glyph_risks: dict[int, Counter[str]] = {}
     completed_pages: list[int] = []
     missing_pages: list[int] = []
     for page_index in requested_pages:
@@ -1667,23 +1716,28 @@ def main(argv: Sequence[str] | None = None) -> int:
         svg_path = svg_files[0]
 
         try:
-            reference_text = reference_text_for_page(page_index)
             rendered_text = svg_text(svg_path)
-            missing, extra = compare_text_layers(reference_text, rendered_text)
-            text_differences[page_index] = (missing, extra)
-            text_layers[page_index] = (reference_text, rendered_text)
-            text_rows.append(
-                (
-                    page_index,
-                    sum(missing.values()),
-                    sum(extra.values()),
-                    counter_summary(missing),
-                    counter_summary(extra),
-                    "",
+            glyph_risks[page_index] = svg_glyph_risks(rendered_text)
+        except Exception as error:  # noqa: BLE001 - glyph ledger도 SVG 파싱 실패를 남긴다.
+            text_rows.append((page_index, 0, 0, "", "", f"SVG 텍스트층 추출 실패: {error}"))
+        else:
+            try:
+                reference_text = reference_text_for_page(page_index)
+                missing, extra = compare_text_layers(reference_text, rendered_text)
+                text_differences[page_index] = (missing, extra)
+                text_layers[page_index] = (reference_text, rendered_text)
+                text_rows.append(
+                    (
+                        page_index,
+                        sum(missing.values()),
+                        sum(extra.values()),
+                        counter_summary(missing),
+                        counter_summary(extra),
+                        "",
+                    )
                 )
-            )
-        except Exception as error:  # noqa: BLE001 - 선택적 텍스트 추출은 픽셀 대조를 막지 않는다.
-            text_rows.append((page_index, 0, 0, "", "", f"텍스트층 추출 실패: {error}"))
+            except Exception as error:  # noqa: BLE001 - PDF text 실패가 glyph 후보를 덮어쓰지 않는다.
+                text_rows.append((page_index, 0, 0, "", "", f"기준 PDF 텍스트층 추출 실패: {error}"))
 
         if args.text_only:
             completed_pages.append(page_index)
@@ -1739,6 +1793,9 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     write_text_owner_shift_ledger(work_dir, text_differences)
     write_text_owner_sequence_ledger(work_dir, text_layers)
+    glyph_risk_report_path = write_svg_glyph_risk_report(
+        work_dir, glyph_risks, requested_pages
+    )
     if args.layout_ledger:
         write_table_fragment_ledger(
             work_dir,
@@ -1780,6 +1837,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(f"  p{page_index + 1}: {score}% {note}")
     print("pixel report:", report_path)
     print("text report:", text_report_path)
+    print("SVG glyph-risk candidates:", glyph_risk_report_path)
     print("text owner-shift candidates:", work_dir / "text-owner-shift-candidates.tsv")
     print("text owner-sequence candidates:", work_dir / "text-owner-sequence-candidates.tsv")
     print("page-count ledger:", work_dir / "page-count-ledger.tsv")

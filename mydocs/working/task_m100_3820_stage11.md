@@ -97,7 +97,27 @@ render-tree source `(pi, line range, control)`를 함께 사용해 **해당 범�
   [p1–17 contact sheet](../../tmp/stage11-issue2007-current-png/reference-current-p001-p017-contact.png),
   전체 SVG/PNG는 `tmp/stage11-issue2007-current-svg/`,
   `tmp/stage11-issue2007-current-png/`, `tmp/stage11-issue2007-reference-png/`에 보관한다.
-- 상태: 이 Stage 11의 p166 이후 범위 보정과 분리된 **미해결 신규 결함**으로
-  [#4039](https://github.com/edwardkim/rhwp/issues/4039)에 등록했다. 다음 단계에서는
-  `pi=7`의 outer/nested `RowBreak` continuation contract를 별도 focused regression으로
-  고정한 뒤 셀 fragment pagination을 수정한다.
+- 상태: 이 Stage 11의 p166 이후 범위 보정과 분리된 **현재 브랜치의 미해결 결함**이다.
+  다음 단계에서 `pi=7`의 outer/nested `RowBreak` continuation contract를 별도 focused
+  regression으로 고정한 뒤 셀 fragment pagination을 수정한다.
+
+### 2026-08-05 candidate15 재검사 — 페이지 수 회복·두부 문자 보정
+
+- 최신 candidate의 전체 `export-svg`는 기준 PDF와 같이 **17쪽**이고, 1–17쪽 text-only
+  원장은 17/17쪽 완료·누락 0이다. [page-count 원장](../../tmp/stage11-issue2007-page-compare-20260805-candidate15/page-count-ledger.tsv)과
+  [run-state](../../tmp/stage11-issue2007-page-compare-20260805-candidate15/run-state.tsv)를 보관했다.
+- p4의 outer/nested `RowBreak` 표는 [기준·현재 비교](../../tmp/stage11-issue2007-page-compare-20260805-candidate15/p04-reference-current.png)에서
+  물리 페이지와 표 구조가 같은 4쪽으로 회복됐다. 보존 companion PDF는 DejaVu 기반이라
+  글꼴 모양 자체는 한컴 정답지로 사용하지 않고, 페이지·표 owner 대조용 참고 자료로만 쓴다.
+- 중첩 표 글머리표 `U+F02FB`가 공개 글꼴에서 두부로 보였다. 한컴 검증 기록의 작은 오른쪽
+  삼각형 `▸`을 좁게 매핑해 [p13 현재 렌더](../../tmp/stage11-issue2007-page-compare-20260805-candidate15/current-13.png)에서
+  실제 표시를 확인했다. 17쪽 전수 [glyph-risk 원장](../../tmp/stage11-issue2007-page-compare-20260805-candidate15/svg-glyph-risk-report.tsv)은
+  raw PUA/U+FFFD 0건이다.
+- `fidelity_compare`에는 PDF 텍스트 대조와 독립된 raw PUA/U+FFFD 후보 원장을 추가했다.
+  이 경로는 이전 candidate의 raw `U+F02FB` 1,027건을 즉시 탐지하며, 현재 candidate에서는
+  0건으로 닫힌다.
+- HWP 2020 MCP 직접 PDF 변환은 `timeout_seconds=900`에서 서버 응답 timeout으로 끝나
+  새 한컴 PDF는 생성되지 않았다. 기존 보존 PDF와 이미 기록된 한컴 glyph 검증을 사용했고,
+  이 timeout은 layout 해결이나 glyph 매핑의 성공 근거로 사용하지 않는다.
+- 상태: **U+F02FB 두부와 24→17쪽 과분할은 해결 확인**. 나머지 중첩 표의 페이지별 raster
+  정합은 별도 잔여 검토 대상으로 유지한다.
