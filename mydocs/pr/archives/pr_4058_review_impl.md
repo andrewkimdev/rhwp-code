@@ -17,6 +17,7 @@
 | 3 | `928cb282e` | CHAR_SHAPE sentinel fail-closed probe |
 | 4 | `c93e861f6` | CharShape 직렬화 모듈 분리와 byte-identical 복원 |
 | 5 | `043a2e339` | source provenance audit CLI와 사용법 |
+| 6 | 현재 PR 보정 커밋 | HWPX->HWP `imgDim=(0,0)` sentinel 비교 범위화, form-002 SVG 기준 갱신, p30/p144/p145 직접 회귀 |
 
 ## 처리 단계
 
@@ -32,6 +33,10 @@
 6. 최초 최신 head에서 Clippy가 테스트 코드의 불필요한 clone과 단일 원소 루프를 거부하면,
    저장 로직을 건드리지 않고 해당 테스트 표현만 보정한다. workspace Clippy와 focused
    release-test를 다시 통과시킨 head의 CI를 병합 기준으로 사용한다.
+7. HWPX 그림의 `imgDim=(0,0)`은 Hancom HWP5 저장 계약에서만 발생하는 원본 이미지 메타
+   sentinel이므로 HWPX->HWP 자기검증에서만 비교 불능으로 취급한다. `curSz` 또는 `imgRect`가
+   함께 달라지면 검증 실패를 유지한다. p30/p144/p145는 페이지 수 대신 render tree 직접 비교로
+   수용 기준을 고정한다.
 
 ## Rollback 범위
 

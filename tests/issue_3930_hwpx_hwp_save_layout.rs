@@ -10,6 +10,16 @@ use rhwp::model::style::BorderLineType;
 use rhwp::wasm_api::HwpDocument;
 
 const FIXTURE: &str = "samples/2025 행정업무운영 편람(최종).hwpx";
+const PAGE_30: u32 = 29;
+const PAGE_144: u32 = 143;
+const PAGE_145: u32 = 144;
+const ATTACHMENT_GUIDANCE: &str = "기안문에 작성한 붙임 문서를 첨부";
+
+fn page_tree(document: &HwpDocument, page: u32) -> String {
+    document
+        .get_page_render_tree(page)
+        .unwrap_or_else(|error| panic!("p{} render tree: {error:?}", page + 1))
+}
 
 fn master_page_text(master_page: &MasterPage) -> String {
     let mut text = String::new();
@@ -41,6 +51,26 @@ fn issue_3930_preserves_page_count_and_inherited_even_master_page() {
     let mut source = HwpDocument::from_bytes(&bytes).expect("HWPX fixture parse");
 
     assert_eq!(source.page_count(), 387, "원본 편람 쪽수");
+    let source_p30_tree = page_tree(&source, PAGE_30);
+    let source_p144_tree = page_tree(&source, PAGE_144);
+    let source_p145_tree = page_tree(&source, PAGE_145);
+    assert!(
+        source_p30_tree.contains("\"text\":\"2025 \"")
+            && source_p30_tree.contains("\"text\":\"행정업무운영 편람\""),
+        "원본 p30 바탕쪽은 책 제목이어야 한다"
+    );
+    assert!(
+        !source_p30_tree.contains("제2장. 공문서 관리"),
+        "원본 p30 바탕쪽은 장 제목으로 바뀌면 안 된다"
+    );
+    assert!(
+        !source_p144_tree.contains(ATTACHMENT_GUIDANCE),
+        "원본 p144에는 붙임 안내 블록이 남으면 안 된다"
+    );
+    assert!(
+        source_p145_tree.contains(ATTACHMENT_GUIDANCE),
+        "원본 p145에는 붙임 안내 블록이 있어야 한다"
+    );
     let source_border_fill = &source.document().doc_info.border_fills[67];
     assert_eq!(
         source_border_fill.borders[0].line_type,
@@ -92,6 +122,18 @@ fn issue_3930_preserves_page_count_and_inherited_even_master_page() {
         387,
         "p144 표가 다음 쪽으로 계속 이월돼야 한다"
     );
+    for (page, source_tree) in [
+        (PAGE_30, source_p30_tree),
+        (PAGE_144, source_p144_tree),
+        (PAGE_145, source_p145_tree),
+    ] {
+        assert_eq!(
+            page_tree(&reloaded, page),
+            source_tree,
+            "저장 HWP p{} 조판 tree는 원본 HWPX와 같아야 한다",
+            page + 1
+        );
+    }
 
     let section = &reloaded.document().sections[2].section_def;
     let base_master_pages: Vec<&MasterPage> = section

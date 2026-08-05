@@ -49,7 +49,8 @@ loaded documents: pr_review_workflow.md, pr_review/README.md,
 ## 로컬 검증
 
 아래 검증은 구현 head `043a2e339`에서 완료됐다. 이후 GitHub Actions가 발견한
-Clippy 네 건을 동작 변경 없이 보정한 현재 PR 보정본도 아래 두 검증으로 재확인했다.
+Clippy 네 건, HWPX->HWP `imgDim=(0,0)` 저장 sentinel, SVG snapshot을 보정한 현재 PR
+보정본도 아래 검증으로 재확인했다.
 
 | 검증 | 결과 |
 | --- | --- |
@@ -59,9 +60,12 @@ Clippy 네 건을 동작 변경 없이 보정한 현재 PR 보정본도 아래 �
 | `cargo fmt --check` | 통과 (CI 보정 후 재실행) |
 | `CARGO_INCREMENTAL=0 cargo clippy --workspace --all-targets -- -D warnings` | 통과, 2분 27초 (CI 보정 후 재실행) |
 | `git diff --check` | 통과 |
+| `CARGO_INCREMENTAL=0 cargo test --profile release-test --tests -- --nocapture` | exit code `0` (CI 보정본) |
+| p30/p144/p145 직접 저장 검증 | 원본 HWPX와 저장 HWP가 387쪽, p30 render tree 동일·책 제목 바탕쪽, p144/p145 SVG·텍스트 동일 |
 
-전체 `cargo test`는 이번 최신 head에서 재실행하지 않았다. 대형 PR의 최종 전체 회귀는
-최신 GitHub Actions 결과로 확인한다.
+위 전체 실행 뒤 p30/p144/p145 render-tree assertion을 focused 회귀에 추가했고,
+`issue_3930_hwpx_hwp_save_layout` 1건이 다시 통과했다. 작업지시자 요청으로 중복 전체 실행은
+수행하지 않는다. 원격 CI는 이 새 assertion과 현재 보정본을 최종 확인해야 한다.
 
 ### CI lint 보정
 
@@ -78,6 +82,8 @@ Actions를 다시 최종 병합 조건으로 삼는다.
 
 - `samples/2025 행정업무운영 편람(최종).hwpx` 저장 후 재열기에서 387쪽, p144 `endCut=[21]`와
   p145 `startRow=2/startCut=[21]`의 표 연속, p30 책 제목 머리말을 focused release-test로 확인했다.
+- 현재 회귀는 p30/p144/p145 전체 render tree도 원본 HWPX와 저장 HWP가 같은지 직접 비교한다.
+  따라서 387쪽이라는 개수만 우연히 유지되고 머리말 또는 붙임 블록 위치가 바뀌는 경우도 차단한다.
 - 기준 HWP/HWPX/PDF 경로와 SHA-256은 [#3930 후속 기록](https://github.com/edwardkim/rhwp/issues/3930#issuecomment-5188976890) 및
   [#3820 이관 기록](https://github.com/edwardkim/rhwp/issues/3820#issuecomment-5189062021)에 남겼다.
 - Hancom 2020 PDF 전수 비교의 production baseline에는 109쪽/392,833픽셀 차이가 남는다.
