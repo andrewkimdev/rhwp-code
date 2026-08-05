@@ -947,6 +947,16 @@ pub fn svgs_to_pdf_with_options(
         };
     options.glyph_outline_cache = glyph_cache.clone();
 
+    // docs/design/RHWP_TEXT_FLATTEN_SKIP_SPIKE_PLAN.md (hwpx-template-engine
+    // repo) — svg2pdf's embed_text=true path draws text from usvg's
+    // metrics-based Text.bounding_box and never reads Text.flattened (the
+    // per-glyph outline geometry usvg computes unconditionally), so skip
+    // computing it whenever we're embedding real fonts anyway. No new CLI
+    // flag: derives from the existing --embed-text option, so
+    // export-svg/export-render-tree/embed_text=false are untouched by
+    // construction (they never set this field, defaulting to `false`).
+    options.skip_text_flatten = export_options.embed_text;
+
     let mut alloc = Ref::new(1);
     let catalog_ref = alloc.bump();
     let page_tree_ref = alloc.bump();
