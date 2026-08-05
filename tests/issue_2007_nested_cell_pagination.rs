@@ -710,9 +710,17 @@ fn issue_2007_continuation_frame_restarts_and_drops_previous_page_residual() {
         );
     }
 
-    // p13 follows a table that ends only 2.5px into the new page. That remnant
-    // is a previous-page border, not a new table frame; it must not cross the
-    // heading at the top of p13.
+    // p10 follows an 8×4 table which ends 4.95px into the new page; p13
+    // likewise contains only a 2.5px tail.  Neither is current-page content,
+    // so neither previous-page bottom edge may become a false top frame.
+    let p10 = doc
+        .build_page_render_tree(9)
+        .expect("issue2007 p10 render tree");
+    assert!(
+        !has_visible_full_width_horizontal_line_near(&p10.root, 84.21, 719.16, 117.15),
+        "p10 paints the previous fragment's residual bottom border as a false top frame"
+    );
+
     let p13 = doc
         .build_page_render_tree(12)
         .expect("issue2007 p13 render tree");

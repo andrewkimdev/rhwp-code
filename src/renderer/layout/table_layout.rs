@@ -286,8 +286,13 @@ const NESTED_FRAGMENT_EDGE_EPSILON_PX: f64 = 0.5;
 /// A table that leaks less than this distance into a clipped continuation cell
 /// is the terminal border of the previous fragment, not content for this page.
 /// Keeping it paints a stray horizontal line at the next page's top (42065
-/// p13), while the corresponding text is already correctly clipped away.
-const NESTED_FRAGMENT_RESIDUAL_BORDER_PX: f64 = 4.0;
+/// p10/p13), while the corresponding text is already correctly clipped away.
+///
+/// A native 1px border may be rasterized just below the logical clip by up to
+/// roughly 5px at the renderer's layout scale.  Six pixels remains below the
+/// smallest real continuation fragment in this fixture, so it only suppresses
+/// that paint residue rather than current-page table content.
+const NESTED_FRAGMENT_RESIDUAL_BORDER_PX: f64 = 6.0;
 
 fn push_fragment_border_line(
     tree: &mut PageRenderTree,
