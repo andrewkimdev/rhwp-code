@@ -181,21 +181,21 @@ fn caption_has_topbottom_picture(caption: &Caption) -> bool {
 }
 
 /// A clipped table cell still has to expose an immediately nested table's
-/// *outer vertical border*.  A nested table can begin after the host cell's
+/// *outer vertical border*. A nested table can begin after the host cell's
 /// left padding while retaining its stored width, which puts that right border
-/// just beyond the host cell's logical content rectangle.  Clipping at the
+/// just beyond the host cell's logical content rectangle. Clipping at the
 /// logical rectangle then removes the entire border even though the table
-/// layout emitted it (issue2007 p4).
+/// layout emitted it (issue2007 p2-p4).
 ///
 /// Do not expand to every descendant: a RowBreak continuation deliberately
 /// keeps future-page text below its physical cell clip.  This is restricted to
 /// direct nested `Table` outer vertical `Line`s and changes only the
 /// horizontal clip extent needed for their stroke paint.
 fn extend_clipped_cell_horizontal_clip_to_nested_table_borders(cell_node: &mut RenderNode) {
-    if !matches!(
-        cell_node.node_type,
-        RenderNodeType::TableCell(TableCellNode { clip: true, .. })
-    ) {
+    let RenderNodeType::TableCell(cell_meta) = &cell_node.node_type else {
+        return;
+    };
+    if !cell_meta.clip {
         return;
     }
 
@@ -208,6 +208,7 @@ fn extend_clipped_cell_horizontal_clip_to_nested_table_borders(cell_node: &mut R
         }
         let table_left = table_node.bbox.x;
         let table_right = table_node.bbox.x + table_node.bbox.width;
+        let mut found_outer_vertical_border = false;
 
         for border_node in &table_node.children {
             let RenderNodeType::Line(line) = &border_node.node_type else {
@@ -229,11 +230,37 @@ fn extend_clipped_cell_horizontal_clip_to_nested_table_borders(cell_node: &mut R
             let half_stroke = line.style.width / 2.0;
             clip_left = clip_left.min(x - half_stroke);
             clip_right = clip_right.max(x + half_stroke);
+            found_outer_vertical_border = true;
+        }
+
+        if !found_outer_vertical_border {
+            // 일부 normal/partial 표는 현재 부모 subtree가 최종 edge `Line`을
+            // 붙이기 전에도 직접 child Table bbox를 완성한다(42065 p2-p3). 이
+            // bbox는 table의 물리 stored-width 경계이므로 작은 stroke 여유만
+            // 포함해 가로 clip의 fallback으로 쓸 수 있다. 세로 bbox는 전혀
+            // 확장하지 않아 다음 쪽 continuation tail은 계속 가려진다.
+            const FALLBACK_BORDER_HALF_STROKE_PX: f64 = 1.0;
+            clip_left = clip_left.min(table_left - FALLBACK_BORDER_HALF_STROKE_PX);
+            clip_right = clip_right.max(table_right + FALLBACK_BORDER_HALF_STROKE_PX);
         }
     }
 
     cell_node.bbox.x = clip_left;
     cell_node.bbox.width = (clip_right - clip_left).max(0.0);
+}
+
+/// Run the narrow horizontal clip correction only after every nested table in
+/// the current subtree has emitted its border edges. Calling the single-cell
+/// helper during the parent cell loop is too early for normal edge rendering:
+/// p2-p3's 4×2/9×2 tables append their `Line`s after that loop and therefore
+/// retained the undersized wrapper clip. The traversal stays post-order and
+/// only delegates to the direct-child-table helper above, so it cannot widen a
+/// continuation's vertical viewport or reveal a future-page text tail.
+pub(super) fn extend_completed_nested_table_border_clips(node: &mut RenderNode) {
+    for child in &mut node.children {
+        extend_completed_nested_table_border_clips(child);
+    }
+    extend_clipped_cell_horizontal_clip_to_nested_table_borders(node);
 }
 
 fn should_render_table_caption(table: &crate::model::table::Table, depth: usize) -> bool {
@@ -1625,6 +1652,11 @@ impl LayoutEngine {
                 ));
             }
         }
+
+        // Cell children may complete normal table-edge rendering only after
+        // the parent cell loop. Correct their horizontal clip at this point
+        // without changing the vertical continuation viewport.
+        extend_completed_nested_table_border_clips(&mut table_node);
 
         col_node.children.push(table_node);
 
@@ -4654,7 +4686,20 @@ impl LayoutEngine {
                 let cell_end_row = (r + cell.row_span as usize).min(row_count);
                 r < sr || cell_end_row > er
             });
-            let effective_valign = if cell_clipped_by_row_filter {
+            // 이 표 자신은 `nested_split`을 받지 않아도, 현재 표가 부모 1×1
+            // RowBreak continuation의 남은 viewport 안에서 호출될 수 있다. 이때 큰
+            // 하위 셀은 부모 Cell clip에 의해 아래가 잘리는데 원래 Center/Bottom
+            // 정렬을 유지하면, 아직 보이지 않는 셀 하단을 기준으로 첫 본문까지
+            // 아래로 밀린다(42065 p10–p16). `col_area`는 호출자가 넘긴 물리
+            // viewport이므로, 그 하단을 실제로 넘는 중첩 셀만 Top으로 수렴시킨다.
+            // 일반 완전 셀 및 최상위 표(depth=0)는 영향이 없다.
+            let cell_clipped_by_parent_viewport = depth > 0
+                && !table.common.treat_as_char
+                && col_area.height > 0.5
+                && cell_y < col_area.y + col_area.height - 0.5
+                && cell_y + cell_h > col_area.y + col_area.height + 0.5;
+            let effective_valign = if cell_clipped_by_row_filter || cell_clipped_by_parent_viewport
+            {
                 VerticalAlign::Top
             } else {
                 cell.vertical_align
@@ -4758,7 +4803,6 @@ impl LayoutEngine {
                     }
                 }
             };
-
             // 세로쓰기 셀
             if cell.text_direction != 0 {
                 let vert_inner_area = LayoutRect {
@@ -4846,11 +4890,6 @@ impl LayoutEngine {
                 }
             }
 
-            // A nested table may keep its stored width after the enclosing
-            // cell's left padding.  Preserve its outer vertical border in the
-            // physical cell clip without admitting the continuation's hidden
-            // vertical tail (issue2007 p4).
-            extend_clipped_cell_horizontal_clip_to_nested_table_borders(&mut cell_node);
             table_node.children.push(cell_node);
 
             // (c) 셀 대각선 렌더링 (셀 콘텐츠 위에 그림)

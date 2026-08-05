@@ -97,6 +97,46 @@ fn find_table_fragment(
         .find_map(|child| find_table_fragment(child, para_index, control_index))
 }
 
+/// `needle`을 실제로 포함하는 가장 안쪽 table fragment를 찾는다.
+///
+/// p10의 결함은 표가 통째로 사라지는 문제가 아니라, continuation viewport에 걸친
+/// 하위 1×1 표가 Center valign을 유지해 첫 본문을 표 상단에서 수백 px 아래로
+/// 보내는 형태다. 따라서 source control만 찾는 기존 helper로는 해당 하위 표를
+/// 특정할 수 없다.
+fn find_innermost_table_containing_text<'a>(
+    node: &'a RenderNode,
+    needle: &str,
+) -> Option<&'a RenderNode> {
+    for child in &node.children {
+        if let Some(found) = find_innermost_table_containing_text(child, needle) {
+            return Some(found);
+        }
+    }
+    (matches!(node.node_type, RenderNodeType::Table(_)) && contains_text(node, needle))
+        .then_some(node)
+}
+
+fn contains_text(node: &RenderNode, needle: &str) -> bool {
+    matches!(node.node_type, RenderNodeType::TextRun(ref run) if run.text.contains(needle))
+        || node
+            .children
+            .iter()
+            .any(|child| contains_text(child, needle))
+}
+
+fn first_text_run_top(node: &RenderNode, needle: &str) -> Option<f64> {
+    let own = match &node.node_type {
+        RenderNodeType::TextRun(run) if run.text.contains(needle) => Some(node.bbox.y),
+        _ => None,
+    };
+    own.or_else(|| {
+        node.children
+            .iter()
+            .filter_map(|child| first_text_run_top(child, needle))
+            .min_by(|left, right| left.total_cmp(right))
+    })
+}
+
 #[derive(Clone, Copy)]
 struct ClipRect {
     x: f64,
@@ -168,6 +208,20 @@ fn nested_table_right_border_paint_extent(table: &RenderNode) -> Option<f64> {
             _ => None,
         })
         .max_by(|left, right| left.total_cmp(right))
+}
+
+/// Wrapper Cell이 직접 포함한 중첩 표의 바깥 우측선을 모두 검사한다.
+///
+/// issue2007 p2에는 4×2와 9×2 표가 한 wrapper Cell 안에 연달아 있고, p3에는
+/// 같은 9×2 표의 continuation만 남는다. 둘 다 stored width가 wrapper의 논리
+/// clip보다 조금 넓어, 표가 완성되기 전에 clip 범위를 계산하면 우측선이 통째로
+/// 사라진다.
+fn direct_nested_table_right_borders(cell: &RenderNode) -> Vec<f64> {
+    cell.children
+        .iter()
+        .filter(|child| matches!(child.node_type, RenderNodeType::Table(_)))
+        .filter_map(nested_table_right_border_paint_extent)
+        .collect()
 }
 
 /// 한 TableCell의 직접 콘텐츠에서만 실제 TextLine 상자들을 수집한다. 중첩 셀은
@@ -398,6 +452,59 @@ fn issue_2007_nested_table_right_outer_border_is_not_clipped() {
 }
 
 #[test]
+fn issue_2007_wrapper_clip_keeps_completed_nested_table_right_borders() {
+    let repo_root = env!("CARGO_MANIFEST_DIR");
+    let hwp_path =
+        Path::new(repo_root).join("samples/basic/issue2007_nested_cell_pagination_42065.hwp");
+    let bytes =
+        fs::read(&hwp_path).unwrap_or_else(|e| panic!("read {}: {}", hwp_path.display(), e));
+    let doc = rhwp::wasm_api::HwpDocument::from_bytes(&bytes)
+        .expect("parse issue2007_nested_cell_pagination_42065.hwp");
+
+    // p2의 4×2·9×2 표와 p3의 9×2 continuation은 모두 outer wrapper(pi=2,
+    // ci=1)의 오른쪽 logical clip보다 넓다. 기준 PDF에는 세 outer vertical
+    // stroke가 보인다. 종전 p4 단일 보정은 child table의 edge가 아직 emit되기 전
+    // cell loop에서 실행돼 이 경로를 놓쳤다.
+    for (page_index, expected_borders) in [(1, 2), (2, 1)] {
+        let tree = doc
+            .build_page_render_tree(page_index)
+            .unwrap_or_else(|e| panic!("issue2007 p{} render tree: {e}", page_index + 1));
+        let outer = find_table_fragment(&tree.root, 2, 1).unwrap_or_else(|| {
+            panic!(
+                "issue2007 p{}의 outer wrapper pi=2 ci=1 표 조각",
+                page_index + 1
+            )
+        });
+        let wrapper = outer
+            .children
+            .iter()
+            .find(|child| !direct_nested_table_right_borders(child).is_empty())
+            .unwrap_or_else(|| {
+                panic!(
+                    "issue2007 p{} outer wrapper가 completed nested table을 직접 포함해야 함",
+                    page_index + 1
+                )
+            });
+        let right_borders = direct_nested_table_right_borders(wrapper);
+        assert_eq!(
+            right_borders.len(),
+            expected_borders,
+            "p{} direct nested table right border count",
+            page_index + 1
+        );
+        let clip_right = wrapper.bbox.x + wrapper.bbox.width;
+        for border_right in right_borders {
+            assert!(
+                clip_right + 0.01 >= border_right,
+                "p{} completed nested table right border is outside its wrapper clip: \
+                 clip_right={clip_right:.2}, border_right={border_right:.2}",
+                page_index + 1,
+            );
+        }
+    }
+}
+
+#[test]
 fn issue_2007_cell_vpos_reset_does_not_overlap_following_paragraphs() {
     let repo_root = env!("CARGO_MANIFEST_DIR");
     let hwp_path =
@@ -524,5 +631,34 @@ fn issue_4159_svg_terminal_bottom_border_is_visible_inside_outer_cell_clip() {
     assert!(
         clip_bottom + 0.01 >= line_bottom,
         "SVG bottom stroke가 outer cell clip에 잘린다: line_bottom={line_bottom:.3}, clip_bottom={clip_bottom:.3}\n{outer_clip}\n{bottom_line}"
+    );
+}
+
+#[test]
+fn issue_2007_continuation_viewport_does_not_center_nested_cell_content() {
+    let repo_root = env!("CARGO_MANIFEST_DIR");
+    let hwp_path =
+        Path::new(repo_root).join("samples/basic/issue2007_nested_cell_pagination_42065.hwp");
+    let bytes =
+        fs::read(&hwp_path).unwrap_or_else(|e| panic!("read {}: {}", hwp_path.display(), e));
+    let doc = rhwp::wasm_api::HwpDocument::from_bytes(&bytes)
+        .expect("parse issue2007_nested_cell_pagination_42065.hwp");
+
+    // 한컴 PDF p10에서는 "독점규제 …"가 1×1 하위 표의 첫 줄로 상단 경계 바로
+    // 뒤에 온다. 종전 rhwp는 부모 RowBreak continuation의 clip window를 모른 채
+    // 이 하위 Center 셀을 원본 1,296px 높이에서 다시 중앙 정렬해 약 250px 빈
+    // 영역을 만들었다. 이 위치 계약은 단순 TextLine overlap=0으로는 검출되지 않는다.
+    let tree = doc
+        .build_page_render_tree(9)
+        .expect("issue2007 p10 render tree");
+    let needle = "독점규제 및 공정거래에 관한 법률";
+    let table = find_innermost_table_containing_text(&tree.root, needle)
+        .expect("p10 nested table containing the 공정거래 law heading");
+    let text_top = first_text_run_top(table, needle).expect("p10 공정거래 law heading text run");
+    assert!(
+        text_top <= table.bbox.y + 40.0,
+        "p10 nested continuation viewport centered its first line instead of starting at the visible table top: \
+         table_y={:.1}, text_y={text_top:.1}",
+        table.bbox.y,
     );
 }

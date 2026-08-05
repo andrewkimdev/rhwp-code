@@ -9,7 +9,9 @@ use super::super::{hwpunit_to_px, ShapeStyle};
 use super::border_rendering::{
     build_row_col_x, collect_cell_borders, render_edge_borders, render_transparent_borders,
 };
-use super::table_layout::{calc_nested_split_rows, NestedTableSplit};
+use super::table_layout::{
+    calc_nested_split_rows, extend_completed_nested_table_border_clips, NestedTableSplit,
+};
 use super::text_measurement::{estimate_text_width, resolved_to_text_style};
 use super::utils::find_bin_data;
 use super::{
@@ -2354,6 +2356,12 @@ impl LayoutEngine {
                 table_y,
             ));
         }
+
+        // Partial-table cells receive their nested table edge nodes only
+        // after the fragment cell loop. Preserve direct nested outer vertical
+        // borders in the horizontal clip without widening the RowBreak
+        // continuation viewport (issue2007 p2-p3).
+        extend_completed_nested_table_border_clips(&mut table_node);
 
         // [Task #1860/#3820] 노드-자식 포섭 불변: 분할 표 조각의 셀 내 절대위치 shape
         // (as-char 텍스트박스/그림 등)가 유닛 기반 셀 높이를 초과해 그려지면 표 노드
