@@ -5,9 +5,9 @@
 - **최신 동기화 기준**: `upstream/devel` `d3fb9de7c0c0648e3d8126c25467e2c78a054337`
 - **첫 devel merge head**: `b0be8673149bbd00ebb67f6d5e62b70025cfa612`
 - **최종 code head**: `5eeab15fd291b2b4b27d3b8a77498fcc0ca5723b`
-- **상태**: PR #4032 review F1–F6 보정 완료, 최종 code head full CI 통과, ready 전환과 review-only
-  기록 push 단계
-- **기록일**: 2026-08-05 KST
+- **merge commit**: `8d48a4c07fad6bcccebbc2adddef4685456bb313`
+- **상태**: 완료. PR #4032 merge, canary PR #4078 실측 완료
+- **기록일**: 2026-08-05 KST, canary 실측 2026-08-06 KST
 
 ## 선행 canary
 
@@ -84,12 +84,53 @@ full lane에서 확인했다.
 - 최종 aggregate: shard `3714+753+784+1=5252`, expected runnable `5252` 일치, preflight
   `no-trailing-review-only-commits`로 full lane 진입, `frontend_mode=package`로 Frontend unit gates만 skip
 
+- review-only trailing commit `3a5c6587c`: preflight가 `fast_pass=true`,
+  `reason=build-and-test-green:success`, `candidate_sha=5eeab15fd`로 `5eeab15fd`의 녹색
+  `Build & Test`를 재사용했다. heavy worker 전량 skip, CI 89초·CodeQL 70초·Render Diff 22초.
+- merge 뒤 devel push full lane(`8d48a4c07`): CI 31026511582, CodeQL 31026511634 통과.
+
+## canary 실측 — PR #4078
+
+Stage 3 canary [PR #3951](https://github.com/edwardkim/rhwp/pull/3951)과 같은 2파일 frontend-only
+변경(`rhwp-studio/src/command/shortcut-map.ts`, `rhwp-studio/tests/shortcut-map.test.ts`)을 써서
+Stage 4만이 차이가 되도록 대조했다. canary head는 `eac12e9e3`, base는 `8d48a4c07`다.
+classifier v2는 `frontend_mode=unit`, `render_required=false`, `rust_required=false`,
+`native_skia_required=false`, `reason=classified:studio-unit`을 판정했다.
+
+| job | #3951 Stage 3 | #4078 Stage 4 |
+| --- | --- | --- |
+| CI preflight | 9s | 7s |
+| Frontend unit gates | 59s | 127s |
+| Frontend package gates | skipped | skipped |
+| Lint (fmt, clippy, WASM check) | 218s | skipped |
+| build-test-archive-a / -b / -slow | 387s / 239s / 324s | 모두 skipped |
+| test-regular-shard-1 / -2 / -3 | 202s / 180s / 133s | 모두 skipped |
+| test-slow-shard | 228s | skipped |
+| Native Skia tests | 368s | skipped |
+| WASM Build | skipped | skipped |
+| Build & Test aggregate | 8s success | 3s success |
+
+| workflow | #3951 runner | #4078 runner | #3951 wall | #4078 wall |
+| --- | --- | --- | --- | --- |
+| CI | 2,355s | 137s | 857s | 148s |
+| CodeQL | 875s | 794s | 655s | 575s |
+| Render Diff | 8s | 8s | 12s | 12s |
+| 합계 | 3,238s | 939s | 857s | 575s |
+
+Stage 4가 새로 생략한 9개 job의 직접 runner time은 2,279초다. CI workflow runner time은 2,218초
+(94.2%), 세 workflow 합계는 2,299초(71.0%) 줄었고 wall clock은 857초에서 575초가 됐다.
+`Build & Test` aggregate가 이 `success|skipped` 조합을 수용해 Stage 4 진리표도 실제 selective run에서
+검증됐다.
+
+Frontend unit gates의 59초→127초 증가는 조건화 결과가 아니라 Studio 테스트가 764건으로 늘어난 영향과
+runner 편차이므로 절감 계산에서 분리한다. CodeQL 차이(875초→794초)도 runner 편차이며, 언어 조건화는
+Stage 5 범위라 3개 언어를 그대로 분석했다.
+
+측정 뒤 #4078은 merge하지 않고 close했고 branch·worktree를 정리했다.
+
 ## 다음 단계
 
-1. review-only trailing commit push와 ready 전환 뒤 preflight fast-pass와 required `Build & Test`
-   성공을 확인한다. 기대 candidate는 `5eeab15fd`다.
-2. 사용자가 CI 통과 후 요청하면 collaborator self-merge 절차를 진행한다.
-3. merge 뒤 frontend-only canary에서 Rust lint·세 builder·네 worker·Native Skia가 모두 `skipped`되고
-   `Build & Test` aggregate가 성공하는지 실측한다.
-4. #3810 직후 4.73GB cache 기준선과 다음 cache sweep 직후 총량을 대조한 뒤 Stage 5 CodeQL 언어
-   조건화로 진행한다.
+1. #3810 직후 4.73GB cache 기준선과 다음 cache sweep 직후 총량을 대조한다.
+2. Stage 5 CodeQL 언어 조건화로 진행한다. Stage 4 이후 frontend-only PR의 critical path가 CI에서
+   CodeQL로 옮겨갔고, wall clock 575초 중 `Analyze (rust)` 단독이 563초를 차지한다. 언어 조건화가
+   적용되면 `Analyze (javascript-typescript)` 수준(약 140초)까지 내려갈 여지가 있다.
