@@ -330,7 +330,27 @@ fn has_fragment_border_line(table_node: &RenderNode, x1: f64, y1: f64, x2: f64, 
     })
 }
 
-/// Repair only the frame geometry of a true nested-table continuation.
+fn translate_render_subtree_y(node: &mut RenderNode, delta_y: f64) {
+    node.bbox.y += delta_y;
+    if let RenderNodeType::Line(line) = &mut node.node_type {
+        line.y1 += delta_y;
+        line.y2 += delta_y;
+    }
+    for child in &mut node.children {
+        translate_render_subtree_y(child, delta_y);
+    }
+}
+
+/// A `vpos=0` line with no text is the explicit empty spacer stored between
+/// a completed nested table and its following source block.
+fn is_empty_vpos_spacer_line(node: &RenderNode) -> bool {
+    matches!(&node.node_type, RenderNodeType::TextLine(line) if line.vpos == Some(0))
+        && node.children.iter().all(|child| {
+            matches!(&child.node_type, RenderNodeType::TextRun(run) if run.text.trim().is_empty())
+        })
+}
+
+/// Repair the frame and source-flow seam of a true nested-table continuation.
 ///
 /// A direct nested table keeps its document-global coordinates even when its
 /// owning 1×1 RowBreak cell is a clipped page fragment. SVG/Canvas therefore
@@ -338,10 +358,16 @@ fn has_fragment_border_line(table_node: &RenderNode, x1: f64, y1: f64, x2: f64, 
 /// fragment's top edge: the source top is still above the clip rectangle. A
 /// few-pixel terminal remnant is the inverse case and must be suppressed.
 ///
-/// Do not alter the table bbox or its flow height here. This is deliberately a
-/// paint-only correction after all native table borders have been emitted, so
-/// it cannot reveal text from the preceding/following fragment (42065
-/// p11/p13/p15).
+/// The source also retains the completed table's following empty `vpos=0`
+/// spacer.  If only a sub-line table tail reaches the new viewport, that
+/// consumed spacer otherwise starts a second time in the new cell and moves
+/// the next real source block down by one line advance (42065 p10/p13).
+/// Normalize that exact two-line seam after layout; it changes neither the
+/// pagination cut nor a non-empty text line's ownership.
+///
+/// This runs after native table edges are emitted. It never changes a table
+/// with current-page content, and the small source-spacer translation is
+/// limited to the direct siblings following a suppressed residual tail.
 fn repair_clipped_nested_table_fragment_frame(tree: &mut PageRenderTree, node: &mut RenderNode) {
     let is_clipped_cell = matches!(
         &node.node_type,
@@ -353,10 +379,17 @@ fn repair_clipped_nested_table_fragment_frame(tree: &mut PageRenderTree, node: &
 
     let clip_top = node.bbox.y;
     let clip_bottom = node.bbox.y + node.bbox.height;
-    for table_node in &mut node.children {
-        if !matches!(table_node.node_type, RenderNodeType::Table(_)) {
+    for table_index in 0..node.children.len() {
+        if !node.children[table_index].visible
+            || !matches!(
+                node.children[table_index].node_type,
+                RenderNodeType::Table(_)
+            )
+        {
             continue;
         }
+
+        let table_node = &mut node.children[table_index];
 
         let table_top = table_node.bbox.y;
         let table_bottom = table_top + table_node.bbox.height;
@@ -375,9 +408,51 @@ fn repair_clipped_nested_table_fragment_frame(tree: &mut PageRenderTree, node: &
             // Only a sub-line tail reaches this page. Hiding its source edge
             // prevents the previous table's bottom border from appearing as a
             // false top border without affecting any current-page content.
-            for child in &mut table_node.children {
-                if matches!(child.node_type, RenderNodeType::Line(_)) {
-                    child.visible = false;
+            table_node.visible = false;
+
+            // The tail's following empty `vpos=0` source line was consumed on
+            // the preceding fragment.  The renderer still lays it out at the
+            // new cell's top, so its line box and following advance are
+            // incorrectly paid twice. Drop that empty spacer and shift its
+            // following source siblings by precisely those two stored
+            // advances. This is
+            // deliberately tighter than a global continuation offset: p9 has
+            // a real spacer at its new block and must retain it, while p10/p13
+            // have an actual table tail in this viewport.
+            let following_lines: Vec<(f64, f64)> = node
+                .children
+                .iter()
+                .skip(table_index + 1)
+                .filter(|child| child.visible && child.bbox.y >= clip_top)
+                .filter(|child| matches!(child.node_type, RenderNodeType::TextLine(_)))
+                .map(|child| (child.bbox.y, child.bbox.height))
+                .collect();
+            if let (Some((spacer_y, _)), Some((next_line_y, _))) =
+                (following_lines.first(), following_lines.get(1))
+            {
+                let spacer_index = node
+                    .children
+                    .iter()
+                    .enumerate()
+                    .skip(table_index + 1)
+                    .find(|(_, child)| {
+                        child.visible
+                            && (child.bbox.y - *spacer_y).abs() <= NESTED_FRAGMENT_EDGE_EPSILON_PX
+                    })
+                    .map(|(index, _)| index);
+                let line_advance = next_line_y - spacer_y;
+                if spacer_index
+                    .is_some_and(|index| is_empty_vpos_spacer_line(&node.children[index]))
+                    && spacer_y - clip_top <= 24.0
+                    && line_advance > NESTED_FRAGMENT_EDGE_EPSILON_PX
+                    && line_advance <= 16.0
+                {
+                    let source_seam_height = line_advance * 2.0;
+                    let spacer_index = spacer_index.expect("checked empty spacer index");
+                    node.children[spacer_index].visible = false;
+                    for child in node.children.iter_mut().skip(spacer_index + 1) {
+                        translate_render_subtree_y(child, -source_seam_height);
+                    }
                 }
             }
             continue;

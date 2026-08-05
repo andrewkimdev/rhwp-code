@@ -720,6 +720,12 @@ fn issue_2007_continuation_frame_restarts_and_drops_previous_page_residual() {
         !has_visible_full_width_horizontal_line_near(&p10.root, 84.21, 719.16, 117.15),
         "p10 paints the previous fragment's residual bottom border as a false top frame"
     );
+    let p10_heading_top = first_text_run_top(&p10.root, "조사기능 관련 타기관 입법례")
+        .expect("p10 heading after residual table tail");
+    assert!(
+        (126.5..=128.5).contains(&p10_heading_top),
+        "p10 must remove the previous fragment's retained empty-spacer reservation, got heading y={p10_heading_top}"
+    );
 
     let p13 = doc
         .build_page_render_tree(12)
