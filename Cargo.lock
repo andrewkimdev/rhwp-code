@@ -1554,7 +1554,7 @@ checksum = "b4ac048d71ede7ee76d585517add45da530660ef4390e49b098733c6e897f254"
 [[package]]
 name = "usvg"
 version = "0.45.1"
-source = "git+https://github.com/andrewkimdev/resvg.git?branch=patch%2Fv0.45.1-text-flatten-skip#3a2e886db7120e749b6f60d71fd8cd3de224612c"
+source = "git+https://github.com/andrewkimdev/resvg.git?branch=patch%2Fv0.45.1-glyph-outline-cache#f4ff03b4af57337c74603dd96bc3c2f7c55da9d3"
 dependencies = [
  "base64",
  "bincode",
