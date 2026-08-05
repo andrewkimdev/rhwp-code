@@ -380,6 +380,63 @@ fn max_retries_recovers_from_transient_failure() {
 }
 
 #[test]
+fn exit_two_is_not_retried() {
+    let bed = TestBed::new("usage-error-no-retry");
+    bed.add_hwp("a.hwp");
+    let config = bed.write_config(&pdf_only_config(json!({ "max_retries": 3 })));
+
+    let output = bed.run(
+        &["--config", config.to_str().unwrap(), "--jobs", "1"],
+        &[
+            ("MOCK_RHWP_FAIL_MATCH", ".hwp"),
+            ("MOCK_RHWP_FAIL_EXIT_CODE", "2"),
+        ],
+    );
+
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "stderr:\n{}",
+        stderr_of(&output)
+    );
+    assert_eq!(bed.invocations("export-pdf"), 1, "exit 2 must not retry");
+    assert_eq!(summary_count(&stdout_of(&output), "Failed conversions:"), 1);
+}
+
+#[test]
+fn partial_format_failure_fails_the_document() {
+    let bed = TestBed::new("partial-format-failure");
+    bed.add_hwp("a.hwp");
+    let config = bed.write_config(&json!({
+        "formats": formats(true, true, false, false),
+        "behavior": { "max_retries": 0 }
+    }));
+
+    let output = bed.run(
+        &["--config", config.to_str().unwrap(), "--jobs", "1"],
+        &[
+            ("MOCK_RHWP_FAIL_MATCH", ".hwp"),
+            ("MOCK_RHWP_FAIL_SUBCOMMAND", "export-png"),
+        ],
+    );
+
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "stderr:\n{}",
+        stderr_of(&output)
+    );
+    assert_eq!(bed.invocations("export-pdf"), 1);
+    assert_eq!(bed.invocations("export-png"), 1);
+    assert!(bed.output.join("pdf").join("a.pdf").is_file());
+    assert_eq!(
+        summary_count(&stdout_of(&output), "Successful conversions:"),
+        0
+    );
+    assert_eq!(summary_count(&stdout_of(&output), "Failed conversions:"), 1);
+}
+
+#[test]
 fn collect_failed_copies_failed_inputs() {
     let bed = TestBed::new("collect-failed");
     bed.add_hwp("good.hwp");
@@ -430,6 +487,26 @@ fn create_format_dirs_false_uses_flat_layout() {
     assert!(bed.output.join("doc").join("doc.txt").is_file());
     assert!(!bed.output.join("pdf").exists());
     assert!(!bed.output.join("text").exists());
+}
+
+#[test]
+fn duplicate_hwp_and_hwpx_stems_are_rejected_before_conversion() {
+    let bed = TestBed::new("duplicate-stem");
+    bed.add_hwp("same.hwp");
+    bed.add_hwp("same.hwpx");
+    let config = bed.write_config(&pdf_only_config(json!({})));
+
+    let output = bed.run(&["--config", config.to_str().unwrap()], &[]);
+
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "stderr:\n{}",
+        stderr_of(&output)
+    );
+    assert!(stderr_of(&output).contains("출력 경로 충돌"));
+    assert_eq!(bed.invocations("export-pdf"), 0);
+    assert!(!bed.output.exists());
 }
 
 #[test]

@@ -14,8 +14,10 @@
 //!   랑데부 장치다 — 상한이 1이면 아무리 기다려도 2가 될 수 없다.
 //! - `MOCK_RHWP_WAIT_TIMEOUT_MS`: 위 대기의 상한 (기본 5000).
 //! - `MOCK_RHWP_FAIL_MATCH`: 입력 경로에 이 부분 문자열이 포함되면 실패 후보.
+//! - `MOCK_RHWP_FAIL_SUBCOMMAND`: 지정하면 그 하위 명령만 실패 후보로 취급한다.
 //! - `MOCK_RHWP_FAIL_TIMES`: 실패 후보 입력에 대해 (하위 명령별로) 처음 N번의
 //!   시도만 실패시키고 그 다음부터 성공한다 (기본: 항상 실패).
+//! - `MOCK_RHWP_FAIL_EXIT_CODE`: 실패 후보의 종료 코드 (기본 1).
 //! - `MOCK_RHWP_CONTENT`: 산출 파일 첫 줄에 쓸 내용 표식 (기본 "mock-output").
 
 use std::env;
@@ -136,7 +138,10 @@ fn run() -> i32 {
     // 실패 시뮬레이션 — FAIL_MATCH 에 걸린 입력은 (명령별) 시도 횟수를 세어
     // 처음 FAIL_TIMES 번 실패한다.
     if let Ok(pattern) = env::var("MOCK_RHWP_FAIL_MATCH") {
-        if input.contains(&pattern) {
+        let matches_subcommand = env::var("MOCK_RHWP_FAIL_SUBCOMMAND")
+            .map(|expected| expected == subcommand)
+            .unwrap_or(true);
+        if input.contains(&pattern) && matches_subcommand {
             let fail_times: u64 = env_parse("MOCK_RHWP_FAIL_TIMES", u64::MAX);
             let attempts_so_far = if let Some(state_dir) = &state_dir {
                 let stem = Path::new(&input)
@@ -165,7 +170,7 @@ fn run() -> i32 {
             };
             if attempts_so_far < fail_times {
                 eprintln!("mock-rhwp: simulated failure for {}", input);
-                return 1;
+                return env_parse("MOCK_RHWP_FAIL_EXIT_CODE", 1i32).max(1);
             }
         }
     }

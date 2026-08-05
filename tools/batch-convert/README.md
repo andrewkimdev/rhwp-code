@@ -86,6 +86,11 @@ output/
 └── 문서1/문서1_001.png, 문서1_001.svg, 문서1_001.txt ...
 ```
 
+같은 상대 경로에서 확장자를 제외한 파일명이 같은 입력(예: `same.hwp`와
+`same.hwpx`)은 PDF 파일과 페이지별 출력 폴더가 충돌한다. 도구는 한 결과가 다른
+결과를 덮어쓰지 않도록 **변환을 시작하기 전에** 이 조합을 오류로 거부하며, 산출물을
+하나도 만들지 않는다. 입력 파일명을 구분한 뒤 다시 실행해야 한다.
+
 변환에 실패한 원본은 `behavior.collect_failed: true` 일 때
 `output/failed/<상대경로>` 로 복사된다.
 
@@ -171,7 +176,7 @@ output/
 | `create_format_dirs` | `true` | 포맷별 하위 폴더(`pdf/`·`png/`·`svg/`·`text/`) 생성 여부 — 위 "출력 구조" 참조 |
 | `collect_failed` | `false` | 변환 실패 원본을 `<출력>/failed/` 로 복사 |
 | `fail_fast` | `false` | 파일 실패가 확정되는 즉시 아직 시작하지 않은 파일을 건너뛴다 (진행 중이던 파일은 마저 끝난다) |
-| `max_retries` | `3` | 포맷별 rhwp 호출 실패 시 추가 재시도 횟수 (총 시도 = 1 + N) |
+| `max_retries` | `3` | 포맷별 rhwp 런타임 실패(exit 1) 시 추가 재시도 횟수 (총 시도 = 1 + N). 사용법·기능 부재(exit 2)는 재시도하지 않음 |
 | `skip_existing` | `false` | 활성 포맷의 산출물이 **전부** 존재하는 파일을 통째로 건너뛴다 |
 
 산출물 존재 판정: PDF 는 파일 존재, PNG/SVG/텍스트는 해당 확장자 파일이 1개
@@ -203,8 +208,9 @@ rhwp CLI 가 파일 단위로 거부할 조합은 배치 시작 전에 걸러 �
 
 ## 결과 집계와 종료 코드
 
-파일 하나는 활성 포맷 중 **하나 이상** 성공하면 Successful, 전부 실패하면
-Failed(실패 사유 목록에 표시), 시도 없이 건너뛰면 Skipped 로 집계된다.
+파일 하나는 활성화한 포맷이 **모두** 성공해야 Successful 이다. 일부 포맷만
+성공해도 Failed 로 집계하고 exit 1을 반환하며, 이미 생성된 다른 포맷 산출물은
+보존한다. 시도 없이 건너뛴 파일만 Skipped 로 집계된다.
 
 ```
 ================== CONVERSION SUMMARY ==================
@@ -239,9 +245,10 @@ cargo test -p batch-convert
 `mock-rhwp`(`src/bin/mock_rhwp.rs`, 테스트 전용)를 `--rhwp-bin` 으로 주입해
 검증한다. 동시 실행 수는 벽시계 시간이 아니라 mock 이 남기는 표식 파일로
 판정한다: `--jobs 1` 이면 최대 동시 실행 1, `--jobs 4` 면 2 이상. 그 외
-`--jobs 0` 거부, overwrite/skip_existing/fail_fast/max_retries/collect_failed/
-create_format_dirs 동작, 포맷 옵션의 rhwp 플래그 전달, unknown field 거부를
-회귀 테스트로 고정한다.
+`--jobs 0` 거부, HWP/HWPX stem 충돌 사전 거부, overwrite/skip_existing/fail_fast/
+max_retries(usage 오류 비재시도)/collect_failed/create_format_dirs 동작, 부분 포맷
+실패의 exit 1, 포맷 옵션의 rhwp 플래그 전달, unknown field 거부를 회귀 테스트로
+고정한다.
 
 ## 구조
 

@@ -4,9 +4,12 @@ use anyhow::{Context, Result};
 use log::*;
 use rayon::prelude::*;
 use regex::Regex;
+use std::collections::BTreeMap;
+use std::error::Error;
+use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, ExitStatus};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use walkdir::WalkDir;
@@ -92,13 +95,79 @@ pub fn find_rhwp_binary(explicit: Option<PathBuf>) -> Option<PathBuf> {
     None
 }
 
+/// rhwp 하위 명령의 실패 종류를 보존한다. batch-convert는 rhwp의 종료 코드
+/// 계약을 소비하므로, 문자열만 남기면 usage/capability 오류(exit 2)를 런타임
+/// 오류처럼 재시도하는 문제가 생긴다.
+#[derive(Debug)]
+enum RhwpExportError {
+    Spawn {
+        subcommand: String,
+        input: PathBuf,
+        source: std::io::Error,
+    },
+    Exit {
+        subcommand: String,
+        input: PathBuf,
+        status: ExitStatus,
+    },
+}
+
+impl RhwpExportError {
+    /// rhwp CLI의 exit 1은 문서별 런타임 실패이므로 재시도할 수 있다. exit 2는
+    /// 사용법 또는 feature 부재로, 같은 인자를 다시 실행해도 해결되지 않는다.
+    fn is_retryable(&self) -> bool {
+        matches!(
+            self,
+            Self::Exit { status, .. } if status.code() == Some(1)
+        )
+    }
+}
+
+impl fmt::Display for RhwpExportError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Spawn {
+                subcommand,
+                input,
+                source,
+            } => write!(
+                f,
+                "failed to spawn rhwp {} for {}: {}",
+                subcommand,
+                input.display(),
+                source
+            ),
+            Self::Exit {
+                subcommand,
+                input,
+                status,
+            } => write!(
+                f,
+                "rhwp {} exited with {} for {}",
+                subcommand,
+                status,
+                input.display()
+            ),
+        }
+    }
+}
+
+impl Error for RhwpExportError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::Spawn { source, .. } => Some(source),
+            Self::Exit { .. } => None,
+        }
+    }
+}
+
 fn run_rhwp_export(
     rhwp_bin: &Path,
     subcommand: &str,
     input: &Path,
     output: &Path,
     extra_args: &[String],
-) -> Result<()> {
+) -> std::result::Result<(), RhwpExportError> {
     let status = Command::new(rhwp_bin)
         .arg(subcommand)
         .arg(input)
@@ -106,15 +175,18 @@ fn run_rhwp_export(
         .arg(output)
         .args(extra_args)
         .status()
-        .with_context(|| format!("failed to spawn rhwp {}", subcommand))?;
+        .map_err(|source| RhwpExportError::Spawn {
+            subcommand: subcommand.to_string(),
+            input: input.to_path_buf(),
+            source,
+        })?;
 
     if !status.success() {
-        anyhow::bail!(
-            "rhwp {} exited with {} for {}",
-            subcommand,
+        return Err(RhwpExportError::Exit {
+            subcommand: subcommand.to_string(),
+            input: input.to_path_buf(),
             status,
-            input.display()
-        );
+        });
     }
 
     Ok(())
@@ -157,14 +229,6 @@ impl BatchConverter {
         // Validate input directory
         if !input_dir.exists() {
             anyhow::bail!("Input directory does not exist: {}", input_dir.display());
-        }
-
-        // Create output directory if it doesn't exist
-        if !output_dir.exists() {
-            fs::create_dir_all(&output_dir).context(format!(
-                "Failed to create output directory: {}",
-                output_dir.display()
-            ))?;
         }
 
         let mut converter = BatchConverter {
@@ -300,7 +364,62 @@ impl BatchConverter {
         Ok(())
     }
 
+    /// PDF와 페이지별 출력 폴더 모두 확장자를 제외한 stem을 사용한다. 따라서
+    /// `same.hwp`와 `same.hwpx`는 같은 target을 가리킨다. 변환을 시작한 뒤에는
+    /// 병렬 순서에 따라 한 결과가 다른 결과를 덮어쓰므로, 모든 출력 전에 거부한다.
+    fn validate_output_collisions(&self) -> Result<()> {
+        let mut groups: BTreeMap<String, Vec<&FileEntry>> = BTreeMap::new();
+
+        for file in &self.files {
+            let parent = file.relative_path.parent().unwrap_or(Path::new(""));
+            let stem = file
+                .relative_path
+                .file_stem()
+                .ok_or_else(|| anyhow::anyhow!("Invalid file name: {}", file.path.display()))?;
+            // macOS/Windows 기본 파일시스템에서도 안전하도록 대소문자 차이도 같은
+            // 출력 키로 본다. 실제 출력 이름은 기존 규약 그대로다.
+            let key = format!(
+                "{}\u{0}{}",
+                parent.to_string_lossy(),
+                stem.to_string_lossy()
+            )
+            .to_lowercase();
+            groups.entry(key).or_default().push(file);
+        }
+
+        let conflicts: Vec<String> = groups
+            .into_values()
+            .filter(|entries| entries.len() > 1)
+            .map(|entries| {
+                entries
+                    .iter()
+                    .map(|entry| entry.relative_path.display().to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            })
+            .collect();
+
+        if !conflicts.is_empty() {
+            anyhow::bail!(
+                "출력 경로 충돌: 확장자를 제외한 같은 상대 경로/파일명을 가진 입력은 함께 변환할 수 없습니다: {}",
+                conflicts.join("; ")
+            );
+        }
+
+        Ok(())
+    }
+
     pub fn convert_batch(&self, dry_run: bool) -> Result<ConversionResult> {
+        // pattern filter가 적용된 최종 입력 집합을 기준으로 충돌을 확인한다. 이
+        // 검증은 출력 폴더 생성보다 앞서야 충돌 시 어떤 산출물도 남기지 않는다.
+        self.validate_output_collisions()?;
+        if !dry_run && !self.output_dir.exists() {
+            fs::create_dir_all(&self.output_dir).context(format!(
+                "Failed to create output directory: {}",
+                self.output_dir.display()
+            ))?;
+        }
+
         let start_time = std::time::Instant::now();
         let total_files = self.files.len();
 
@@ -440,7 +559,6 @@ impl BatchConverter {
         }
 
         let mut attempted = 0usize;
-        let mut succeeded = 0usize;
         let mut format_errors: Vec<String> = Vec::new();
 
         for format in self.enabled_formats() {
@@ -460,7 +578,6 @@ impl BatchConverter {
             attempted += 1;
             match self.export_with_retry(format, input_path, &target, dry_run) {
                 Ok(()) => {
-                    succeeded += 1;
                     debug!(
                         "Successfully converted to {}: {}",
                         format.dir_name(),
@@ -483,7 +600,7 @@ impl BatchConverter {
             // 활성 포맷 전부가 overwrite=false 로 건너뛰어졌다.
             return Ok(ConversionFileResult::Skipped);
         }
-        if succeeded > 0 {
+        if format_errors.is_empty() {
             Ok(ConversionFileResult::Success)
         } else {
             Err(format_errors.join("; "))
@@ -504,7 +621,11 @@ impl BatchConverter {
         loop {
             match self.export_once(format, input, target, dry_run) {
                 Ok(()) => return Ok(()),
-                Err(e) if attempt < max_retries => {
+                Err(e)
+                    if e.downcast_ref::<RhwpExportError>()
+                        .is_some_and(RhwpExportError::is_retryable)
+                        && attempt < max_retries =>
+                {
                     attempt += 1;
                     warn!(
                         "Retrying {} for {} (attempt {}/{}): {:#}",
@@ -552,13 +673,13 @@ impl BatchConverter {
             })?;
         }
 
-        run_rhwp_export(
+        Ok(run_rhwp_export(
             &self.rhwp_bin,
             format.subcommand(),
             input,
             target,
             &self.format_args(format),
-        )
+        )?)
     }
 
     /// config 의 포맷 옵션을 rhwp CLI 플래그로 그대로 옮긴다. 여기서 플래그로
