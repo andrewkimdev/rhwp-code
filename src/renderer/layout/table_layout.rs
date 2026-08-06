@@ -5800,12 +5800,43 @@ impl LayoutEngine {
             }
             let para_style = styles.para_styles.get(p.para_shape_id as usize);
             let is_empty_spacer_para = p.text.trim().is_empty() && p.controls.is_empty();
-            let preserve_vpos_empty_spacer = preserve_linear_single_cell_vpos
-                && is_empty_spacer_para
-                && p.line_segs.len() == 1
-                && p.line_segs
-                    .first()
-                    .is_some_and(|seg| seg.vertical_pos >= cell_first_vpos);
+            let preserve_forward_stored_empty_spacer = {
+                let profile = self.profile.get();
+                (profile.native_hwp5_layout() || profile.hwp5_origin_hwpx())
+                    && is_empty_spacer_para
+                    && matches!(p.line_segs.as_slice(), [seg] if !line_seg_is_synthetic(seg))
+                    && match (p.line_segs.first(), cell.paragraphs.get(pi + 1)) {
+                        (Some(seg), Some(next_para)) if next_para.controls.is_empty() => {
+                            match next_para.line_segs.first() {
+                                Some(next) if !line_seg_is_synthetic(next) => {
+                                    let full_line_box = seg.line_height > 0
+                                        && next.line_height > 0
+                                        && i64::from(seg.line_height) * 4
+                                            >= i64::from(next.line_height) * 3;
+                                    full_line_box
+                                        && next.vertical_pos >= seg.vertical_pos + seg.line_height
+                                }
+                                _ => false,
+                            }
+                        }
+                        _ => false,
+                    }
+            };
+            let preserve_vpos_empty_spacer = is_empty_spacer_para
+                && ((preserve_linear_single_cell_vpos
+                    && p.line_segs.len() == 1
+                    && p.line_segs
+                        .first()
+                        .is_some_and(|seg| seg.vertical_pos >= cell_first_vpos))
+                    // #2430 물리 16쪽의 1×1 비인라인 표는 vertical_offset이
+                    // 1801HU라 선형 vpos 모드가 아니지만, p[0] 빈 Enter 뒤의
+                    // p[1]이 0→1800HU로 전진하고 빈 줄 높이도 다음 본문 줄의
+                    // 82%다. 이 저장 순방향 full-line box는 overlay가 아니므로
+                    // 0높이로 접지 않는다. 반면 작은 장식 간격용 빈 문단은 기존
+                    // collapse를 유지한다(hwpx_sample2.hwp: 500~600/1000HU).
+                    // 다음 문단이 중첩 control을 host하면 그 vpos는 control 배치
+                    // 좌표이므로 빈 Enter의 독립 줄박스 증거로 사용하지 않는다.
+                    || preserve_forward_stored_empty_spacer);
             let collapse_empty_rowbreak_spacer = is_block_rowbreak
                 && table.row_count == 1
                 && table.col_count == 1

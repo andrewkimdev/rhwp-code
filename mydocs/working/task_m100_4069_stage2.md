@@ -34,14 +34,17 @@ orphan/sliver 완화 규칙으로 흡수하지 않는다.
 
 ### 빈 Enter와 #2430 회귀
 
-작업지시자가 #2430 정답지의 14쪽을 한컴 편집기와 대조해 셀 안의 빈 Enter가 무시되는 차이를
-확인했다. 진단 결과 그 빈 문단은 비선형 부모 셀에서 `0HU`로 rewind하지만 한컴의 저장 프레임
-증거가 아니다. 이를 경계로 승격하면 39쪽 정본이 38쪽으로 줄었다.
+초기 14쪽 대조에서는 셀 안의 빈 Enter가 무시된다고 판단했지만, 작업지시자가 물리 16쪽의
+셀 `(0,0)`을 다시 확인해 선두 빈 Enter 한 줄이 실제로 조판되는 것을 발견했다. IR에도 빈
+`p[0]`의 저장 줄(`vpos=0`, `line_height=900HU`)과 다음 `p[1]`의 `vpos=1800HU` 전진이 남아
+있었다. 기존 구현은 비인라인 1×1 RowBreak 표의 빈 문단을 일괄 0높이로 접어 첫 문장을 표
+상단에서 `0.94px` 아래에 그렸지만, 한컴 PDF는 약 `27px`의 선두 빈 줄을 둔다.
 
-따라서 텍스트·control이 없는 실제 빈 문단은 1×1 선형 RowBreak 부모의 저장 vpos를 보존하는
-경우에만 프레임 증거로 쓴다. 텍스트 또는 control이 있는 다음 문단은 기존 의미 판정을 따른다.
-`issue_2430_cell_rewrap_threshold_no_oversplit`의 39쪽 계약이 과다분할 40쪽과 과소분할 38쪽을
-모두 검출하도록 설명을 보강했다.
+수정은 두 의미를 분리한다. 빈 문단 뒤 저장 줄이 최소 한 줄높이만큼 순방향으로 전진하면 실제
+줄박스 높이는 보존한다. 반면 빈 문단의 `vpos` rewind는 그 자체만으로 저장 프레임·페이지
+경계로 승격하지 않는다. 그 결과 물리 16쪽의 첫 문장 간격은 `24.9px`로 회복하면서도 문서는
+한컴 정본과 같은 39쪽을 유지한다. `issue_2430_page16_keeps_leading_blank_paragraph_in_cell`이
+빈 줄 높이를, `issue_2430_cell_rewrap_threshold_no_oversplit`이 39쪽 계약을 각각 고정한다.
 
 ## 검증
 
@@ -50,10 +53,12 @@ orphan/sliver 완화 규칙으로 흡수하지 않는다.
 - `cargo test --profile release-test --tests`: exit 0
   - 라이브러리 3,290개: 3,282 passed, 8 ignored, 0 failed
   - 모든 통합 test binary 통과
-- 핵심 focused 회귀 33개 통과
+- 핵심 focused 회귀 34개 통과
   - #4069 4개: 17쪽, 2·3쪽 cursor, 10·11쪽 frame, 15·16쪽 child table
-  - #2430 1개: 39쪽
+  - #2430 2개: 39쪽, 물리 16쪽 셀 선두 빈 Enter 높이
   - #1891, #2279, #3637, `issue_rowbreak_chart_overlap` 포함
+- `overflow_cell_baseline` 통과: 장식 간격용 짧은 빈 문단과 control host 문단은
+  새 full-line 보존 조건에서 제외해 `hwpx_sample2.hwp`의 기존 overflow 3줄 계약 유지
 - Native Skia: 라이브러리 58 passed, #2225 2 passed, direct PDF 4 passed
 - `cargo fmt --check`, `git diff --check`: 통과
 - `cargo clippy --all-targets -- -D warnings`: 통과
@@ -64,9 +69,11 @@ orphan/sliver 완화 규칙으로 흡수하지 않는다.
 프로젝트 표준 Docker Compose 절차로 `wasm-pack 0.15.0` 빌드를 새로 수행했다.
 
 - 최종 `pkg/rhwp_bg.wasm` SHA-256:
-  `6a9efdc4bc1d4931043447ff0c6cf5c6ab4916c2ef55c8c5c5bdc5d956dfcb68`
+  `1a16df5eba2f5c3e006b4f1ad1c98c86127ad1273d89c0a5151badc002da1e70`
 - 생성된 `rhwp.js`와 `rhwp.d.ts`: 기존 바인딩과 차이 없음
 - Node 직접 로드: #4069 17쪽, #2430 39쪽
+- WASM HTML 물리 16쪽: 빈 TextLine `top=200.33px`, 첫 문장 `top=224.33px`,
+  표 상단부터 첫 문장까지 `24.94px`
 - WASM render: 15쪽에 조달청 자식 표 시작·말미 존재, 다음 프레임 부재;
   16쪽에 `<이해관계자 협의>` 존재
 
@@ -85,6 +92,9 @@ orphan/sliver 완화 규칙으로 흡수하지 않는다.
 
 폰트·안티앨리어싱 차이로 pixel/ink 일치율 자체는 완료 판정으로 쓰지 않았다. 정확 쪽수,
 render-tree 텍스트 계약, 자동 구조 후보, 한컴 PDF review를 함께 판정 근거로 사용했다.
+
+#2430의 추가 빈 Enter 판정 근거는 `output/4069/issue2430-p16-fixed/`에 일반·디버그
+PNG/SVG와 render tree, 수정 전·한컴 PDF 바로가기로 남겼다.
 
 ## 단계 판정
 
