@@ -112,6 +112,56 @@ test('문단 서식 대상 산출은 텍스트 선택보다 셀 블록을 먼저
     '셀 블록 대상 산출을 호출하지 않는다');
 });
 
+test('글자 서식 대상 판정은 셀 블록 선택도 대상으로 인정한다', () => {
+  // hasSelection() 은 anchor/fnAnchor 만 본다. 서식 가드가 그것만 보면 셀 블록 선택에서
+  // 통째로 반환돼 굵게/기울임/글꼴 크기가 아무 일도 하지 않는다.
+  const ih = source('src/engine/input-handler.ts');
+  const start = ih.indexOf('private hasFormatTargetSelection()');
+  assert.notEqual(start, -1, 'hasFormatTargetSelection 이 없다');
+  const body = ih.slice(start, ih.indexOf('\n  }', start));
+  assert.match(body, /this\.cursor\.hasSelection\(\)\s*\|\|\s*this\.cursor\.isInCellSelectionMode\(\)/,
+    '셀 블록 선택을 서식 대상으로 보지 않는다');
+});
+
+test('글자 서식 가드가 모두 셀 블록을 인정하는 판정으로 바뀌어야 한다', () => {
+  // 한 곳만 바꾸면 Ctrl+B 는 되는데 글꼴 크기 증감은 안 되는 부분 수정이 된다.
+  const ih = source('src/engine/input-handler.ts');
+  for (const fn of ['applyToggleFormat', 'adjustFontSize', 'adjustCharRatio', 'adjustCharSpacing']) {
+    const start = ih.indexOf(fn + '(');
+    assert.notEqual(start, -1, `${fn} 을 찾지 못했다`);
+    const body = ih.slice(start, ih.indexOf('\n  }', start));
+    assert.match(body, /if \(!this\.hasFormatTargetSelection\(\)\) return;/,
+      `${fn} 이 셀 블록 선택을 대상으로 인정하지 않는다`);
+  }
+});
+
+test('셀 블록 글자 서식은 되돌리기 라우팅(executeOperation)을 거친다', () => {
+  // 뮤테이션 표면 원장(mutation-routing-guard)이 세는 사이트이므로 직접 wasm 호출이
+  // executeOperation 밖으로 새면 Undo 가 비는 채로 문서만 바뀐다.
+  const ih = source('src/engine/input-handler.ts');
+  const start = ih.indexOf('private applyCharFormatToCellBlock');
+  assert.notEqual(start, -1, 'applyCharFormatToCellBlock 이 없다');
+  const body = ih.slice(start, ih.indexOf('\n  }\n', start));
+  assert.match(body, /this\.executeOperation\(\{\s*\n?\s*kind: 'snapshot'/,
+    '스냅샷 라우팅을 거치지 않는다');
+  assert.match(body, /wasm\.applyCharFormatInCell\(/, '셀 글자 서식 적용 호출이 없다');
+  assert.match(body, /if \(len <= 0\) continue;/, '빈 문단 건너뛰기가 없다');
+});
+
+test('글자 서식 적용 진입점이 셀 블록 분기를 먼저 호출한다', () => {
+  // 분기가 없으면 getSelectionOrdered() 가 null 이라 그대로 반환된다.
+  const ih = source('src/engine/input-handler.ts');
+  const start = ih.indexOf('private applyCharFormat(props');
+  assert.notEqual(start, -1, 'applyCharFormat 을 찾지 못했다');
+  const body = ih.slice(start, ih.indexOf('\n  }', start));
+  const blockAt = body.indexOf('this.getSelectedCellBlock()');
+  const selAt = body.indexOf('this.cursor.getSelectionOrdered()');
+  assert.notEqual(blockAt, -1, '셀 블록 분기가 없다');
+  assert.ok(blockAt < selAt, '셀 블록 분기가 텍스트 선택 분기보다 뒤에 있다');
+  assert.match(body, /this\.applyCharFormatToCellBlock\(block, props\)/,
+    '셀 블록 적용 경로를 호출하지 않는다');
+});
+
 test('모양 붙여넣기도 같은 셀 산출 함수를 쓴다', () => {
   // 같은 블록을 대상으로 하는 두 경로가 필터를 각자 갖고 있으면 한쪽만 고쳐진다.
   const ih = source('src/engine/input-handler.ts');
