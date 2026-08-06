@@ -7,7 +7,7 @@
 //! 권위 정답지는 한글 2022 편집기 37쪽
 //! (`pdf/issue1921/59043_regulatory_analysis-2022.pdf`, 편집기 PageCount=37 정합).
 //! 잔여 +5는 2단 배치 밀도(부동 표 흐름 패킹) 축으로 #1921 후속 과제 — 본 테스트는
-//! 현재 도달값 42를 핀해 개선(37 방향)과 회귀(43+)를 모두 표면화한다.
+//! 현재 도달값 39를 핀해 개선(37 방향)과 회귀(40+)를 모두 표면화한다.
 
 use std::fs;
 use std::path::Path;
@@ -25,10 +25,10 @@ fn page_count_of(rel: &str) -> u32 {
 fn regulatory_59043_page_count_pin() {
     let pages = page_count_of("samples/issue1921/59043_regulatory_analysis.hwp");
     assert_eq!(
-        pages, 41,
-        "issue1921 59043 핀 41쪽 (한글 2022 정답지 37쪽, 잔여 +4=배치 밀도 축; #2195 전각·outer margin·pad 정합으로 42→41). \
-         실측 {}p — 42p+면 sliver/과분할 회귀, 41p 미만이면 개선이므로 핀과 \
-         정답지(37)를 갱신할 것.",
+        pages, 39,
+        "issue1921 59043 현 핀 39쪽 (한글 2022 정답지 37쪽, 잔여 +2=배치 밀도·페이지 소유 fidelity 축). \
+         실측 {}p — 40p+면 과분할 회귀, 38p 이하면 한글 PDF 직접 대조 후 핀과 \
+         잔여 정합성 기록을 갱신할 것.",
         pages
     );
 }

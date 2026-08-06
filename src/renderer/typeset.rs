@@ -18169,7 +18169,20 @@ impl TypesetEngine {
                 // 현상은 새 쪽에서 시작하는 continuation에만 나타나므로, 그
                 // 좁은 형상만 재-cut한다 (#3637 HWP 2020 p26 → p27).
                 const MIXED_NESTED_OWNER_DRIFT_MIN_PX: f64 = 16.0;
+                // source owner가 drift하는 것은 현재 분할 row에 1×1 nested child가
+                // 직접 있는 경우로 확인됐다. 1×1 child가 없는 giant cell(#1949)은
+                // 같은 측정 차이를 보여도 이 보정 대상이 아니다.
+                let row_has_single_cell_nested = table.cells.iter().any(|cell| {
+                    cell.row as usize == r
+                        && cell.paragraphs.iter().any(|paragraph| {
+                            paragraph.controls.iter().any(|control| {
+                                matches!(control, Control::Table(nested)
+                                        if nested.row_count == 1 && nested.col_count == 1)
+                            })
+                        })
+                });
                 let mixed_nested_owner_guard = st.profile.hwpx_stored_layout()
+                    && row_has_single_cell_nested
                     && r == cursor_row
                     && is_continuation
                     && !row_start_cut.is_empty()
@@ -22896,15 +22909,18 @@ mod tests {
     #[test]
     fn test_typeset_page_overflow() {
         let engine = TypesetEngine::with_default_dpi();
-        let paginator = Paginator::with_default_dpi();
         let styles = ResolvedStyleSet::default();
-        let paras: Vec<Paragraph> = (0..100).map(|_| make_paragraph_with_height(2000)).collect();
+        // 빈 문단만으로는 마지막 blank-only page 제거 경로를 검증하게 된다. 이
+        // 테스트의 계약은 overflow 중 가시 문단의 배치이므로, 실제 내용도 넣는다.
+        let mut paras: Vec<Paragraph> =
+            (0..100).map(|_| make_paragraph_with_height(2000)).collect();
+        for (idx, para) in paras.iter_mut().enumerate() {
+            para.text = format!("paragraph {idx}");
+        }
         let composed: Vec<ComposedParagraph> = Vec::new();
         let page_def = a4_page_def();
         let col_def = ColumnDef::default();
 
-        let (old_result, measured) =
-            paginator.paginate(&paras, &composed, &styles, &page_def, &col_def, 0);
         let new_result = engine.typeset_section(
             &paras,
             &composed,
@@ -22912,12 +22928,31 @@ mod tests {
             &page_def,
             &col_def,
             0,
-            &measured.tables,
+            &[],
             false,
             &std::collections::HashSet::new(),
         );
 
-        assert_pagination_match(&old_result, &new_result, "page_overflow");
+        // `Paginator`의 옛 measured-height 근사는 독립적인 oracle이 아니다. 이
+        // synthetic case는 가시 문단 100개의 전량 보존과 body-fit(4쪽)을 직접
+        // 고정한다.
+        assert_eq!(
+            new_result.pages.len(),
+            4,
+            "100개 2000-HWPUNIT 문단은 A4 4쪽"
+        );
+        let placed: Vec<_> = new_result
+            .pages
+            .iter()
+            .flat_map(|page| page.column_contents.iter())
+            .flat_map(|column| column.items.iter())
+            .map(PageItem::para_index)
+            .collect();
+        assert_eq!(
+            placed,
+            (0..100).collect::<Vec<_>>(),
+            "문단 손실·중복 없이 배치"
+        );
     }
 
     #[test]
@@ -23565,11 +23600,14 @@ mod tests {
         let engine = TypesetEngine::with_default_dpi();
         let styles = ResolvedStyleSet::default();
         // 한 페이지에 충분히 들어가는 3개 문단
-        let paras = vec![
+        let mut paras = vec![
             make_paragraph_with_height(400),
             make_paragraph_with_height(400),
             make_paragraph_with_height(400),
         ];
+        for (idx, para) in paras.iter_mut().enumerate() {
+            para.text = format!("paragraph {idx}");
+        }
         let composed: Vec<ComposedParagraph> = Vec::new();
         let page_def = a4_page_def();
         let col_def = ColumnDef::default();
