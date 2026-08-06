@@ -8,6 +8,7 @@ import { SelectionRenderer } from './selection-renderer';
 import { CommandHistory } from './history';
 import { DeleteSelectionCommand, ApplyCharFormatCommand, ApplyParaFormatCommand, SnapshotCommand, SetFormValueCommand, TextMutationEffectAccumulator, IMMEDIATE_TEXT_MUTATION_EFFECTS } from './command';
 import type { OperationDescriptor, ParaFormatTarget, RefreshPolicy, TextMutationEffects, EditCommand, EditContext, FormValueTarget } from './command';
+import { selectCellIndicesInRange } from './cell-block-format';
 import { VirtualScroll } from '@/view/virtual-scroll';
 import { ViewportManager } from '@/view/viewport-manager';
 import type {
@@ -77,6 +78,7 @@ type PagePoint = {
   pageX: number;
   pageY: number;
 };
+
 
 const FORMAT_COPY_CHAR_KEYS: Array<keyof CharProperties> = [
   'fontSize',
@@ -4463,14 +4465,13 @@ export class InputHandler {
       operationType: 'formatCopyCellProps',
       operation: (wasm) => {
         const dims = wasm.getTableDimensions(ctx.sec, ctx.ppi, ctx.ci);
-        const excluded = this.cursor.getExcludedCells();
-        for (let cellIdx = 0; cellIdx < dims.cellCount; cellIdx++) {
-          const info = wasm.getCellInfo(ctx.sec, ctx.ppi, ctx.ci, cellIdx);
-          if (info.row < range.startRow || info.row > range.endRow ||
-              info.col < range.startCol || info.col > range.endCol) {
-            continue;
-          }
-          if (excluded.has(`${info.row},${info.col}`)) continue;
+        const cellIndices = selectCellIndicesInRange(
+          dims.cellCount,
+          (cellIdx) => wasm.getCellInfo(ctx.sec, ctx.ppi, ctx.ci, cellIdx),
+          range,
+          this.cursor.getExcludedCells(),
+        );
+        for (const cellIdx of cellIndices) {
           wasm.setCellProperties(ctx.sec, ctx.ppi, ctx.ci, cellIdx, props);
         }
         return this.cursor.getPosition();
