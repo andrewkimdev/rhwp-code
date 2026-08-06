@@ -33,6 +33,7 @@ from toolkit import (  # noqa: E402
     ToolkitError,
     add_common_args,
     emit_summary,
+    ensure_output_absent,
     ensure_utf8_stdio,
     resolve_rhwp,
 )
@@ -91,6 +92,9 @@ def main(argv=None) -> int:
         for f in (file_a, file_b):
             if not f.is_file():
                 raise ToolkitError(f"파일이 없습니다: {f}", EXIT_USAGE)
+        report_path = Path(args.report) if args.report else None
+        if report_path:
+            ensure_output_absent(report_path, "출력 보고서")
 
         tk = RhwpToolkit(resolve_rhwp(args.rhwp_bin), verbose=args.verbose)
 
@@ -129,8 +133,7 @@ def main(argv=None) -> int:
             "svgByteCompare": svg_result if not args.skip_svg else "skipped",
             "exit": final_exit,
         }
-        if args.report:
-            report_path = Path(args.report)
+        if report_path:
             if report_path.parent and not report_path.parent.exists():
                 report_path.parent.mkdir(parents=True, exist_ok=True)
             with open(report_path, "w", encoding="utf-8") as fh:

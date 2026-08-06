@@ -30,6 +30,7 @@ from toolkit import (  # noqa: E402
     ToolkitError,
     add_common_args,
     emit_summary,
+    ensure_output_absent,
     ensure_utf8_stdio,
     collect_input_files,
     resolve_rhwp,
@@ -39,11 +40,13 @@ SUPPORTED_TASKS = ("info", "export-text", "export-structure")
 
 
 def run_batch_task(tk, task, files, threads, out_dir):
-    """batch <task> 실행 → (레코드, 실패목록, ndjson 경로)."""
+    """batch <task> 실행 → 레코드·파일 실패·NDJSON·프로세스 실패를 반환한다."""
     cmd = ["batch", task, "--json"]
     if threads:
         cmd += ["--threads", str(threads)]
-    records, _, _ = tk.run_ndjson(cmd, "\n".join(str(f) for f in files) + "\n")
+    records, batch_exit, batch_note = tk.run_ndjson(
+        cmd, "\n".join(str(f) for f in files) + "\n"
+    )
     ndjson_path = out_dir / (task.replace("-", "_") + ".ndjson")
     with open(ndjson_path, "w", encoding="utf-8") as fh:
         for rec in records:
@@ -57,7 +60,14 @@ def run_batch_task(tk, task, files, threads, out_dir):
         for r in records
         if r.get("error") is not None
     ]
-    return records, failed, ndjson_path
+    batch_failure = None
+    # 파일별 error 레코드가 있으면 부분 실패 계약으로 이미 집계된다. 레코드 없이
+    # 끝난 비정상 종료만 별도 실패로 남겨 성공(0) 오판을 막는다.
+    if batch_exit != 0 and not failed:
+        batch_failure = {"task": task, "exitCode": batch_exit}
+        if batch_note:
+            batch_failure["stderr"] = batch_note
+    return records, failed, ndjson_path, batch_failure
 
 
 def main(argv=None) -> int:
@@ -101,21 +111,31 @@ def main(argv=None) -> int:
                 EXIT_USAGE,
             )
         out_dir = Path(args.out_dir)
+        output_paths = {
+            out_dir / "summary.json",
+            *(out_dir / (task.replace("-", "_") + ".ndjson") for task in tasks),
+        }
+        for output_path in output_paths:
+            ensure_output_absent(output_path, "출력 파일")
         out_dir.mkdir(parents=True, exist_ok=True)
 
         tk = RhwpToolkit(resolve_rhwp(args.rhwp_bin), verbose=args.verbose)
 
         per_task = {}
         outputs = {}
+        batch_failures = []
 
         # ① 메타 축 — 이후 필터의 기준
-        info_records, info_failed, info_path = run_batch_task(
+        info_records, info_failed, info_path, info_batch_failure = run_batch_task(
             tk, "info", files, args.threads, out_dir
         )
         per_task["info"] = {
             "okCount": len(info_records) - len(info_failed),
             "failed": info_failed,
         }
+        if info_batch_failure:
+            per_task["info"]["batchFailure"] = info_batch_failure
+            batch_failures.append(info_batch_failure)
         outputs["info"] = str(info_path)
 
         # ② 필터 — pageCount 기준 대상 좁히기 (실패 파일은 자동 제외)
@@ -133,16 +153,24 @@ def main(argv=None) -> int:
             if not targets:
                 per_task[task] = {"okCount": 0, "failed": [], "skipped": "대상 0건"}
                 continue
-            records, failed, path = run_batch_task(
+            records, failed, path, batch_failure = run_batch_task(
                 tk, task, targets, args.threads, out_dir
             )
             per_task[task] = {"okCount": len(records) - len(failed), "failed": failed}
+            if batch_failure:
+                per_task[task]["batchFailure"] = batch_failure
+                batch_failures.append(batch_failure)
             outputs[task] = str(path)
 
         all_failed = sorted(
-            {f["source"] for t in per_task.values() for f in t["failed"]}
+            {
+                f["source"]
+                for t in per_task.values()
+                for f in t["failed"]
+                if f.get("source")
+            }
         )
-        final_exit = EXIT_OK if not all_failed else EXIT_RUNTIME
+        final_exit = EXIT_OK if not all_failed and not batch_failures else EXIT_RUNTIME
         summary = {
             "workflow": "bulk_sweep",
             "inputCount": len(files),
@@ -151,6 +179,7 @@ def main(argv=None) -> int:
             "tasks": {t: per_task[t] for t in per_task},
             "outputs": outputs,
             "failedSources": all_failed,
+            "batchFailures": batch_failures,
             "exit": final_exit,
         }
         summary_path = out_dir / "summary.json"
@@ -164,10 +193,13 @@ def main(argv=None) -> int:
         ] + [f"요약: {summary_path}"]
         if all_failed:
             human.append(f"실패 파일 {len(all_failed)}건 — summary.json failedSources 참조")
+        if batch_failures:
+            human.append(f"batch 실행 실패 {len(batch_failures)}건 — summary.json batchFailures 참조")
         emit_summary(summary, args.json, human)
         if final_exit != EXIT_OK:
             print(
-                f"오류: {len(all_failed)}개 파일 처리 실패 (성공분 NDJSON 은 보존됨)",
+                f"오류: 파일 실패 {len(all_failed)}건, batch 실행 실패 {len(batch_failures)}건 "
+                "(성공분 NDJSON 은 보존됨)",
                 file=sys.stderr,
             )
         return final_exit

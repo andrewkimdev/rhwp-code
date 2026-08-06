@@ -162,6 +162,15 @@ class TestFormFilling(unittest.TestCase):
         self.assertIn("notFound", r.stderr)
         self.assertFalse(out.exists(), "실패했는데 산출물이 남았다")
 
+    def test_existing_output_is_preserved(self):
+        values = write_json(WORKDIR / "existing_values.json", {"회사명": "새 값"})
+        out = WORKDIR / "existing.hwp"
+        original = b"must-not-overwrite"
+        out.write_bytes(original)
+        r = run_workflow("form_filling.py", FIELD_DOC, values, "-o", out)
+        self.assertEqual(r.returncode, 2, r.stderr)
+        self.assertEqual(out.read_bytes(), original)
+
     def test_ambiguous_name_fails(self):
         values = write_json(WORKDIR / "amb.json", {"목차1": "모호"})
         out = WORKDIR / "amb.hwp"
@@ -212,6 +221,16 @@ class TestTableHarvest(unittest.TestCase):
         )
         self.assertEqual(r.returncode, 1)
 
+    def test_existing_csv_is_preserved(self):
+        out_dir = WORKDIR / "tables_existing"
+        out_dir.mkdir()
+        csv_path = out_dir / "table0.csv"
+        original = b"must-not-overwrite\n"
+        csv_path.write_bytes(original)
+        r = run_workflow("table_harvest.py", TABLE_DOC, "-o", out_dir)
+        self.assertEqual(r.returncode, 2, r.stderr)
+        self.assertEqual(csv_path.read_bytes(), original)
+
     def test_missing_document_is_usage_error(self):
         r = run_workflow(
             "table_harvest.py", SAMPLES / "no-such.hwp", "-o", WORKDIR / "tx"
@@ -248,6 +267,16 @@ class TestArchiveSearch(unittest.TestCase):
         self.assertEqual(len(data["errors"]), 1)
         self.assertIn("corrupt.hwp", data["errors"][0]["source"])
         self.assertEqual(data["matchedFileCount"], 1, "성공분 결과가 유실됐다")
+        self.assertEqual(data["exit"], 1)
+        self.assertEqual(data["batch"]["exitCode"], 1)
+
+    def test_existing_report_is_preserved(self):
+        report = WORKDIR / "search_existing.json"
+        original = b"must-not-overwrite\n"
+        report.write_bytes(original)
+        r = run_workflow("archive_search.py", ARCHIVE_DIR, "--query", "보건", "-o", report)
+        self.assertEqual(r.returncode, 2, r.stderr)
+        self.assertEqual(report.read_bytes(), original)
 
     def test_missing_directory_is_usage_error(self):
         r = run_workflow("archive_search.py", WORKDIR / "no-such-dir", "--query", "보건")
@@ -296,6 +325,36 @@ class TestBulkSweep(unittest.TestCase):
         )
         self.assertEqual(r.returncode, 2)
 
+    def test_existing_summary_input_is_preserved(self):
+        out_dir = WORKDIR / "sweep_existing"
+        out_dir.mkdir()
+        info_path = out_dir / "info.ndjson"
+        original = b"must-not-overwrite\n"
+        info_path.write_bytes(original)
+        r = run_workflow("bulk_sweep.py", ARCHIVE_DIR, "-o", out_dir)
+        self.assertEqual(r.returncode, 2, r.stderr)
+        self.assertEqual(info_path.read_bytes(), original)
+
+    @unittest.skipUnless(
+        os.name == "posix" and Path("/bin/false").is_file(),
+        "POSIX false executable is required",
+    )
+    def test_batch_process_failure_exits_1(self):
+        out_dir = WORKDIR / "sweep_batch_process_failure"
+        r = run_workflow(
+            "bulk_sweep.py",
+            FIELD_DOC,
+            "-o",
+            out_dir,
+            "--rhwp-bin",
+            "/bin/false",
+            "--json",
+        )
+        self.assertEqual(r.returncode, 1, r.stderr)
+        summary = json.loads(r.stdout)
+        self.assertEqual(summary["exit"], 1)
+        self.assertEqual(summary["batchFailures"], [{"task": "info", "exitCode": 1}])
+
 
 class TestDistributionVerify(unittest.TestCase):
     def test_identical_document_exits_0(self):
@@ -317,6 +376,16 @@ class TestDistributionVerify(unittest.TestCase):
     def test_missing_file_is_usage_error(self):
         r = run_workflow("distribution_verify.py", FIELD_DOC, SAMPLES / "no-such.hwp")
         self.assertEqual(r.returncode, 2)
+
+    def test_existing_report_is_preserved(self):
+        report = WORKDIR / "distribution_existing.json"
+        original = b"must-not-overwrite\n"
+        report.write_bytes(original)
+        r = run_workflow(
+            "distribution_verify.py", FIELD_DOC, FIELD_DOC, "-o", report
+        )
+        self.assertEqual(r.returncode, 2, r.stderr)
+        self.assertEqual(report.read_bytes(), original)
 
 
 if __name__ == "__main__":

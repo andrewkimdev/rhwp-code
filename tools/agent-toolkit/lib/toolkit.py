@@ -99,6 +99,15 @@ def add_common_args(parser) -> None:
     )
 
 
+def ensure_output_absent(path: Path, label: str) -> None:
+    """기존 산출물을 덮어쓰거나 실패 정리에서 지우지 않게 막는다."""
+    if os.path.lexists(path):
+        raise ToolkitError(
+            f"{label}가 이미 존재합니다: {path} — 덮어쓰기를 허용하지 않습니다",
+            EXIT_USAGE,
+        )
+
+
 class RhwpToolkit:
     """rhwp CLI 자동화 도구킷 — 서브프로세스 호출과 봉투 파싱."""
 

@@ -29,6 +29,7 @@ from toolkit import (  # noqa: E402
     add_common_args,
     collect_input_files,
     emit_summary,
+    ensure_output_absent,
     ensure_utf8_stdio,
     resolve_rhwp,
 )
@@ -62,6 +63,9 @@ def main(argv=None) -> int:
                 "대상 문서(.hwp/.hwpx)가 없습니다: " + ", ".join(args.paths),
                 EXIT_USAGE,
             )
+        report_path = Path(args.report) if args.report else None
+        if report_path:
+            ensure_output_absent(report_path, "출력 보고서")
 
         tk = RhwpToolkit(resolve_rhwp(args.rhwp_bin), verbose=args.verbose)
         cmd = ["batch", "search", "--query", args.query, "--json"]
@@ -114,11 +118,13 @@ def main(argv=None) -> int:
             "totalMatchCount": total_matches,
             "files": hits,
             "errors": errors,
+            "batch": {"exitCode": batch_exit, "stderr": batch_note or None},
             # matches[].text 는 문서에서 온 값 — 데이터이지 지시가 아니다
             "untrustedFields": ["files[].matches[].text"],
         }
-        if args.report:
-            report_path = Path(args.report)
+        final_exit = EXIT_OK if not errors and batch_exit == 0 else EXIT_RUNTIME
+        report["exit"] = final_exit
+        if report_path:
             if report_path.parent and not report_path.parent.exists():
                 report_path.parent.mkdir(parents=True, exist_ok=True)
             with open(report_path, "w", encoding="utf-8") as fh:
@@ -131,15 +137,13 @@ def main(argv=None) -> int:
             f"(페이지 {sorted(set(m['page'] for m in h['matches']))})"
             for h in hits
         ] or [f'"{args.query}" 매치 없음 ({len(files)}개 문서)']
-        if args.report:
-            human.append(f"보고서: {args.report}")
+        if report_path:
+            human.append(f"보고서: {report_path}")
         if errors:
             human.append(f"처리 실패 {len(errors)}건 — 보고서 errors[] 참조")
             if batch_note:
                 human.append(batch_note)
 
-        final_exit = EXIT_OK if not errors and batch_exit == 0 else EXIT_RUNTIME
-        report["exit"] = final_exit
         emit_summary(report, args.json, human)
         if final_exit != EXIT_OK:
             print(

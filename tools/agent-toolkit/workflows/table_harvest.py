@@ -28,6 +28,7 @@ from toolkit import (  # noqa: E402
     ToolkitError,
     add_common_args,
     emit_summary,
+    ensure_output_absent,
     ensure_utf8_stdio,
     read_csv_grid,
     resolve_rhwp,
@@ -52,13 +53,12 @@ def main(argv=None) -> int:
     add_common_args(parser)
     args = parser.parse_args(argv)
 
-    written: list = []
+    created_csv_paths: list[Path] = []
     try:
         document = Path(args.document)
         if not document.is_file():
             raise ToolkitError(f"문서가 없습니다: {document}", EXIT_USAGE)
         out_dir = Path(args.out_dir)
-        out_dir.mkdir(parents=True, exist_ok=True)
 
         tk = RhwpToolkit(resolve_rhwp(args.rhwp_bin), verbose=args.verbose)
 
@@ -77,6 +77,11 @@ def main(argv=None) -> int:
                 f"수확할 표가 없습니다 (tableCount=0): {document}", EXIT_RUNTIME
             )
 
+        csv_paths = [out_dir / f"table{t['index']}.csv" for t in tables]
+        for csv_path in csv_paths:
+            ensure_output_absent(csv_path, "출력 CSV")
+        out_dir.mkdir(parents=True, exist_ok=True)
+
         harvested = []
         for t in tables:
             idx = t["index"]
@@ -89,13 +94,14 @@ def main(argv=None) -> int:
             ]
             if args.bom:
                 cmd.append("--bom")
+            # 사전 충돌 검사를 통과한 새 경로라 실행 중 부분 파일도 정리할 수 있다.
+            created_csv_paths.append(csv_path)
             tk.run_json(cmd)
             if not csv_path.is_file():
                 raise ToolkitError(
                     f"table-to-csv 가 성공을 보고했지만 CSV 가 없습니다: {csv_path}",
                     EXIT_RUNTIME,
                 )
-            written.append(csv_path)
 
             # ② 재독 대조 — 산출 CSV 의 실제 행·열 수 vs 격자 계약
             rows = read_csv_grid(csv_path)
@@ -135,7 +141,7 @@ def main(argv=None) -> int:
         )
         return EXIT_OK
     except ToolkitError as e:
-        for p in written:  # 검증 안 된 산출물을 남기지 않는다
+        for p in created_csv_paths:  # 이번 호출이 만든 미검증 CSV만 정리한다
             try:
                 Path(p).unlink()
             except OSError:

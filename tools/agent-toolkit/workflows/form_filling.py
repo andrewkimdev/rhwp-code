@@ -34,6 +34,7 @@ from toolkit import (  # noqa: E402
     ToolkitError,
     add_common_args,
     emit_summary,
+    ensure_output_absent,
     ensure_utf8_stdio,
     resolve_rhwp,
     verify_filled,
@@ -72,6 +73,8 @@ def main(argv=None) -> int:
     add_common_args(parser)
     args = parser.parse_args(argv)
 
+    output = None
+    output_owned = False
     try:
         template = Path(args.template)
         if not template.is_file():
@@ -80,6 +83,8 @@ def main(argv=None) -> int:
         output = Path(args.output)
         if output.resolve() == template.resolve():
             raise ToolkitError("출력 경로가 서식과 같습니다 — 덮어쓰기 금지", EXIT_USAGE)
+        ensure_output_absent(output, "출력 파일")
+        output_owned = True
         if output.parent and not output.parent.exists():
             output.parent.mkdir(parents=True, exist_ok=True)
 
@@ -129,9 +134,6 @@ def main(argv=None) -> int:
                 )
 
         if problems:
-            # 미완성 산출물을 성공처럼 남기지 않는다
-            if output.is_file():
-                output.unlink()
             raise ToolkitError(
                 "서식 채우기 검증 실패: " + "; ".join(problems), EXIT_RUNTIME
             )
@@ -156,6 +158,12 @@ def main(argv=None) -> int:
         )
         return EXIT_OK
     except ToolkitError as e:
+        # 충돌 검사를 통과한 이번 호출의 산출물만 정리한다.
+        if output_owned and output is not None and output.is_file():
+            try:
+                output.unlink()
+            except OSError:
+                pass
         print(f"오류: {e}", file=sys.stderr)
         return e.exit_code
 
