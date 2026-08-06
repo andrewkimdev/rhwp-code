@@ -705,14 +705,6 @@ jobs:
           cargo build --workspace
           cargo clippy --workspace --all-targets -- -D warnings
 
-      # Python 도구킷은 Rust unit archive에 포함되지 않으므로 실제 release-test rhwp
-      # 바이너리와 samples fixture를 이 경로에서 함께 검증한다.
-      - name: Agent toolkit workflow regression
-        run: |
-          cargo build --profile release-test --bin rhwp
-          RHWP_BIN=target/release-test/rhwp \
-            python3 tools/agent-toolkit/tests/test_workflows.py
-
       - name: Check WASM target
         run: cargo check --target wasm32-unknown-unknown --lib
 

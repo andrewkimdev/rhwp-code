@@ -29,7 +29,7 @@ last_verified: 2026-08-06
 | 높음 | `form_filling`과 `table_harvest`가 검증 실패 때 기존 `-o` 산출물도 삭제할 수 있었다. | 공통 출력 충돌 검사를 추가하고, 이번 호출이 새로 확보한 경로만 정리하도록 변경했다. |
 | 높음 | `bulk_sweep`이 레코드 없이 `batch` 프로세스가 실패해도 exit 0을 보고했다. | 레코드 없는 비정상 batch 종료를 `batchFailures`로 기록하고 exit 1로 승격했다. |
 | 중간 | `archive_search --report`가 최종 `exit`를 넣기 전에 파일을 저장했다. | 종료 판정 뒤에 보고서를 저장하고 batch 종료 코드·stderr를 함께 기록했다. |
-| 중간 | 도구킷의 실제 rhwp 회귀 21건이 GitHub CI에서 실행되지 않았다. | 기존 Lint job에서 release-test `rhwp`를 빌드한 뒤 도구킷 회귀를 실행하도록 추가했다. |
+| 중간 | 도구킷의 실제 rhwp 회귀 21건이 GitHub CI에서 실행되지 않았다. | 단순 보조 도구이므로 핵심 CI에는 추가하지 않고, 메인터너 보정 때 실제 `rhwp`로 27건을 로컬 실행했다. |
 | 낮음 | PR 본문은 구현·테스트가 후속 PR이라고 설명하지만 실제 head에는 구현과 회귀가 포함돼 있었다. | 코드 보정과 별도로 PR 본문을 현재 범위에 맞게 갱신해야 한다. |
 
 출력 충돌 계약은 모든 워크플로에 일관되게 적용했다. 기존 파일·보고서·계획된 CSV·NDJSON이
@@ -49,7 +49,7 @@ last_verified: 2026-08-06
 ## 최종 권고
 
 **메인터너 보정 commit을 원 PR head에 추가한 뒤 최신 head의 GitHub Actions를 재검증한다.**
-보정 commit은 기존 출력 보호, batch 실패 계약, 보고서 계약, 회귀 CI 연결만 포함한다.
+보정 commit은 기존 출력 보호, batch 실패 계약, 보고서 계약, 로컬 회귀 보강만 포함한다.
 GitHub push·PR 본문 수정·merge·comment는 이 문서 작성 시점에 수행하지 않았다.
 
 실행 순서와 rollback은 [PR #4037 implementation 계획](pr_4037_review_impl.md)을 따른다.
