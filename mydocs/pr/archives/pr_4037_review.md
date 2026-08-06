@@ -22,9 +22,14 @@ last_verified: 2026-08-06
 | 최신 devel | `d722c1161e03a0bf58beebc7b0d9c638f7a52b8b` (병합 시뮬레이션 기준) |
 | 원격 검증 | [CI 31068823951](https://github.com/edwardkim/rhwp/actions/runs/31068823951), [CodeQL 31068823815](https://github.com/edwardkim/rhwp/actions/runs/31068823815) 성공 |
 | 검증 뒤 PR 상태 | `mergeable=MERGEABLE`, `mergeStateStatus=CLEAN` |
+| 기준선 정렬 merge | `df3aefd70` (`ca77f8ba9` + `d722c1161`), 오늘할일 한 파일의 기록을 함께 보존 |
 
 원 head는 최신 `devel`의 조상이 아니었으나, 최신 `devel` 위 병합 시뮬레이션은 충돌 없이
 구성됐다. 렌더러·레이아웃·fixture·기준 PDF 변경은 없으므로 시각 증적 경로는 적용하지 않았다.
+
+code CI 완료 뒤의 첫 archive review commit `ca77f8ba9`는 최신 `devel`의 같은 날 오늘할일 추가와만
+충돌했다. `df3aefd70`은 현재 `devel`을 정확한 두 번째 parent로 두고 양쪽 오늘할일 기록을 보존한
+update-branch merge다. contributor 원 commit은 rewrite하지 않았다.
 
 ## 발견 사항과 보정
 
@@ -57,9 +62,9 @@ last_verified: 2026-08-06
 **수용.** 메인터너 보정 commit을 포함한 code head의 로컬 검증과 GitHub CI·CodeQL이 모두 성공했다.
 보정 범위는 기존 출력 보호, batch 실패 계약, 보고서 계약, 로컬 회귀 보강으로 한정했다.
 
-이 archive review·오늘할일 trailing commit은 code head 뒤에 단일 부모로 추가한다. push 뒤에는
-`6049d291`을 candidate로 재사용한 fast-pass aggregate가 성공하고 최신 PR 상태가 `CLEAN`인지 확인한 뒤
-작업지시자 승인에 따라 병합한다. 병합 comment에는 보정이 기존 산출물 삭제와 batch 실패 은닉을 막기 위해
-필요했던 이유를 명시한다.
+이 commit은 update-branch merge `df3aefd70` 뒤의 단일 부모 review-only 기록이다. push 뒤에는
+`6049d291`을 code candidate로 재사용한 fast-pass aggregate가 성공하고 최신 PR 상태가 `CLEAN`인지
+확인한 뒤 작업지시자 승인에 따라 병합한다. 병합 comment에는 보정이 기존 산출물 삭제와 batch 실패 은닉을
+막기 위해 필요했던 이유를 명시한다.
 
 보정 실행과 rollback은 [PR #4037 메인터너 보정 실행 기록](pr_4037_review_impl.md)을 따른다.

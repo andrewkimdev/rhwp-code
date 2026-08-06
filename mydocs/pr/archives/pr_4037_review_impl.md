@@ -20,10 +20,12 @@ last_verified: 2026-08-06
    README·가이드의 출력·실패 계약도 갱신했다.
 6. 보정은 `6f8ee6d84`, CI 제외 정리는 `6049d2919`으로 원 PR source branch에 반영했다.
 7. code head `6049d291`의 CI `31068823951`과 CodeQL `31068823815`가 모두 성공했다.
+8. 이후 같은 날 `devel` 오늘할일 추가와 충돌해, 양쪽 기록을 보존한 update-branch merge
+   `df3aefd70`을 만들었다. contributor 원 commit은 rewrite하지 않았다.
 
 ## 남은 절차
 
-- 이 archive review와 오늘할일만 포함하는 trailing commit을 같은 source branch에 push한다.
+- update-branch merge 뒤의 이 archive review·오늘할일 trailing commit을 같은 source branch에 push한다.
 - `6049d291`을 code candidate로 재사용한 fast-pass aggregate와 최신 `CLEAN` 상태를 확인한다.
 - 병합 후 comment에는 기존 산출물 삭제와 batch 실패 은닉을 막기 위한 메인터너 보정임을 명시한다.
 
