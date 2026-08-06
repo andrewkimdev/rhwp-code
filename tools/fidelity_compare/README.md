@@ -82,6 +82,10 @@ python3 tools/fidelity_compare/fidelity_compare.py 0 214 \
   보완한다. NFC·공백 정규화 뒤 한 쪽에서 사라진 16자 이상 **순서 보존** 문자열이 바로 다음 rhwp/PDF
   쪽에만 있으면 같은 owner 방향 후보로 기록한다. URL·citation·긴 각주 이동에는 강하지만, 최종 layout
   판정은 아니다.
+- `visible-text-excess-candidates.tsv`: raw SVG text 원장이 ancestor clip 밖의 숨은 이전 표 조각까지
+  세는 한계를 보완한다. PDF 본문이 거의 모두 존재하면서, 실제 body/cell clip 안에서 보이는 rhwp text가
+  48자 이상 과잉이면 page-owner 조기 배치·중복 paint 후보로 기록한다. clip/폰트/추출기 차이를 완전히
+  판별하지 못하므로 기준 PDF review 없이 결함으로 확정하지 않는다.
 - `float-owner-shift-candidates.tsv`: `rhwp_earlier_than_reference` 본문 owner 이동과 바로 다음
   페이지 상단 25% 안의 substantial Body `TopAndBottom`/`Square`/`Tight`/`Through` 그림을 한 행으로
   묶는다. 그림 자체만으로는 후보가 되지 않으며, PDF↔SVG text owner 차이가 먼저 있어야 한다.
@@ -125,6 +129,11 @@ python3 tools/fidelity_compare/fidelity_compare.py 0 214 \
 `table-fragment-candidates.tsv`는 같은 `(pi, ci)`의 인접 쪽 fragment와 footer/frame·하단 text-delta 신호를
 우선순위 후보로 묶는다. `text-report.tsv` 상위 페이지와 `export-svg --json`의 `overflowCellLines` 및 bbox
 ledger를 합친 뒤에만 pixel diff와 visual sweep으로 확정한다.
+
+`visible-text-excess-candidates.tsv`는 이 raw SVG 경로와 별도로 clip 교집합을 통과한 baseline band만
+비교한다. 따라서 off-page/완전 clip된 이전 표 조각 때문에 현재 쪽 SVG-only 문자가 부풀어 owner 이동을
+놓치는 경우를 줄인다. 반대로 회전·복잡한 transform·PDF text 추출 자체의 누락은 보수적으로 포함하거나
+후보만 남기므로, 이것도 hard failure가 아니라 PDF 대조 대상으로 해석한다.
 
 `--layout-ledger`를 함께 주면 `float-owner-shift-candidates.tsv`도 쓴다. 이는 generic owner
 candidate와 successor-page의 상단 Body float를 결합해, 그림 앞 문단의 줄바꿈이 한 페이지 이르게

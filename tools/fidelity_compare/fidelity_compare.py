@@ -294,6 +294,81 @@ def svg_text(svg_path: Path) -> str:
     return "".join(parts)
 
 
+def _svg_viewport(root: ET.Element) -> tuple[float, float, float, float] | None:
+    """Return the root SVG viewport when it is an axis-aligned numeric box."""
+    view_box = root.get("viewBox")
+    if view_box:
+        try:
+            x, y, width, height = (float(value) for value in view_box.replace(",", " ").split())
+        except ValueError:
+            return None
+        if width > 0.0 and height > 0.0:
+            return (x, y, x + width, y + height)
+    width = _svg_float(root, "width")
+    height = _svg_float(root, "height")
+    if width is not None and height is not None and width > 0.0 and height > 0.0:
+        return (0.0, 0.0, width, height)
+    return None
+
+
+def svg_visible_text(svg_path: Path) -> tuple[str, int]:
+    """Extract text whose baseline band intersects the effective rhwp clip.
+
+    `export-svg` deliberately retains descendants of earlier table fragments even
+    when an ancestor `body-clip-*`/`cell-clip-*` makes them completely invisible.
+    The ordinary text ledger preserves those source nodes for forensic work, but
+    page-owner comparison needs the text the user can actually see.  This helper
+    follows the axis-aligned clips emitted by rhwp and applies a conservative
+    baseline band; unknown coordinates stay included rather than becoming a false
+    negative.
+    """
+    root = ET.parse(svg_path).getroot()
+    clip_rectangles = _svg_clip_rectangles(root)
+    viewport = _svg_viewport(root)
+    parts: list[str] = []
+    excluded_chars = 0
+
+    def text_is_visible(
+        element: ET.Element, active_clip: tuple[float, float, float, float] | None
+    ) -> bool:
+        if active_clip is None:
+            return False
+        y = _svg_float(element, "y")
+        font_size = _svg_float(element, "font-size")
+        if y is None or font_size is None or font_size <= 0.0:
+            return True
+        # SVG `y` is a baseline.  The band deliberately over-approximates a
+        # glyph so a partially visible line remains in the ledger.
+        text_top = y - font_size
+        text_bottom = y + font_size * 0.3
+        return text_bottom > active_clip[1] and text_top < active_clip[3]
+
+    def walk(
+        element: ET.Element, active_clip: tuple[float, float, float, float] | None
+    ) -> None:
+        nonlocal excluded_chars
+        tag = _svg_local_name(element)
+        if tag in {"defs", "clipPath"}:
+            return
+        if element.get("display") == "none" or element.get("visibility") == "hidden":
+            return
+        clip_id = _clip_id_from_attr(element.get("clip-path"))
+        if clip_id is not None and clip_id in clip_rectangles:
+            active_clip = _intersect_svg_rectangles(active_clip, clip_rectangles[clip_id])
+        if tag == "text":
+            text = "".join(element.itertext())
+            if text_is_visible(element, active_clip):
+                parts.append(text)
+            else:
+                excluded_chars += sum(normalized_characters(text).values())
+            return
+        for child in element:
+            walk(child, active_clip)
+
+    walk(root, viewport)
+    return "".join(parts), excluded_chars
+
+
 def svg_glyph_risks(text: str) -> Counter[str]:
     """Return text glyphs that can become a visible tofu in a public font.
 
@@ -410,6 +485,35 @@ def adjacent_text_owner_shift_candidates(
             "rhwp_later_than_reference",
             missing,
             next_extra,
+        )
+    return candidates
+
+
+def visible_text_excess_candidates(
+    page_differences: Mapping[int, tuple[Counter[str], Counter[str]]],
+    clip_excluded_chars: Mapping[int, int],
+) -> list[dict[str, object]]:
+    """Find a page that visibly contains substantial text beyond its PDF peer.
+
+    This is complementary to reciprocal adjacent-page matching.  When rhwp
+    renders an entire reference page *and* source text belonging to later pages,
+    no reciprocal difference exists: the later page can retain the same text
+    again.  Require the PDF text to be almost wholly present so font substitution
+    or an ordinary replacement does not become a page-owner candidate.
+    """
+    candidates: list[dict[str, object]] = []
+    for page_index, (missing, extra) in sorted(page_differences.items()):
+        missing_count = sum(missing.values())
+        extra_count = sum(extra.values())
+        if extra_count < 48 or missing_count > max(8, int(extra_count * 0.15)):
+            continue
+        candidates.append(
+            {
+                "page": page_index,
+                "reference_only": missing_count,
+                "visible_svg_only": extra_count,
+                "clip_excluded_chars": clip_excluded_chars.get(page_index, 0),
+            }
         )
     return candidates
 
@@ -2278,6 +2382,28 @@ def write_text_owner_sequence_ledger(
             )
 
 
+def write_visible_text_excess_ledger(
+    work_dir: Path,
+    page_differences: Mapping[int, tuple[Counter[str], Counter[str]]],
+    clip_excluded_chars: Mapping[int, int],
+) -> None:
+    """Write visible-only owner candidates without changing the raw text ledger."""
+    report_path = work_dir / "visible-text-excess-candidates.tsv"
+    with report_path.open("w", encoding="utf-8") as report:
+        report.write(
+            "page\treference_only\tvisible_svg_only\tclip_excluded_chars\tnote\n"
+        )
+        for candidate in visible_text_excess_candidates(
+            page_differences, clip_excluded_chars
+        ):
+            report.write(
+                f"{int(candidate['page']) + 1}\t{candidate['reference_only']}\t"
+                f"{candidate['visible_svg_only']}\t{candidate['clip_excluded_chars']}\t"
+                "candidate only; PDF text is preserved but visible rhwp text is substantially extra "
+                "(possible early/duplicate page owner)\n"
+            )
+
+
 def write_successor_float_owner_shift_ledger(
     work_dir: Path,
     tree_dir: Path,
@@ -2487,6 +2613,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     text_rows: list[tuple[int, int, int, str, str, str]] = []
     text_differences: dict[int, tuple[Counter[str], Counter[str]]] = {}
     text_layers: dict[int, tuple[str, str]] = {}
+    visible_text_differences: dict[int, tuple[Counter[str], Counter[str]]] = {}
+    clip_excluded_text_chars: dict[int, int] = {}
     glyph_risks: dict[int, Counter[str]] = {}
     completed_pages: list[int] = []
     missing_pages: list[int] = []
@@ -2503,6 +2631,8 @@ def main(argv: Sequence[str] | None = None) -> int:
 
         try:
             rendered_text = svg_text(svg_path)
+            visible_rendered_text, clip_excluded_chars = svg_visible_text(svg_path)
+            clip_excluded_text_chars[page_index] = clip_excluded_chars
             glyph_risks[page_index] = svg_glyph_risks(rendered_text)
         except Exception as error:  # noqa: BLE001 - glyph ledger도 SVG 파싱 실패를 남긴다.
             text_rows.append((page_index, 0, 0, "", "", f"SVG 텍스트층 추출 실패: {error}"))
@@ -2512,6 +2642,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                 missing, extra = compare_text_layers(reference_text, rendered_text)
                 text_differences[page_index] = (missing, extra)
                 text_layers[page_index] = (reference_text, rendered_text)
+                visible_text_differences[page_index] = compare_text_layers(
+                    reference_text, visible_rendered_text
+                )
                 text_rows.append(
                     (
                         page_index,
@@ -2579,6 +2712,9 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     write_text_owner_shift_ledger(work_dir, text_differences)
     write_text_owner_sequence_ledger(work_dir, text_layers)
+    write_visible_text_excess_ledger(
+        work_dir, visible_text_differences, clip_excluded_text_chars
+    )
     glyph_risk_report_path = write_svg_glyph_risk_report(
         work_dir, glyph_risks, requested_pages
     )
@@ -2643,6 +2779,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     print("SVG glyph-risk candidates:", glyph_risk_report_path)
     print("text owner-shift candidates:", work_dir / "text-owner-shift-candidates.tsv")
     print("text owner-sequence candidates:", work_dir / "text-owner-sequence-candidates.tsv")
+    print("visible text-excess candidates:", work_dir / "visible-text-excess-candidates.tsv")
     print("page-count ledger:", work_dir / "page-count-ledger.tsv")
     if args.layout_ledger:
         print("layout ledger:", work_dir / "layout-candidates.tsv")
