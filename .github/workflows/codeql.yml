@@ -118,15 +118,6 @@ jobs:
               return parents.length === 2 && parents.some((parent) => parent.sha === baseSha);
             }
 
-            async function isCurrentBaseAncestor(candidateSha, baseSha) {
-              const { data: comparison } = await github.rest.repos.compareCommitsWithBasehead({
-                owner,
-                repo,
-                basehead: `${baseSha}...${candidateSha}`,
-              });
-              return comparison.status === 'ahead' || comparison.status === 'identical';
-            }
-
             function latestRun(runs) {
               return runs
                 .slice()
@@ -137,19 +128,47 @@ jobs:
                 })[0];
             }
 
-            async function codeqlResult(candidateSha) {
-              const checkRuns = await github.paginate(github.rest.checks.listForRef, {
+            async function codeqlResult(candidateSha, pr) {
+              const workflowRuns = await github.paginate(github.rest.actions.listWorkflowRuns, {
                 owner,
                 repo,
-                ref: candidateSha,
+                workflow_id: 'codeql.yml',
+                event: 'pull_request',
+                per_page: 100,
+              });
+              const workflowRun = latestRun(workflowRuns.filter((run) => (
+                run.path === '.github/workflows/codeql.yml'
+                && run.event === 'pull_request'
+                && run.head_sha === candidateSha
+                && run.head_branch === pr.head.ref
+                && run.head_repository?.id === pr.head.repo?.id
+              )));
+              if (!workflowRun) {
+                return { state: 'missing', reason: `missing-codeql-workflow:${candidateSha}` };
+              }
+              const runCreatedAt = Date.parse(workflowRun.created_at);
+              const pullCreatedAt = Date.parse(pr.created_at);
+              if (!Number.isFinite(runCreatedAt)
+                || !Number.isFinite(pullCreatedAt)
+                || runCreatedAt < pullCreatedAt) {
+                return { state: 'failed', reason: 'codeql-workflow-pr-identity-mismatch' };
+              }
+              if (workflowRun.status !== 'completed') {
+                return {
+                  state: 'pending',
+                  reason: `codeql-workflow-not-completed:${workflowRun.status}`,
+                };
+              }
+              const jobs = await github.paginate(github.rest.actions.listJobsForWorkflowRun, {
+                owner,
+                repo,
+                run_id: workflowRun.id,
+                filter: 'latest',
                 per_page: 100,
               });
 
               for (const checkName of requiredChecks) {
-                const checkRun = latestRun(checkRuns.filter((run) => (
-                  run.name === checkName
-                  && run.app?.slug === 'github-actions'
-                )));
+                const checkRun = latestRun(jobs.filter((job) => job.name === checkName));
                 if (!checkRun) {
                   return { state: 'missing', reason: `missing-check:${checkName}:${candidateSha}` };
                 }
@@ -225,12 +244,12 @@ jobs:
                     reviewOnlyCandidates.push(sha);
                     continue;
                   }
-                  // #3233 keeps the narrow Update branch merge topology. Its green
-                  // workflow can be reused after one or more review-only records.
+                  // Keep the narrow Update branch merge compatibility path. It is
+                  // optional: ordinary trailing review-only records do not require it.
                   if (reviewOnlyCandidates.length > 0
                     && isCurrentBaseReviewMerge(commit, pr.base.sha)) {
                     reviewOnlyCandidates.push(sha);
-                    core.info(`including current-base ${reviewOnlyLabel(files)} merge candidate ${sha}`);
+                    core.info(`including ${reviewOnlyLabel(files)} update-branch merge candidate ${sha}`);
                     break;
                   }
                   setResult(false, `${reviewOnlyLabel(files)}-merge-not-reusable:${sha}`);
@@ -250,11 +269,7 @@ jobs:
               }
 
               for (const candidateSha of reviewOnlyCandidates) {
-                if (!(await isCurrentBaseAncestor(candidateSha, pr.base.sha))) {
-                  core.info(`candidate does not include current base: ${candidateSha}`);
-                  continue;
-                }
-                const result = await codeqlResult(candidateSha);
+                const result = await codeqlResult(candidateSha, pr);
                 if (result.state === 'green') {
                   setResult(true, 'codeql-checks-green', candidateSha);
                   return;
@@ -266,7 +281,7 @@ jobs:
                 core.info(`candidate not reusable yet: ${candidateSha} (${result.reason})`);
               }
 
-              setResult(false, 'no-green-current-base-codeql-candidate');
+              setResult(false, 'no-green-codeql-candidate');
             } catch (error) {
               core.warning(`CodeQL preflight failed; running full CodeQL. ${error.message}`);
               setResult(false, 'preflight-error');

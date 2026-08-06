@@ -43,7 +43,7 @@ test('review-only changes require no code worker', () => {
       native_skia_required: 'false',
       codeql_languages: 'none',
       classification_status: 'classified',
-      classifier_version: '1',
+      classifier_version: '2',
       reason: 'classified:review-only',
     },
   );
@@ -65,7 +65,7 @@ test('mixed Studio package and Rust changes union modes and CodeQL languages', (
       native_skia_required: 'false',
       codeql_languages: 'javascript-typescript,rust',
       classification_status: 'classified',
-      classifier_version: '1',
+      classifier_version: '2',
       reason: 'classified:rust+studio-package',
     },
   );
@@ -83,6 +83,61 @@ test('Rust renderer changes require Rust, Native Skia, Canvas, and Rust CodeQL',
   assert.equal(result.native_skia_required, 'true');
   assert.equal(result.codeql_languages, 'rust');
   assert.equal(result.classification_status, 'classified');
+});
+
+test('Native Skia integration test changes run Rust and Native Skia without Canvas', () => {
+  for (const filename of [
+    'tests/issue_2225_missing_picture_placeholder.rs',
+    'tests/render_p37_direct_pdf_export.rs',
+  ]) {
+    const result = classifyChanges({
+      eventName: 'pull_request',
+      files: [{ filename, status: 'modified' }],
+    });
+    assert.equal(result.rust_required, 'true', filename);
+    assert.equal(result.render_required, 'false', filename);
+    assert.equal(result.native_skia_required, 'true', filename);
+    assert.equal(result.codeql_languages, 'rust', filename);
+    assert.equal(result.classification_status, 'classified', filename);
+    assert.equal(result.classifier_version, '2', filename);
+    assert.equal(result.reason, 'classified:native-skia-rust', filename);
+  }
+});
+
+test('Rust test input changes keep default Rust tests alongside render gates', () => {
+  for (const filename of [
+    'tests/fixtures/fonts/RHWPExactFaceSmoke.ttc',
+    'ttfs/opensource/NotoSansKR-Regular.ttf',
+    'samples/render-p35-font-native-bitmap.hwpx',
+  ]) {
+    const result = classifyChanges({
+      eventName: 'pull_request',
+      files: [{ filename, status: 'modified' }],
+    });
+    assert.equal(result.rust_required, 'true', filename);
+    assert.equal(result.render_required, 'true', filename);
+    assert.equal(result.native_skia_required, 'true', filename);
+    assert.equal(result.codeql_languages, 'none', filename);
+    assert.equal(result.classification_status, 'classified', filename);
+    assert.equal(result.classifier_version, '2', filename);
+    assert.equal(result.reason, 'classified:rust-test-input', filename);
+  }
+});
+
+test('frontend font assets and render tooling do not over-enable the Rust lane', () => {
+  for (const filename of [
+    'assets/fonts/NotoSansKR-Regular.woff2',
+    'scripts/generate_exact_face_collection_fixture.py',
+    'docs/text-ir-v2.md',
+  ]) {
+    const result = classifyChanges({
+      eventName: 'pull_request',
+      files: [{ filename, status: 'modified' }],
+    });
+    assert.equal(result.rust_required, 'false', filename);
+    assert.equal(result.render_required, 'true', filename);
+    assert.equal(result.native_skia_required, 'true', filename);
+  }
 });
 
 test('Studio package configuration and broad runtime sources remain render-impacting', () => {

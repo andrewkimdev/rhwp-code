@@ -3,7 +3,7 @@
 - **이슈**: [#3790](https://github.com/edwardkim/rhwp/issues/3790)
 - **브랜치**: `codex/issue-3790-stage3-frontend`
 - **최종 동기화 기준**: `upstream/devel` `f864e851a98f`
-- **상태**: draft PR #3943 리뷰 보정·최신 devel 재검증 완료, 최신 head CI 대기
+- **상태**: PR #3943 merge 및 canary PR #3951 측정 완료
 - **기록일**: 2026-08-04 KST
 
 ## 변경 요약
@@ -54,9 +54,14 @@ controller enforcement는 Stage 3~5 진리표 확정과 정상 devel→main 릴�
 전체 Rust·WASM package 검증은 Stage 3 PR 자체가 workflow/classifier 변경으로 full lane에 들어가므로 원격
 CI에서 확인한다. 로컬에서는 Stage 3가 새로 추가한 unit lane과 분류·workflow 계약에 집중했다.
 
-## 다음 단계
+## 완료 및 canary 결과
 
-1. 리뷰 보정과 review 기록을 PR #3943 head에 push한다.
-2. workflow 변경이므로 최신 head는 full lane으로 통과해야 한다.
-3. merge 직후 frontend-only canary PR과 같은 SHA의 수동 full run을 대조한다.
-4. canary 진리표를 확인한 뒤 Stage 4 Rust lint·builder/worker·Native Skia 조건화를 별도 PR로 진행한다.
+PR #3943은 리뷰 보정과 최신 full CI를 통과해 devel에 merge됐다. 후속 frontend-only canary PR #3951은
+`frontend_mode=unit`, `render_required=false`를 판정해 unit gate만 59초에 실행하고 package와 Canvas를
+정확히 skip했다. 같은 SHA의 수동 full에서 package 2분 47초와 Canvas 5분 59초가 성공해 직접 runner
+time 7분 47초 절감을 확인했다.
+
+수동 full 전체는 기존 cold release archive 30분 timeout으로 완료되지 않았고, 실제 main push에서도
+동일 증상이 확인돼 #4029로 분리했다. Stage 3 진리표와 절감효과는 성공한 동일 SHA frontend·Canvas
+구간으로 확정했으며 canary PR은 제품 변경이 아니므로 merge 없이 close했다. 후속은 Stage 4
+Rust lint·builder/worker·Native Skia 조건화다.

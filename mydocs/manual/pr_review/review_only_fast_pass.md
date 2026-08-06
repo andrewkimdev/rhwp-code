@@ -23,33 +23,35 @@ review-only인 경우에 적용하는 공용 modifier다. maintainer·collaborat
 ## A. code PR 뒤의 trailing review-only commit
 
 contributor code PR의 뒤에 review 문서·오늘할일·허용된 신규 기준 자료를 추가하면 workflow는 현재 head에서
-거꾸로 확인해, **현재 base를 포함하고 이후 변경이 모두 review-only인 가장 최근 green PR head**의 결과를
-재사용한다. 따라서 직전 green PR head 자체가 review-only commit이어도, 그 commit의 full CI가 성공했고 그 뒤에
-허용된 기록만 추가됐다면 candidate가 될 수 있다.
+거꾸로 확인해, **같은 PR source branch에서 실행된 녹색 code candidate SHA와 이후 변경이 모두 review-only인
+가장 최근 head**의 결과를 재사용한다. base가 전진했더라도 source·test가 바뀌지 않았다면 문서 기록만을 위해
+Update branch, merge, rebase를 수행하지 않는다. 따라서 직전 green PR head 자체가 review-only commit이어도,
+그 commit의 full CI가 성공했고 그 뒤에 허용된 기록만 추가됐다면 candidate가 될 수 있다.
 
 다음 조건을 모두 만족해야 한다.
 
 1. candidate 이후 current head까지의 review-only commit은 single-parent다.
 2. review-only Update branch merge를 candidate로 쓰는 경우에는 현재 PR base를 parent로 포함한 정확히
    2-parent merge이고, 그 뒤에 적어도 하나의 single-parent review-only commit이 있어야 한다.
-3. candidate SHA는 현재 base를 ancestor로 포함한다. base가 바뀐 뒤 update branch를 하지 않은 옛 run은
-   재사용하지 않는다.
-4. 후보는 최신순으로 조회한다. check/workflow가 없거나 진행 중인 후보는 더 이전 후보를 계속 확인하되,
+3. candidate SHA는 현재 PR commit history의 code 후보여야 하며, CI·CodeQL·Render Diff 결과는 같은 PR의
+   head branch, source repository, event, candidate SHA와 정확히 일치해야 한다. 현재 base 전진은 단독으로
+   재사용 거부 사유가 아니다.
+4. 후보는 최신순으로 조회한다. workflow가 없거나 진행 중인 후보는 더 이전 후보를 계속 확인하되,
    가장 최근 완료 후보가 failed이면 full CI로 fallback한다.
 5. 채택한 candidate SHA의 Build & Test check 또는 같은 SHA의 CI workflow 집계 job이 completed이고
    conclusion이 success, skipped, neutral 중 하나여야 한다.
 6. push 뒤 최신 head의 preflight와 branch protection이 요구하는 Build & Test aggregate를 확인한다.
    heavy worker가 skipped인 것은 정상이나 aggregate가 pending 또는 failing이면 merge하지 않는다.
 
-trailing range에 reviewer가 만든 일반 merge commit이 있으면 fast-pass는 이를 재사용하지 않는다. current
-`devel`을 직접 parent로 둔 review-only update merge만 제한적으로 허용하며, 그 외 merge는 code 변경을 숨길 수
-있다. contributor가 review 도중 source를 갱신한 경우에는 새 source를 기존 reviewer 기록에 merge하지 말고
+trailing range에 reviewer가 만든 일반 merge commit이 있으면 fast-pass는 이를 재사용하지 않는다. 현재
+`devel`을 직접 parent로 둔 review-only update merge만 선택적으로 허용하며, 일반 trailing 기록에는 그 merge가
+필요하지 않다. contributor가 review 도중 source를 갱신한 경우에는 새 source를 기존 reviewer 기록에 merge하지 말고
 [2.6.1 외부 PR review 기록의 source head 정렬](multi_pr_update_branch.md#261-외부-pr-review-기록의-source-head-정렬)을
 적용해 reviewer 기록만 새 source 위로 replay한다.
 
-local Cargo 성공만으로 candidate의 GitHub Actions를 대체하지 않는다. current base 불일치, 가장 최근 완료
-candidate check의 failed, 허용되지 않은 merge 형태, 허용 경로 밖 변경은 full CI fallback이다. 후보가 전부
-missing 또는 진행 중이면 green 검증을 찾지 못한 것이므로 역시 full CI를 실행한다.
+local Cargo 성공만으로 candidate의 GitHub Actions를 대체하지 않는다. candidate workflow의 PR identity 불일치,
+가장 최근 완료 candidate check의 failed, 허용되지 않은 merge 형태, 허용 경로 밖 변경은 full CI fallback이다.
+후보가 전부 missing 또는 진행 중이면 green 검증을 찾지 못한 것이므로 역시 full CI를 실행한다.
 
 collaborator가 contributor code를 local에서 검증한 뒤 review·오늘할일만 같은 source head에 추가하는 경우도
 이 A 경로다. local 검증 결과와 candidate SHA, 재사용한 Build & Test URL을 review 문서에 기록한다.
@@ -70,7 +72,7 @@ all-review-only-no-code-impact fast-pass를 즉시 선택한다. candidate의 �
 - code, test, CI workflow, Cargo.lock 변경
 - 기존 sample, PDF, golden, baseline, fixture의 수정·삭제·rename
 - 허용 목록 밖의 신규 파일
-- A 경로의 candidate check 누락·실패·미완료 또는 허용되지 않은 merge 형태
+- A 경로의 candidate workflow 누락·실패·미완료·PR identity 불일치 또는 허용되지 않은 merge 형태
 - preflight가 fast_pass=false를 반환
 
 fast-pass는 merge 조건을 없애지 않는다. 최신 head, mergeable 상태, required aggregate, 작업지시자 승인을
