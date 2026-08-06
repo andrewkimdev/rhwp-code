@@ -75,6 +75,10 @@ SVG, WebCanvas, Native Skia에 흩어져 있던 `charSz` 계산을 같은 함수
 **로컬 수용 권고.** 공통 helper로 renderer 세 경로를 정렬했고, 테두리 없음과 반전 사각형의 상반된
 회귀 조건, Native Skia replay, 최신 `devel` merge simulation을 모두 통과했다. 발견한 merge blocker는 없다.
 
-원격 상태는 변동 가능하므로 merge 전에는 이 review-only commit이 `812868363`의 성공한 code candidate를
-재사용한 fast-pass aggregate를 만족하는지, PR head가 최신이며 `mergeable=CLEAN`인지, 그리고 작업지시자
-승인이 있는지를 다시 확인한다.
+`mydocs/orders/20260806.md`가 현재 `devel`에서도 갱신돼 문서-only commit만으로는 merge conflict가
+발생했다. 두 기록을 모두 보존하는 current-base merge `459b30ddd`를 만들었으나 자동 `merge-tree`는
+해당 문서의 충돌 때문에 tree를 만들지 못했다. 따라서 review-only fast-pass 재사용 조건에는 해당하지
+않고, 이 문서 commit을 push한 최신 head의 full CI가 필요하다.
+
+원격 상태는 변동 가능하므로 merge 전에는 최신 head의 full CI, `mergeable=CLEAN`, 그리고 작업지시자
+승인을 다시 확인한다.
