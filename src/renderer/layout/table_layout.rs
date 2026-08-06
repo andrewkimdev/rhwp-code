@@ -433,11 +433,47 @@ pub(super) struct CellUnit {
     /// [Task #1073] 이 유닛이 중첩 표의 한 행을 표현하면 그 행 인덱스. 텍스트/일반 유닛은 None.
     /// 분할 행에서 컷 → `NestedTableSplit`(중첩행 범위) 매핑에 사용.
     nested_row: Option<usize>,
+    /// [#4069] `CELL` 분할 중첩 표의 한 행을 셀별 cursor로 더 잘게 나눈 조각.
+    /// 바깥 CellUnit 컷이 이 조각을 선택하면 렌더러도 같은 자식 컷을 사용한다.
+    nested_table_fragment: Option<NestedTableUnitCut>,
     mixed_nested_fragment: bool,
     mixed_nested_trailing: bool,
     mixed_nested_content_height: f64,
+    /// [#4069] 이 mixed fragment가 자식 1×1 표의 canonical CellUnit을 그대로
+    /// 투영한 것인지 표시한다. true이면 렌더도 같은 자식 컷 범위를 재귀 사용한다.
+    mixed_nested_recursive: bool,
     top_and_bottom_flow: bool,
     empty_spacer: bool,
+}
+
+/// [#4069] 중첩 표의 셀 흐름을 바깥 셀 컷 원장으로 투영한 한 조각.
+///
+/// 기존 `(height, trailing, content_height)` 튜플은 내부 셀의 강제 쪽 경계를
+/// 잃어버렸다. 특히 42065의 1×1 중첩 셀은 저장된 vpos가 쪽마다 0으로
+/// 리셋되므로, 그 경계까지 함께 투영해야 첫 조각과 continuation이 같은 원장을 쓴다.
+#[derive(Debug, Clone, Copy)]
+struct NestedFlowFragment {
+    height: f64,
+    hard_break_before: bool,
+    trailing: bool,
+    content_height: f64,
+    recursive: bool,
+}
+
+#[derive(Debug, Clone)]
+struct NestedTableUnitCut {
+    start_cut: RowCut,
+    end_cut: RowCut,
+    terminal: bool,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct NestedTableCut {
+    pub start_row: usize,
+    pub end_row: usize,
+    pub start_cut: RowCut,
+    pub end_cut: RowCut,
+    pub is_block_split: bool,
 }
 
 /// 중첩 표 부분 렌더링을 위한 행 범위 정보
@@ -455,6 +491,9 @@ pub(crate) struct NestedTableSplit {
     /// 포함 — end_cut 종료). true 면 이어받을 continuation 이 없으므로 셀 하단 초과
     /// 줄 드롭(다음 쪽 소속 줄 제외용)을 적용하지 않는다 — 꼬리 문단 유실 방지.
     pub terminal: bool,
+    /// [#4069] 중첩 표의 자식 행·CellUnit 범위. Some이면 scalar clip 대신
+    /// `layout_partial_table`에 동일 컷을 넘겨 측정과 렌더의 fragment 권위를 통일한다.
+    pub recursive_cut: Option<NestedTableCut>,
 }
 
 /// 중첩 표에서 pixel offset/space를 행 범위로 변환한다.
@@ -474,6 +513,7 @@ pub(crate) fn calc_nested_split_rows(
             flow_height: 0.0,
             offset_within_start: 0.0,
             terminal: false,
+            recursive_cut: None,
         };
     }
 
@@ -542,6 +582,7 @@ pub(crate) fn calc_nested_split_rows(
         flow_height: visible_height,
         offset_within_start: 0.0,
         terminal: false,
+        recursive_cut: None,
     }
 }
 
@@ -5205,9 +5246,44 @@ impl LayoutEngine {
         &self,
         table: &crate::model::table::Table,
         styles: &ResolvedStyleSet,
-    ) -> Vec<(f64, bool, f64)> {
+    ) -> Vec<NestedFlowFragment> {
         if table.row_count != 1 {
             return Vec::new();
+        }
+
+        // [#4069] 단일 셀 중첩 표는 별도 높이 추정식을 다시 만들지 않고 그 셀의
+        // canonical CellUnit 원장을 재사용한다. 여러 저장 페이지 프레임을 가진
+        // 장문 흐름에 한정해 깊이와 무관하게 재귀하며, placeholder line_height와
+        // nested_h를 동시에 더하던 기존 이중 회계를 제거한다. 단일 경계 문서는
+        // #2279의 검증된 legacy 측정 원장을 유지한다.
+        let mut row_cells = table
+            .cells
+            .iter()
+            .filter(|cell| cell.row == 0 && cell.row_span == 1);
+        if let (Some(cell), None) = (row_cells.next(), row_cells.next()) {
+            let units = self.cell_units(cell, table, styles);
+            let stored_page_frames = units.iter().filter(|unit| unit.hard_break_before).count();
+            if stored_page_frames >= 2 {
+                return units
+                    .iter()
+                    .map(|unit| {
+                        let visible = Self::cell_unit_has_visible_content(cell, unit);
+                        NestedFlowFragment {
+                            height: unit.height,
+                            hard_break_before: unit.hard_break_before,
+                            trailing: unit.mixed_nested_trailing || !visible,
+                            content_height: if unit.mixed_nested_content_height > 0.0 {
+                                unit.mixed_nested_content_height
+                            } else if visible {
+                                unit.height
+                            } else {
+                                0.0
+                            },
+                            recursive: true,
+                        }
+                    })
+                    .collect();
+            }
         }
 
         let mut row_units: Vec<(f64, bool, f64)> = Vec::new();
@@ -5382,6 +5458,15 @@ impl LayoutEngine {
             }
         }
         row_units
+            .into_iter()
+            .map(|(height, trailing, content_height)| NestedFlowFragment {
+                height,
+                hard_break_before: false,
+                trailing,
+                content_height,
+                recursive: false,
+            })
+            .collect()
     }
 
     /// [Issue #2214] 표 단위 nested-text flag에 대한 문단 로컬 기여 여부.
@@ -5587,9 +5672,11 @@ impl LayoutEngine {
                         vis_start: 0,
                         vis_end: 0,
                         nested_row: None,
+                        nested_table_fragment: None,
                         mixed_nested_fragment: false,
                         mixed_nested_trailing: false,
                         mixed_nested_content_height: 0.0,
+                        mixed_nested_recursive: false,
                         top_and_bottom_flow: false,
                         empty_spacer: false,
                     });
@@ -5608,9 +5695,11 @@ impl LayoutEngine {
                 vis_start: 0,
                 vis_end: 0,
                 nested_row: None,
+                nested_table_fragment: None,
                 mixed_nested_fragment: false,
                 mixed_nested_trailing: false,
                 mixed_nested_content_height: 0.0,
+                mixed_nested_recursive: false,
                 top_and_bottom_flow: true,
                 empty_spacer: false,
             });
@@ -5876,7 +5965,13 @@ impl LayoutEngine {
                         _ => None,
                     })
                     .collect();
-                if nested_tables.len() == 1 && nested_tables[0].row_count >= 2 {
+                if nested_tables.len() == 1
+                    && nested_tables[0].row_count >= 2
+                    && !matches!(
+                        nested_tables[0].page_break,
+                        crate::model::table::TablePageBreak::None
+                    )
+                {
                     let nt = nested_tables[0];
                     let ncol = nt.col_count as usize;
                     let nrow = nt.row_count as usize;
@@ -5898,6 +5993,157 @@ impl LayoutEngine {
                     let om_top = hwpunit_to_px(nt.outer_margin_top as i32, self.dpi);
                     let om_bot = hwpunit_to_px(nt.outer_margin_bottom as i32, self.dpi);
                     for (ri, rh) in rhs.iter().enumerate() {
+                        // [#4069] CELL 분할 중첩 표는 큰 행을 단일 atom으로 바깥
+                        // 원장에 올리지 않는다. 행에서 콘텐츠가 가장 높은 셀의 unit
+                        // 경계를 공통 높이 축으로 삼고, 각 경계에서 모든 셀의 누적
+                        // cursor를 기록한다. 따라서 첫 조각과 continuation 모두 같은
+                        // 자식 RowCut을 렌더러에 전달할 수 있다.
+                        if matches!(nt.page_break, TablePageBreak::RowBreak) {
+                            let mut row_cells: Vec<&crate::model::table::Cell> = nt
+                                .cells
+                                .iter()
+                                .filter(|cell| cell.row as usize == ri && cell.row_span == 1)
+                                .collect();
+                            row_cells.sort_by_key(|cell| cell.col);
+                            let row_is_auto_height = !row_cells.is_empty()
+                                && row_cells.iter().all(|cell| cell.height == 0);
+                            let row_has_crossing_span = nt.cells.iter().any(|cell| {
+                                let start = cell.row as usize;
+                                let end = start + (cell.row_span as usize).max(1);
+                                cell.row_span > 1 && start <= ri && ri < end
+                            });
+                            let row_units: Vec<std::sync::Arc<Vec<CellUnit>>> = row_cells
+                                .iter()
+                                .map(|cell| self.cell_units(cell, nt, styles))
+                                .collect();
+                            let driver = row_units
+                                .iter()
+                                .enumerate()
+                                .filter(|(_, cell_units)| !cell_units.is_empty())
+                                .max_by(|(_, a), (_, b)| {
+                                    let ah: f64 = a.iter().map(|unit| unit.height).sum();
+                                    let bh: f64 = b.iter().map(|unit| unit.height).sum();
+                                    ah.total_cmp(&bh)
+                                })
+                                .map(|(index, _)| index);
+
+                            if let Some(driver_index) = driver.filter(|driver_index| {
+                                row_is_auto_height
+                                    && !row_has_crossing_span
+                                    && row_units[*driver_index].len() > 1
+                            }) {
+                                let driver_units = &row_units[driver_index];
+                                let driver_total: f64 =
+                                    driver_units.iter().map(|unit| unit.height).sum();
+                                let row_extra = (*rh - driver_total).max(0.0);
+                                let mut driver_before = 0.0;
+
+                                for (fragment_index, driver_unit) in driver_units.iter().enumerate()
+                                {
+                                    let driver_after = driver_before + driver_unit.height;
+                                    let cuts_at = |height: f64| -> RowCut {
+                                        row_units
+                                            .iter()
+                                            .map(|cell_units| {
+                                                let mut consumed = 0.0;
+                                                let mut count = 0usize;
+                                                while count < cell_units.len()
+                                                    && consumed + cell_units[count].height
+                                                        <= height + 0.1
+                                                {
+                                                    consumed += cell_units[count].height;
+                                                    count += 1;
+                                                }
+                                                count
+                                            })
+                                            .collect()
+                                    };
+                                    let start_cut = cuts_at(driver_before);
+                                    let end_cut = cuts_at(driver_after);
+                                    let terminal = row_units
+                                        .iter()
+                                        .zip(end_cut.iter())
+                                        .all(|(cell_units, end)| *end >= cell_units.len());
+                                    let mut uh = driver_unit.height;
+                                    if fragment_index == 0 {
+                                        uh += row_extra * 0.5;
+                                    }
+                                    if fragment_index + 1 == driver_units.len() {
+                                        uh += row_extra - row_extra * 0.5;
+                                        if ri + 1 < nrow {
+                                            uh += ncs;
+                                        }
+                                        if ri + 1 == nrow {
+                                            uh += om_bot + spacing_after;
+                                        }
+                                    }
+                                    if ri == 0 && fragment_index == 0 {
+                                        uh += om_top + spacing_before;
+                                    }
+
+                                    let mut hard_break_before = driver_unit.hard_break_before
+                                        || (reset_before && ri == 0 && fragment_index == 0);
+                                    let mut vpos_gap_before =
+                                        vpos_gap_before_para && ri == 0 && fragment_index == 0;
+                                    for ((cell_units, start), end) in
+                                        row_units.iter().zip(start_cut.iter()).zip(end_cut.iter())
+                                    {
+                                        if end > start {
+                                            if cell_units
+                                                .get(*start)
+                                                .is_some_and(|unit| unit.hard_break_before)
+                                            {
+                                                hard_break_before = true;
+                                            }
+                                            if cell_units
+                                                .get(*start)
+                                                .is_some_and(|unit| unit.vpos_gap_before)
+                                            {
+                                                vpos_gap_before = true;
+                                            }
+                                        }
+                                    }
+                                    if use_vpos_unit_positions
+                                        && ri == 0
+                                        && fragment_index == 0
+                                        && !hard_break_before
+                                    {
+                                        if let Some(seg) = p.line_segs.first() {
+                                            let target_top = normalized_vpos_px(seg.vertical_pos);
+                                            if target_top > unit_cum {
+                                                uh += target_top - unit_cum;
+                                                vpos_gap_before = true;
+                                            }
+                                        }
+                                    }
+
+                                    units.push(CellUnit {
+                                        height: uh,
+                                        hard_break_before,
+                                        vpos_gap_before,
+                                        para_idx: pi,
+                                        vis_start: 0,
+                                        vis_end: line_count.max(1),
+                                        nested_row: Some(ri),
+                                        nested_table_fragment: Some(NestedTableUnitCut {
+                                            start_cut,
+                                            end_cut,
+                                            terminal,
+                                        }),
+                                        mixed_nested_fragment: false,
+                                        mixed_nested_trailing: false,
+                                        mixed_nested_content_height: 0.0,
+                                        mixed_nested_recursive: false,
+                                        top_and_bottom_flow: false,
+                                        empty_spacer: false,
+                                    });
+                                    unit_cum += uh;
+                                    driver_before = driver_after;
+                                }
+                                continue;
+                            }
+                        }
+
                         let mut uh = *rh;
                         let hard_break_before = reset_before && ri == 0;
                         let mut vpos_gap_before = vpos_gap_before_para && ri == 0;
@@ -5927,9 +6173,11 @@ impl LayoutEngine {
                             vis_start: 0,
                             vis_end: line_count.max(1),
                             nested_row: Some(ri),
+                            nested_table_fragment: None,
                             mixed_nested_fragment: false,
                             mixed_nested_trailing: false,
                             mixed_nested_content_height: 0.0,
+                            mixed_nested_recursive: false,
                             top_and_bottom_flow: false,
                             empty_spacer: false,
                         });
@@ -5963,14 +6211,15 @@ impl LayoutEngine {
                     } else {
                         900.0
                     };
-                    let total_frag_h: f64 = frags.iter().map(|(h, _, _)| *h).sum();
+                    let total_frag_h: f64 = frags.iter().map(|fragment| fragment.height).sum();
                     if frags.len() > 1 && total_frag_h > multi_page_px {
                         let om_top = hwpunit_to_px(nt.outer_margin_top as i32, self.dpi);
                         let om_bot = hwpunit_to_px(nt.outer_margin_bottom as i32, self.dpi);
                         let n = frags.len();
-                        for (fi, (h, trailing, content_h)) in frags.into_iter().enumerate() {
-                            let mut uh = h;
-                            let hard_break_before = reset_before && fi == 0;
+                        for (fi, fragment) in frags.into_iter().enumerate() {
+                            let mut uh = fragment.height;
+                            let hard_break_before =
+                                fragment.hard_break_before || (reset_before && fi == 0);
                             let mut vpos_gap_before = vpos_gap_before_para && fi == 0;
                             if use_vpos_unit_positions && fi == 0 && !hard_break_before {
                                 if let Some(seg) = p.line_segs.first() {
@@ -5995,9 +6244,11 @@ impl LayoutEngine {
                                 vis_start: line_count,
                                 vis_end: line_count,
                                 nested_row: None,
+                                nested_table_fragment: None,
                                 mixed_nested_fragment: true,
-                                mixed_nested_trailing: trailing,
-                                mixed_nested_content_height: content_h,
+                                mixed_nested_trailing: fragment.trailing,
+                                mixed_nested_content_height: fragment.content_height,
+                                mixed_nested_recursive: fragment.recursive,
                                 top_and_bottom_flow: false,
                                 empty_spacer: false,
                             });
@@ -6084,9 +6335,11 @@ impl LayoutEngine {
                             vis_start: li,
                             vis_end: li + 1,
                             nested_row: None,
+                            nested_table_fragment: None,
                             mixed_nested_fragment: false,
                             mixed_nested_trailing: false,
                             mixed_nested_content_height: 0.0,
+                            mixed_nested_recursive: false,
                             top_and_bottom_flow: false,
                             empty_spacer: false,
                         });
@@ -6103,7 +6356,7 @@ impl LayoutEngine {
                         nested_h + 4.0
                     };
                     if target_h > 0.5 {
-                        let mut fragment_heights: Vec<(f64, bool, f64)> = p
+                        let mut fragment_heights: Vec<NestedFlowFragment> = p
                             .controls
                             .iter()
                             .filter_map(|ctrl| {
@@ -6120,11 +6373,20 @@ impl LayoutEngine {
                             let mut remaining = target_h;
                             while remaining > 0.5 {
                                 let h = remaining.min(NESTED_FRAGMENT_UNIT_PX);
-                                fragment_heights.push((h, false, h));
+                                fragment_heights.push(NestedFlowFragment {
+                                    height: h,
+                                    hard_break_before: false,
+                                    trailing: false,
+                                    content_height: h,
+                                    recursive: false,
+                                });
                                 remaining -= h;
                             }
                         } else {
-                            let current_h: f64 = fragment_heights.iter().map(|(h, _, _)| *h).sum();
+                            let current_h: f64 = fragment_heights
+                                .iter()
+                                .map(|fragment| fragment.height)
+                                .sum();
                             // [Task #1809] top pad 차감(c7dbe8a2, 종전 HWPX 한정)을 소스
                             // 무관화 — 한글 편집기 대조에서 pad 적용 컷 위치가 정답
                             // (admrul_0556 p1 조각 하단: 한글 808.8 = pad 적용 808.7,
@@ -6157,28 +6419,30 @@ impl LayoutEngine {
                             let top_up = (target_h - current_h).max(0.0);
                             let target_h = target_h - hwpx_rowbreak_top_pad.min(top_up);
                             if target_h > current_h + 0.5 {
-                                if let Some((first, _, content_h)) = fragment_heights.first_mut() {
-                                    *first += target_h - current_h;
-                                    *content_h = (*content_h).max(*first);
+                                if let Some(first) = fragment_heights.first_mut() {
+                                    first.height += target_h - current_h;
+                                    first.content_height = first.content_height.max(first.height);
                                 }
                             }
                         }
-                        for (h, trailing, content_h) in fragment_heights {
+                        for fragment in fragment_heights {
                             units.push(CellUnit {
-                                height: h,
-                                hard_break_before: false,
+                                height: fragment.height,
+                                hard_break_before: fragment.hard_break_before,
                                 vpos_gap_before: false,
                                 para_idx: pi,
                                 vis_start: line_count,
                                 vis_end: line_count,
                                 nested_row: None,
+                                nested_table_fragment: None,
                                 mixed_nested_fragment: true,
-                                mixed_nested_trailing: trailing,
-                                mixed_nested_content_height: content_h,
+                                mixed_nested_trailing: fragment.trailing,
+                                mixed_nested_content_height: fragment.content_height,
+                                mixed_nested_recursive: fragment.recursive,
                                 top_and_bottom_flow: false,
                                 empty_spacer: false,
                             });
-                            unit_cum += h;
+                            unit_cum += fragment.height;
                         }
                     }
                     append_non_inline_units(
@@ -6318,9 +6582,11 @@ impl LayoutEngine {
                         line_count.max(1)
                     },
                     nested_row: None,
+                    nested_table_fragment: None,
                     mixed_nested_fragment: false,
                     mixed_nested_trailing: false,
                     mixed_nested_content_height: 0.0,
+                    mixed_nested_recursive: false,
                     top_and_bottom_flow: para_top_and_bottom_flow_unit,
                     empty_spacer: is_empty_spacer_para,
                 });
@@ -6404,9 +6670,11 @@ impl LayoutEngine {
                             li + 1
                         },
                         nested_row: None,
+                        nested_table_fragment: None,
                         mixed_nested_fragment: false,
                         mixed_nested_trailing: false,
                         mixed_nested_content_height: 0.0,
+                        mixed_nested_recursive: false,
                         top_and_bottom_flow: para_top_and_bottom_flow_unit,
                         empty_spacer: is_empty_spacer_para,
                     });
@@ -7679,25 +7947,67 @@ impl LayoutEngine {
         let hi = end_unit.min(units.len()).max(lo);
         let mut total = 0.0;
         let mut offset = 0.0;
-        let mut visible_units: Vec<(f64, bool)> = Vec::new();
+        let mut visible_units: Vec<(f64, bool, bool)> = Vec::new();
+        let mut recursive_total = 0usize;
+        let mut recursive_start = 0usize;
+        let mut has_non_recursive_fragment = false;
         for (idx, unit) in units.iter().enumerate() {
             if unit.para_idx != para_idx || !unit.mixed_nested_fragment {
                 continue;
+            }
+            if unit.mixed_nested_recursive {
+                recursive_total += 1;
+                if idx < lo {
+                    recursive_start += 1;
+                }
+            } else {
+                has_non_recursive_fragment = true;
             }
             total += unit.height;
             if idx < lo {
                 offset += unit.height;
             }
             if idx >= lo && idx < hi {
-                visible_units.push((unit.height, unit.mixed_nested_trailing));
+                visible_units.push((
+                    unit.height,
+                    unit.mixed_nested_trailing,
+                    unit.mixed_nested_recursive,
+                ));
             }
         }
         if offset > 0.5 {
-            while visible_units.last().is_some_and(|(_, trailing)| *trailing) {
+            while visible_units
+                .last()
+                .is_some_and(|(_, trailing, _)| *trailing)
+            {
                 visible_units.pop();
             }
         }
-        let flow_visible: f64 = visible_units.iter().map(|(h, _)| *h).sum();
+        let flow_visible: f64 = visible_units.iter().map(|(h, _, _)| *h).sum();
+        let recursive_visible = visible_units
+            .iter()
+            .filter(|(_, _, recursive)| *recursive)
+            .count();
+        let recursive_cut = if recursive_total > 0 && !has_non_recursive_fragment {
+            let recursive_end = recursive_start + recursive_visible;
+            Some(NestedTableCut {
+                start_row: 0,
+                end_row: 1,
+                start_cut: if recursive_start == 0 {
+                    Vec::new()
+                } else {
+                    vec![recursive_start]
+                },
+                end_cut: if recursive_end >= recursive_total {
+                    Vec::new()
+                } else {
+                    vec![recursive_end]
+                },
+                is_block_split: false,
+            })
+        } else {
+            None
+        };
         // Continuation pages still need the whole visible slice clipped in, even
         // when the same host cell has following paragraphs in the current cut.
         // Shrinking the clip to the first non-trailing unit keeps the flow
@@ -7705,7 +8015,7 @@ impl LayoutEngine {
         let visible: f64 = flow_visible;
         let first_visible_content_height = visible_units
             .iter()
-            .find_map(|(height, trailing)| (!*trailing).then_some(*height))
+            .find_map(|(height, trailing, _)| (!*trailing).then_some(*height))
             .unwrap_or(0.0);
         let offset_within_start = (offset - first_visible_content_height).max(0.0);
         let is_offset_continuation = offset_within_start > 0.5;
@@ -7722,7 +8032,9 @@ impl LayoutEngine {
             return None;
         }
         let remaining = (total - offset).max(0.0);
-        let flow_height = if is_offset_continuation {
+        let flow_height = if recursive_cut.is_some() {
+            flow_visible
+        } else if is_offset_continuation {
             flow_visible + first_visible_content_height
         } else {
             flow_visible.min(remaining)
@@ -7746,6 +8058,7 @@ impl LayoutEngine {
         // 이 셀 콘텐츠의 마지막 조각이다 — 이후 continuation 이 만들어지지 않는다.
         let terminal = end_unit >= units.len();
         let (start_row, end_row, row_offset_within_start, visible_height) = match nested {
+            Some(_) if recursive_cut.is_some() => (0, 1, 0.0, flow_visible),
             Some(nt) if nt.row_count > 1 => {
                 let ncol = nt.col_count as usize;
                 let nrow = nt.row_count as usize;
@@ -7797,6 +8110,80 @@ impl LayoutEngine {
             // the host cell starts below it.
             offset_within_start: row_offset_within_start,
             terminal,
+            recursive_cut,
+        })
+    }
+
+    /// [#4069] 바깥 셀 컷에 선택된 `CELL` 분할 중첩 표 조각을 자식 표의
+    /// `(row, RowCut)` 범위로 되돌린다. 측정 원장에 기록한 시작/끝 cursor를
+    /// 그대로 사용하므로 페이지마다 전체 행을 다시 그리는 scalar clip이 없다.
+    pub(crate) fn nested_table_split_from_cut_units(
+        &self,
+        cell: &crate::model::table::Cell,
+        table: &crate::model::table::Table,
+        styles: &ResolvedStyleSet,
+        start_unit: usize,
+        end_unit: usize,
+        para_idx: usize,
+    ) -> Option<NestedTableSplit> {
+        let units = self.cell_units(cell, table, styles);
+        let lo = start_unit.min(units.len());
+        let hi = end_unit.min(units.len()).max(lo);
+        let mut first_unit: Option<&CellUnit> = None;
+        let mut last_unit: Option<&CellUnit> = None;
+        let mut has_fragment = false;
+        let mut visible_height = 0.0;
+        for unit in units.iter().take(hi).skip(lo) {
+            if unit.para_idx != para_idx || unit.nested_row.is_none() {
+                continue;
+            }
+            first_unit.get_or_insert(unit);
+            last_unit = Some(unit);
+            has_fragment |= unit.nested_table_fragment.is_some();
+            visible_height += unit.height;
+        }
+        if !has_fragment {
+            return None;
+        }
+        let (first_unit, last_unit) = (first_unit?, last_unit?);
+        let first_row = first_unit.nested_row?;
+        let last_row = last_unit.nested_row?;
+        let start_cut = first_unit
+            .nested_table_fragment
+            .as_ref()
+            .map(|fragment| {
+                if fragment.start_cut.iter().all(|cut| *cut == 0) {
+                    Vec::new()
+                } else {
+                    fragment.start_cut.clone()
+                }
+            })
+            .unwrap_or_default();
+        let (end_cut, terminal) = last_unit
+            .nested_table_fragment
+            .as_ref()
+            .map(|fragment| {
+                if fragment.terminal {
+                    (Vec::new(), true)
+                } else {
+                    (fragment.end_cut.clone(), false)
+                }
+            })
+            .unwrap_or_else(|| (Vec::new(), true));
+        Some(NestedTableSplit {
+            start_row: first_row,
+            end_row: last_row + 1,
+            visible_height,
+            flow_height: visible_height,
+            offset_within_start: 0.0,
+            terminal,
+            recursive_cut: Some(NestedTableCut {
+                start_row: first_row,
+                end_row: last_row + 1,
+                start_cut,
+                end_cut,
+                is_block_split: false,
+            }),
         })
     }
 
