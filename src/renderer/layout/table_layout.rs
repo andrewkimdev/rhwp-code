@@ -1772,10 +1772,6 @@ impl LayoutEngine {
                 return 0.0;
             }
         }
-        let header_footer_padding_compat = matches!(
-            col_node.node_type,
-            RenderNodeType::Header | RenderNodeType::Footer | RenderNodeType::MasterPage
-        );
         // 1x1 래퍼 표 감지: 외곽 표를 무시하고 내부 표를 직접 렌더링.
         // (Task #688) 셀 paragraphs 가 2개 이상이면 첫 nested 표만 unwrap 시 나머지
         // paragraph 의 nested 표가 누락되므로 paragraphs.len() == 1 가드를 둔다.
@@ -2391,12 +2387,18 @@ impl LayoutEngine {
             split_terminal,
             clamp_header_negative_para_offset,
             inline_table_flow_y_shift,
-            header_footer_padding_compat,
             // HWP5에서는 표 안의 비글자 1×1 표가 `inMargin=(0,0,141,141)`를
             // 갖더라도 셀의 작은 좌우 저장 margin을 계속 적용하는 형상이 있다.
             // 일반 최상위 표의 #2195 pad 사다리는 유지하고, 실제 셀 내부 중첩에만
-            // 문맥을 제한한다 (#2308 HWP 2024 PDF p34).
-            depth > 0 && !table.common.treat_as_char,
+            // 문맥을 제한한다 (#2308 HWP 2024 PDF p34). MasterPage/footer의
+            // 중첩 표는 #2195의 일반 aim=false 표 여백을 써야 하므로 제외한다
+            // (exam_social p2 footer 번호 회귀).
+            depth > 0
+                && !table.common.treat_as_char
+                && !matches!(
+                    col_node.node_type,
+                    RenderNodeType::Header | RenderNodeType::Footer | RenderNodeType::MasterPage
+                ),
             &cellzone_diagonal_origin_covered,
         );
 
@@ -5257,7 +5259,6 @@ impl LayoutEngine {
         split_terminal: bool,
         clamp_header_negative_para_offset: bool,
         inline_table_flow_y_shift: f64,
-        header_footer_padding_compat: bool,
         nested_non_tac_cell_margin_compat: bool,
         cellzone_diagonal_origin_covered: &[Vec<bool>],
     ) {
@@ -5350,11 +5351,7 @@ impl LayoutEngine {
 
             // 셀 패딩 (cell.padding이 0이면 table.padding fallback)
             let (mut pad_left, mut pad_right, pad_top, pad_bottom) = self
-                .resolve_cell_padding_for_context(
-                    cell,
-                    table,
-                    header_footer_padding_compat || nested_non_tac_cell_margin_compat,
-                );
+                .resolve_cell_padding_for_context(cell, table, nested_non_tac_cell_margin_compat);
 
             let mut composed_paras: Vec<_> = cell
                 .paragraphs
