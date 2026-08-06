@@ -22,11 +22,13 @@ last_verified: 2026-08-06
 7. code head `6049d291`의 CI `31068823951`과 CodeQL `31068823815`가 모두 성공했다.
 8. 이후 같은 날 `devel` 오늘할일 추가와 충돌해, 양쪽 기록을 보존한 update-branch merge
    `df3aefd70`을 만들었다. contributor 원 commit은 rewrite하지 않았다.
+9. 첫 fast-pass preflight가 merge 뒤의 green candidate를 아직 찾지 못해 full CI로 전환됐고,
+   `67aedc594`의 CI `31069850597`과 CodeQL `31069850507`가 모두 성공했다.
 
 ## 남은 절차
 
-- update-branch merge 뒤의 이 archive review·오늘할일 trailing commit을 같은 source branch에 push한다.
-- `6049d291`을 code candidate로 재사용한 fast-pass aggregate와 최신 `CLEAN` 상태를 확인한다.
+- `67aedc594` 뒤의 이 archive review·오늘할일 trailing commit을 같은 source branch에 push한다.
+- `67aedc594`을 code candidate로 재사용한 fast-pass aggregate와 최신 `CLEAN` 상태를 확인한다.
 - 병합 후 comment에는 기존 산출물 삭제와 batch 실패 은닉을 막기 위한 메인터너 보정임을 명시한다.
 
 ## rollback
