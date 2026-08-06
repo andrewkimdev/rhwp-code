@@ -657,19 +657,15 @@ jobs:
 
   test-slow-shard:
     uses: ./.github/workflows/run-nextest-archives.yml
-    needs: [preflight, native-skia-tests, build-test-archive-slow]
+    # [#4103] shard는 archive만 소비한다. Native Skia는 final aggregate가 별도 집계하므로
+    # 여기서 기다리지 않아 archive 완료 즉시 기본 테스트를 시작할 수 있다.
+    needs: [preflight, build-test-archive-slow]
     if: >-
       ${{
         always()
         && needs.preflight.result == 'success'
         && needs.preflight.outputs.fast_pass != 'true'
         && needs.preflight.outputs.rust_required == 'true'
-        && (
-          (needs.preflight.outputs.native_skia_required == 'true'
-            && needs['native-skia-tests'].result == 'success')
-          || (needs.preflight.outputs.native_skia_required == 'false'
-            && needs['native-skia-tests'].result == 'skipped')
-        )
         && needs['build-test-archive-slow'].result == 'success'
       }}
     permissions:
@@ -681,19 +677,13 @@ jobs:
 
   test-regular-shard-1:
     uses: ./.github/workflows/run-nextest-archives.yml
-    needs: [preflight, native-skia-tests, build-test-archive-a]
+    needs: [preflight, build-test-archive-a]
     if: >-
       ${{
         always()
         && needs.preflight.result == 'success'
         && needs.preflight.outputs.fast_pass != 'true'
         && needs.preflight.outputs.rust_required == 'true'
-        && (
-          (needs.preflight.outputs.native_skia_required == 'true'
-            && needs['native-skia-tests'].result == 'success')
-          || (needs.preflight.outputs.native_skia_required == 'false'
-            && needs['native-skia-tests'].result == 'skipped')
-        )
         && needs['build-test-archive-a'].result == 'success'
       }}
     permissions:
@@ -705,19 +695,13 @@ jobs:
 
   test-regular-shard-2:
     uses: ./.github/workflows/run-nextest-archives.yml
-    needs: [preflight, native-skia-tests, build-test-archive-slow]
+    needs: [preflight, build-test-archive-slow]
     if: >-
       ${{
         always()
         && needs.preflight.result == 'success'
         && needs.preflight.outputs.fast_pass != 'true'
         && needs.preflight.outputs.rust_required == 'true'
-        && (
-          (needs.preflight.outputs.native_skia_required == 'true'
-            && needs['native-skia-tests'].result == 'success')
-          || (needs.preflight.outputs.native_skia_required == 'false'
-            && needs['native-skia-tests'].result == 'skipped')
-        )
         && needs['build-test-archive-slow'].result == 'success'
       }}
     permissions:
@@ -729,19 +713,13 @@ jobs:
 
   test-regular-shard-3:
     uses: ./.github/workflows/run-nextest-archives.yml
-    needs: [preflight, native-skia-tests, build-test-archive-b]
+    needs: [preflight, build-test-archive-b]
     if: >-
       ${{
         always()
         && needs.preflight.result == 'success'
         && needs.preflight.outputs.fast_pass != 'true'
         && needs.preflight.outputs.rust_required == 'true'
-        && (
-          (needs.preflight.outputs.native_skia_required == 'true'
-            && needs['native-skia-tests'].result == 'success')
-          || (needs.preflight.outputs.native_skia_required == 'false'
-            && needs['native-skia-tests'].result == 'skipped')
-        )
         && needs['build-test-archive-b'].result == 'success'
       }}
     permissions:
