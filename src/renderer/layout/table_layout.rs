@@ -1004,7 +1004,7 @@ impl LayoutEngine {
         let cell_spacing = hwpunit_to_px(table.cell_spacing as i32, self.dpi);
 
         // ── 1. 열 폭 + 행 높이 계산 ──
-        let col_widths = self.resolve_column_widths(table, col_count);
+        let mut col_widths = self.resolve_column_widths(table, col_count);
         let row_heights = self.resolve_row_heights(
             table,
             col_count,
@@ -1072,7 +1072,7 @@ impl LayoutEngine {
         // [#3658] 종료 조각 여부 — 셀 하단 초과 줄 드롭 예외 판정에 사용.
         let split_terminal = nested_split.is_some_and(|s| s.terminal);
 
-        let row_col_x = build_row_col_x(
+        let mut row_col_x = build_row_col_x(
             table,
             &col_widths,
             col_count,
@@ -1100,10 +1100,54 @@ impl LayoutEngine {
             None
         };
 
-        let table_width = row_col_x
+        let mut table_width = row_col_x
             .iter()
             .map(|rx| rx.last().copied().unwrap_or(0.0))
             .fold(col_x.last().copied().unwrap_or(0.0), f64::max);
+        // [#4042 버그 A] 셀 안 중첩 표(depth>0, 비-TAC)의 렌더 폭은 표 선언 폭(=부모 셀
+        // full 폭)으로 결정되는데, 호출자(table_partial.rs:1309 continuation, table_layout.rs
+        // 정상 비-TAC 셀 경로)는 이미 패딩을 뺀 col_area(inner_width)를 넘기고 원점도
+        // compute_table_x_position 이 패딩 반영(inner_x)해 잡는다. 빠진 단계는 폭을 그
+        // 안쪽 내용 상자(col_area.width)에 맞춰 clamp 하는 것뿐이라, 원점은 패딩만큼 우측
+        // 이동했는데 폭은 full 이라 우측이 pad_left 만큼 셀 밖으로 넘쳐 클립됐다. col_area
+        // 에 맞춰 균일 축소해 좌우 원점·폭을 정합시킨다. table_width < col_area.width 인
+        // 정상/좁은 표(#3308 가운데 배치)와 TAC 표는 조건상 no-op. 지역변수 스케일링뿐이라
+        // cell_units/projection 캐시를 재계산하지 않아 단일 패스 성능 불변.
+        // row_col_x 를 함께 축소하지 않으면 셀 내용만 줄고 테두리 세로선이 full 로 남아
+        // 우측 세로선이 어긋나므로 col_widths·col_x·row_col_x·table_width 를 동일 fit 로 축소.
+        // fit 타깃은 col_area.width 가 아니라 원점 로직(compute_table_x_position depth>0
+        // 분기, 2573-2575)이 실제로 쓰는 가용 폭 `area_w = col_area.width - om_left` 와
+        // 정확히 일치시킨다. 표 원점이 col_area.x + om_left 로 밀리므로, 폭을 col_area.width
+        // 로 맞추면 om_left(예: 조문대비표 ≈1.9px)만큼 우측이 여전히 초과한다. area_w 로
+        // 맞추면 표 우측 = (col_area.x + om_left) + area_w = col_area.x + col_area.width 로
+        // 셀 내용 우측에 정확히 flush 된다.
+        let fit_om_left = hwpunit_to_px(table.outer_margin_left as i32, self.dpi);
+        let fit_avail_w = (col_area.width - fit_om_left).max(0.0);
+        // [#4042 버그 A] 다중열(col_count>1) 중첩 표만 대상. 1×1(단일 셀) 중첩 표는
+        // 셀 자체가 표 폭이라 render_normalization 이 부모 셀에 맞춰 스트레치(#2195/#4058
+        // 76076)하는 것이 정답 기하이며, 여기서 col_area.width 로 되축소하면 그 스트레치
+        // 를 되돌려 nested fragment 기하가 어긋난다(issue_2308 회귀). 우측 클립 defect 는
+        // 열 경계 합이 셀 내용 상자를 넘는 다중열 표의 증상이므로 col_count>1 로 한정한다
+        // (케이스별 구조 가드).
+        if depth > 0
+            && table.col_count > 1
+            && !table.common.treat_as_char
+            && table_width > fit_avail_w + 0.5
+        {
+            let fit = fit_avail_w / table_width;
+            for w in col_widths.iter_mut() {
+                *w *= fit;
+            }
+            for x in col_x.iter_mut() {
+                *x *= fit;
+            }
+            for rx in row_col_x.iter_mut() {
+                for x in rx.iter_mut() {
+                    *x *= fit;
+                }
+            }
+            table_width *= fit;
+        }
         let table_height = if let Some(col_row_y) = independent_col_row_y.as_ref() {
             col_row_y
                 .iter()
@@ -3147,30 +3191,53 @@ impl LayoutEngine {
                             // 본문배치 속성(가로/세로 기준, 정렬, 오프셋) 적용
                             let pic_w = hwpunit_to_px(pic.common.width as i32, self.dpi);
                             let pic_h = hwpunit_to_px(pic.common.height as i32, self.dpi);
-                            // [Task #577] TopAndBottom + vert_rel_to=Para 인 셀 내부 이미지는
-                            // anchor 라인이 이미지에 의해 displaced 되므로, layout_composed_paragraph
-                            // 가 advance 시킨 para_y 가 아닌 anchor 시점(para_y_before_compose)을 기준
-                            // 으로 해야 cell-clip 영역 내부에 정확히 배치된다. (exam_science 2번 보기 ⑤
-                            // 등 5개 이미지에서 line_height(약 15.32px) 만큼 아래로 밀려 잘림.)
-                            let top_and_bottom_para = matches!(
-                                pic.common.text_wrap,
-                                crate::model::shape::TextWrap::TopAndBottom
-                            ) && matches!(
+                            // vert_rel_to=Para 인 셀 내부 비인라인 이미지의 앵커 기준점.
+                            // `para_y` 는 `layout_composed_paragraph` 가 advance 시킨 뒤의
+                            // 값이라 한 줄 아래를 가리킨다 — 그대로 쓰면 그림이 줄 높이만큼
+                            // 내려가 셀 경계에 잘린다.
+                            //
+                            // 이 자리는 wrap 종류를 하나씩 열거하며 고쳐 왔다 —
+                            // [Task #577] TopAndBottom(exam_science 2번 보기 ⑤ 등 5개가
+                            // line_height 약 15.32px 만큼 밀려 잘림), [Task #2207] 글뒤로·
+                            // 글앞으로(오버레이는 텍스트 플로우를 밀지 않아 같은 원리).
+                            // [#4059] 그 열거에 Square·Tight·Through 가 빠져 있었다 — 관세청
+                            // 보도자료 1쪽 "한국판뉴딜" 로고가 줄 높이(17.3px)만큼 밀려 잘렸다.
+                            //
+                            // 다만 **두 무리는 기준점이 다르다.** wrap 무관하게 #577 공식
+                            // (`content_cell_y + pad_top + seg.vpos`)으로 통일해 보았더니
+                            // `pic-in-table-with-toggle` 이 한글 대비 +8.6px 에서 −43.8px 로
+                            // 더 어긋났다. 그 셀은 valign=Center 라 문단이 셀 상단이 아니라
+                            // 가운데에 놓이는데, 저 공식은 셀 콘텐츠 상단을 가리키기 때문이다.
+                            // Square 계열은 **실제 문단 top**(`para_y_before_compose`)이 맞다.
+                            //
+                            // 한글 PDF 오라클 실측 (그림 top, px):
+                            //   문서                        한글     종전      정정 후
+                            //   관세청 한국판뉴딜           191.9   208.3    191.0
+                            //   pic-in-table-with-toggle    249.5   258.1    244.8
+                            //   hwpx_sample2 p19            970.2   978.4    965.1
+                            // 잔여 약 5px 는 별개 축이다 — toggle 은 x 도 같은 크기로 어긋난다
+                            // (한글 170.1 vs 166.4). 앵커 원점(셀 padding 해석) 쪽으로 보인다.
+                            //
+                            // 이 분기는 이미 `treat_as_char == false` 안이므로 wrap 조건 없이
+                            // vert_rel_to 만 본다.
+                            let non_inline_para = matches!(
                                 pic.common.vert_rel_to,
                                 crate::model::shape::VertRelTo::Para
                             );
-                            // [Task #2207] 글뒤로/글앞으로(절대 오버레이) + Para 도 앵커
-                            // 시점 기준. 오버레이 그림은 텍스트 플로우를 밀지 않으므로
-                            // compose 후 전진된 para_y 는 한 줄 아래를 가리킨다 (#577 과
-                            // 동일 원리 — Shape 경로는 이미 wrap 무관 앵커 시점 기준).
-                            let overlay_para = matches!(
-                                pic.common.text_wrap,
-                                crate::model::shape::TextWrap::BehindText
-                                    | crate::model::shape::TextWrap::InFrontOfText
-                            ) && matches!(
-                                pic.common.vert_rel_to,
-                                crate::model::shape::VertRelTo::Para
-                            );
+                            // #2071 셀 valign 강제 + 앵커 분기 판정용. 그쪽은 한글 2024
+                            // 오라클로 TopAndBottom 한정 검증된 **별개 계약**이라 위 앵커
+                            // 정정과 함께 넓히지 않는다.
+                            let top_and_bottom_para = non_inline_para
+                                && matches!(
+                                    pic.common.text_wrap,
+                                    crate::model::shape::TextWrap::TopAndBottom
+                                );
+                            let overlay_para = non_inline_para
+                                && matches!(
+                                    pic.common.text_wrap,
+                                    crate::model::shape::TextWrap::BehindText
+                                        | crate::model::shape::TextWrap::InFrontOfText
+                                );
                             // [Task #2226] 텍스트 없는 문단에서 seg.vpos > 0 이면 그
                             // 줄은 flow 그림에 밀려난 위치다 — 그림 오프셋의 원점은
                             // 문단 시작이므로 앵커에 vpos 를 더하면 그림이 셀 아래로
@@ -3183,7 +3250,11 @@ impl LayoutEngine {
                             let anchor_y = if displaced_empty_line_para {
                                 // Square 포함 모든 비인라인 그림 — 원점은 문단 시작.
                                 content_cell_y + pad_top
-                            } else if top_and_bottom_para || overlay_para {
+                            } else if non_inline_para && !top_and_bottom_para && !overlay_para {
+                                // Square·Tight·Through — 흐름을 미는 wrap. 기준점은 셀
+                                // 콘텐츠 상단이 아니라 **실제 문단 top** 이다(valign 반영).
+                                para_y_before_compose
+                            } else if non_inline_para {
                                 para.line_segs
                                     .first()
                                     .filter(|seg| seg.vertical_pos >= 0)
