@@ -59,13 +59,93 @@ fn collect_visible_text_line_rights(node: &RenderNode, rights: &mut Vec<f64>) {
     }
 }
 
+#[derive(Clone, Copy)]
+struct ClipRect {
+    x: f64,
+    y: f64,
+    right: f64,
+    bottom: f64,
+}
+
+impl ClipRect {
+    fn from_node(node: &RenderNode) -> Self {
+        Self {
+            x: node.bbox.x,
+            y: node.bbox.y,
+            right: node.bbox.x + node.bbox.width,
+            bottom: node.bbox.y + node.bbox.height,
+        }
+    }
+
+    fn intersect(self, other: Self) -> Option<Self> {
+        let clipped = Self {
+            x: self.x.max(other.x),
+            y: self.y.max(other.y),
+            right: self.right.min(other.right),
+            bottom: self.bottom.min(other.bottom),
+        };
+        (clipped.right > clipped.x && clipped.bottom > clipped.y).then_some(clipped)
+    }
+
+    fn contains_node(self, node: &RenderNode) -> bool {
+        node.bbox.x >= self.x - 0.01
+            && node.bbox.y >= self.y - 0.01
+            && node.bbox.x + node.bbox.width <= self.right + 0.01
+            && node.bbox.y + node.bbox.height <= self.bottom + 0.01
+    }
+
+    fn intersects_node(self, node: &RenderNode) -> bool {
+        self.intersect(Self::from_node(node)).is_some()
+    }
+}
+
+fn text_run_is_fully_painted(node: &RenderNode, needle: &str, clip: Option<ClipRect>) -> bool {
+    if !node.visible {
+        return false;
+    }
+    let clip = match &node.node_type {
+        RenderNodeType::TableCell(cell) if cell.clip => {
+            clip.and_then(|active| active.intersect(ClipRect::from_node(node)))
+        }
+        _ => clip,
+    };
+    if matches!(&node.node_type, RenderNodeType::TextRun(run) if run.text.contains(needle))
+        && clip.is_some_and(|active| active.contains_node(node))
+    {
+        return true;
+    }
+    node.children
+        .iter()
+        .any(|child| text_run_is_fully_painted(child, needle, clip))
+}
+
+fn text_run_is_partially_painted(node: &RenderNode, needle: &str, clip: Option<ClipRect>) -> bool {
+    if !node.visible {
+        return false;
+    }
+    let clip = match &node.node_type {
+        RenderNodeType::TableCell(cell) if cell.clip => {
+            clip.and_then(|active| active.intersect(ClipRect::from_node(node)))
+        }
+        _ => clip,
+    };
+    if matches!(&node.node_type, RenderNodeType::TextRun(run) if run.text.contains(needle))
+        && clip.is_some_and(|active| active.intersects_node(node) && !active.contains_node(node))
+    {
+        return true;
+    }
+    node.children
+        .iter()
+        .any(|child| text_run_is_partially_painted(child, needle, clip))
+}
+
 #[test]
 fn issue_2308_sparse_width_overlay_keeps_nested_fragment_geometry() {
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("samples/76076_regulatory_analysis.hwp");
     let bytes = fs::read(path).expect("read #2195 authority fixture");
     let core = DocumentCore::from_bytes(&bytes).expect("parse #2195 authority fixture");
 
-    let expected = [(32, 351.1, 636.8), (33, 77.1, 406.1)];
+    let expected = [(32, 351.1, 649.3), (33, 77.1, 395.2)];
     for (page, expected_y, expected_height) in expected {
         let tree = core
             .build_page_render_tree(page)
@@ -81,6 +161,34 @@ fn issue_2308_sparse_width_overlay_keeps_nested_fragment_geometry() {
             page + 1
         );
     }
+}
+
+/// 한컴 PDF p33의 마지막 "현황 추이(p.270)" 줄은 p33의 셀 안에 온전히 남고,
+/// p34는 다음 문단에서 시작한다. 중첩 표 조각 유닛을 기본 inMargin 폭으로
+/// 재조판하면 한 줄을 덜 측정해 이 경계가 각각 하단/상단 clip에 반쯤 걸린다.
+#[test]
+fn issue_2308_nested_fragment_cut_does_not_half_paint_boundary_line() {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("samples/76076_regulatory_analysis.hwp");
+    let bytes = fs::read(path).expect("read #2195 authority fixture");
+    let core = DocumentCore::from_bytes(&bytes).expect("parse #2195 authority fixture");
+
+    let p33 = core.build_page_render_tree(32).expect("render HWP PDF p33");
+    let p33_clip = Some(ClipRect::from_node(&p33.root));
+    assert!(
+        text_run_is_fully_painted(&p33.root, "현황 추이", p33_clip),
+        "p33 must keep the final source line fully inside the nested-cell clip"
+    );
+
+    let p34 = core.build_page_render_tree(33).expect("render HWP PDF p34");
+    let p34_clip = Some(ClipRect::from_node(&p34.root));
+    assert!(
+        !text_run_is_partially_painted(&p34.root, "현황 추이", p34_clip),
+        "p34 must not retain a half-painted residue of the p33-owned source line"
+    );
+    assert!(
+        text_run_is_fully_painted(&p34.root, "자율안전확인신고한", p34_clip),
+        "p34 must begin with the next fully painted source paragraph"
+    );
 }
 
 /// HWP 2024 PDF p34의 1×1 중첩 표는 `inMargin=(0,0,141,141)`이더라도

@@ -6365,7 +6365,14 @@ impl LayoutEngine {
 
         let mut row_units: Vec<(f64, bool, f64, bool)> = Vec::new();
         for cell in table.cells.iter().filter(|cell| cell.row == 0) {
-            let (pad_left, pad_right, pad_top, pad_bottom) = self.resolve_cell_padding(cell, table);
+            // 이 helper는 부모 셀의 Control::Table, 즉 중첩 표의 조각 유닛을
+            // 산출한다. 비글자 중첩 표는 실제 배치에서 보존된 작은 cellMargin을
+            // 사용하므로, 여기에서도 같은 폭으로 조판해야 한다. 기본 padding
+            // 규칙(aim=false → table inMargin)으로 재조판하면 더 넓은 폭에서 줄이
+            // 하나 덜 생겨, 유닛 컷은 마지막 줄을 포함했다고 판단해도 실제 SVG
+            // glyph가 다음 페이지 clip에 걸린다 (76076 p33→34).
+            let (pad_left, pad_right, pad_top, pad_bottom) =
+                self.resolve_cell_padding_for_context(cell, table, !table.common.treat_as_char);
             let cell_w = if cell.width < 0x8000_0000 {
                 hwpunit_to_px(cell.width as i32, self.dpi) * self.render_table_width_scale(table)
             } else {
