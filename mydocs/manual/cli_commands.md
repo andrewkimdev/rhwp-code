@@ -1059,6 +1059,35 @@ record 를 축별로 비교한다.
 | `hwp5-borderfill-diagonal-probe <oracle> <generated> --out-dir <폴더>` | BORDER_FILL 대각선 attr/payload 축 판정 probe |
 | `hwp5-first-para-control-probe <oracle> <generated> --out-dir <폴더>` | 첫 문단 control/PARA_TEXT/PARA_CHAR_SHAPE 계약 probe |
 | `hwp5-anchor-trace <파일> --needle <텍스트> [--section N] [--window N] [--out <path>]` | 특정 텍스트 주변 raw HWP5 record 추적 |
+| `hwp5-char-shape-audit <hancom-oracle.hwp> <generated.hwp> --out <보고서.md> [--source-hwpx <원본.hwpx>]` | CHAR_SHAPE sentinel 차이와 실제 PARA_CHAR_SHAPE 사용 위치 감사 |
+
+### `hwp5-char-shape-audit <hancom-oracle.hwp> <generated.hwp> --out <보고서.md> [--source-hwpx <원본.hwpx>]`
+
+Hancom Office가 저장한 HWP와 rhwp가 생성한 HWP의 DocInfo CHAR_SHAPE를 비교한다.
+문서를 수정하거나 변환하지 않는 **진단 전용** 명령이다.
+
+- positional 입력은 암호화·배포용이 아닌 HWP5 두 개다. 첫 번째는 Hancom 비교 입력, 두 번째는
+  rhwp 생성 입력이다.
+- `--out <보고서.md>`는 필수다. 부모 폴더가 없으면 생성하며 Markdown 보고서를 쓴다.
+- raw semantic key는 attr(46..50)와 shadow color(64..68)를 제외해 Hancom 값이 하나뿐인
+  unique_different 후보와 ambiguous/unmatched를 분류한다. 이는 Hancom record나 순번을
+  runtime serializer에 전달하는 기능이 아니다.
+- logical normalized payload는 inactive underline/strike/shadow sentinel을 제거한 비교다.
+  equivalent 결과만으로 serializer canonicalization을 적용하면 안 된다. 실제 PDF 변화는
+  별도 Hancom 검증으로 판정한다.
+- 생성 HWP의 PARA_CHAR_SHAPE 참조를 따라 style별 run 수, 문단 수, text sample을 함께 낸다.
+  PARA_LINE_SEG bit 0의 누적 쪽수는 저장본에 표식이 없으면 0일 수 있으며, **Hancom PDF 쪽번호와
+  동일하다고 가정하지 않는다.**
+- `--source-hwpx <원본.hwpx>`를 주면 `Contents/header.xml`의 charPr ID별
+  underline/strikeout/shadow child attribute signature를 raw 분류와 교차 집계한다. 동일 signature가
+  서로 다른 raw 분류에 함께 나타나면 source-derived production 선택 기준으로 사용할 수 없다.
+- 성공은 `0`, 파일/CFB/HWPX ZIP/XML 읽기 또는 보고서 쓰기 실패는 `1`, 인자 누락·알 수 없는 옵션은
+  `2`다. 성공 시 stdout에는 `written: <보고서 경로>` 한 줄만 출력한다.
+
+    # HWPX -> HWP5 fidelity 조사: Hancom 저장 HWP는 진단 비교 대상으로만 사용
+    rhwp hwp5-char-shape-audit hancom-saved.hwp rhwp-saved.hwp \
+      --source-hwpx source.hwpx \
+      --out output/char-shape-audit.md
 
 ---
 
@@ -1106,3 +1135,5 @@ record 를 축별로 비교한다.
   `rhwp --help`/`capabilities` 를 직접 뽑지 못했다 — `src/main.rs` 소스(usage 문자열·JSON
   봉투 구성 코드)를 1차 근거로 삼았다. 실제 `--help`/`capabilities` 출력 대조와 예시 명령
   실행 검증은 빌드 가능한 환경(CI 등)에서 재확인이 필요하다.
+- 2026-08-05 현행화: `hwp5-char-shape-audit`를 §4 HWP5 저장 계약 진단 명령으로 추가했다.
+  선택 `--source-hwpx`는 원본 `charPr` 장식 속성의 출처 교차 집계만 수행하며 문서를 변경하지 않는다.

@@ -2674,6 +2674,54 @@ fn line_seg_visible_bounds_px(seg: &LineSeg, page_vpos_base: i32, dpi: f64) -> O
     (top >= 0 && bottom >= 0).then(|| (hwpunit_to_px(top, dpi), hwpunit_to_px(bottom, dpi)))
 }
 
+const SAVED_TAIL_FIT_CHAIN_CAP: usize = 2;
+
+#[derive(Debug, PartialEq, Eq)]
+enum SavedTailFitChainDecision {
+    NoChange,
+    Advance,
+    Break,
+}
+
+fn saved_tail_fit_chain_decision(
+    tail_fit_chain: usize,
+    saved_tail_vpos_fit: bool,
+    hwp_authoritative: bool,
+    native_hwp5_reset_tail_fits_actual_footnote_boundary: bool,
+) -> SavedTailFitChainDecision {
+    if !saved_tail_vpos_fit
+        || hwp_authoritative
+        || native_hwp5_reset_tail_fits_actual_footnote_boundary
+    {
+        SavedTailFitChainDecision::NoChange
+    } else if tail_fit_chain >= SAVED_TAIL_FIT_CHAIN_CAP {
+        SavedTailFitChainDecision::Break
+    } else {
+        SavedTailFitChainDecision::Advance
+    }
+}
+
+fn saved_line_clears_footnote_area(
+    current_footnote_height: f64,
+    is_single_column: bool,
+    overflow: f64,
+    footnote_safety_margin: f64,
+    saved_bounds: Option<(f64, f64)>,
+    base_available_height: f64,
+    current_height: f64,
+) -> bool {
+    current_footnote_height > 0.0
+        && is_single_column
+        && overflow <= footnote_safety_margin
+        && saved_bounds.is_some_and(|(top, bottom)| {
+            let text_limit = base_available_height - current_footnote_height;
+            top >= 0.0
+                && top <= base_available_height
+                && bottom <= text_limit
+                && current_height <= top + 16.0
+        })
+}
+
 fn saved_bounds_fit_at_flow_tail(bounds: (f64, f64), current_height: f64, available: f64) -> bool {
     saved_bounds_fit_at_flow_tail_with_tolerance(bounds, current_height, available, 16.0)
 }
@@ -14184,6 +14232,16 @@ impl TypesetEngine {
             let mut cumulative = 0.0;
             let mut end_line = cursor_line;
             let mut used_saved_tail_vpos_fit = false;
+            // [#4024] 저장 사다리 신뢰(`saved_tail_vpos_fit`)는 `li..line_count` 만 보고
+            // 그때까지 쌓인 `cumulative` 를 모른다. 그래서 한 번 참이 되면 예산을 넘긴
+            // 채로 남은 줄을 계속 통과시켜 초과가 단조 증가한다(1480000 pi=724: 잔여
+            // 18.5px 에 6줄 통과, 초과 19.7 -> 137.0px).
+            //
+            // 쪽 단위 실측(무작위 대형 문서 60건): 소실 쪽의 연쇄는 전부 길이 3 이상
+            // (중앙 5, 최대초과 중앙 117.2px)인데, 소실 없는 쪽은 66% 가 길이 1~2
+            // (중앙 2, 최대초과 중앙 49.4px)다. 한컴 정답 36쪽을 고정하는
+            // `issue_554` hwp3-sample4 의 유일한 통과도 길이 1 이다.
+            let mut tail_fit_chain = 0usize;
             for li in cursor_line..line_count {
                 if forced_page_break_line
                     .map(|break_line| li == break_line && li > cursor_line)
@@ -14289,9 +14347,44 @@ impl TypesetEngine {
                                 .max(0.0),
                             self.dpi,
                         );
+                    // [#4054] 각주 안전마진(40px = 3000 HWPUNIT)은 각주 영역과 본문 꼬리가
+                    // 겹칠 위험을 상수로 막는다. 그런데 저장 LineSeg 가 이 줄을 **각주 영역
+                    // 위**에 두고 있고 흐름 커서가 그 좌표보다 위에 있으면, 겹침은 rhwp·한글
+                    // 양쪽 기준 모두에서 실측으로 배제된다. 그 경우에만 마진 몫의 초과를
+                    // 통과시킨다.
+                    //
+                    // 10k 실측(판정 가능한 이른 분할 135지점): 이 마진이 최대 원인이었다 —
+                    // 73지점·133줄·42문서. 한글은 그 자리에 줄을 두는데 rhwp 만 다음 쪽으로
+                    // 밀어내며, 쪽수 지표는 뒤쪽의 저장 좌표 신뢰가 흡수해 침묵한다.
+                    let saved_line_clears_footnote_area = saved_line_clears_footnote_area(
+                        st.current_footnote_height,
+                        st.col_count == 1,
+                        overflow,
+                        st.footnote_safety_margin,
+                        para.line_segs.get(li).and_then(|seg| {
+                            line_seg_visible_bounds_px(
+                                seg,
+                                current_page_vpos_base.unwrap_or(0),
+                                self.dpi,
+                            )
+                        }),
+                        st.base_available_height(),
+                        st.current_height,
+                    );
+                    match saved_tail_fit_chain_decision(
+                        tail_fit_chain,
+                        saved_tail_vpos_fit,
+                        hwp_authoritative,
+                        native_hwp5_reset_tail_fits_actual_footnote_boundary,
+                    ) {
+                        SavedTailFitChainDecision::Break => break,
+                        SavedTailFitChainDecision::Advance => tail_fit_chain += 1,
+                        SavedTailFitChainDecision::NoChange => {}
+                    }
                     if !hwp_authoritative
                         && !saved_tail_vpos_fit
                         && !native_hwp5_reset_tail_fits_actual_footnote_boundary
+                        && !saved_line_clears_footnote_area
                     {
                         break;
                     }
@@ -14436,7 +14529,7 @@ impl TypesetEngine {
         };
         let mt = fitted_visible_mt.as_ref().or(mt);
 
-        let is_tac = table.attr & 0x01 != 0;
+        let is_tac = self.uses_tac_table_flow(table);
         // [#1880] 자리차지(TopAndBottom) 판정: 종전 원시 attr 비트((attr>>21)&7==1)는
         // HWPX 파스가 table.attr 를 미채움(bit0 만 미러, section.rs:1831)이라 항상
         // false, HWP5 재파스는 원시 attr 전체(control.rs:153)라 true — 같은 IR 의
@@ -16442,7 +16535,7 @@ impl TypesetEngine {
             .count();
         let post_table_start = if tac_wrap_split {
             (pre_table_end_line + 1).min(total_lines).max(1)
-        } else if table.attr & 0x01 != 0 {
+        } else if self.uses_tac_table_flow(table) {
             pre_table_end_line.max(1)
         } else if table.common.treat_as_char && total_lines > pre_table_end_line + 1 {
             // HWPX TAC 표(attr 비트0=0): 표줄(pre_table_end_line) 다음에 실제 본문 줄이
@@ -16573,7 +16666,19 @@ impl TypesetEngine {
         table: &crate::model::table::Table,
         fmt: &FormattedParagraph,
     ) -> bool {
-        table.attr & 0x01 != 0 || self.tac_table_line_index(para, table, fmt) == Some(0)
+        self.uses_tac_table_flow(table) || self.tac_table_line_index(para, table, fmt) == Some(0)
+    }
+
+    /// HWPX 계보 HWP는 HWP5 CTRL_HEADER를 다시 읽으면서 `table.attr` bit 0을
+    /// `treatAsChar`로 채운다. 하지만 HWPX의 inline 의미는 `treatAsChar`와
+    /// `flowWithText`가 모두 참일 때만 성립한다. 후자가 거짓인 표를 TAC으로
+    /// 오인하면 큰 표가 통째로 배치되어 저장 직후 쪽 경계가 압축된다 (#3930).
+    fn uses_tac_table_flow(&self, table: &crate::model::table::Table) -> bool {
+        if self.profile.get().hwpx_stored_layout() {
+            table.common.treat_as_char && table.common.flow_with_text
+        } else {
+            table.attr & 0x01 != 0
+        }
     }
 
     /// 비-TAC 블록 표의 조판: fits → place / split(Break Token 기반).
@@ -20794,6 +20899,92 @@ mod tests {
             }],
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn saved_tail_fit_chain_stops_on_third_applicable_line() {
+        assert_eq!(
+            saved_tail_fit_chain_decision(0, true, false, false),
+            SavedTailFitChainDecision::Advance,
+            "첫 저장 꼬리줄은 허용한다"
+        );
+        assert_eq!(
+            saved_tail_fit_chain_decision(1, true, false, false),
+            SavedTailFitChainDecision::Advance,
+            "둘째 저장 꼬리줄은 허용한다"
+        );
+        assert_eq!(
+            saved_tail_fit_chain_decision(2, true, false, false),
+            SavedTailFitChainDecision::Break,
+            "셋째 저장 꼬리줄에서 예산 초과 연쇄를 끊는다"
+        );
+    }
+
+    #[test]
+    fn saved_tail_fit_chain_keeps_authoritative_boundary_exceptions() {
+        assert_eq!(
+            saved_tail_fit_chain_decision(2, true, true, false),
+            SavedTailFitChainDecision::NoChange,
+            "HWP 권위 경계는 저장 꼬리줄 상한으로 중단하지 않는다"
+        );
+        assert_eq!(
+            saved_tail_fit_chain_decision(2, true, false, true),
+            SavedTailFitChainDecision::NoChange,
+            "native HWP5 실제 각주 경계 예외는 저장 꼬리줄 상한으로 중단하지 않는다"
+        );
+        assert_eq!(
+            saved_tail_fit_chain_decision(2, false, false, false),
+            SavedTailFitChainDecision::NoChange,
+            "저장 꼬리줄 판정이 아니면 연쇄 상태를 바꾸지 않는다"
+        );
+    }
+
+    #[test]
+    fn saved_line_clears_footnote_area_requires_every_boundary() {
+        let allows = |footnote_height, is_single_column, overflow, bounds, current_height| {
+            saved_line_clears_footnote_area(
+                footnote_height,
+                is_single_column,
+                overflow,
+                40.0,
+                bounds,
+                1_000.0,
+                current_height,
+            )
+        };
+
+        assert!(
+            allows(300.0, true, 40.0, Some((200.0, 700.0)), 216.0),
+            "각주 위 저장 좌표, 안전마진 이하 초과, 16px 흐름 허용오차의 경계값은 허용한다"
+        );
+        assert!(
+            !allows(0.0, true, 40.0, Some((200.0, 700.0)), 216.0),
+            "각주가 없으면 예외를 적용하지 않는다"
+        );
+        assert!(
+            !allows(300.0, false, 40.0, Some((200.0, 700.0)), 216.0),
+            "다단에는 적용하지 않는다"
+        );
+        assert!(
+            !allows(300.0, true, 40.1, Some((200.0, 700.0)), 216.0),
+            "안전마진보다 큰 초과는 허용하지 않는다"
+        );
+        assert!(
+            !allows(300.0, true, 40.0, Some((200.0, 700.1)), 216.0),
+            "저장 줄 하단이 각주 영역에 닿으면 허용하지 않는다"
+        );
+        assert!(
+            !allows(300.0, true, 40.0, Some((-0.1, 700.0)), 0.0),
+            "쪽 밖 음수 저장 좌표는 허용하지 않는다"
+        );
+        assert!(
+            !allows(300.0, true, 40.0, Some((1_000.1, 700.0)), 0.0),
+            "본문 높이를 넘는 저장 좌표는 허용하지 않는다"
+        );
+        assert!(
+            !allows(300.0, true, 40.0, Some((200.0, 700.0)), 216.1),
+            "흐름 커서가 저장 좌표보다 낮으면 허용하지 않는다"
+        );
     }
 
     /// [#3925] HWPX empty-host 그림 표의 raw anchor는 다음 저장 사다리가 개체 높이를

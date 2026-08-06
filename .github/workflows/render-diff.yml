@@ -133,15 +133,6 @@ jobs:
               return parents.length === 2 && parents.some((parent) => parent.sha === baseSha);
             }
 
-            async function isCurrentBaseAncestor(candidateSha, baseSha) {
-              const { data: comparison } = await github.rest.repos.compareCommitsWithBasehead({
-                owner,
-                repo,
-                basehead: `${baseSha}...${candidateSha}`,
-              });
-              return comparison.status === 'ahead' || comparison.status === 'identical';
-            }
-
             function latestRun(runs) {
               return runs
                 .slice()
@@ -289,12 +280,12 @@ jobs:
                     reviewOnlyCandidates.push(sha);
                     continue;
                   }
-                  // #3233 keeps the narrow Update branch merge topology. Its green
-                  // workflow can be reused after one or more review-only records.
+                  // Keep the narrow Update branch merge compatibility path. It is
+                  // optional: ordinary trailing review-only records do not require it.
                   if (reviewOnlyCandidates.length > 0
                     && isCurrentBaseReviewMerge(commit, pr.base.sha)) {
                     reviewOnlyCandidates.push(sha);
-                    core.info(`including current-base ${reviewOnlyLabel(files)} merge candidate ${sha}`);
+                    core.info(`including ${reviewOnlyLabel(files)} update-branch merge candidate ${sha}`);
                     break;
                   }
                   setResult(false, `${reviewOnlyLabel(files)}-merge-not-reusable:${sha}`);
@@ -314,10 +305,6 @@ jobs:
               }
 
               for (const candidateSha of reviewOnlyCandidates) {
-                if (!(await isCurrentBaseAncestor(candidateSha, pr.base.sha))) {
-                  core.info(`candidate does not include current base: ${candidateSha}`);
-                  continue;
-                }
                 const result = await renderDiffResult(candidateSha, pr);
                 if (result.state === 'green') {
                   setResult(true, 'canvas-visual-diff-success', candidateSha);
@@ -330,7 +317,7 @@ jobs:
                 core.info(`candidate not reusable yet: ${candidateSha} (${result.reason})`);
               }
 
-              setResult(false, 'no-green-current-base-render-candidate');
+              setResult(false, 'no-green-render-candidate');
             } catch (error) {
               core.warning(`Render Diff preflight failed; running full Render Diff. ${error.message}`);
               setResult(false, 'preflight-error');

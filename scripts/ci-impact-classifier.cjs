@@ -2,7 +2,7 @@
 
 const fs = require('node:fs');
 
-const CLASSIFIER_VERSION = '1';
+const CLASSIFIER_VERSION = '2';
 const CODEQL_LANGUAGE_ORDER = ['javascript-typescript', 'python', 'rust'];
 const FRONTEND_MODE_RANK = { none: 0, unit: 1, package: 2 };
 
@@ -15,6 +15,28 @@ const RENDER_RUST_PREFIXES = [
 const RENDER_RUST_FILES = new Set([
   'src/document_core/queries/rendering.rs',
 ]);
+
+const NATIVE_SKIA_RUST_FILES = new Set([
+  'tests/issue_2225_missing_picture_placeholder.rs',
+  'tests/render_p37_direct_pdf_export.rs',
+]);
+
+const RUST_TEST_INPUT_FILES = new Set([
+  'samples/render-p35-font-native-bitmap.hwpx',
+]);
+
+const RUST_TEST_FONT_PREFIXES = [
+  'tests/fixtures/fonts/',
+  'ttfs/',
+];
+
+const RUST_TEST_FONT_EXTENSIONS = [
+  '.otf',
+  '.ttc',
+  '.ttf',
+  '.woff',
+  '.woff2',
+];
 
 const RENDER_TOOL_PATHS = new Set([
   'scripts/renderer_baseline.py',
@@ -125,6 +147,16 @@ function isRustPath(filename) {
   return filename.endsWith('.rs') || filename === 'build.rs';
 }
 
+function isRustTestInputPath(filename) {
+  return (
+    RUST_TEST_INPUT_FILES.has(filename)
+    || (
+      RUST_TEST_FONT_PREFIXES.some((prefix) => filename.startsWith(prefix))
+      && RUST_TEST_FONT_EXTENSIONS.some((extension) => filename.endsWith(extension))
+    )
+  );
+}
+
 function isStudioKnownNonRenderSource(filename) {
   return (
     filename.startsWith('rhwp-studio/src/command/')
@@ -203,10 +235,26 @@ function classifyChanges(input = {}) {
       continue;
     }
 
+    if (NATIVE_SKIA_RUST_FILES.has(filename)) {
+      rustRequired = true;
+      nativeSkiaRequired = true;
+      codeqlLanguages.add('rust');
+      reasons.add('native-skia-rust');
+      continue;
+    }
+
     if (isRustPath(filename)) {
       rustRequired = true;
       codeqlLanguages.add('rust');
       reasons.add('rust');
+      continue;
+    }
+
+    if (isRustTestInputPath(filename)) {
+      rustRequired = true;
+      renderRequired = true;
+      nativeSkiaRequired = true;
+      reasons.add('rust-test-input');
       continue;
     }
 

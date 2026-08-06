@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import os
 import re
+import subprocess
+import textwrap
 import unittest
 from pathlib import Path
 
 
 WORKFLOW_PATH = Path(__file__).resolve().parents[2] / ".github/workflows/ci.yml"
+CLASSIFIER_PATH = Path(__file__).resolve().parents[1] / "ci-impact-classifier.cjs"
 WORKER_MARKER = "  # [#2393] 기본 테스트 병렬화"
 
 
@@ -18,7 +22,8 @@ class CiImpactWorkflowTests(unittest.TestCase):
     def _step(self, name: str, source: str | None = None) -> str:
         workflow = source or self.workflow
         step = workflow.split(f"      - name: {name}", maxsplit=1)[1]
-        return step.split("\n      - name:", maxsplit=1)[0]
+        boundary = re.search(r"(?m)^(?:      - name:|  [A-Za-z0-9_-]+:)\s*", step)
+        return step[: boundary.start()] if boundary else step
 
     def _job(self, name: str) -> str:
         match = re.search(
@@ -27,6 +32,38 @@ class CiImpactWorkflowTests(unittest.TestCase):
         )
         self.assertIsNotNone(match, name)
         return match.group(0) if match else ""
+
+    def _run_aggregate(self, **overrides: str) -> subprocess.CompletedProcess[str]:
+        step = self._step("Check Build & Test worker results")
+        script = textwrap.dedent(step.split("        run: |\n", maxsplit=1)[1])
+        env = {
+            **os.environ,
+            "PREFLIGHT_RESULT": "success",
+            "FAST_PASS": "false",
+            "RUST_REQUIRED": "false",
+            "NATIVE_SKIA_REQUIRED": "false",
+            "FRONTEND_MODE": "unit",
+            "IMPACT_REASON": "classified:studio-unit",
+            "BUILD_SLOW_RESULT": "skipped",
+            "BUILD_A_RESULT": "skipped",
+            "BUILD_B_RESULT": "skipped",
+            "TEST_SLOW_RESULT": "skipped",
+            "TEST_REGULAR_1_RESULT": "skipped",
+            "TEST_REGULAR_2_RESULT": "skipped",
+            "TEST_REGULAR_3_RESULT": "skipped",
+            "LINT_RESULT": "skipped",
+            "NATIVE_SKIA_RESULT": "skipped",
+            "FRONTEND_UNIT_RESULT": "success",
+            "FRONTEND_PACKAGE_RESULT": "skipped",
+            **overrides,
+        }
+        return subprocess.run(
+            ["bash", "-e", "-o", "pipefail", "-c", script],
+            check=False,
+            capture_output=True,
+            env=env,
+            text=True,
+        )
 
     def test_preflight_exposes_every_axis_with_fail_closed_defaults(self) -> None:
         expected_defaults = {
@@ -57,7 +94,11 @@ class CiImpactWorkflowTests(unittest.TestCase):
         self.assertIn("sparse-checkout-cone-mode: false", step)
         self.assertIn("id: checkout-impact-classifier", step)
         self.assertIn("Classify CI impact", self.preflight)
-        self.assertIn("Stage 3 activates frontend_mode and render_required", self.preflight)
+        self.assertIn(
+            "Stage 4 activates frontend_mode, render_required, rust_required, "
+            "and native_skia_required",
+            self.preflight,
+        )
         self.assertIn("pr-base-trusted", self.preflight)
         self.assertNotIn("pr-base-trusted-shadow", self.preflight)
 
@@ -104,15 +145,15 @@ class CiImpactWorkflowTests(unittest.TestCase):
         self.assertIn("context.eventName === 'workflow_dispatch'", collect)
         self.assertIn("? 'manual-or-tag'", collect)
 
-    def test_stage3_consumes_only_frontend_axis(self) -> None:
+    def test_stage4_consumes_frontend_rust_and_native_axes_but_defers_codeql(self) -> None:
         self.assertIn("needs.preflight.outputs.frontend_mode", self.workers)
-        for deferred_axis in (
+        for active_axis in (
             "needs.preflight.outputs.rust_required",
             "needs.preflight.outputs.native_skia_required",
-            "needs.preflight.outputs.codeql_languages",
         ):
-            with self.subTest(axis=deferred_axis):
-                self.assertNotIn(deferred_axis, self.workers)
+            with self.subTest(axis=active_axis):
+                self.assertIn(active_axis, self.workers)
+        self.assertNotIn("needs.preflight.outputs.codeql_languages", self.workers)
 
     def test_unit_and_package_jobs_are_mutually_exclusive(self) -> None:
         unit = self._job("frontend-unit-gates")
@@ -126,29 +167,163 @@ class CiImpactWorkflowTests(unittest.TestCase):
         self.assertIn("npm --prefix rhwp-studio run test", package)
         self.assertIn("npm --prefix rhwp-studio run build", package)
 
-    def test_rust_workers_require_the_frontend_truth_table(self) -> None:
+    def test_rust_lint_and_archive_builders_require_rust_axis(self) -> None:
+        lint = self._job("lint")
+        self.assertIn("needs.preflight.outputs.rust_required == 'true'", lint)
+
         for job_name in (
             "build-test-archive-slow",
             "build-test-archive-a",
             "build-test-archive-b",
-            "native-skia-tests",
         ):
             with self.subTest(job=job_name):
                 job = self._job(job_name)
+                self.assertIn("needs.preflight.outputs.rust_required == 'true'", job)
+                self.assertIn("needs.lint.result == 'success'", job)
                 self.assertIn("frontend-unit-gates", job)
                 self.assertIn("frontend-package-gates", job)
                 self.assertIn("frontend_mode == 'none'", job)
                 self.assertIn("frontend_mode == 'unit'", job)
                 self.assertIn("frontend_mode == 'package'", job)
 
+    def test_native_skia_accepts_expected_lint_state_for_each_rust_lane(self) -> None:
+        native = self._job("native-skia-tests")
+        self.assertIn("needs.preflight.outputs.native_skia_required == 'true'", native)
+        self.assertIn("needs.preflight.outputs.rust_required == 'true'", native)
+        self.assertIn("needs.lint.result == 'success'", native)
+        self.assertIn("needs.preflight.outputs.rust_required == 'false'", native)
+        self.assertIn("needs.lint.result == 'skipped'", native)
+        self.assertIn("frontend-unit-gates", native)
+        self.assertIn("frontend-package-gates", native)
+        self.assertIn("frontend_mode == 'none'", native)
+        self.assertIn("frontend_mode == 'unit'", native)
+        self.assertIn("frontend_mode == 'package'", native)
+
+    def test_aggregate_harness_stops_at_the_next_job_boundary(self) -> None:
+        step = self._step("Check Build & Test worker results")
+        script = textwrap.dedent(step.split("        run: |\n", maxsplit=1)[1])
+        self.assertNotIn("wasm-build:", script)
+        self.assertNotIn("startsWith(github.ref", script)
+
+    def test_native_skia_integration_targets_are_classifier_inputs(self) -> None:
+        native_step = self._step("Native Skia tests")
+        classifier = CLASSIFIER_PATH.read_text(encoding="utf-8")
+        targets = set(re.findall(r"--test ([A-Za-z0-9_]+)", native_step))
+        self.assertTrue(targets)
+        for target in targets:
+            with self.subTest(target=target):
+                self.assertIn(f"'tests/{target}.rs'", classifier)
+
+    def test_rust_workers_require_expected_native_skia_state(self) -> None:
+        for job_name in (
+            "test-slow-shard",
+            "test-regular-shard-1",
+            "test-regular-shard-2",
+            "test-regular-shard-3",
+        ):
+            with self.subTest(job=job_name):
+                job = self._job(job_name)
+                self.assertIn("needs.preflight.outputs.rust_required == 'true'", job)
+                self.assertIn("native_skia_required == 'true'", job)
+                self.assertIn("needs['native-skia-tests'].result == 'success'", job)
+                self.assertIn("native_skia_required == 'false'", job)
+                self.assertIn("needs['native-skia-tests'].result == 'skipped'", job)
+
     def test_aggregate_validates_expected_success_and_skipped_states(self) -> None:
         aggregate = self._job("build-and-test")
         self.assertIn("- frontend-unit-gates", aggregate)
         self.assertIn("- frontend-package-gates", aggregate)
+        self.assertIn("RUST_REQUIRED:", aggregate)
+        self.assertIn("NATIVE_SKIA_REQUIRED:", aggregate)
+        self.assertIn("Rust lane expected success", aggregate)
+        self.assertIn("Rust lane expected skipped", aggregate)
+        self.assertIn("Native Skia lane expected success", aggregate)
+        self.assertIn("Native Skia lane expected skipped", aggregate)
+        self.assertIn("Unknown rust_required", aggregate)
+        self.assertIn("Unknown native_skia_required", aggregate)
         self.assertIn("Frontend none lane expected skipped/skipped", aggregate)
         self.assertIn("Frontend unit lane expected success/skipped", aggregate)
         self.assertIn("Frontend package lane expected skipped/success", aggregate)
         self.assertIn("Unknown frontend mode", aggregate)
+
+    def test_shard_count_artifacts_are_downloaded_only_for_rust_lane(self) -> None:
+        aggregate = self._job("build-and-test")
+        for step_name in (
+            "Download shard counts",
+            "Download archive expected counts",
+            "Verify shard totals",
+        ):
+            with self.subTest(step=step_name):
+                self.assertIn(
+                    "needs.preflight.outputs.rust_required == 'true'",
+                    self._step(step_name, aggregate),
+                )
+
+    def test_aggregate_accepts_every_supported_stage4_lane(self) -> None:
+        rust_success = {
+            "RUST_REQUIRED": "true",
+            "LINT_RESULT": "success",
+            "BUILD_SLOW_RESULT": "success",
+            "BUILD_A_RESULT": "success",
+            "BUILD_B_RESULT": "success",
+            "TEST_SLOW_RESULT": "success",
+            "TEST_REGULAR_1_RESULT": "success",
+            "TEST_REGULAR_2_RESULT": "success",
+            "TEST_REGULAR_3_RESULT": "success",
+        }
+        cases = {
+            "frontend-only": {},
+            "rust-non-render": {
+                **rust_success,
+                "FRONTEND_MODE": "none",
+                "FRONTEND_UNIT_RESULT": "skipped",
+            },
+            "rust-render": {
+                **rust_success,
+                "NATIVE_SKIA_REQUIRED": "true",
+                "NATIVE_SKIA_RESULT": "success",
+                "FRONTEND_MODE": "none",
+                "FRONTEND_UNIT_RESULT": "skipped",
+            },
+            "non-rust-native-input": {
+                "NATIVE_SKIA_REQUIRED": "true",
+                "NATIVE_SKIA_RESULT": "success",
+                "FRONTEND_MODE": "package",
+                "FRONTEND_UNIT_RESULT": "skipped",
+                "FRONTEND_PACKAGE_RESULT": "success",
+            },
+        }
+        for name, env in cases.items():
+            with self.subTest(lane=name):
+                result = self._run_aggregate(**env)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_aggregate_rejects_axis_result_mismatches(self) -> None:
+        cases = {
+            "unexpected-rust-worker": {"LINT_RESULT": "success"},
+            "missing-native-worker": {
+                "NATIVE_SKIA_REQUIRED": "true",
+                "NATIVE_SKIA_RESULT": "skipped",
+            },
+            "unexpected-native-worker": {"NATIVE_SKIA_RESULT": "success"},
+            "frontend-mismatch": {"FRONTEND_UNIT_RESULT": "skipped"},
+            "unknown-rust-axis": {"RUST_REQUIRED": "maybe"},
+            "unknown-native-axis": {"NATIVE_SKIA_REQUIRED": "maybe"},
+        }
+        for name, env in cases.items():
+            with self.subTest(lane=name):
+                result = self._run_aggregate(**env)
+                self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_aggregate_fast_pass_still_accepts_skipped_heavy_jobs(self) -> None:
+        result = self._run_aggregate(
+            FAST_PASS="true",
+            RUST_REQUIRED="true",
+            NATIVE_SKIA_REQUIRED="true",
+            FRONTEND_MODE="package",
+            FRONTEND_UNIT_RESULT="skipped",
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_classifier_failures_remain_fail_closed_without_failing_preflight(self) -> None:
         for step_name in (

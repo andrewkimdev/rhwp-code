@@ -15,6 +15,7 @@ pub mod core_pages_probe;
 pub mod hwp5_anchor_trace;
 pub mod hwp5_borderfill_diagonal_probe;
 pub mod hwp5_cell_header_probe;
+pub mod hwp5_char_shape_audit;
 pub mod hwp5_contract_analyze;
 pub mod hwp5_contract_probe;
 pub mod hwp5_ctrl_data_trace;
