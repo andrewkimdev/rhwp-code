@@ -423,6 +423,11 @@ pub(super) struct CellUnit {
     height: f64,
     /// 이 유닛 앞에 vpos 리셋(셀 내부 페이지 분할)이 있는가.
     hard_break_before: bool,
+    /// 같은 문단의 줄 사이에서 페이지 하단까지 진행한 저장 vpos가
+    /// 상단으로 되돌아가며 프레임이 바뀌는 경계인가.
+    /// 이 경계를 흡수하면 렌더러의 줄 좌표가 역행하므로 부모 컷에서도
+    /// 반드시 보존한다. 문단 사이 reset의 orphan/sliver 완화 계약과 구분한다.
+    stored_frame_break_before: bool,
     vpos_gap_before: bool,
     /// 이 유닛이 속한 문단 인덱스 (셀 내).
     para_idx: usize,
@@ -455,6 +460,7 @@ pub(super) struct CellUnit {
 struct NestedFlowFragment {
     height: f64,
     hard_break_before: bool,
+    stored_frame_break_before: bool,
     trailing: bool,
     content_height: f64,
     recursive: bool,
@@ -5252,7 +5258,7 @@ impl LayoutEngine {
         }
 
         // [#4069] 단일 셀 중첩 표는 별도 높이 추정식을 다시 만들지 않고 그 셀의
-        // canonical CellUnit 원장을 재사용한다. 여러 저장 페이지 프레임을 가진
+        // canonical CellUnit 원장을 재사용한다. 저장 페이지 프레임 경계를 가진
         // 장문 흐름에 한정해 깊이와 무관하게 재귀하며, placeholder line_height와
         // nested_h를 동시에 더하던 기존 이중 회계를 제거한다. 단일 경계 문서는
         // #2279의 검증된 legacy 측정 원장을 유지한다.
@@ -5262,8 +5268,16 @@ impl LayoutEngine {
             .filter(|cell| cell.row == 0 && cell.row_span == 1);
         if let (Some(cell), None) = (row_cells.next(), row_cells.next()) {
             let units = self.cell_units(cell, table, styles);
-            let stored_page_frames = units.iter().filter(|unit| unit.hard_break_before).count();
-            if stored_page_frames >= 2 {
+            let stored_page_frame_boundaries =
+                units.iter().filter(|unit| unit.hard_break_before).count();
+            let has_intra_para_frame_boundary =
+                units.iter().any(|unit| unit.stored_frame_break_before);
+            // [#4069 Stage 2] 문단 내부 경계는 하나여도 부모 원장에서
+            // 소실하면 안 된다. 문단 사이의 단일 reset은 legacy orphan/sliver
+            // 완화를 유지하지만, 같은 문단 줄 좌표의 역행은 페이지 경계이다.
+            // 42065 p10의 내부 표는 문단 22의 두 줄 사이에서 vpos 58620→0이
+            // 되며 한컴 정본도 그 경계로 쪽을 나눈다.
+            if stored_page_frame_boundaries >= 2 || has_intra_para_frame_boundary {
                 return units
                     .iter()
                     .map(|unit| {
@@ -5271,6 +5285,7 @@ impl LayoutEngine {
                         NestedFlowFragment {
                             height: unit.height,
                             hard_break_before: unit.hard_break_before,
+                            stored_frame_break_before: unit.stored_frame_break_before,
                             trailing: unit.mixed_nested_trailing || !visible,
                             content_height: if unit.mixed_nested_content_height > 0.0 {
                                 unit.mixed_nested_content_height
@@ -5462,6 +5477,7 @@ impl LayoutEngine {
             .map(|(height, trailing, content_height)| NestedFlowFragment {
                 height,
                 hard_break_before: false,
+                stored_frame_break_before: false,
                 trailing,
                 content_height,
                 recursive: false,
@@ -5477,6 +5493,24 @@ impl LayoutEngine {
                 .controls
                 .iter()
                 .any(|control| matches!(control, Control::Table(_)))
+    }
+
+    /// 문단이 정확히 하나의 1×1 자식 표를 host하는가.
+    ///
+    /// 저장 프레임 끝에서 이 형태의 표를 fragment로 푼 뒤 다음 문단 reset을
+    /// 엄격히 보존할 때만 사용한다. 일반 문단 사이 reset의 orphan 완화와 분리한다.
+    fn paragraph_hosts_single_cell_nested_table(paragraph: &Paragraph) -> bool {
+        let mut tables = paragraph
+            .controls
+            .iter()
+            .filter_map(|control| match control {
+                Control::Table(table) => Some(table.as_ref()),
+                _ => None,
+            });
+        matches!(
+            (tables.next(), tables.next()),
+            (Some(table), None) if table.row_count == 1 && table.col_count == 1
+        )
     }
 
     /// [Issue #2063] 표에 "가시 텍스트 + 중첩 표"를 가진 셀이 하나라도 있는지 직접 계산한다.
@@ -5608,6 +5642,32 @@ impl LayoutEngine {
         let line_seg_is_synthetic = |seg: &crate::model::paragraph::LineSeg| {
             seg.tag & crate::model::paragraph::LineSeg::TAG_IMPLEMENTATION_PROPERTY != 0
         };
+        let is_hwp5_stored_frame_rewind = |prev: &crate::model::paragraph::LineSeg,
+                                           cur: &crate::model::paragraph::LineSeg|
+         -> bool {
+            let profile = self.profile.get();
+            if (!profile.native_hwp5_layout() && !profile.hwp5_origin_hwpx())
+                || line_seg_is_synthetic(prev)
+                || line_seg_is_synthetic(cur)
+            {
+                return false;
+            }
+            let prev_end = prev.vertical_pos + prev.line_height;
+            if cur.vertical_pos < 0 || prev_end <= 0 || cur.vertical_pos >= prev_end {
+                return false;
+            }
+            // HWPX 저장 lineseg의 reset은 중첩 셀 로컬 좌표계일 수 있다
+            // (#3637). HWP5 저장 계약 안에서도 작은 내부 표의 로컬 reset
+            // (rowbreak-problem-pages.hwp: 9600→0HU)을 페이지 경계로 올리지
+            // 않도록 직전 줄이 body 하단 절반에 도달한 경우만 인정한다.
+            let body_height = self.current_body_area.get().3;
+            let frame_floor = if body_height > 0.0 {
+                body_height * 0.5
+            } else {
+                450.0
+            };
+            hwpunit_to_px(prev_end, self.dpi) >= frame_floor
+        };
         let is_block_rowbreak_table = matches!(
             table.page_break,
             crate::model::table::TablePageBreak::RowBreak
@@ -5667,6 +5727,7 @@ impl LayoutEngine {
                     units.push(CellUnit {
                         height: h,
                         hard_break_before: false,
+                        stored_frame_break_before: false,
                         vpos_gap_before: false,
                         para_idx,
                         vis_start: 0,
@@ -5690,6 +5751,7 @@ impl LayoutEngine {
             units.push(CellUnit {
                 height: non_inline_h,
                 hard_break_before: false,
+                stored_frame_break_before: false,
                 vpos_gap_before: false,
                 para_idx,
                 vis_start: 0,
@@ -5799,6 +5861,43 @@ impl LayoutEngine {
             } else {
                 false
             };
+            // #2430 p14의 비선형 부모 셀에는 한컴이 무시하는 빈 Enter가 있고,
+            // 그 단일 lineseg도 다음 저장 좌표 0으로 rewind한다. 이를 프레임
+            // 경계로 올리면 39쪽 정본이 38쪽으로 줄어든다. 실제 빈 문단은
+            // #4069처럼 1×1 선형 부모의 저장 vpos를 보존하는 경우에만 증거로 쓴다.
+            let stored_frame_tail_before_next_para = if cell_has_local_vpos_origin {
+                match (p.line_segs.last(), cell.paragraphs.get(pi + 1)) {
+                    (Some(prev), Some(next))
+                        if !next.text.is_empty()
+                            || !next.controls.is_empty()
+                            || (preserve_linear_single_cell_vpos
+                                && next.text.is_empty()
+                                && next.controls.is_empty()
+                                && next.line_segs.len() == 1
+                                && next.line_segs.first().is_some_and(|seg| {
+                                    seg.vertical_pos >= cell_first_vpos
+                                        && !line_seg_is_synthetic(seg)
+                                })) =>
+                    {
+                        next.line_segs
+                            .first()
+                            .is_some_and(|cur| is_hwp5_stored_frame_rewind(prev, cur))
+                    }
+                    _ => false,
+                }
+            } else {
+                false
+            };
+            let stored_frame_break_before_para = if pi > 0 && cell_has_local_vpos_origin {
+                let prev_para = &cell.paragraphs[pi - 1];
+                Self::paragraph_hosts_single_cell_nested_table(prev_para)
+                    && match (prev_para.line_segs.last(), p.line_segs.first()) {
+                        (Some(prev), Some(cur)) => is_hwp5_stored_frame_rewind(prev, cur),
+                        _ => false,
+                    }
+            } else {
+                false
+            };
             let prev_para_has_mixed_nested_table = if pi > 0 {
                 let prev = &cell.paragraphs[pi - 1];
                 !prev.text.trim().is_empty()
@@ -5843,6 +5942,23 @@ impl LayoutEngine {
                 }
                 let prev_end = prev.vertical_pos + prev.line_height;
                 cur.vertical_pos >= 0 && prev_end > 0 && cur.vertical_pos < prev_end
+            };
+            let stored_frame_break_before = |li: usize| -> bool {
+                if li == 0 {
+                    return stored_frame_break_before_para;
+                }
+                if !line_reset_before(li) {
+                    return false;
+                }
+                let Some(prev) = p.line_segs.get(li - 1) else {
+                    return false;
+                };
+                let Some(cur) = p.line_segs.get(li) else {
+                    return false;
+                };
+                // 42065 p10의 같은 문단 58620→0HU도 위의 HWP5 저장 프레임
+                // 판정과 같은 계약을 사용한다.
+                is_hwp5_stored_frame_rewind(prev, cur)
             };
             // [Task #993] 줄 높이는 렌더러(layout_composed_paragraph)와 동일하게
             // corrected_line_height 를 적용한다 — raw line_height 가 폰트보다
@@ -6083,6 +6199,8 @@ impl LayoutEngine {
 
                                     let mut hard_break_before = driver_unit.hard_break_before
                                         || (reset_before && ri == 0 && fragment_index == 0);
+                                    let mut stored_frame_break_before =
+                                        driver_unit.stored_frame_break_before;
                                     let mut vpos_gap_before =
                                         vpos_gap_before_para && ri == 0 && fragment_index == 0;
                                     for ((cell_units, start), end) in
@@ -6094,6 +6212,12 @@ impl LayoutEngine {
                                                 .is_some_and(|unit| unit.hard_break_before)
                                             {
                                                 hard_break_before = true;
+                                            }
+                                            if cell_units
+                                                .get(*start)
+                                                .is_some_and(|unit| unit.stored_frame_break_before)
+                                            {
+                                                stored_frame_break_before = true;
                                             }
                                             if cell_units
                                                 .get(*start)
@@ -6120,6 +6244,7 @@ impl LayoutEngine {
                                     units.push(CellUnit {
                                         height: uh,
                                         hard_break_before,
+                                        stored_frame_break_before,
                                         vpos_gap_before,
                                         para_idx: pi,
                                         vis_start: 0,
@@ -6168,6 +6293,7 @@ impl LayoutEngine {
                         units.push(CellUnit {
                             height: uh,
                             hard_break_before,
+                            stored_frame_break_before: false,
                             vpos_gap_before,
                             para_idx: pi,
                             vis_start: 0,
@@ -6212,7 +6338,15 @@ impl LayoutEngine {
                         900.0
                     };
                     let total_frag_h: f64 = frags.iter().map(|fragment| fragment.height).sum();
-                    if frags.len() > 1 && total_frag_h > multi_page_px {
+                    // [#4069 Stage 3] 한 페이지 이하 1×1 자식 표라도 host line이
+                    // 저장 프레임 하단까지 차지하고 다음 문단이 새 프레임으로
+                    // rewind하면 현재 쪽의 남은 공간에서 시작해야 한다. 원자 처리하면
+                    // 42065 p15의 `조달청` 다음 표가 통째로 p16으로 밀린다.
+                    // HWP5 저장 경계로 확인된 경우만 열어 form-002/#1891의 일반
+                    // 단일 페이지 중첩 표 배치는 유지한다.
+                    if frags.len() > 1
+                        && (total_frag_h > multi_page_px || stored_frame_tail_before_next_para)
+                    {
                         let om_top = hwpunit_to_px(nt.outer_margin_top as i32, self.dpi);
                         let om_bot = hwpunit_to_px(nt.outer_margin_bottom as i32, self.dpi);
                         let n = frags.len();
@@ -6239,6 +6373,7 @@ impl LayoutEngine {
                             units.push(CellUnit {
                                 height: uh,
                                 hard_break_before,
+                                stored_frame_break_before: fragment.stored_frame_break_before,
                                 vpos_gap_before,
                                 para_idx: pi,
                                 vis_start: line_count,
@@ -6330,6 +6465,7 @@ impl LayoutEngine {
                         units.push(CellUnit {
                             height: lh,
                             hard_break_before,
+                            stored_frame_break_before: stored_frame_break_before(li),
                             vpos_gap_before,
                             para_idx: pi,
                             vis_start: li,
@@ -6376,6 +6512,7 @@ impl LayoutEngine {
                                 fragment_heights.push(NestedFlowFragment {
                                     height: h,
                                     hard_break_before: false,
+                                    stored_frame_break_before: false,
                                     trailing: false,
                                     content_height: h,
                                     recursive: false,
@@ -6429,6 +6566,7 @@ impl LayoutEngine {
                             units.push(CellUnit {
                                 height: fragment.height,
                                 hard_break_before: fragment.hard_break_before,
+                                stored_frame_break_before: fragment.stored_frame_break_before,
                                 vpos_gap_before: false,
                                 para_idx: pi,
                                 vis_start: line_count,
@@ -6573,6 +6711,7 @@ impl LayoutEngine {
                     // 가시 콘텐츠를 가지므로 리셋 보존.
                     hard_break_before: hard_break_before
                         && (has_table_in_para || para_has_visible_text),
+                    stored_frame_break_before: false,
                     vpos_gap_before: vpos_gap_before && !collapse_empty_rowbreak_spacer,
                     para_idx: pi,
                     vis_start: 0,
@@ -6657,6 +6796,8 @@ impl LayoutEngine {
                         // 양산하던 여분 빈 연속 페이지 회귀를 제거한다. 가시 텍스트 문단 사이
                         // 리셋(Task #993 의도)은 그대로 하드 브레이크로 보존한다.
                         hard_break_before: hard_break_before && para_has_visible_text,
+                        stored_frame_break_before: para_has_visible_text
+                            && stored_frame_break_before(li),
                         vpos_gap_before: vpos_gap_before && !collapse_empty_rowbreak_spacer,
                         para_idx: pi,
                         vis_start: if collapse_empty_rowbreak_spacer {
@@ -7080,23 +7221,37 @@ impl LayoutEngine {
                     && !u.empty_spacer
                     && h + u.height <= avail_height
                     && avail_height - h > HARD_BREAK_REMAINING_TOLERANCE_PX;
+                // [#4069 Stage 2/3] 재귀 투영된 자식 표의 문단 내부 저장 프레임
+                // 경계(p10), 그리고 1×1 자식 표 host 직후의 저장 프레임 경계(p15)는
+                // relaxed/absorb 규칙으로 넘지 않는다. 그 밖의 문단 사이 hard break의
+                // orphan/sliver 완화와 직접 표 셀의 기존 적응은 유지한다.
+                let follows_single_cell_nested_host = u
+                    .para_idx
+                    .checked_sub(1)
+                    .and_then(|para_idx| cell.paragraphs.get(para_idx))
+                    .is_some_and(Self::paragraph_hosts_single_cell_nested_table);
+                let strict_saved_frame_break = u.stored_frame_break_before
+                    && (u.mixed_nested_recursive || follows_single_cell_nested_host);
                 if j > start
                     && u.hard_break_before
-                    && (rewind_internal_hard_break_orphan
-                        || !relaxed_hard_break
-                        || (!u.empty_spacer
-                            && (h + u.height > avail_height
-                                || avail_height - h <= HARD_BREAK_REMAINING_TOLERANCE_PX)))
-                    && !units[start..j].iter().all(|unit| unit.empty_spacer)
-                    && !tiny_fragment_waste
+                    && (strict_saved_frame_break
+                        || ((rewind_internal_hard_break_orphan
+                            || !relaxed_hard_break
+                            || (!u.empty_spacer
+                                && (h + u.height > avail_height
+                                    || avail_height - h <= HARD_BREAK_REMAINING_TOLERANCE_PX)))
+                            && !units[start..j].iter().all(|unit| unit.empty_spacer)
+                            && !tiny_fragment_waste))
                 {
-                    if self.should_absorb_midpage_saved_vpos_reset(
-                        table,
-                        u,
-                        h,
-                        avail_height,
-                        allow_midpage_reset_absorb,
-                    ) {
+                    if !strict_saved_frame_break
+                        && self.should_absorb_midpage_saved_vpos_reset(
+                            table,
+                            u,
+                            h,
+                            avail_height,
+                            allow_midpage_reset_absorb,
+                        )
+                    {
                         h += u.height;
                         j += 1;
                         continue;
@@ -7250,21 +7405,31 @@ impl LayoutEngine {
                     j = units.len();
                     break;
                 }
+                let follows_single_cell_nested_host = u
+                    .para_idx
+                    .checked_sub(1)
+                    .and_then(|para_idx| cell.paragraphs.get(para_idx))
+                    .is_some_and(Self::paragraph_hosts_single_cell_nested_table);
+                let strict_saved_frame_break = u.stored_frame_break_before
+                    && (u.mixed_nested_recursive || follows_single_cell_nested_host);
                 if j > start
                     && u.hard_break_before
-                    && (!relaxed_hard_break
-                        || (!u.empty_spacer
-                            && (h + u.height > avail_height
-                                || avail_height - h <= HARD_BREAK_REMAINING_TOLERANCE_PX)))
-                    && !units[start..j].iter().all(|unit| unit.empty_spacer)
+                    && (strict_saved_frame_break
+                        || ((!relaxed_hard_break
+                            || (!u.empty_spacer
+                                && (h + u.height > avail_height
+                                    || avail_height - h <= HARD_BREAK_REMAINING_TOLERANCE_PX)))
+                            && !units[start..j].iter().all(|unit| unit.empty_spacer)))
                 {
-                    if self.should_absorb_midpage_saved_vpos_reset(
-                        table,
-                        u,
-                        h,
-                        avail_height,
-                        allow_midpage_reset_absorb,
-                    ) {
+                    if !strict_saved_frame_break
+                        && self.should_absorb_midpage_saved_vpos_reset(
+                            table,
+                            u,
+                            h,
+                            avail_height,
+                            allow_midpage_reset_absorb,
+                        )
+                    {
                         h += u.height;
                         j += 1;
                         continue;

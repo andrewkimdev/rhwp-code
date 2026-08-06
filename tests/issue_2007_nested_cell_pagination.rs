@@ -89,3 +89,65 @@ fn issue_2007_nested_cell_cursor_has_no_boundary_duplication() {
         "3쪽에 조문 대비표 마지막 개정 조항이 없다 — terminal cursor 누락"
     );
 }
+
+#[test]
+fn issue_2007_intra_paragraph_saved_frame_break_is_preserved() {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("samples/basic/issue2007_nested_cell_pagination_42065.hwp");
+    let bytes = fs::read(&path).expect("fixture read");
+    let core = DocumentCore::from_bytes(&bytes).expect("fixture parse");
+    let page10 = normalized_page_text(&core, 9);
+    let page11 = normalized_page_text(&core, 10);
+
+    const FRAME_START: &str = "제50조의2(조사권의남용금지)";
+    const FRAME_CONTINUATION: &str = "행하여야하며,다른목적등을위하여조사권을남용하여서는아니된다.";
+    const NEXT_ARTICLE: &str = "제50조의4(이행강제금등)";
+
+    assert!(
+        page10.contains(FRAME_START),
+        "10쪽에 저장 프레임 말미 조항이 없다"
+    );
+    assert!(
+        !page10.contains(FRAME_CONTINUATION),
+        "10쪽에 다음 저장 프레임이 겹쳤다 — 문단 내부 vpos reset 소실"
+    );
+    assert!(
+        page11.contains(FRAME_CONTINUATION),
+        "11쪽에 문단 내부 vpos reset 이후 줄이 없다"
+    );
+    assert!(
+        page11.contains(NEXT_ARTICLE),
+        "11쪽에 후속 조항이 없다 — child cursor 누락"
+    );
+}
+
+#[test]
+fn issue_2007_saved_frame_tail_nested_table_starts_before_next_frame() {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("samples/basic/issue2007_nested_cell_pagination_42065.hwp");
+    let bytes = fs::read(&path).expect("fixture read");
+    let core = DocumentCore::from_bytes(&bytes).expect("fixture parse");
+    let page15 = normalized_page_text(&core, 14);
+    let page16 = normalized_page_text(&core, 15);
+
+    const NESTED_TABLE_START: &str = "조달사업에관한법률";
+    const NESTED_TABLE_TAIL: &str = "제4항에따라시정요구를받은계약상대자";
+    const NEXT_FRAME: &str = "<이해관계자협의>:입법예고‧기관협의중";
+
+    assert!(
+        page15.contains(NESTED_TABLE_START),
+        "15쪽 조달청 제목 뒤 자식 표가 다음 쪽으로 통째로 밀렸다"
+    );
+    assert!(
+        page15.contains(NESTED_TABLE_TAIL),
+        "15쪽 저장 프레임 말미까지 조달청 자식 표가 이어지지 않았다"
+    );
+    assert!(
+        !page15.contains(NEXT_FRAME),
+        "다음 저장 프레임의 이해관계자 협의 제목이 15쪽에 흡수됐다"
+    );
+    assert!(
+        page16.contains(NEXT_FRAME),
+        "16쪽이 이해관계자 협의 저장 프레임에서 재개하지 않았다"
+    );
+}
