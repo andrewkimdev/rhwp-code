@@ -186,16 +186,19 @@ fn caption_has_topbottom_picture(caption: &Caption) -> bool {
 }
 
 /// A clipped table cell still has to expose an immediately nested table's
-/// *outer vertical border*. A nested table can begin after the host cell's
-/// left padding while retaining its stored width, which puts that right border
-/// just beyond the host cell's logical content rectangle. Clipping at the
-/// logical rectangle then removes the entire border even though the table
-/// layout emitted it (issue2007 p2-p4).
+/// *outer border*. A nested table can begin after the host cell's left padding
+/// while retaining its stored width, which puts that right border just beyond
+/// the host cell's logical content rectangle. A completed nested table can
+/// likewise end one border-width below an ancestor wrapper clip. Clipping at
+/// the logical rectangle then removes the entire border even though the table
+/// layout emitted it (issue2007 p2-p4, p9).
 ///
 /// Do not expand to every descendant: a RowBreak continuation deliberately
 /// keeps future-page text below its physical cell clip.  This is restricted to
-/// direct nested `Table` outer vertical `Line`s and changes only the
-/// horizontal clip extent needed for their stroke paint.
+/// direct nested `Table` outer vertical `Line`s. The horizontal correction
+/// remains unrestricted because it never reveals a future-page text tail.
+/// The vertical correction is separately bounded to a terminal border that
+/// misses the clip by at most six pixels.
 fn extend_clipped_cell_horizontal_clip_to_nested_table_borders(cell_node: &mut RenderNode) {
     let RenderNodeType::TableCell(cell_meta) = &cell_node.node_type else {
         return;
@@ -254,6 +257,88 @@ fn extend_clipped_cell_horizontal_clip_to_nested_table_borders(cell_node: &mut R
     cell_node.bbox.width = (clip_right - clip_left).max(0.0);
 }
 
+/// A terminal table border may be just outside a *wrapper ancestor* clip even
+/// though its direct host cell contains it. This is distinct from a real
+/// continuation: allowing an arbitrary descendant's vertical extent would
+/// reveal future-page text, but a completed outer horizontal border within a
+/// few pixels is paint-only. Preserve exactly that stroke interval (42065 p9).
+const NESTED_COMPLETED_BORDER_CLIP_OVERFLOW_PX: f64 = 6.0;
+
+fn extend_clipped_cell_vertical_clip_to_nearby_nested_table_borders(cell_node: &mut RenderNode) {
+    let RenderNodeType::TableCell(cell_meta) = &cell_node.node_type else {
+        return;
+    };
+    if !cell_meta.clip {
+        return;
+    }
+
+    fn scan_table_borders(
+        node: &RenderNode,
+        clip_top: f64,
+        clip_bottom: f64,
+        extended_top: &mut f64,
+        extended_bottom: &mut f64,
+    ) {
+        if matches!(node.node_type, RenderNodeType::Table(_)) {
+            let table_left = node.bbox.x;
+            let table_right = table_left + node.bbox.width;
+            let table_top = node.bbox.y;
+            let table_bottom = table_top + node.bbox.height;
+            for child in &node.children {
+                let RenderNodeType::Line(line) = &child.node_type else {
+                    continue;
+                };
+                if (line.y1 - line.y2).abs() > NESTED_FRAGMENT_EDGE_EPSILON_PX
+                    || (line.x1.min(line.x2) - table_left).abs() > NESTED_FRAGMENT_EDGE_EPSILON_PX
+                    || (line.x1.max(line.x2) - table_right).abs() > NESTED_FRAGMENT_EDGE_EPSILON_PX
+                {
+                    continue;
+                }
+                let is_outer_top = (line.y1 - table_top).abs() <= NESTED_FRAGMENT_EDGE_EPSILON_PX;
+                let is_outer_bottom =
+                    (line.y1 - table_bottom).abs() <= NESTED_FRAGMENT_EDGE_EPSILON_PX;
+                if !is_outer_top && !is_outer_bottom {
+                    continue;
+                }
+                let half_stroke = line.style.width.max(NESTED_FRAGMENT_EDGE_EPSILON_PX) / 2.0;
+                let paint_top = line.y1 - half_stroke;
+                let paint_bottom = line.y1 + half_stroke;
+                if paint_top < clip_top
+                    && clip_top - paint_top <= NESTED_COMPLETED_BORDER_CLIP_OVERFLOW_PX
+                {
+                    *extended_top =
+                        (*extended_top).min(paint_top - NESTED_FRAGMENT_FRAME_INSET_EPSILON_PX);
+                }
+                if paint_bottom > clip_bottom
+                    && paint_bottom - clip_bottom <= NESTED_COMPLETED_BORDER_CLIP_OVERFLOW_PX
+                {
+                    *extended_bottom = (*extended_bottom)
+                        .max(paint_bottom + NESTED_FRAGMENT_FRAME_INSET_EPSILON_PX);
+                }
+            }
+        }
+        for child in &node.children {
+            scan_table_borders(child, clip_top, clip_bottom, extended_top, extended_bottom);
+        }
+    }
+
+    let clip_top = cell_node.bbox.y;
+    let clip_bottom = clip_top + cell_node.bbox.height;
+    let mut extended_top = clip_top;
+    let mut extended_bottom = clip_bottom;
+    for child in &cell_node.children {
+        scan_table_borders(
+            child,
+            clip_top,
+            clip_bottom,
+            &mut extended_top,
+            &mut extended_bottom,
+        );
+    }
+    cell_node.bbox.y = extended_top;
+    cell_node.bbox.height = (extended_bottom - extended_top).max(0.0);
+}
+
 /// A table's logical stored width can end just inside a direct cell whose
 /// horizontal paint extent was widened for a nested table border.  Preserve
 /// that direct-cell extent on the table node before its parent cell computes
@@ -294,6 +379,13 @@ const NESTED_FRAGMENT_EDGE_EPSILON_PX: f64 = 0.5;
 /// that paint residue rather than current-page table content.
 const NESTED_FRAGMENT_RESIDUAL_BORDER_PX: f64 = 6.0;
 
+/// SVG and Canvas both clip a stroke by its painted area, rather than by the
+/// centerline.  Keep a reconstructed frame's whole stroke a hair inside the
+/// viewport: a centreline exactly on the clip boundary loses its anti-aliased
+/// outer half, and can disappear entirely at a fractional device scale.
+const NESTED_FRAGMENT_FRAME_INSET_EPSILON_PX: f64 = 0.05;
+const NESTED_FRAGMENT_FRAME_TARGET_EPSILON_PX: f64 = 0.05;
+
 fn push_fragment_border_line(
     tree: &mut PageRenderTree,
     table_node: &mut RenderNode,
@@ -330,6 +422,90 @@ fn has_fragment_border_line(table_node: &RenderNode, x1: f64, y1: f64, x2: f64, 
     })
 }
 
+/// Return the reconstructed frame coordinate whose full painted stroke stays
+/// inside the active clip. `at_top` selects the clip's upper or lower edge.
+fn fragment_horizontal_frame_y(
+    clip_top: f64,
+    clip_bottom: f64,
+    style: &crate::renderer::LineStyle,
+    at_top: bool,
+) -> f64 {
+    let inset = style.width.max(NESTED_FRAGMENT_EDGE_EPSILON_PX) / 2.0
+        + NESTED_FRAGMENT_FRAME_INSET_EPSILON_PX;
+    if at_top {
+        clip_top + inset
+    } else {
+        clip_bottom - inset
+    }
+}
+
+/// Make one full-width fragment edge paint-safe without producing a double
+/// rule. Native table layout commonly leaves the source border exactly on the
+/// clip edge.  The old broad `has_fragment_border_line` tolerance treated that
+/// clipped source line as equivalent to the reconstructed one, so no usable
+/// frame was emitted (issue2007 p11/p14).  Prefer moving that exact source
+/// line inward; add a line only when the source did not retain one.
+fn ensure_fragment_horizontal_frame_inside_clip(
+    tree: &mut PageRenderTree,
+    table_node: &mut RenderNode,
+    table_left: f64,
+    table_right: f64,
+    clip_edge_y: f64,
+    frame_y: f64,
+    style: crate::renderer::LineStyle,
+) {
+    let has_target = table_node.children.iter().any(|child| {
+        matches!(
+            &child.node_type,
+            RenderNodeType::Line(line)
+                if child.visible
+                    && (line.y1 - line.y2).abs() <= NESTED_FRAGMENT_EDGE_EPSILON_PX
+                    && (line.x1.min(line.x2) - table_left).abs()
+                        <= NESTED_FRAGMENT_EDGE_EPSILON_PX
+                    && (line.x1.max(line.x2) - table_right).abs()
+                        <= NESTED_FRAGMENT_EDGE_EPSILON_PX
+                    && (line.y1 - frame_y).abs()
+                        <= NESTED_FRAGMENT_FRAME_TARGET_EPSILON_PX
+        )
+    });
+    if has_target {
+        return;
+    }
+
+    if let Some(source_line) = table_node.children.iter_mut().find(|child| {
+        matches!(
+            &child.node_type,
+            RenderNodeType::Line(line)
+                if child.visible
+                    && (line.y1 - line.y2).abs() <= NESTED_FRAGMENT_EDGE_EPSILON_PX
+                    && (line.x1.min(line.x2) - table_left).abs()
+                        <= NESTED_FRAGMENT_EDGE_EPSILON_PX
+                    && (line.x1.max(line.x2) - table_right).abs()
+                        <= NESTED_FRAGMENT_EDGE_EPSILON_PX
+                    && (line.y1 - clip_edge_y).abs()
+                        <= NESTED_FRAGMENT_EDGE_EPSILON_PX
+        )
+    }) {
+        let delta_y = frame_y - source_line.bbox.y;
+        if let RenderNodeType::Line(line) = &mut source_line.node_type {
+            line.y1 += delta_y;
+            line.y2 += delta_y;
+        }
+        source_line.bbox.y += delta_y;
+        return;
+    }
+
+    push_fragment_border_line(
+        tree,
+        table_node,
+        table_left,
+        frame_y,
+        table_right,
+        frame_y,
+        style,
+    );
+}
+
 fn translate_render_subtree_y(node: &mut RenderNode, delta_y: f64) {
     node.bbox.y += delta_y;
     if let RenderNodeType::Line(line) = &mut node.node_type {
@@ -350,12 +526,169 @@ fn is_empty_vpos_spacer_line(node: &RenderNode) -> bool {
         })
 }
 
+/// Reconstruct one table's physical fragment frame inside an ancestor
+/// `TableCell` clip.  A 1×1 RowBreak wrapper often has no border of its own:
+/// the paintable frame belongs to a deeper table in its cell.  Consequently
+/// this helper intentionally accepts the ancestor clip rather than requiring
+/// the table itself to own it (42065 p10-p14).
+fn reconstruct_nested_table_fragment_frame(
+    tree: &mut PageRenderTree,
+    table_node: &mut RenderNode,
+    clip_top: f64,
+    clip_bottom: f64,
+) {
+    let table_top = table_node.bbox.y;
+    let table_bottom = table_top + table_node.bbox.height;
+    if table_bottom <= clip_top + NESTED_FRAGMENT_EDGE_EPSILON_PX
+        || table_top >= clip_bottom - NESTED_FRAGMENT_EDGE_EPSILON_PX
+    {
+        return;
+    }
+    let starts_before_clip = table_top < clip_top - NESTED_FRAGMENT_EDGE_EPSILON_PX;
+    let ends_after_clip = table_bottom > clip_bottom + NESTED_FRAGMENT_EDGE_EPSILON_PX;
+    if !starts_before_clip && !ends_after_clip {
+        return;
+    }
+
+    let fragment_top = table_top.max(clip_top);
+    let fragment_bottom = table_bottom.min(clip_bottom);
+    let fragment_height = fragment_bottom - fragment_top;
+    if fragment_height <= NESTED_FRAGMENT_EDGE_EPSILON_PX {
+        return;
+    }
+    // Preserve the source-flow seam rule from the direct wrapper repair. A
+    // sub-line tail belongs to the preceding page, even when its visible
+    // border is owned by a deeper descendant table; rebuilding it here would
+    // turn that tail into a false top frame on p10/p13.
+    if starts_before_clip && fragment_height < NESTED_FRAGMENT_RESIDUAL_BORDER_PX {
+        return;
+    }
+
+    let table_left = table_node.bbox.x;
+    let table_right = table_left + table_node.bbox.width;
+    let mut horizontal_style = None;
+    let mut left_style = None;
+    let mut right_style = None;
+    for child in &table_node.children {
+        let RenderNodeType::Line(line) = &child.node_type else {
+            continue;
+        };
+        let horizontal = (line.y2 - line.y1).abs() <= NESTED_FRAGMENT_EDGE_EPSILON_PX;
+        let vertical = (line.x2 - line.x1).abs() <= NESTED_FRAGMENT_EDGE_EPSILON_PX;
+        if horizontal
+            && (line.x1.min(line.x2) - table_left).abs() <= NESTED_FRAGMENT_EDGE_EPSILON_PX
+            && (line.x1.max(line.x2) - table_right).abs() <= NESTED_FRAGMENT_EDGE_EPSILON_PX
+            && horizontal_style.is_none()
+        {
+            horizontal_style = Some(line.style.clone());
+        }
+        if vertical && (line.x1 - table_left).abs() <= NESTED_FRAGMENT_EDGE_EPSILON_PX {
+            left_style.get_or_insert_with(|| line.style.clone());
+        }
+        if vertical && (line.x1 - table_right).abs() <= NESTED_FRAGMENT_EDGE_EPSILON_PX {
+            right_style.get_or_insert_with(|| line.style.clone());
+        }
+    }
+
+    // Keep the horizontal centreline inside the clip by half a stroke.  A
+    // centreline exactly at the SVG/Canvas clip edge otherwise loses its
+    // anti-aliased outer half, and at some device scales the entire rule.
+    let frame_top = horizontal_style.as_ref().map_or(fragment_top, |style| {
+        if starts_before_clip {
+            fragment_horizontal_frame_y(clip_top, clip_bottom, style, true)
+        } else {
+            fragment_top
+        }
+    });
+    let frame_bottom = horizontal_style.as_ref().map_or(fragment_bottom, |style| {
+        if ends_after_clip {
+            fragment_horizontal_frame_y(clip_top, clip_bottom, style, false)
+        } else {
+            fragment_bottom
+        }
+    });
+
+    if let Some(style) = horizontal_style.as_ref() {
+        if starts_before_clip {
+            ensure_fragment_horizontal_frame_inside_clip(
+                tree,
+                table_node,
+                table_left,
+                table_right,
+                clip_top,
+                frame_top,
+                style.clone(),
+            );
+        }
+        if ends_after_clip {
+            ensure_fragment_horizontal_frame_inside_clip(
+                tree,
+                table_node,
+                table_left,
+                table_right,
+                clip_bottom,
+                frame_bottom,
+                style.clone(),
+            );
+        }
+    }
+    if let Some(style) = left_style {
+        if !has_fragment_border_line(table_node, table_left, frame_top, table_left, frame_bottom) {
+            push_fragment_border_line(
+                tree,
+                table_node,
+                table_left,
+                frame_top,
+                table_left,
+                frame_bottom,
+                style,
+            );
+        }
+    }
+    if let Some(style) = right_style {
+        if !has_fragment_border_line(
+            table_node,
+            table_right,
+            frame_top,
+            table_right,
+            frame_bottom,
+        ) {
+            push_fragment_border_line(
+                tree,
+                table_node,
+                table_right,
+                frame_top,
+                table_right,
+                frame_bottom,
+                style,
+            );
+        }
+    }
+}
+
+/// Visit only descendants: the direct child is handled by the original seam
+/// repair first, while this pass reaches the real bordered table below an
+/// unbordered RowBreak wrapper.
+fn reconstruct_nested_table_descendant_fragment_frames(
+    tree: &mut PageRenderTree,
+    node: &mut RenderNode,
+    clip_top: f64,
+    clip_bottom: f64,
+) {
+    for child in &mut node.children {
+        if matches!(child.node_type, RenderNodeType::Table(_)) {
+            reconstruct_nested_table_fragment_frame(tree, child, clip_top, clip_bottom);
+        }
+        reconstruct_nested_table_descendant_fragment_frames(tree, child, clip_top, clip_bottom);
+    }
+}
+
 /// Repair the frame and source-flow seam of a true nested-table continuation.
 ///
 /// A direct nested table keeps its document-global coordinates even when its
 /// owning 1×1 RowBreak cell is a clipped page fragment. SVG/Canvas therefore
-/// naturally retains the old table's bottom/side lines, but loses the new
-/// fragment's top edge: the source top is still above the clip rectangle. A
+/// naturally retains old table geometry, but loses the new fragment's frame:
+/// the source top or bottom can lie beyond the physical clip rectangle. A
 /// few-pixel terminal remnant is the inverse case and must be suppressed.
 ///
 /// The source also retains the completed table's following empty `vpos=0`
@@ -393,18 +726,24 @@ fn repair_clipped_nested_table_fragment_frame(tree: &mut PageRenderTree, node: &
 
         let table_top = table_node.bbox.y;
         let table_bottom = table_top + table_node.bbox.height;
-        if table_top >= clip_top - NESTED_FRAGMENT_EDGE_EPSILON_PX
-            || table_bottom <= clip_top + NESTED_FRAGMENT_EDGE_EPSILON_PX
+        if table_bottom <= clip_top + NESTED_FRAGMENT_EDGE_EPSILON_PX
+            || table_top >= clip_bottom - NESTED_FRAGMENT_EDGE_EPSILON_PX
         {
             continue;
         }
+        let starts_before_clip = table_top < clip_top - NESTED_FRAGMENT_EDGE_EPSILON_PX;
+        let ends_after_clip = table_bottom > clip_bottom + NESTED_FRAGMENT_EDGE_EPSILON_PX;
+        if !starts_before_clip && !ends_after_clip {
+            continue;
+        }
+        let fragment_top = table_top.max(clip_top);
         let fragment_bottom = table_bottom.min(clip_bottom);
-        let fragment_height = fragment_bottom - clip_top;
+        let fragment_height = fragment_bottom - fragment_top;
         if fragment_height <= NESTED_FRAGMENT_EDGE_EPSILON_PX {
             continue;
         }
 
-        if fragment_height < NESTED_FRAGMENT_RESIDUAL_BORDER_PX {
+        if starts_before_clip && fragment_height < NESTED_FRAGMENT_RESIDUAL_BORDER_PX {
             // Only a sub-line tail reaches this page. Hiding its source edge
             // prevents the previous table's bottom border from appearing as a
             // false top border without affecting any current-page content.
@@ -484,20 +823,50 @@ fn repair_clipped_nested_table_fragment_frame(tree: &mut PageRenderTree, node: &
             }
         }
 
+        // Place reconstructed horizontal centerlines half a stroke inside the
+        // clip. SVG clipPath and Canvas clip both otherwise remove half (and
+        // at some device scales all) of a line placed exactly on the boundary.
+        // The sub-pixel inset retains the physical edge while keeping paint
+        // independent of browser anti-aliasing rules.
+        let frame_top = horizontal_style.as_ref().map_or(fragment_top, |style| {
+            if starts_before_clip {
+                fragment_horizontal_frame_y(clip_top, clip_bottom, style, true)
+            } else {
+                fragment_top
+            }
+        });
+        let frame_bottom = horizontal_style.as_ref().map_or(fragment_bottom, |style| {
+            if ends_after_clip {
+                fragment_horizontal_frame_y(clip_top, clip_bottom, style, false)
+            } else {
+                fragment_bottom
+            }
+        });
+
         // The original vertical sides already intersect the cell clip in most
-        // renderers. Emit them again at the fragment boundary nevertheless:
-        // an SVG clip exactly on the right edge otherwise drops that side,
-        // yielding a three-sided table in the browser canvas.
-        if let Some(style) = horizontal_style {
-            if !has_fragment_border_line(table_node, table_left, clip_top, table_right, clip_top) {
-                push_fragment_border_line(
+        // renderers. Emit them again at fragment boundaries nevertheless: an
+        // SVG/Canvas clip exactly on the edge otherwise yields an open frame.
+        if let Some(style) = horizontal_style.as_ref() {
+            if starts_before_clip {
+                ensure_fragment_horizontal_frame_inside_clip(
                     tree,
                     table_node,
                     table_left,
-                    clip_top,
                     table_right,
                     clip_top,
-                    style,
+                    frame_top,
+                    style.clone(),
+                );
+            }
+            if ends_after_clip {
+                ensure_fragment_horizontal_frame_inside_clip(
+                    tree,
+                    table_node,
+                    table_left,
+                    table_right,
+                    clip_bottom,
+                    frame_bottom,
+                    style.clone(),
                 );
             }
         }
@@ -505,17 +874,17 @@ fn repair_clipped_nested_table_fragment_frame(tree: &mut PageRenderTree, node: &
             if !has_fragment_border_line(
                 table_node,
                 table_left,
-                clip_top,
+                frame_top,
                 table_left,
-                fragment_bottom,
+                frame_bottom,
             ) {
                 push_fragment_border_line(
                     tree,
                     table_node,
                     table_left,
-                    clip_top,
+                    frame_top,
                     table_left,
-                    fragment_bottom,
+                    frame_bottom,
                     style,
                 );
             }
@@ -524,22 +893,27 @@ fn repair_clipped_nested_table_fragment_frame(tree: &mut PageRenderTree, node: &
             if !has_fragment_border_line(
                 table_node,
                 table_right,
-                clip_top,
+                frame_top,
                 table_right,
-                fragment_bottom,
+                frame_bottom,
             ) {
                 push_fragment_border_line(
                     tree,
                     table_node,
                     table_right,
-                    clip_top,
+                    frame_top,
                     table_right,
-                    fragment_bottom,
+                    frame_bottom,
                     style,
                 );
             }
         }
     }
+
+    // The immediate 1×1 RowBreak table can be an unbordered structural
+    // wrapper.  Its descendant table owns the visible rule, so apply the same
+    // physical fragment-frame contract below that wrapper as well.
+    reconstruct_nested_table_descendant_fragment_frames(tree, node, clip_top, clip_bottom);
 }
 
 /// Run the narrow horizontal clip correction only after every nested table in
@@ -558,6 +932,7 @@ pub(super) fn extend_completed_nested_table_border_clips(
     }
     extend_table_horizontal_bbox_to_direct_cell_paint(node);
     extend_clipped_cell_horizontal_clip_to_nested_table_borders(node);
+    extend_clipped_cell_vertical_clip_to_nearby_nested_table_borders(node);
     repair_clipped_nested_table_fragment_frame(tree, node);
 }
 

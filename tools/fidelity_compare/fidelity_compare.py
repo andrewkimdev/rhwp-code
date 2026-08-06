@@ -1729,6 +1729,65 @@ def svg_vertical_lines_with_clips(
     return lines
 
 
+def svg_horizontal_lines_with_clips(
+    svg_path: Path,
+) -> list[dict[str, object]]:
+    """Collect painted horizontal SVG lines and their effective rhwp clip.
+
+    This is the horizontal counterpart to :func:`svg_vertical_lines_with_clips`.
+    Continued tables are especially sensitive here: an outer frame can exist
+    in the render tree while a page/cell clip removes half (or all) of its
+    horizontal stroke at the physical page boundary.
+    """
+    root = ET.parse(svg_path).getroot()
+    clip_rectangles = _svg_clip_rectangles(root)
+    lines: list[dict[str, object]] = []
+
+    def walk(
+        element: ET.Element,
+        active_clip: tuple[float, float, float, float] | None,
+        active_clip_ids: tuple[str, ...],
+    ) -> None:
+        tag = _svg_local_name(element)
+        if tag in {"defs", "clipPath"}:
+            return
+        clip_id = _clip_id_from_attr(element.get("clip-path"))
+        next_clip = active_clip
+        next_clip_ids = active_clip_ids
+        if clip_id is not None and clip_id in clip_rectangles:
+            next_clip = _intersect_svg_rectangles(next_clip, clip_rectangles[clip_id])
+            next_clip_ids = (*next_clip_ids, clip_id)
+
+        if tag == "line":
+            x1 = _svg_float(element, "x1")
+            y1 = _svg_float(element, "y1")
+            x2 = _svg_float(element, "x2")
+            y2 = _svg_float(element, "y2")
+            stroke_width = _svg_float(element, "stroke-width") or 1.0
+            if None not in {x1, y1, x2, y2}:
+                assert x1 is not None and y1 is not None and x2 is not None and y2 is not None
+                if abs(y1 - y2) <= 0.01 and abs(x1 - x2) >= 1.0:
+                    half_stroke = stroke_width / 2.0
+                    lines.append(
+                        {
+                            "x0": min(x1, x2),
+                            "x1": max(x1, x2),
+                            "y": y1,
+                            "stroke_width": stroke_width,
+                            "paint_top": y1 - half_stroke,
+                            "paint_bottom": y1 + half_stroke,
+                            "clip": next_clip,
+                            "clip_ids": next_clip_ids,
+                        }
+                    )
+
+        for child in element:
+            walk(child, next_clip, next_clip_ids)
+
+    walk(root, None, ())
+    return lines
+
+
 def table_records(tree: Mapping[str, object]) -> list[dict[str, object]]:
     """Return all render-tree table boxes used to identify SVG outer edges."""
     records: list[dict[str, object]] = []
@@ -1738,6 +1797,7 @@ def table_records(tree: Mapping[str, object]) -> list[dict[str, object]]:
         if node.get("type") == "Table" and box is not None:
             table_x, table_y, table_width, table_height = box
             own_outer_vertical_lines: list[tuple[str, float, float, float, float]] = []
+            own_horizontal_lines: list[tuple[float, float, float, float]] = []
             children = node.get("children")
             if isinstance(children, list):
                 for child in children:
@@ -1747,18 +1807,21 @@ def table_records(tree: Mapping[str, object]) -> list[dict[str, object]]:
                     if line_box is None:
                         continue
                     line_x, line_y, line_width, line_height = line_box
-                    if line_height <= max(1.0, line_width):
-                        continue
-                    edge = (
-                        "left"
-                        if abs(line_x - table_x) <= 0.2
-                        else "right"
-                        if abs(line_x - (table_x + table_width)) <= 0.2
-                        else None
-                    )
-                    if edge is not None:
-                        own_outer_vertical_lines.append(
-                            (edge, line_x, line_y, line_y + line_height, line_width)
+                    if line_height > max(1.0, line_width):
+                        edge = (
+                            "left"
+                            if abs(line_x - table_x) <= 0.2
+                            else "right"
+                            if abs(line_x - (table_x + table_width)) <= 0.2
+                            else None
+                        )
+                        if edge is not None:
+                            own_outer_vertical_lines.append(
+                                (edge, line_x, line_y, line_y + line_height, line_width)
+                            )
+                    elif line_width >= max(1.0, line_height):
+                        own_horizontal_lines.append(
+                            (line_x, line_x + line_width, line_y, line_height)
                         )
             records.append(
                 {
@@ -1768,6 +1831,7 @@ def table_records(tree: Mapping[str, object]) -> list[dict[str, object]]:
                     "cols": node.get("cols"),
                     "bbox": box,
                     "own_outer_vertical_lines": own_outer_vertical_lines,
+                    "own_horizontal_lines": own_horizontal_lines,
                 }
             )
         children = node.get("children")
@@ -1861,6 +1925,206 @@ def svg_table_border_clip_candidates(
     )
 
 
+def _horizontal_line_matches_table_record(
+    line: Mapping[str, object],
+    table: Mapping[str, object],
+) -> bool:
+    """Require an SVG line to correspond to a direct render-tree table line."""
+    expected_lines = table["own_horizontal_lines"]
+    assert isinstance(expected_lines, list)
+    for expected_x0, expected_x1, expected_y, expected_height in expected_lines:
+        tolerance = max(0.25, float(expected_height) / 2.0 + 0.2)
+        if (
+            abs(float(line["x0"]) - float(expected_x0)) <= tolerance
+            and abs(float(line["x1"]) - float(expected_x1)) <= tolerance
+            and abs(float(line["y"]) - float(expected_y)) <= tolerance
+        ):
+            return True
+    return False
+
+
+def _table_has_paint_safe_horizontal_frame(
+    table: Mapping[str, object],
+    all_lines: Sequence[Mapping[str, object]],
+    clip: tuple[float, float, float, float],
+    edge: str,
+) -> bool:
+    """Return whether the table has a direct frame stroke wholly inside `clip`.
+
+    Continued tables retain their original off-page border as a source node
+    after a correct physical frame has been reconstructed.  Treating that
+    hidden source node as a live defect would make the ledger permanently
+    noisy, so a paint-safe direct sibling at the same page edge resolves it.
+    """
+    for line in all_lines:
+        line_clip = line["clip"]
+        if not isinstance(line_clip, tuple) or not _horizontal_line_matches_table_record(line, table):
+            continue
+        paint_top = float(line["paint_top"])
+        paint_bottom = float(line["paint_bottom"])
+        if edge == "top":
+            if (
+                paint_top >= clip[1] - 0.01
+                and float(line["y"]) - clip[1] <= 6.0
+                and paint_bottom <= clip[3] + 0.01
+            ):
+                return True
+        elif (
+            paint_bottom <= clip[3] + 0.01
+            and clip[3] - float(line["y"]) <= 6.0
+            and paint_top >= clip[1] - 0.01
+        ):
+            return True
+    return False
+
+
+def svg_table_horizontal_border_clip_candidates(
+    svg_path: Path,
+    tree: Mapping[str, object],
+) -> list[dict[str, object]]:
+    """Find table frame strokes that a vertical clip removes or halves.
+
+    The vertical-border ledger intentionally cannot see page-top/page-bottom
+    frame losses.  This companion checks direct Table horizontal `Line`s near
+    an effective clip's top or bottom and reports only strokes with <80% of
+    their height remaining and no paint-safe sibling frame.  A six-pixel
+    boundary band captures native HWP border rounding while excluding old
+    off-page source lines and tiny residual fragments.
+    """
+    all_lines = svg_horizontal_lines_with_clips(svg_path)
+    candidates: list[dict[str, object]] = []
+
+    def append_candidate(candidate: dict[str, object]) -> None:
+        """Keep one candidate per table edge and effective clip."""
+        key = (
+            tuple(candidate["bbox"]),
+            str(candidate["edge"]),
+            tuple(candidate["clip_ids"]),
+            tuple(candidate["clip_rect"]),
+        )
+        for existing in candidates:
+            existing_key = (
+                tuple(existing["bbox"]),
+                str(existing["edge"]),
+                tuple(existing["clip_ids"]),
+                tuple(existing["clip_rect"]),
+            )
+            if existing_key == key:
+                return
+        candidates.append(candidate)
+
+    for line in all_lines:
+        clip = line["clip"]
+        if not isinstance(clip, tuple):
+            continue
+        paint_top = float(line["paint_top"])
+        paint_bottom = float(line["paint_bottom"])
+        visible_height = max(0.0, min(paint_bottom, clip[3]) - max(paint_top, clip[1]))
+        visible_height_ratio = visible_height / max(paint_bottom - paint_top, 0.01)
+        if visible_height_ratio >= 0.8:
+            continue
+
+        y = float(line["y"])
+        top_distance = abs(y - clip[1])
+        bottom_distance = abs(y - clip[3])
+        if min(top_distance, bottom_distance) > 6.0:
+            continue
+        edge = "top" if top_distance <= bottom_distance else "bottom"
+
+        for table in table_records(tree):
+            table_box = table["bbox"]
+            assert isinstance(table_box, tuple)
+            table_x, table_y, table_width, table_height = table_box
+            fragment_height = max(
+                0.0,
+                min(table_y + table_height, clip[3]) - max(table_y, clip[1]),
+            )
+            if fragment_height < 6.0 or not _horizontal_line_matches_table_record(line, table):
+                continue
+            if _table_has_paint_safe_horizontal_frame(table, all_lines, clip, edge):
+                continue
+            append_candidate(
+                {
+                    "pi": table.get("pi"),
+                    "ci": table.get("ci"),
+                    "rows": table.get("rows"),
+                    "cols": table.get("cols"),
+                    "bbox": table_box,
+                    "edge": edge,
+                    "line_x0": line["x0"],
+                    "line_x1": line["x1"],
+                    "line_y": y,
+                    "stroke_width": line["stroke_width"],
+                    "visible_height_ratio": visible_height_ratio,
+                    "clip_ids": line["clip_ids"],
+                    "clip_rect": clip,
+                }
+            )
+
+    # A continuation can also lose its physical frame before any source line
+    # approaches the clip edge: p10/p13 keep the table's real bottom border
+    # on a later page, so the old near-edge-only pass saw no line to flag.
+    # Once a direct-bordered table spans an effective clip, the active
+    # physical fragment requires a paint-safe top and/or bottom sibling.
+    for table in table_records(tree):
+        table_box = table["bbox"]
+        assert isinstance(table_box, tuple)
+        table_x, table_y, table_width, table_height = table_box
+        matching_lines = [
+            line
+            for line in all_lines
+            if isinstance(line["clip"], tuple)
+            and _horizontal_line_matches_table_record(line, table)
+        ]
+        if not matching_lines:
+            continue
+        for source_line in matching_lines:
+            clip = source_line["clip"]
+            assert isinstance(clip, tuple)
+            fragment_height = max(
+                0.0,
+                min(table_y + table_height, clip[3]) - max(table_y, clip[1]),
+            )
+            if fragment_height < 6.0:
+                continue
+            for edge, continues in (
+                ("top", table_y < clip[1] - 0.5),
+                ("bottom", table_y + table_height > clip[3] + 0.5),
+            ):
+                if not continues or _table_has_paint_safe_horizontal_frame(
+                    table, all_lines, clip, edge
+                ):
+                    continue
+                frame_y = clip[1] if edge == "top" else clip[3]
+                append_candidate(
+                    {
+                        "pi": table.get("pi"),
+                        "ci": table.get("ci"),
+                        "rows": table.get("rows"),
+                        "cols": table.get("cols"),
+                        "bbox": table_box,
+                        "edge": edge,
+                        "line_x0": table_x,
+                        "line_x1": table_x + table_width,
+                        "line_y": frame_y,
+                        "stroke_width": source_line["stroke_width"],
+                        "visible_height_ratio": 0.0,
+                        "clip_ids": source_line["clip_ids"],
+                        "clip_rect": clip,
+                    }
+                )
+
+    return sorted(
+        candidates,
+        key=lambda candidate: (
+            float(candidate["bbox"][1]),
+            float(candidate["bbox"][0]),
+            str(candidate["edge"]),
+            float(candidate["line_y"]),
+        ),
+    )
+
+
 def write_svg_table_border_clip_ledger(
     work_dir: Path,
     svg_dir: Path,
@@ -1913,6 +2177,64 @@ def write_svg_table_border_clip_ledger(
                     f"{float(candidate['visible_width_ratio']):.3f}\t"
                     f"{','.join(clip_ids) or '-'}\t{format_bbox(candidate['clip_rect'])}\t"
                     "candidate only; outer table stroke is emitted but hidden by SVG clip\n"
+                )
+
+
+def write_svg_table_horizontal_border_clip_ledger(
+    work_dir: Path,
+    svg_dir: Path,
+    tree_dir: Path,
+    requested_pages: Sequence[int],
+) -> None:
+    """Write candidates for clipped table top/bottom frames.
+
+    Kept separate from the vertical ledger so callers can distinguish a lost
+    right/left table edge from a page-break frame that is only half painted.
+    """
+    report_path = work_dir / "svg-table-horizontal-border-clip-candidates.tsv"
+    with report_path.open("w", encoding="utf-8") as report:
+        report.write(
+            "page\tpi\tci\trows\tcols\tedge\ttable_bbox\tline_x0\tline_x1\t"
+            "line_y\tstroke_width\tvisible_height_ratio\tclip_ids\tclip_rect\tnote\n"
+        )
+        for page_index in requested_pages:
+            svg_paths = list(svg_dir.glob(f"*_{page_index + 1:03}.svg"))
+            tree_path = tree_path_for_page(tree_dir, page_index)
+            if not svg_paths or tree_path is None:
+                report.write(
+                    f"{page_index + 1}\t-\t-\t-\t-\t-\t-\t-\t-\t-\t-\t-\t-\t"
+                    "SVG 또는 render tree 없음\n"
+                )
+                continue
+            try:
+                tree = json.loads(tree_path.read_text(encoding="utf-8"))
+                if not isinstance(tree, Mapping):
+                    raise ValueError("render tree root가 object가 아님")
+                candidates = svg_table_horizontal_border_clip_candidates(svg_paths[0], tree)
+            except (ET.ParseError, OSError, ValueError, json.JSONDecodeError) as error:
+                report.write(
+                    f"{page_index + 1}\t-\t-\t-\t-\t-\t-\t-\t-\t-\t-\t-\t-\t-\t"
+                    f"SVG/tree 읽기 실패: {error}\n"
+                )
+                continue
+            if not candidates:
+                report.write(
+                    f"{page_index + 1}\t-\t-\t-\t-\t-\t-\t-\t-\t-\t-\t-\t-\t-\t-\t-\n"
+                )
+                continue
+            for candidate in candidates:
+                clip_ids = candidate["clip_ids"]
+                assert isinstance(clip_ids, tuple)
+                report.write(
+                    f"{page_index + 1}\t{format_number(candidate['pi'])}\t"
+                    f"{format_number(candidate['ci'])}\t{format_number(candidate['rows'])}\t"
+                    f"{format_number(candidate['cols'])}\t{candidate['edge']}\t"
+                    f"{format_bbox(candidate['bbox'])}\t{float(candidate['line_x0']):.1f}\t"
+                    f"{float(candidate['line_x1']):.1f}\t{float(candidate['line_y']):.1f}\t"
+                    f"{float(candidate['stroke_width']):.1f}\t"
+                    f"{float(candidate['visible_height_ratio']):.3f}\t"
+                    f"{','.join(clip_ids) or '-'}\t{format_bbox(candidate['clip_rect'])}\t"
+                    "candidate only; table top/bottom frame stroke is clipped at a page boundary\n"
                 )
 
 
@@ -2278,6 +2600,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             tree_dir,
             requested_pages,
         )
+        write_svg_table_horizontal_border_clip_ledger(
+            work_dir,
+            svg_dir,
+            tree_dir,
+            requested_pages,
+        )
         write_successor_float_owner_shift_ledger(
             work_dir,
             tree_dir,
@@ -2323,6 +2651,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(
             "SVG table-border clip candidates:",
             work_dir / "svg-table-border-clip-candidates.tsv",
+        )
+        print(
+            "SVG table-horizontal-border clip candidates:",
+            work_dir / "svg-table-horizontal-border-clip-candidates.tsv",
         )
         print(
             "float owner-shift candidates:",

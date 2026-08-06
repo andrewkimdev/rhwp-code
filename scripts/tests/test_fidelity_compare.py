@@ -474,6 +474,75 @@ class SvgTableBorderClipCandidateTests(unittest.TestCase):
         self.assertEqual(candidates, [])
 
 
+class SvgTableHorizontalBorderClipCandidateTests(unittest.TestCase):
+    def test_reports_bottom_table_frame_hidden_by_parent_clip(self) -> None:
+        tree = {
+            "type": "Page",
+            "bbox": {"x": 0, "y": 0, "w": 800, "h": 1000},
+            "children": [
+                {
+                    "type": "Table",
+                    "pi": 7,
+                    "ci": 1,
+                    "rows": 1,
+                    "cols": 1,
+                    "bbox": {"x": 80, "y": 200, "w": 650, "h": 700},
+                    "children": [
+                        {"type": "Line", "bbox": {"x": 80, "y": 900, "w": 650, "h": 2}}
+                    ],
+                }
+            ],
+        }
+        svg = """<svg xmlns="http://www.w3.org/2000/svg">
+          <defs><clipPath id="cell-clip"><rect x="75" y="100" width="660" height="798"/></clipPath></defs>
+          <g clip-path="url(#cell-clip)"><line x1="80" y1="900" x2="730" y2="900" stroke="#000" stroke-width="2"/></g>
+        </svg>"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            svg_path = Path(directory) / "p010.svg"
+            svg_path.write_text(svg, encoding="utf-8")
+            candidates = FIDELITY.svg_table_horizontal_border_clip_candidates(svg_path, tree)
+
+        self.assertEqual(len(candidates), 1)
+        self.assertEqual(candidates[0]["pi"], 7)
+        self.assertEqual(candidates[0]["edge"], "bottom")
+        self.assertEqual(candidates[0]["visible_height_ratio"], 0.0)
+        self.assertEqual(candidates[0]["clip_ids"], ("cell-clip",))
+
+    def test_reports_missing_physical_bottom_frame_before_source_border(self) -> None:
+        tree = {
+            "type": "Page",
+            "bbox": {"x": 0, "y": 0, "w": 800, "h": 1000},
+            "children": [
+                {
+                    "type": "Table",
+                    "pi": 7,
+                    "ci": 1,
+                    "rows": 1,
+                    "cols": 1,
+                    "bbox": {"x": 80, "y": 200, "w": 650, "h": 700},
+                    "children": [
+                        {"type": "Line", "bbox": {"x": 80, "y": 900, "w": 650, "h": 2}}
+                    ],
+                }
+            ],
+        }
+        svg = """<svg xmlns="http://www.w3.org/2000/svg">
+          <defs><clipPath id="cell-clip"><rect x="75" y="100" width="660" height="750"/></clipPath></defs>
+          <g clip-path="url(#cell-clip)"><line x1="80" y1="900" x2="730" y2="900" stroke="#000" stroke-width="2"/></g>
+        </svg>"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            svg_path = Path(directory) / "p010.svg"
+            svg_path.write_text(svg, encoding="utf-8")
+            candidates = FIDELITY.svg_table_horizontal_border_clip_candidates(svg_path, tree)
+
+        self.assertEqual(len(candidates), 1)
+        self.assertEqual(candidates[0]["edge"], "bottom")
+        self.assertEqual(candidates[0]["line_y"], 850.0)
+        self.assertEqual(candidates[0]["visible_height_ratio"], 0.0)
+
+
 class TableCellTextOverlapCandidateTests(unittest.TestCase):
     def test_reports_painted_lines_overlapping_within_one_cell(self) -> None:
         tree = {

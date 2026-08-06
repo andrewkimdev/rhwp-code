@@ -210,10 +210,14 @@ fn nested_table_right_border_paint_extent(table: &RenderNode) -> Option<f64> {
         .max_by(|left, right| left.total_cmp(right))
 }
 
-/// A RowBreak host clips its direct nested table at the page boundary.  The
-/// continuation therefore needs a newly painted top edge at the clip origin;
-/// the source table's own top edge remains on the preceding page.
-fn has_direct_full_width_horizontal_line_at(table: &RenderNode, y: f64) -> bool {
+/// A RowBreak host clips its direct nested table at the page boundary. The
+/// continuation needs a newly painted top edge whose *whole stroke* is inside
+/// that clip; a centerline exactly on the boundary is only a half-painted SVG
+/// or Canvas rule.
+fn has_direct_full_width_horizontal_line_inside_top_clip(
+    table: &RenderNode,
+    clip_top: f64,
+) -> bool {
     let left = table.bbox.x;
     let right = table.bbox.x + table.bbox.width;
     table.children.iter().any(|child| {
@@ -222,9 +226,10 @@ fn has_direct_full_width_horizontal_line_at(table: &RenderNode, y: f64) -> bool 
             RenderNodeType::Line(line)
                 if child.visible
                     && (line.y1 - line.y2).abs() <= 0.1
-                    && (line.y1 - y).abs() <= 0.6
                     && (line.x1.min(line.x2) - left).abs() <= 0.6
                     && (line.x1.max(line.x2) - right).abs() <= 0.6
+                    && line.y1 - line.style.width / 2.0 >= clip_top + 0.001
+                    && line.y1 - clip_top <= line.style.width.max(1.0) + 0.6
         )
     })
 }
@@ -247,6 +252,70 @@ fn has_visible_full_width_horizontal_line_near(
         .children
         .iter()
         .any(|child| has_visible_full_width_horizontal_line_near(child, left, right, y))
+}
+
+/// Find the innermost table containing `needle` and verify that its real
+/// bottom border's full stroke survives every enclosing `TableCell` clip.
+/// A line node alone is insufficient: SVG/Canvas clip paths can silently
+/// erase the line after layout has emitted it (issue2007 p9).
+fn nested_table_bottom_border_is_painted(
+    node: &RenderNode,
+    needle: &str,
+    clip: Option<ClipRect>,
+) -> Option<bool> {
+    let clip = match &node.node_type {
+        RenderNodeType::TableCell(cell) if cell.clip => {
+            clip.and_then(|active| active.intersect(ClipRect::from_node(node)))
+        }
+        _ => clip,
+    };
+    for child in &node.children {
+        if let Some(result) = nested_table_bottom_border_is_painted(child, needle, clip) {
+            return Some(result);
+        }
+    }
+    if !matches!(node.node_type, RenderNodeType::Table(_)) || !contains_text(node, needle) {
+        return None;
+    }
+    let table_left = node.bbox.x;
+    let table_right = table_left + node.bbox.width;
+    let table_bottom = node.bbox.y + node.bbox.height;
+    let Some(active_clip) = clip else {
+        return Some(false);
+    };
+    Some(node.children.iter().any(|child| {
+        matches!(
+            &child.node_type,
+            RenderNodeType::Line(line)
+                if child.visible
+                    && (line.y1 - line.y2).abs() <= 0.1
+                    && (line.y1 - table_bottom).abs() <= 0.6
+                    && (line.x1.min(line.x2) - table_left).abs() <= 0.6
+                    && (line.x1.max(line.x2) - table_right).abs() <= 0.6
+                    && line.y1 + line.style.width / 2.0 <= active_clip.bottom + 0.01
+        )
+    }))
+}
+
+/// A clipped continuation frame needs a bottom edge placed fully inside its
+/// physical clip.  A centerline exactly on the clip bottom paints as a half
+/// line in SVG/Canvas and can disappear at device scale.
+fn has_direct_bottom_frame_inside_clip(table: &RenderNode, clip_bottom: f64) -> bool {
+    let left = table.bbox.x;
+    let right = table.bbox.x + table.bbox.width;
+    table.children.iter().any(|child| {
+        matches!(
+            &child.node_type,
+            RenderNodeType::Line(line)
+                if child.visible
+                    && (line.y1 - line.y2).abs() <= 0.1
+                    && (line.x1.min(line.x2) - left).abs() <= 0.6
+                    && (line.x1.max(line.x2) - right).abs() <= 0.6
+                    && line.y1 <= clip_bottom + 0.01
+                    && clip_bottom - line.y1 <= line.style.width.max(1.0) + 0.6
+                    && line.y1 + line.style.width / 2.0 <= clip_bottom - 0.001
+        )
+    })
 }
 
 /// Wrapper Cell이 직접 포함한 중첩 표의 바깥 우측선을 모두 검사한다.
@@ -675,6 +744,14 @@ fn issue_2007_completed_multiline_table_keeps_following_heading_in_next_viewport
         (125.0..=140.0).contains(&heading_top),
         "p9 heading must start inside the new physical viewport, got y={heading_top}"
     );
+
+    // p9의 8×4 표는 실제 하단선이 wrapper Cell clip 밖으로 4.95px 나가 있었다.
+    // node가 존재하는지만 보면 SVG/Canvas에서 선이 완전히 잘린 결함을 놓친다.
+    assert_eq!(
+        nested_table_bottom_border_is_painted(&p9.root, "조달청", p9_clip),
+        Some(true),
+        "p9 completed 8×4 table bottom border must survive every enclosing TableCell clip"
+    );
 }
 
 #[test]
@@ -688,8 +765,8 @@ fn issue_2007_continuation_frame_restarts_and_drops_previous_page_residual() {
 
     // p11 and p15 start in the middle of a dotted 1×1 nested table. Their
     // source top edge is on the preceding page, so SVG/Canvas must receive a
-    // new full-width top edge at the continuation viewport instead of only
-    // retaining the old bottom/side lines.
+    // new full-width top edge *inside* the continuation viewport instead of
+    // retaining a centerline that clipPath/Canvas cuts in half.
     for (page_index, needle) in [
         (10, "금융거래정보를 요구하는 경우에는"),
         (14, "금융위원회는 관계자에 대한 조사실적"),
@@ -704,8 +781,8 @@ fn issue_2007_continuation_frame_restarts_and_drops_previous_page_residual() {
             )
         });
         assert!(
-            has_direct_full_width_horizontal_line_at(table, 117.15),
-            "p{} continuation table is missing its reconstructed top frame",
+            has_direct_full_width_horizontal_line_inside_top_clip(table, 117.0),
+            "p{} continuation top frame is absent or still paint-clipped at the viewport edge",
             page_index + 1
         );
     }
@@ -725,6 +802,24 @@ fn issue_2007_continuation_frame_restarts_and_drops_previous_page_residual() {
     assert!(
         (126.5..=128.5).contains(&p10_heading_top),
         "p10 must remove the previous fragment's retained empty-spacer reservation, got heading y={p10_heading_top}"
+    );
+
+    // p10의 새 1×1 frame은 다음 페이지까지 계속되므로 source의 실제 하단선은
+    // viewport 밖에 있다. 한컴 PDF처럼 현재 조각의 하단 frame을 다시 그리되,
+    // stroke 전체가 clip 안에 남아야 한다.
+    let p10_outer = find_table_fragment(&p10.root, 7, 1).expect("p10 outer pi=7 ci=1 continuation");
+    let p10_outer_cell = direct_table_cell(p10_outer).expect("p10 outer direct Cell");
+    let p10_inner =
+        find_innermost_table_containing_text(&p10.root, "독점규제 및 공정거래에 관한 법률")
+            .expect("p10 bordered table below the unbordered RowBreak wrapper");
+    let p10_clip_bottom = p10_outer_cell.bbox.y + p10_outer_cell.bbox.height;
+    assert!(
+        p10_inner.bbox.y + p10_inner.bbox.height > p10_clip_bottom + 1.0,
+        "p10 fixture must retain an overflowing continuation table for the fragment-frame regression"
+    );
+    assert!(
+        has_direct_bottom_frame_inside_clip(p10_inner, p10_clip_bottom),
+        "p10 continuation frame must paint a full-width bottom edge inside its physical clip"
     );
 
     let p13 = doc
