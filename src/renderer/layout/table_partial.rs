@@ -705,9 +705,7 @@ impl LayoutEngine {
                     let total = composed_paras.get(i).map(|c| c.lines.len()).unwrap_or(0);
                     s != 0 || e != total
                 })
-            } else {
-                false
-            };
+            });
             // [#4042] 쪽 경계로 실제 잘리는 셀은 세로 가운데/아래 정렬이 성립하지 않는다.
             // 한컴 조판 규칙: 용지 시작 y 에서 아래로 흐르며 쪽 경계에 닿으면 자른다 —
             // 가시 슬라이스(inner_height)보다 콘텐츠가 큰 셀은 위에서부터 흘러야 하며,
