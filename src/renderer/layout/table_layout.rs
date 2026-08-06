@@ -526,6 +526,117 @@ fn is_empty_vpos_spacer_line(node: &RenderNode) -> bool {
         })
 }
 
+/// A non-empty direct text line immediately followed by a nested table is a
+/// heading/table group, not independent bottom-of-page prose.  HWP5 can keep
+/// the heading in the preceding RowBreak fragment while putting the table's
+/// first usable row only in the next fragment.  That paints the heading twice:
+/// once at the prior page bottom and once above the next cell clip
+/// (issue2007 p7--p8).  Keep the group together at the actual viewport that
+/// can paint the table.
+const NESTED_HEADING_WITH_TABLE_MAX_GAP_PX: f64 = 32.0;
+const NESTED_HEADING_WITH_TABLE_TOP_INSET_PX: f64 = 4.0;
+
+/// A text bbox is the layout line box.  Canvas glyph ink can extend slightly
+/// above it, so the first line of a clipped cell needs a small paint-safe
+/// inset rather than a centreline exactly on the clip boundary.
+const CLIPPED_TEXT_INK_TOP_OVERFLOW_PX: f64 = 4.0;
+const CLIPPED_TEXT_INK_TOP_INSET_PX: f64 = 0.25;
+
+fn text_line_has_non_whitespace_text(node: &RenderNode) -> bool {
+    matches!(node.node_type, RenderNodeType::TextLine(_))
+        && node.children.iter().any(|child| {
+            matches!(&child.node_type, RenderNodeType::TextRun(run) if !run.text.trim().is_empty())
+        })
+}
+
+/// Preserve source ownership at a clipped cell's title/table seam and keep a
+/// first visible glyph out of the ancestor Canvas/SVG clip.
+///
+/// This operates only on direct source siblings.  It never grows the clip:
+/// prior-page text remains hidden and a future-page tail cannot be exposed.
+fn repair_clipped_cell_text_table_seam(node: &mut RenderNode) {
+    let is_clipped_cell = matches!(
+        &node.node_type,
+        RenderNodeType::TableCell(TableCellNode { clip: true, .. })
+    );
+    if !is_clipped_cell {
+        return;
+    }
+
+    let clip_top = node.bbox.y;
+    let clip_bottom = clip_top + node.bbox.height;
+
+    for table_index in 0..node.children.len() {
+        if !node.children[table_index].visible
+            || !matches!(
+                node.children[table_index].node_type,
+                RenderNodeType::Table(_)
+            )
+        {
+            continue;
+        }
+        let table_top = node.children[table_index].bbox.y;
+        let title_index = (0..table_index).rev().find(|&index| {
+            node.children[index].visible && text_line_has_non_whitespace_text(&node.children[index])
+        });
+        let Some(title_index) = title_index else {
+            continue;
+        };
+        // A real intervening text paragraph owns its own page boundary.  Only
+        // a title followed by empty host lines and the next table is movable.
+        if node.children[title_index + 1..table_index]
+            .iter()
+            .any(text_line_has_non_whitespace_text)
+        {
+            continue;
+        }
+        let title_top = node.children[title_index].bbox.y;
+        let title_bottom = title_top + node.children[title_index].bbox.height;
+        if table_top + NESTED_FRAGMENT_EDGE_EPSILON_PX < title_bottom
+            || table_top - title_bottom > NESTED_HEADING_WITH_TABLE_MAX_GAP_PX
+        {
+            continue;
+        }
+
+        if table_top >= clip_bottom - NESTED_FRAGMENT_EDGE_EPSILON_PX
+            && title_top >= clip_top - NESTED_FRAGMENT_EDGE_EPSILON_PX
+            && title_bottom <= clip_bottom + NESTED_FRAGMENT_EDGE_EPSILON_PX
+        {
+            // The table has no paintable content in this fragment.  Its title
+            // belongs to the next fragment with the table rather than to this
+            // page's last line.
+            for child in &mut node.children[title_index..=table_index] {
+                child.visible = false;
+            }
+            continue;
+        }
+
+        if title_top < clip_top
+            && clip_top - title_top <= NESTED_HEADING_WITH_TABLE_MAX_GAP_PX
+            && table_top >= clip_top - NESTED_FRAGMENT_EDGE_EPSILON_PX
+        {
+            // Move the complete source group, retaining its title-to-table
+            // spacing.  Moving only the text would detach it from the table;
+            // expanding the cell clip would replay preceding-page content.
+            let target_top = clip_top + NESTED_HEADING_WITH_TABLE_TOP_INSET_PX;
+            let delta_y = target_top - title_top;
+            for child in &mut node.children[title_index..=table_index] {
+                translate_render_subtree_y(child, delta_y);
+            }
+        }
+    }
+
+    for child in &mut node.children {
+        if !child.visible || !text_line_has_non_whitespace_text(child) {
+            continue;
+        }
+        let line_top = child.bbox.y;
+        if line_top < clip_top && clip_top - line_top <= CLIPPED_TEXT_INK_TOP_OVERFLOW_PX {
+            translate_render_subtree_y(child, clip_top + CLIPPED_TEXT_INK_TOP_INSET_PX - line_top);
+        }
+    }
+}
+
 /// Reconstruct one table's physical fragment frame inside an ancestor
 /// `TableCell` clip.  A 1×1 RowBreak wrapper often has no border of its own:
 /// the paintable frame belongs to a deeper table in its cell.  Consequently
@@ -712,6 +823,7 @@ fn repair_clipped_nested_table_fragment_frame(tree: &mut PageRenderTree, node: &
 
     let clip_top = node.bbox.y;
     let clip_bottom = node.bbox.y + node.bbox.height;
+    repair_clipped_cell_text_table_seam(node);
     for table_index in 0..node.children.len() {
         if !node.children[table_index].visible
             || !matches!(

@@ -172,6 +172,13 @@ impl ClipRect {
 
 /// SVG와 Canvas가 공통으로 지키는 TableCell clip을 적용한 뒤의 가시 text만 센다.
 fn contains_painted_text(node: &RenderNode, needle: &str, clip: Option<ClipRect>) -> bool {
+    // RenderNode::visible is honored by both the SVG and Canvas painters.
+    // A source line deliberately suppressed at a pagination seam must not be
+    // counted as painted merely because its layout bbox still intersects the
+    // physical page.
+    if !node.visible {
+        return false;
+    }
     let clip = match &node.node_type {
         RenderNodeType::TableCell(cell) if cell.clip => {
             clip.and_then(|active| active.intersect(ClipRect::from_node(node)))
@@ -529,6 +536,34 @@ fn issue_2007_saved_frame_tail_nested_table_starts_before_next_frame() {
         ),
         "p8 continuation이 p7 마지막 줄을 다시 paint한다 — mixed nested split의 콘텐츠 원점이 한 unit 앞서 있다"
     );
+
+    // p7 끝에는 7×3 표의 제목이 남을 공간처럼 보이지만, 표 본체는 cell clip을
+    // 통과하지 못한다. 한컴은 제목을 표와 분리하지 않고 p8에 함께 배치한다. 종전
+    // rhwp는 제목을 p7 하단에 paint하고 p8에서는 같은 source line을 clip 위에 남겨
+    // 사라지게 했다.
+    let p7 = doc
+        .build_page_render_tree(6)
+        .expect("issue2007 p7 render tree");
+    let p7_clip = Some(ClipRect::from_node(&p7.root));
+    let carried_heading = "해외 반부패 전담기구 조사기능 현황";
+    assert!(
+        !contains_painted_text(&p7.root, carried_heading, p7_clip),
+        "p7 must not paint a table heading whose table starts on p8"
+    );
+    assert!(
+        contains_painted_text(
+            &tree.root,
+            carried_heading,
+            Some(ClipRect::from_node(&tree.root))
+        ),
+        "p8 must retain the heading with its first visible table rows"
+    );
+    let heading_top =
+        first_text_run_top(&tree.root, carried_heading).expect("p8 carried table heading text run");
+    assert!(
+        (120.0..=123.0).contains(&heading_top),
+        "p8 heading must be inside the current nested-cell viewport, got y={heading_top}"
+    );
 }
 
 #[test]
@@ -715,6 +750,22 @@ fn issue_2007_single_cell_continuation_does_not_repaint_boundary_fragments() {
         ),
         "p17 terminal nested-cell clip drops the source's final section 4"
     );
+
+    // Canvas/SVG는 TextLine bbox보다 위로 나온 glyph ink도 ancestor cell clip으로
+    // 자른다. p16/p17의 첫 visible heading이 cell top보다 2.5px 위였으므로 상단
+    // 획이 잘렸다. 현재 fragment의 line box 자체를 inset 안으로 넣되, 이전 쪽
+    // source line은 여전히 clip 밖에 남겨야 한다.
+    for (tree, needle, page) in [
+        (&p16, "이해관계자 협의", 16),
+        (&p17, "선호된 대안의 기대효과", 17),
+    ] {
+        let line_top = first_text_run_top(&tree.root, needle)
+            .unwrap_or_else(|| panic!("p{page} top continuation heading"));
+        assert!(
+            line_top >= 117.3,
+            "p{page} first visible heading remains above its nested-cell paint clip: y={line_top}"
+        );
+    }
 }
 
 #[test]
