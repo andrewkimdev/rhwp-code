@@ -37,6 +37,7 @@ from hwp_test_data_generator import (  # noqa: E402
     ConfigError,
     build_ingest,
     load_templates,
+    validate_template_name,
     validate_template,
 )
 
@@ -130,6 +131,12 @@ class BuildIngestTest(unittest.TestCase):
             validate_template(
                 "bad", {"questions": 2, "passages": 2, "questions_per_passage": 2}
             )
+
+    def test_template_name_must_be_a_single_safe_filename(self):
+        for name in ("", ".", "..", "../escaped", "/tmp/escaped", r"dir\\escaped", "nul\x00name"):
+            with self.subTest(name=name):
+                with self.assertRaises(ConfigError):
+                    validate_template_name(name)
 
 
 @NEEDS_RHWP
@@ -251,6 +258,40 @@ class CliUsageErrorTest(unittest.TestCase):
             )
         self.assertEqual(EXIT_USAGE, proc.returncode)
         self.assertIn("rhwp 바이너리", proc.stderr)
+
+    def test_non_executable_rhwp_bin_is_usage_error_without_traceback(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            bin_path = Path(tmp) / "not-executable-rhwp"
+            bin_path.write_text("", encoding="utf-8")
+            bin_path.chmod(0o644)
+            proc = run_cli("--output-dir", tmp, "--rhwp-bin", str(bin_path))
+        self.assertEqual(EXIT_USAGE, proc.returncode)
+        self.assertIn("실행할 수 없습니다", proc.stderr)
+        self.assertNotIn("Traceback", proc.stderr)
+
+    def test_path_like_template_name_is_usage_error_before_output_write(self):
+        bad_config = {
+            "templates": {
+                "../escaped": {
+                    "description": "출력 경로 이탈 시도",
+                    "questions": 1,
+                    "choices_per_question": 2,
+                }
+            }
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config_path = root / "config.json"
+            config_path.write_text(
+                json.dumps(bad_config, ensure_ascii=False), encoding="utf-8"
+            )
+            proc = run_cli(
+                "--output-dir", str(root / "out"), "--config", str(config_path),
+                env_extra={"RHWP_BIN": ""},
+            )
+            self.assertFalse((root / "escaped.hwpx").exists())
+        self.assertEqual(EXIT_USAGE, proc.returncode)
+        self.assertIn("단일 파일명", proc.stderr)
 
     def test_unknown_template_name_is_usage_error(self):
         with tempfile.TemporaryDirectory() as tmp:

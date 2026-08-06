@@ -21,6 +21,8 @@ HWPX 를 산출**하고, 산출물마다 `rhwp info --json` 재검증을 파이�
 
 - Python 3 (표준 라이브러리만)
 - `rhwp` 실행 파일 — 해석 순서: **`--rhwp-bin` 인자 > `RHWP_BIN` 환경변수 > PATH**
+  - 명시한 경로는 실행 가능한 일반 파일이어야 한다. 없는 파일·디렉터리·실행 권한 없는 파일은
+    환경 오류(exit 2)로 거부한다.
 
 ```bash
 cargo build --bin rhwp        # target/debug/rhwp
@@ -106,6 +108,9 @@ python tools/test-data-gen/hwp_test_data_generator.py --output-dir out --keep-in
 `build-from-ingest` 에 전달한다(경계 사례 fixture 제작용 — 실패 회귀 테스트가
 이 경로로 스키마 위반 입력을 주입한다).
 
+템플릿 이름은 산출물 파일명으로도 사용하므로 비어 있거나 `.`·`..`, `/`·`\\` 같은
+경로 구분자가 들어갈 수 없다. 모든 산출물은 반드시 `--output-dir` 바로 아래에 만든다.
+
 ### 이전 config 에서 제거된 항목 (README 정정)
 
 이전 구현의 `num_tables`·`num_images`(실제 픽셀 임베드)·`use_styles`·
@@ -130,6 +135,7 @@ python -m unittest discover -s tools/test-data-gen -p "test_*.py"
 - **실패 케이스**: 스키마 위반 ingest(boxed 블록에 `text`, `choices` 누락)는
   rhwp 원인 메시지를 표면화하며 exit 1
 - 설정 오류(미지 키, `choices_per_question` 6, 없는 바이너리, 없는 템플릿)는 exit 2
+- 경로형 템플릿 이름과 실행 권한 없는 rhwp 경로도 exit 2이며 traceback을 출력하지 않음
 - 같은 시드 결정성, 템플릿 knob → ingest 구조 대응(박스/미디어/공유 지문 위치)
 
 rhwp 바이너리가 없으면 파이프라인 테스트는 skip 되고 순수 파이썬 테스트만 돈다.

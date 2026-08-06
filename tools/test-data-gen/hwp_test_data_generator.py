@@ -113,8 +113,24 @@ def load_templates(config_path: Path) -> Dict[str, Dict[str, Any]]:
         raise ConfigError(f"설정에 비어 있지 않은 'templates' 객체가 필요합니다: {config_path}")
 
     for name, spec in templates.items():
+        validate_template_name(name)
         validate_template(name, spec)
     return templates
+
+
+def validate_template_name(name: str) -> None:
+    """템플릿 이름이 산출물 폴더 밖으로 나가지 않는 단일 파일명인지 확인한다."""
+    if (
+        not name
+        or name in {".", ".."}
+        or "\x00" in name
+        or "/" in name
+        or "\\" in name
+        or Path(name).is_absolute()
+    ):
+        raise ConfigError(
+            f"템플릿 이름은 경로 구분자 없는 단일 파일명이어야 합니다: {name!r}"
+        )
 
 
 def validate_template(name: str, spec: Any) -> None:
@@ -267,8 +283,9 @@ def resolve_rhwp_bin(explicit: Optional[str]) -> str:
     """`--rhwp-bin` > `RHWP_BIN` > PATH 순서로 rhwp 실행 파일을 찾는다."""
     candidate = explicit or os.environ.get("RHWP_BIN")
     if candidate:
-        if not Path(candidate).exists():
-            raise ConfigError(f"rhwp 바이너리가 없습니다: {candidate}")
+        path = Path(candidate)
+        if not path.is_file() or not os.access(path, os.X_OK):
+            raise ConfigError(f"rhwp 바이너리가 없거나 실행할 수 없습니다: {candidate}")
         return candidate
     found = shutil.which("rhwp")
     if not found:
