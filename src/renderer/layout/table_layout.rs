@@ -637,6 +637,33 @@ fn repair_clipped_cell_text_table_seam(node: &mut RenderNode) {
     }
 }
 
+/// Suppress a next-fragment table whose first border only grazes the current
+/// clipped cell.  A Canvas clip can still anti-alias a fraction of that border
+/// even when the table's logical top is just below the clip, leaving a stray
+/// horizontal rule at the preceding page's bottom (issue2007 p8).
+///
+/// This is deliberately limited to a table beginning no more than one border
+/// residue window below the physical clip.  A separate page render owns that
+/// table with a fresh viewport; no current-page text or usable table area is
+/// discarded here.
+fn suppress_future_nested_table_border_residue(node: &mut RenderNode, clip_bottom: f64) {
+    for child in &mut node.children {
+        if !child.visible {
+            continue;
+        }
+        if matches!(child.node_type, RenderNodeType::Table(_)) {
+            let table_top = child.bbox.y;
+            if table_top >= clip_bottom - NESTED_FRAGMENT_EDGE_EPSILON_PX
+                && table_top - clip_bottom <= NESTED_FRAGMENT_RESIDUAL_BORDER_PX
+            {
+                child.visible = false;
+                continue;
+            }
+        }
+        suppress_future_nested_table_border_residue(child, clip_bottom);
+    }
+}
+
 /// Reconstruct one table's physical fragment frame inside an ancestor
 /// `TableCell` clip.  A 1×1 RowBreak wrapper often has no border of its own:
 /// the paintable frame belongs to a deeper table in its cell.  Consequently
@@ -824,6 +851,7 @@ fn repair_clipped_nested_table_fragment_frame(tree: &mut PageRenderTree, node: &
     let clip_top = node.bbox.y;
     let clip_bottom = node.bbox.y + node.bbox.height;
     repair_clipped_cell_text_table_seam(node);
+    suppress_future_nested_table_border_residue(node, clip_bottom);
     for table_index in 0..node.children.len() {
         if !node.children[table_index].visible
             || !matches!(
@@ -1521,6 +1549,10 @@ struct HorizontalCellVars {
     /// root-body table owner의 첫 저장 LINE_SEG vpos. nested/header/footer 호출은 None.
     outer_host_stored_vpos_hu: Option<i32>,
     inline_table_flow_y_shift: f64,
+    /// 이 1×1 표가 앞 페이지에서 일부 흐름을 이미 소비한 continuation인가.
+    /// 단순 row filter의 첫 조각과 구분해, 미래 중첩 표의 위치 상한을 풀 수 있는
+    /// 유일한 문맥으로 쓴다 (#2007/#3637).
+    single_row_continuation: bool,
     /// [#3658] 분할 렌더(row_filter)가 이 셀 콘텐츠의 마지막 조각인가.
     /// true 면 셀 하단 초과 줄 드롭(다음 쪽 소속 줄 제외)을 적용하지 않는다 —
     /// 이어받을 continuation 이 없어 드롭된 꼬리 줄은 영구 유실되기 때문.
@@ -2022,6 +2054,17 @@ impl LayoutEngine {
         };
         // [#3658] 종료 조각 여부 — 셀 하단 초과 줄 드롭 예외 판정에 사용.
         let split_terminal = nested_split.is_some_and(|s| s.terminal);
+        // PR #4122의 재귀 child cursor가 있으면 자식 RowCut이 continuation 소유권을
+        // 직접 결정한다. 기존 1×1 위치/정렬 보정은 그 cursor가 없는 scalar fallback
+        // continuation에서만 적용해 같은 흐름 오프셋을 두 번 소비하지 않는다.
+        let scalar_single_row_continuation = nested_split.is_some_and(|split| {
+            row_count == 1
+                && col_count == 1
+                && split.start_row == 0
+                && split.end_row >= 1
+                && split.offset_within_start > 0.5
+                && split.recursive_cut.is_none()
+        });
 
         let mut row_col_x = build_row_col_x(
             table,
@@ -2344,10 +2387,16 @@ impl LayoutEngine {
             split_row_range,
             row_y_shift,
             split_y_offset,
+            scalar_single_row_continuation,
             split_terminal,
             clamp_header_negative_para_offset,
             inline_table_flow_y_shift,
             header_footer_padding_compat,
+            // HWP5에서는 표 안의 비글자 1×1 표가 `inMargin=(0,0,141,141)`를
+            // 갖더라도 셀의 작은 좌우 저장 margin을 계속 적용하는 형상이 있다.
+            // 일반 최상위 표의 #2195 pad 사다리는 유지하고, 실제 셀 내부 중첩에만
+            // 문맥을 제한한다 (#2308 HWP 2024 PDF p34).
+            depth > 0 && !table.common.treat_as_char,
             &cellzone_diagonal_origin_covered,
         );
 
@@ -3766,6 +3815,7 @@ impl LayoutEngine {
             clamp_header_negative_para_offset,
             outer_host_stored_vpos_hu,
             inline_table_flow_y_shift,
+            single_row_continuation,
             split_terminal,
         } = v;
         let inner_area = LayoutRect {
@@ -4768,7 +4818,22 @@ impl LayoutEngine {
                         // 놓여 쪽 밖으로 나간다(80550 29쪽: 셀 310~889 인데 중첩2가
                         // 889~1193). PR #3666 이 문단에 건 상한과 같은 계열의 한 단계 깊은
                         // 경로다.
-                        let nested_y = nested_y.min(inner_area.y + inner_area.height);
+                        // 누적 오프셋을 가진 1×1 RowBreak continuation은 현재 clip보다
+                        // 뒤에 있는 다음 내부 표까지 하단으로 clamp하면 안 된다. 원래
+                        // 다음 페이지에 속할 표들이 모두 같은 셀 하단으로 재배치되어
+                        // 겹치기 때문이다(issue2007 42065 p7–p12). 이때만 원래 y를
+                        // 유지해 부모 Cell clip이 미래 표를 제외하고, 앞쪽 표는 음수 y로
+                        // 이어서 그릴 수 있다.
+                        //
+                        // 단순 `row_filter + 1×1`은 continuation의 첫 조각(offset=0)도
+                        // 포함한다. 그 형상까지 상한을 풀면 #3637처럼 실제 셀 밖으로
+                        // 새는 중첩 표가 다시 허용된다. 따라서 페이지 간에 이미 소비된
+                        // 행 높이가 있는 실제 continuation으로 문맥을 좁힌다.
+                        let nested_y = if single_row_continuation {
+                            nested_y
+                        } else {
+                            nested_y.min(inner_area.y + inner_area.height)
+                        };
                         let nested_ctx = cell_context.as_ref().map(|ctx| {
                             let mut new_ctx = ctx.clone();
                             new_ctx.path.push(CellPathEntry {
@@ -5188,10 +5253,12 @@ impl LayoutEngine {
         row_filter: Option<(usize, usize)>,
         row_y_shift: f64,
         split_y_offset: f64,
+        scalar_single_row_continuation: bool,
         split_terminal: bool,
         clamp_header_negative_para_offset: bool,
         inline_table_flow_y_shift: f64,
         header_footer_padding_compat: bool,
+        nested_non_tac_cell_margin_compat: bool,
         cellzone_diagonal_origin_covered: &[Vec<bool>],
     ) {
         let mut independent_border_nodes: Vec<RenderNode> = Vec::new();
@@ -5282,8 +5349,12 @@ impl LayoutEngine {
             );
 
             // 셀 패딩 (cell.padding이 0이면 table.padding fallback)
-            let (mut pad_left, mut pad_right, pad_top, pad_bottom) =
-                self.resolve_cell_padding_for_context(cell, table, header_footer_padding_compat);
+            let (mut pad_left, mut pad_right, pad_top, pad_bottom) = self
+                .resolve_cell_padding_for_context(
+                    cell,
+                    table,
+                    header_footer_padding_compat || nested_non_tac_cell_margin_compat,
+                );
 
             let mut composed_paras: Vec<_> = cell
                 .paragraphs
@@ -5304,8 +5375,14 @@ impl LayoutEngine {
             // 텍스트 오버플로우 시 좌우 패딩 축소.
             // 1443 셀 안여백 샘플처럼 큰 명시 좌우 여백은 한컴과 같이 보존하되,
             // 기존 문서의 1~4mm급 일반 셀 여백은 종전 오버플로우 방어를 유지한다.
-            let preserve_explicit_horizontal_padding =
-                cell.apply_inner_margin && cell.padding.left.max(cell.padding.right) >= 1700;
+            let preserve_explicit_horizontal_padding = (cell.apply_inner_margin && cell.padding.left.max(cell.padding.right) >= 1700)
+                    // #2308 p34: 중첩 비글자표의 510HU 저장 margin은 일반 overflow
+                    // 추정보다 한컴 PDF가 우선한다. 이 여백을 다시 1px까지 깎으면
+                    // 문단이 우측 테두리와 맞닿는다.
+                    || (nested_non_tac_cell_margin_compat
+                        && cell.padding.left.max(cell.padding.right)
+                            > table.padding.left.max(table.padding.right)
+                        && cell.padding.left.max(cell.padding.right) < 2500);
             let (new_pl, new_pr) = self.shrink_cell_padding_for_overflow(
                 pad_left,
                 pad_right,
@@ -5519,18 +5596,19 @@ impl LayoutEngine {
             // HWP는 표 안의 빈 anchor line을 line_height=0으로 먼저 저장할 수 있어
             // 단순 first()를 쓰면 이 보정이 무효가 된다. 아래쪽 잘림이나 정상 완전
             // 셀에는 적용하지 않는다.
-            let upper_page_clip_line_reservation = (cell_clipped_by_page_viewport
-                && cell_y < page_view_top - 0.5)
-                .then(|| {
+            let upper_page_clip_line_reservation =
+                if cell_clipped_by_page_viewport && cell_y < page_view_top - 0.5 {
                     cell.paragraphs
                         .iter()
                         .flat_map(|para| para.line_segs.iter())
                         .find(|seg| seg.line_height > 0)
                         .map(|seg| hwpunit_to_px(seg.line_height, self.dpi))
                         .unwrap_or(0.0)
-                })
-                .unwrap_or(0.0);
+                } else {
+                    0.0
+                };
             let effective_valign = if cell_clipped_by_row_filter
+                || scalar_single_row_continuation
                 || cell_clipped_by_parent_viewport
                 || cell_clipped_by_page_viewport
             {
@@ -5696,6 +5774,7 @@ impl LayoutEngine {
                         clamp_header_negative_para_offset,
                         outer_host_stored_vpos_hu,
                         inline_table_flow_y_shift,
+                        single_row_continuation: scalar_single_row_continuation,
                         split_terminal,
                     },
                 );

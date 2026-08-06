@@ -261,6 +261,26 @@ fn has_visible_full_width_horizontal_line_near(
         .any(|child| has_visible_full_width_horizontal_line_near(child, left, right, y))
 }
 
+/// `visible` is inherited by the painter.  A table hidden as a future-page
+/// residue can keep its child Line nodes structurally present, so this helper
+/// must stop at an invisible ancestor rather than inspecting leaf visibility
+/// alone.
+fn has_painted_horizontal_line_in_bottom_residue(node: &RenderNode, clip_bottom: f64) -> bool {
+    if !node.visible {
+        return false;
+    }
+    matches!(
+        &node.node_type,
+        RenderNodeType::Line(line)
+            if (line.y1 - line.y2).abs() <= 0.1
+                && line.y1 >= clip_bottom - 0.5
+                && line.y1 <= clip_bottom + 1.0
+    ) || node
+        .children
+        .iter()
+        .any(|child| has_painted_horizontal_line_in_bottom_residue(child, clip_bottom))
+}
+
 /// Find the innermost table containing `needle` and verify that its real
 /// bottom border's full stroke survives every enclosing `TableCell` clip.
 /// A line node alone is insufficient: SVG/Canvas clip paths can silently
@@ -527,6 +547,14 @@ fn issue_2007_saved_frame_tail_nested_table_starts_before_next_frame() {
         "p8 RowBreak 표 조각 bbox가 쪽 밖으로 새어 Canvas/WASM paint 범위를 오염한다: \
          bottom={fragment_bottom:.1}, page_height={:.1}",
         tree.root.bbox.height
+    );
+    let fragment_cell =
+        direct_table_cell(fragment).expect("issue2007 p8 RowBreak 표 조각의 직접 clipped cell");
+    let clip_bottom = fragment_cell.bbox.y + fragment_cell.bbox.height;
+    assert!(
+        !has_painted_horizontal_line_in_bottom_residue(fragment, clip_bottom),
+        "p8 paints the next fragment's top border at the preceding page bottom; \
+         clip_bottom={clip_bottom:.1}"
     );
     assert!(
         !contains_painted_text(

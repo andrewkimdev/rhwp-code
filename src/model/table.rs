@@ -204,12 +204,17 @@ impl Cell {
             // 센티널로 보고 표 패딩 폴백 유지.
             return cell_padding >= 0;
         }
-        // [#2195] aim=false 는 **전 축 표 기본** — pad 통제 사다리 2종 실측:
+        // [#2195] aim=false 는 원칙적으로 **전 축 표 기본** — pad 통제 사다리
+        // 2종 실측:
         // (1) 표(0,0,141,141)+셀(510,510,141,141): 실효 좌우 0·상하 141,
         // (2) 표(510,510,223,223)+셀 동일: inner = 표폭-1020(좌우 510x2)·상하 223.
-        // 종전 #1785 보존 규칙(cell>table 시 셀 채택)은 사다리와 불합치 — 제거.
-        // (36381023 결재란 RT 케이스는 전체 게이트로 재검증.)
-        let _ = allow_saved_small_cell_margin;
+        // 단, 셀 안의 비글자표가 표 자체에는 좌우 0·상하 141HU만 저장하고 셀에는
+        // 510HU 좌우 margin을 보존한 HWP5 형상은 한컴이 그 작은 저장 여백을 쓴다.
+        // 이는 일반 표의 `inMargin=(0,0,141,141)` 사다리를 뒤집지 않도록 호출자가
+        // 중첩 비글자표 문맥에서만 허용한다 (#2308 p34).
+        if allow_saved_small_cell_margin && cell_padding > table_padding && cell_padding < 2500 {
+            return true;
+        }
         false
     }
 
