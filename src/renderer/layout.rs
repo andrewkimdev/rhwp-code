@@ -1339,7 +1339,7 @@ fn is_tolerated_endnote_column_bottom_bleed_with_limit(
 
 /// 문단 번호 상태 (수준별 카운터)
 #[derive(Debug, Clone, Default)]
-struct NumberingState {
+pub(crate) struct NumberingState {
     /// 현재 활성 numbering_id
     current_id: Option<u16>,
     /// 수준별 카운터 (0~6 → 1~7수준)
@@ -1357,7 +1357,7 @@ impl NumberingState {
     }
 
     /// 번호 문단 처리: 카운터를 갱신하고 현재 수준의 번호를 반환
-    fn advance(
+    pub(crate) fn advance(
         &mut self,
         numbering_id: u16,
         level: u8,
@@ -1826,8 +1826,9 @@ pub(crate) use border_rendering::{
 };
 pub use paragraph_layout::map_pua_bullet_char;
 pub(crate) use utils::{
-    drawing_to_line_style, drawing_to_shape_style, find_bin_data, format_page_number,
-    layout_rect_to_bbox, picture_display_size_hu, picture_flow_frame_size_hu, resolve_numbering_id,
+    default_outline_numbering, drawing_to_line_style, drawing_to_shape_style,
+    expand_numbering_format, find_bin_data, format_page_number, layout_rect_to_bbox,
+    picture_display_size_hu, picture_flow_frame_size_hu, resolve_numbering_id,
 };
 
 #[cfg(test)]

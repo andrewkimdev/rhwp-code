@@ -33,6 +33,7 @@ const stbZoomIn = document.getElementById("stb-zoom-in")!;
 // 사이드바 요소
 const appShell = document.getElementById("app-shell")!;
 const navSidebar = document.getElementById("nav-sidebar")!;
+const navResizer = document.getElementById("nav-resizer")!;
 const navCollapse = document.getElementById("nav-collapse")!;
 const navReopen = document.getElementById("nav-reopen")!;
 const navTabs = Array.from(document.querySelectorAll<HTMLButtonElement>(".nav-tab"));
@@ -43,6 +44,20 @@ const navPanels = new Map<string, HTMLElement>(
   ])
 );
 const stbSidebarToggle = document.getElementById("stb-sidebar-toggle")!;
+
+interface ViewerState {
+  sidebarWidth?: number;
+  collapsedOutlineKeys?: string[];
+}
+
+const savedViewerState = (vscode.getState() as ViewerState | undefined) ?? {};
+const MIN_SIDEBAR_WIDTH = 180;
+const MAX_SIDEBAR_WIDTH = 520;
+let sidebarWidth = Math.max(
+  MIN_SIDEBAR_WIDTH,
+  Math.min(MAX_SIDEBAR_WIDTH, savedViewerState.sidebarWidth ?? 240)
+);
+const collapsedOutlineKeys = new Set(savedViewerState.collapsedOutlineKeys ?? []);
 
 // 문서 상태
 type ZoomMode = "manual" | "fitWidth" | "fitPage";
@@ -58,6 +73,9 @@ let fileName = "";
 let documentLoadGeneration = 0;
 let rendererSelection: RendererSessionSelection | null = null;
 let rendererFallbackScheduled = false;
+let outlineHighlight: HTMLDivElement | null = null;
+/** 상태 표시줄의 쪽 번호 입력 모드 여부. 초기 레이아웃 변경보다 먼저 초기화한다. */
+let pageInputActive = false;
 const PREFETCH_MARGIN = 300;
 const ZOOM_STEP = 0.1;
 const ZOOM_MIN = 0.25;
@@ -738,6 +756,7 @@ function cancelReRender(pageNum: number): void {
 function releasePage(pageNum: number): void {
   cancelReRender(pageNum);
   const pi = pageInfos[pageNum];
+  if (outlineHighlight?.parentElement === pi.element) outlineHighlight = null;
   if (pi.element) pi.element.innerHTML = "";
   pi.rendered = false;
 }
@@ -771,6 +790,31 @@ function scrollToPage(pageNum: number): void {
   const eRect = el.getBoundingClientRect();
   scrollContainer.scrollTop += eRect.top - cRect.top - 12;
   updateVisiblePages();
+}
+
+/** 문단의 조판 좌표까지 이동하고 해당 줄을 강조한다. */
+function scrollToDocumentPosition(pageNum: number, y: number, height: number): void {
+  const el = pageInfos[pageNum]?.element;
+  if (!el) return;
+  const cRect = scrollContainer.getBoundingClientRect();
+  const eRect = el.getBoundingClientRect();
+  scrollContainer.scrollTop += eRect.top - cRect.top + y * currentZoom - 12;
+  updateVisiblePages();
+  requestAnimationFrame(() => showOutlineHighlight(pageNum, y, height));
+}
+
+function showOutlineHighlight(pageNum: number, y: number, height: number): void {
+  outlineHighlight?.remove();
+  outlineHighlight = null;
+
+  const page = pageInfos[pageNum];
+  if (!page?.rendered || !page.element) return;
+  const highlight = document.createElement("div");
+  highlight.className = "outline-highlight";
+  highlight.style.top = `${Math.max(0, y * currentZoom - 4)}px`;
+  highlight.style.height = `${Math.max(16, height * currentZoom + 8)}px`;
+  page.element.appendChild(highlight);
+  outlineHighlight = highlight;
 }
 
 // ── 사이드바: 썸네일 ──
@@ -903,55 +947,209 @@ function toggleSidebar(collapse?: boolean): void {
   if (!next) highlightCurrentThumb();
 }
 
+function maxSidebarWidth(): number {
+  const availableWidth = appShell.clientWidth || window.innerWidth;
+  return Math.max(
+    MIN_SIDEBAR_WIDTH,
+    Math.min(MAX_SIDEBAR_WIDTH, availableWidth - 240)
+  );
+}
+
+function saveViewerState(): void {
+  vscode.setState({
+    sidebarWidth,
+    collapsedOutlineKeys: Array.from(collapsedOutlineKeys),
+  });
+}
+
+function setSidebarWidth(width: number, save = true): void {
+  sidebarWidth = Math.round(
+    Math.max(MIN_SIDEBAR_WIDTH, Math.min(maxSidebarWidth(), width))
+  );
+  appShell.style.setProperty("--nav-sidebar-width", `${sidebarWidth}px`);
+  navResizer.setAttribute("aria-valuenow", String(sidebarWidth));
+  navResizer.setAttribute("aria-valuemin", String(MIN_SIDEBAR_WIDTH));
+  navResizer.setAttribute("aria-valuemax", String(maxSidebarWidth()));
+  if (save) saveViewerState();
+}
+
+navResizer.addEventListener("pointerdown", (event) => {
+  if (event.button !== 0 || navSidebar.classList.contains("collapsed")) return;
+  event.preventDefault();
+
+  const startX = event.clientX;
+  const startWidth = sidebarWidth;
+  navResizer.setPointerCapture(event.pointerId);
+  appShell.classList.add("sidebar-resizing");
+
+  const resize = (moveEvent: PointerEvent) => {
+    setSidebarWidth(startWidth + moveEvent.clientX - startX, false);
+  };
+  const finish = () => {
+    navResizer.removeEventListener("pointermove", resize);
+    navResizer.removeEventListener("pointerup", finish);
+    navResizer.removeEventListener("pointercancel", finish);
+    appShell.classList.remove("sidebar-resizing");
+    saveViewerState();
+  };
+
+  navResizer.addEventListener("pointermove", resize);
+  navResizer.addEventListener("pointerup", finish);
+  navResizer.addEventListener("pointercancel", finish);
+});
+
+navResizer.addEventListener("keydown", (event) => {
+  if (event.key === "ArrowLeft") {
+    event.preventDefault();
+    setSidebarWidth(sidebarWidth - 16);
+  } else if (event.key === "ArrowRight") {
+    event.preventDefault();
+    setSidebarWidth(sidebarWidth + 16);
+  } else if (event.key === "Home") {
+    event.preventDefault();
+    setSidebarWidth(MIN_SIDEBAR_WIDTH);
+  } else if (event.key === "End") {
+    event.preventDefault();
+    setSidebarWidth(maxSidebarWidth());
+  }
+});
+
+setSidebarWidth(sidebarWidth, false);
 stbSidebarToggle.addEventListener("click", () => toggleSidebar());
 navCollapse.addEventListener("click", () => toggleSidebar(true));
 navReopen.addEventListener("click", () => toggleSidebar(false));
 
 
-// ── 사이드바: 목차 ──
+// ── 사이드바: 개요 ──
 
-interface StructureNode {
+interface OutlineNavigationItem {
   level: number;
-  kind: string;
-  marker?: string;
-  heading?: string;
+  number: string;
+  title: string;
+  page: number;
   section: number;
   paragraph: number;
-  children?: StructureNode[];
 }
 
-/** 문서 구조(개요/조문)를 목차 패널에 트리로 렌더한다. */
+interface OutlineTreeNode {
+  entry: OutlineNavigationItem;
+  children: OutlineTreeNode[];
+}
+
+function outlineKey(entry: OutlineNavigationItem): string {
+  return `${entry.section}:${entry.paragraph}`;
+}
+
+/** 개요 수준을 이용해 평면 목록을 부모/자식 트리로 구성한다. */
+function buildOutlineTree(entries: OutlineNavigationItem[]): OutlineTreeNode[] {
+  const roots: OutlineTreeNode[] = [];
+  const ancestors: OutlineTreeNode[] = [];
+
+  for (const entry of entries) {
+    const node: OutlineTreeNode = { entry, children: [] };
+    while (
+      ancestors.length > 0
+      && ancestors[ancestors.length - 1].entry.level >= entry.level
+    ) {
+      ancestors.pop();
+    }
+    const parent = ancestors[ancestors.length - 1];
+    (parent ? parent.children : roots).push(node);
+    ancestors.push(node);
+  }
+
+  return roots;
+}
+
+function renderOutlineTree(panel: HTMLElement, nodes: OutlineTreeNode[]): void {
+  for (const node of nodes) {
+    const { entry } = node;
+    const hasChildren = node.children.length > 0;
+    const key = outlineKey(entry);
+    const expanded = !collapsedOutlineKeys.has(key);
+    const item = document.createElement("div");
+    item.className = "nav-item nav-outline-item";
+    item.style.paddingLeft = `${(Math.max(1, entry.level) - 1) * 12 + 2}px`;
+    item.tabIndex = 0;
+    const label = `${entry.number} ${entry.title}`.trim() || "(제목 없음)";
+    item.title = label;
+
+    if (hasChildren) {
+      const toggle = document.createElement("button");
+      toggle.className = "nav-outline-toggle";
+      toggle.type = "button";
+      toggle.textContent = expanded ? "▾" : "▸";
+      toggle.title = expanded ? "하위 개요 접기" : "하위 개요 펼치기";
+      toggle.setAttribute("aria-label", `${label} 하위 개요 ${expanded ? "접기" : "펼치기"}`);
+      toggle.setAttribute("aria-expanded", String(expanded));
+      toggle.addEventListener("click", (event) => {
+        event.stopPropagation();
+        collapsedOutlineKeys[expanded ? "add" : "delete"](key);
+        saveViewerState();
+        buildOutline();
+      });
+      item.appendChild(toggle);
+    } else {
+      const spacer = document.createElement("span");
+      spacer.className = "nav-outline-spacer";
+      spacer.setAttribute("aria-hidden", "true");
+      item.appendChild(spacer);
+    }
+
+    const labelElement = document.createElement("span");
+    labelElement.className = "nav-outline-label";
+    labelElement.textContent = label;
+    item.appendChild(labelElement);
+    item.addEventListener("click", () => navigateToOutline(entry));
+    item.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        navigateToOutline(entry);
+      }
+    });
+    panel.appendChild(item);
+
+    if (hasChildren && expanded) renderOutlineTree(panel, node.children);
+  }
+}
+
+/** 문단 모양의 개요 번호만 개요 패널에 렌더한다. */
 function buildOutline(): void {
   const panel = navPanels.get("outline");
   if (!panel || !hwpDoc) return;
   panel.innerHTML = "";
 
-  let roots: StructureNode[] = [];
+  let outline: OutlineNavigationItem[] = [];
   try {
-    roots = JSON.parse(hwpDoc.getStructure("auto")).roots ?? [];
+    outline = JSON.parse(hwpDoc.getOutlineNavigation()).outline ?? [];
   } catch {
-    roots = [];
+    outline = [];
   }
-  if (roots.length === 0) {
-    panel.appendChild(navEmpty("목차 정보가 없습니다"));
+  if (outline.length === 0) {
+    panel.appendChild(navEmpty("개요 번호가 없습니다"));
     return;
   }
 
-  const walk = (nodes: StructureNode[]): void => {
-    for (const n of nodes) {
-      const item = document.createElement("div");
-      item.className = "nav-item";
-      item.style.paddingLeft = `${(Math.max(1, n.level) - 1) * 12 + 6}px`;
-      const marker = n.marker ? `${n.marker} ` : "";
-      const label = `${marker}${n.heading ?? ""}`.trim() || "(제목 없음)";
-      item.textContent = label;
-      item.title = label;
-      item.addEventListener("click", () => navigateToPosition(n.section, n.paragraph));
-      panel.appendChild(item);
-      if (n.children?.length) walk(n.children);
+  renderOutlineTree(panel, buildOutlineTree(outline));
+}
+
+/** 개요 문단의 조판 좌표로 이동한다. 좌표를 못 찾으면 쪽 번호로 폴백한다. */
+function navigateToOutline(entry: OutlineNavigationItem): void {
+  if (!hwpDoc) return;
+  try {
+    const rect = JSON.parse(hwpDoc.getCursorRect(entry.section, entry.paragraph, 0));
+    if (
+      typeof rect?.pageIndex === "number"
+      && typeof rect?.y === "number"
+      && typeof rect?.height === "number"
+    ) {
+      scrollToDocumentPosition(rect.pageIndex, rect.y, rect.height);
+      return;
     }
-  };
-  walk(roots);
+  } catch {
+    // 개요 문단의 정확한 조판 좌표가 없으면 아래 쪽 이동으로 폴백한다.
+  }
+  if (entry.page > 0) scrollToPage(entry.page - 1);
 }
 
 // ── 사이드바: 북마크 ──
@@ -991,8 +1189,6 @@ function buildBookmarks(): void {
 }
 
 // ── 상태 표시줄: 쪽 번호 이동 ──
-
-let pageInputActive = false;
 
 stbPage.style.cursor = "pointer";
 stbPage.title = "쪽 번호로 이동";
