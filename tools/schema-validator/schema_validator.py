@@ -19,6 +19,7 @@
 중첩 검증(`properties`/`items`/`oneOf` 대안) 실패는 반드시 상위 반환값으로
 전파된다. `oneOf` 는 draft-07 의미론 그대로 **정확히 한 대안**과 일치해야 하며,
 0개 일치·2개 이상 일치는 모두 ERROR 다.
+정확히 하나가 일치했을 때 그 대안의 WARNING 은 최종 진단에 보존한다.
 
 지원 키워드: type, const, enum, required, properties, additionalProperties,
 items(단일 스키마), oneOf, minimum, maximum, minLength, maxLength,
@@ -301,8 +302,9 @@ class IngestSchemaValidator:
         """draft-07 `oneOf`: 정확히 한 대안과 일치해야 통과.
 
         각 대안은 스크래치 오류 목록으로 격리 검증하고 **반환 bool** 로 일치를
-        판정한다(스크래치의 WARNING 은 일치 여부에 영향 없음). 0개 일치는
-        ONEOF_FAILED, 2개 이상 일치는 ONEOF_AMBIGUOUS — 둘 다 ERROR 다.
+        판정한다. WARNING 은 일치 여부에 영향 없지만, 정확히 하나가 일치하면
+        선택된 대안의 WARNING 은 최종 결과에 보존한다. 0개 일치는 ONEOF_FAILED,
+        2개 이상 일치는 ONEOF_AMBIGUOUS — 둘 다 ERROR 다.
         """
         matched: List[int] = []
         probe_errors: List[List[ValidationError]] = []
@@ -313,6 +315,14 @@ class IngestSchemaValidator:
             probe_errors.append(scratch)
 
         if len(matched) == 1:
+            # oneOf 대안 검증은 다른 대안의 ERROR/WARNING 이 본문 결과에 섞이지
+            # 않도록 scratch에서 수행한다. 다만 선택된 대안의 WARNING 은 Rust
+            # build-from-ingest가 거부할 입력을 사전에 알리는 진단이므로 보존한다.
+            errors.extend(
+                error
+                for error in probe_errors[matched[0]]
+                if error.level is ErrorLevel.WARNING
+            )
             return True
 
         if not matched:
@@ -393,7 +403,7 @@ class IngestSchemaValidator:
                     ValidationError(
                         level=ErrorLevel.WARNING,
                         message=(
-                            f"스키마에 정의되지 않은 필드 '{key}' — "
+                            f"현재 스키마 분기에 정의되지 않은 필드 '{key}' — "
                             "rhwp build-from-ingest 는 미지 필드를 거부합니다"
                         ),
                         path=child_path,

@@ -173,6 +173,25 @@ class OneOfSemanticsTest(unittest.TestCase):
             f"경로: {[e.path for e in errors]}",
         )
 
+    def test_selected_oneof_branch_warnings_are_preserved(self):
+        # text 대안에 없는 bold와 image 전용 ref는 JSON Schema 기본값상 허용되지만
+        # Rust StemBlock 파서는 조용한 내용 유실을 막기 위해 거부한다. oneOf가 text
+        # 대안 하나와 일치해도 이 경고는 최종 결과에 남아야 한다.
+        for extra in ({"bold": True}, {"ref": "img/q1.png"}):
+            with self.subTest(extra=extra):
+                data = json.loads(SAMPLE_MINIMAL.read_text(encoding="utf-8"))
+                data["questions"][0]["stem_blocks"][0].update(extra)
+                errors = self.validator.validate(data)
+
+                self.assertEqual(set(), error_codes(errors))
+                warnings = [e for e in errors if e.level is ErrorLevel.WARNING]
+                self.assertEqual(1, len(warnings), [str(e) for e in errors])
+                self.assertEqual("UNKNOWN_FIELD", warnings[0].code)
+                self.assertEqual(
+                    f"questions[0].stem_blocks[0].{next(iter(extra))}",
+                    warnings[0].path,
+                )
+
 
 class UnknownFieldWarningTest(unittest.TestCase):
     """미지 필드는 스키마상 허용이지만 Rust 측이 거부하므로 경고로 조기 신고한다."""
@@ -223,6 +242,23 @@ class CliExitCodeTest(unittest.TestCase):
         result = json.loads(proc.stdout)
         self.assertFalse(result["valid"])
         self.assertGreater(result["error_count"], 0)
+
+    def test_selected_oneof_branch_warning_stays_valid_and_exits_zero(self):
+        data = json.loads(SAMPLE_MINIMAL.read_text(encoding="utf-8"))
+        data["questions"][0]["stem_blocks"][0]["bold"] = True
+        with tempfile.TemporaryDirectory() as tmp:
+            candidate = Path(tmp) / "oneof-warning.json"
+            candidate.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+            proc = self._run_cli(str(candidate), "--json")
+
+        self.assertEqual(EXIT_OK, proc.returncode, proc.stderr)
+        result = json.loads(proc.stdout)
+        self.assertTrue(result["valid"])
+        self.assertEqual(0, result["error_count"])
+        self.assertEqual(1, result["warning_count"])
+        self.assertEqual("WARNING", result["errors"][0]["level"])
+        self.assertEqual("UNKNOWN_FIELD", result["errors"][0]["code"])
+        self.assertEqual("questions[0].stem_blocks[0].bold", result["errors"][0]["path"])
 
     def test_syntax_error_reports_line_column(self):
         with tempfile.TemporaryDirectory() as tmp:

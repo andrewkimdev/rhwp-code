@@ -16,6 +16,10 @@
    0개 일치(`ONEOF_FAILED`)와 2개 이상 일치(`ONEOF_AMBIGUOUS`)는 모두 ERROR.
    저장소 샘플(`sample_minimal.json`, `sample_structured.json`)은 오류 0건·경고
    0건으로 통과한다.
+3. **선택된 `oneOf` 대안의 WARNING 보존** — 대안 판정 중 생긴 WARNING은
+   매치하지 않은 대안끼리 섞지 않는다. 다만 정확히 하나와 일치한 대안의 WARNING은
+   최종 결과에 남긴다. Rust `build-from-ingest`가 거부할 미지·변형 전용 필드를
+   성공 결과로 조용히 감추지 않기 위함이다.
 
 ## 사용법
 
@@ -67,6 +71,10 @@ python tools/schema-validator/schema_validator.py my.json --schema path/to/schem
   거부한다. 오탈자를 빌드 전에 잡으라고 경고로 신고하되 `valid` 판정은
   스키마 의미론을 따른다.
 
+`oneOf` 안에서는 정확히 하나와 일치한 대안의 WARNING도 보존한다. 따라서
+`type:"text"` 블록에 image 대안 전용 `ref`를 섞거나 `bold` 같은 미지 필드를 넣으면,
+종료 코드와 `valid`는 성공으로 유지하되 Rust 파서 실패 가능성을 WARNING으로 알린다.
+
 역으로 이 검증기는 Rust 파서가 잡지 않는 것도 잡는다 — 예: `version` 의
 `const "1"` 위반(Rust 쪽은 임의 문자열 허용).
 
@@ -80,7 +88,7 @@ python tools/schema-validator/schema_validator.py my.json --schema path/to/schem
 | `CONST_MISMATCH` | `const` 불일치 (예: `version` ≠ `"1"`) |
 | `ENUM_MISMATCH` | `enum` 밖의 값 (예: `placement`) |
 | `MISSING_REQUIRED_FIELD` | 필수 필드 누락 |
-| `UNKNOWN_FIELD` | 미정의 필드 (WARNING; `additionalProperties: false` 명시 시 ERROR) |
+| `UNKNOWN_FIELD` | 현재 객체 또는 선택된 `oneOf` 대안의 미정의 필드 (WARNING; `additionalProperties: false` 명시 시 ERROR) |
 | `ONEOF_FAILED` | `oneOf` 어느 대안과도 불일치 (대안별 실패 사유 힌트 포함) |
 | `ONEOF_AMBIGUOUS` | `oneOf` 2개 이상 대안과 일치 |
 | `BELOW_MINIMUM` / `ABOVE_MAXIMUM` | 수치 범위 위반 |
@@ -113,3 +121,6 @@ python -m unittest discover -s tools/schema-validator -p "test_*.py"
 - `oneOf` 정확성: 1개 일치 = 통과, 0개/2개 일치 = 실패
 - 4단계 중첩(`questions[i].choices[j]`) 오류의 최상위 bool 전파
 - JSON 구문 오류의 줄/칸 보고, 스키마 부재 시 종료 코드 2
+
+또한 선택된 `oneOf` 대안의 미지·변형 전용 필드는 WARNING으로 최종 결과에 남고,
+CLI는 `valid:true`와 종료 코드 0을 유지하는 회귀를 고정한다.
