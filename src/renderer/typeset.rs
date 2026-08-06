@@ -19371,9 +19371,15 @@ impl TypesetEngine {
                 return None;
             }
         };
-        // HeightMeasurer가 빈 1×1 래퍼를 내부 표로 재귀 측정한다. 이 아래의
-        // 행-분할 데이터도 반드시 같은 표를 기준으로 만들어야 한다.
-        let row_geometry_table = row_geometry_table(table);
+        // HWPX의 빈 1×1 wrapper는 측정기와 renderer가 모두 내부 표를 행 기하로
+        // 사용한다. native HWP5의 RowBreak wrapper는 반대로 바깥 표의 clip/frame이
+        // continuation 계약을 가진다. 그 입력에 inner-row cursor를 적용하면
+        // source owner가 한 조각씩 늦어지는 42065 회귀가 된다.
+        let row_geometry_table = if st.profile.native_hwp5_layout() {
+            table
+        } else {
+            row_geometry_table(table)
+        };
 
         let declared_table_height = (declared_object_total - host_spacing_total).max(0.0);
         let declared_table_does_not_fit_remaining =

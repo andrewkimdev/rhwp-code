@@ -1872,7 +1872,11 @@ impl LayoutEngine {
         // Only unwrap when the fragment cursor is outside the outer table's row
         // domain.  A genuine 1×1 table containing a nested table can otherwise be
         // intentionally rendered as its own one-row frame.
-        let table = fragment_row_geometry_table(outer_table, end_row);
+        let table = if self.profile.get().native_hwp5_layout() {
+            outer_table
+        } else {
+            fragment_row_geometry_table(outer_table, end_row)
+        };
 
         if table.cells.is_empty() {
             return y_start;

@@ -3863,7 +3863,11 @@ impl LayoutEngine {
         // 마지막 조각은 다음 페이지로 넘길 소유자가 없다. 이때 viewport cut을
         // 적용하면 한컴이 같은 쪽에 보존하는 꼬리 문단/중첩 표를 영구 유실한다.
         // 기존 line-fit 경로도 `split_terminal`에서 같은 예외를 두었다 (#3658).
-        let fragment_cut_units = if single_row_fragment && row_filter.is_some() && !split_terminal {
+        let fragment_cut_units = if self.profile.get().hwpx_stored_layout()
+            && single_row_fragment
+            && row_filter.is_some()
+            && !split_terminal
+        {
             let offset = single_row_fragment_content_offset
                 .unwrap_or_else(|| single_row_continuation_offset.unwrap_or(0.0))
                 .max(0.0);
@@ -3880,7 +3884,6 @@ impl LayoutEngine {
         };
         let fragment_line_ranges = fragment_cut_units
             .map(|(start, end)| self.cell_line_ranges_from_cut(cell, table, styles, start, end));
-
         // 셀 내 문단 + 컨트롤 통합 레이아웃
         let mut para_y = text_y_start;
         let mut has_preceding_text = false;
@@ -4900,7 +4903,16 @@ impl LayoutEngine {
                         // 포함한다. 그 형상까지 상한을 풀면 #3637처럼 실제 셀 밖으로
                         // 새는 중첩 표가 다시 허용된다. 따라서 페이지 간에 이미 소비된
                         // 행 높이가 있는 실제 continuation으로 문맥을 좁힌다.
-                        let nested_y = if single_row_continuation {
+                        // native HWP5 RowBreak 1×1 wrapper는 offset=0인 첫 조각도
+                        // 바깥 Cell을 continuation viewport로 사용한다. 이 조각의
+                        // 하단으로 미래 descendant를 clamp하면 42065 p17 제목이
+                        // p16에 미리 들어온다. HWPX는 실제로 셀 밖으로 빠진 중첩 표만
+                        // 막기 위해 아래의 좁은 누적-offset guard를 계속 적용한다.
+                        let native_hwp5_rowbreak_fragment = self.profile.get().native_hwp5_layout()
+                            && row_filter.is_some()
+                            && table.row_count == 1
+                            && table.col_count == 1;
+                        let nested_y = if single_row_continuation || native_hwp5_rowbreak_fragment {
                             nested_y
                         } else {
                             nested_y.min(inner_area.y + inner_area.height)
@@ -5125,7 +5137,18 @@ impl LayoutEngine {
                             // 이 셀 조각의 unit cut이 만든 중첩 표 slice를 다음 깊이에도
                             // 그대로 넘긴다. 픽셀 높이만으로 다시 행을 추정하면 첫 조각과
                             // continuation이 같은 행을 각각 재렌더해 쪽 소유가 깨진다.
-                            let nested_split = mixed_nested_split.as_ref();
+                            // #3637의 source-unit viewport는 HWPX wrapper가 보존한
+                            // 행 소유를 다음 깊이에 전달해야 한다. native HWP5 RowBreak
+                            // 1×1 wrapper는 이미 물리 cell clip과 누적 vpos로 같은
+                            // 조각을 표현한다. 여기에 HWPX split을 다시 전달하면 child
+                            // table의 viewport가 한 unit만큼 앞서 p16이 p17 제목을
+                            // 중복 paint한다(42065 HWP 2020).
+                            let nested_split = self
+                                .profile
+                                .get()
+                                .hwpx_stored_layout()
+                                .then_some(mixed_nested_split.as_ref())
+                                .flatten();
                             let table_h = self.layout_table(
                                 tree,
                                 cell_node,
