@@ -18163,12 +18163,26 @@ impl TypesetEngine {
                 end_row = r;
             } else {
                 let split_candidate_rows_height = consumed + cs_before + split_total;
-                let split_row_overflow_tolerance = if mt.allows_row_break_split() {
-                    rowbreak_split_row_overflow_tolerance
-                } else {
-                    0.1
-                };
-                if r > cursor_row
+                // HWPX RowBreak 연속 조각은 작은 측정 drift에는 종전 여유를
+                // 유지한다. 다만 mixed nested tail이 한 줄을 넘겨 현재 쪽에
+                // 물리적으로 더 그려지면 다음 쪽 source owner를 건너뛴다. 이
+                // 현상은 새 쪽에서 시작하는 continuation에만 나타나므로, 그
+                // 좁은 형상만 재-cut한다 (#3637 HWP 2020 p26 → p27).
+                const MIXED_NESTED_OWNER_DRIFT_MIN_PX: f64 = 16.0;
+                let mixed_nested_owner_guard = st.profile.hwpx_stored_layout()
+                    && r == cursor_row
+                    && is_continuation
+                    && !row_start_cut.is_empty()
+                    && split_total > res.consumed_height + padding + 0.5
+                    && split_candidate_rows_height - avail_for_rows
+                        > MIXED_NESTED_OWNER_DRIFT_MIN_PX;
+                let split_row_overflow_tolerance =
+                    if mt.allows_row_break_split() && !mixed_nested_owner_guard {
+                        rowbreak_split_row_overflow_tolerance
+                    } else {
+                        0.1
+                    };
+                if (r > cursor_row || mixed_nested_owner_guard)
                     && split_candidate_rows_height > avail_for_rows + split_row_overflow_tolerance
                 {
                     // 보이는 조각은 orphan 기준을 통과해도 row-area 예산은 넘을 수 있다.
@@ -18178,7 +18192,17 @@ impl TypesetEngine {
                     // 한글은 같은 자리에서 조각 분할을 시작한다(PDF p108). 초과분만큼
                     // 예산을 줄여 한 번 재시도하고, 그래도 초과면 종전대로 이월한다.
                     let over = split_candidate_rows_height - avail_for_rows;
-                    let retry_budget = (budget - over - 0.5).max(0.0);
+                    // Ordinary overfill requires only the measured excess.
+                    // The guarded mixed-nested form has an additional physical
+                    // tail that is absent from `advance_row_cut`'s logical
+                    // height; reserve it too, so the next page begins at the
+                    // first omitted source unit rather than one line late.
+                    let painted_tail = (split_total - res.consumed_height - padding).max(0.0);
+                    let retry_budget = if mixed_nested_owner_guard {
+                        (budget - over - painted_tail - 0.5).max(0.0)
+                    } else {
+                        (budget - over - 0.5).max(0.0)
+                    };
                     let res2 = layout_engine.advance_row_cut(
                         table,
                         r,

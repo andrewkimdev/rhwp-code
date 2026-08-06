@@ -90,6 +90,29 @@ fn deepest_bottom(node: &RenderNode) -> f64 {
         .fold(own, |a, b| if b > a { b } else { a })
 }
 
+/// 실제 Cell clip 안에 온전히 남은 text만 누적한다. RenderTree에는 clip 바깥으로
+/// 배치된 다음 조각의 노드도 진단용으로 남을 수 있으므로, raw node text만 보면
+/// p26 하단에서 잘린 p27 source owner를 오탐한다.
+fn fully_visible_text(node: &RenderNode, clip_top: f64, clip_bottom: f64, out: &mut String) {
+    let (next_top, next_bottom) = if matches!(&node.node_type, RenderNodeType::TableCell(_)) {
+        (
+            clip_top.max(node.bbox.y),
+            clip_bottom.min(node.bbox.y + node.bbox.height),
+        )
+    } else {
+        (clip_top, clip_bottom)
+    };
+    if let RenderNodeType::TextRun(run) = &node.node_type {
+        let bottom = node.bbox.y + node.bbox.height;
+        if node.bbox.y >= next_top - TOLERANCE_PX && bottom <= next_bottom + TOLERANCE_PX {
+            out.push_str(&run.text);
+        }
+    }
+    for child in &node.children {
+        fully_visible_text(child, next_top, next_bottom, out);
+    }
+}
+
 /// 중첩 표가 부모 셀 안에서 시작해, 쪽 아래로 컨테이너째 흘러내리지 않는다.
 #[test]
 fn nested_table_starts_inside_its_parent_cell() {
@@ -102,6 +125,38 @@ fn nested_table_starts_inside_its_parent_cell() {
     assert_eq!(
         page_count, 31,
         "HWP 2020 기준 31쪽과 달라졌다 — 중첩 표 조각 또는 문서 말미 빈 문단의 쪽 소유를 확인하라"
+    );
+
+    // HWP 2020 PDF p26의 마지막 source line은 "시간당 근로임금…"이고,
+    // p27은 바로 다음 "사업체노동력조사…"로 시작한다. p26의 painted tail을
+    // 좁히기만 하면 p27에서 첫 줄이 중복되고, pagination만 앞당기면 p27의
+    // 첫 줄이 사라진다. 실제 Cell clip 안의 소유를 양쪽에서 함께 고정한다.
+    let mut p26_text = String::new();
+    let p26 = doc
+        .build_page_render_tree(25)
+        .expect("HWP 2020 p26 render tree");
+    fully_visible_text(&p26.root, f64::NEG_INFINITY, f64::INFINITY, &mut p26_text);
+    assert!(
+        p26_text.contains("시간당 근로임금은"),
+        "p26은 HWP 2020이 소유한 마지막 임금 기준 줄을 보여야 한다"
+    );
+    assert!(
+        !p26_text.contains("사업체노동력조사"),
+        "p26에 p27 source owner가 가시 상태로 남았다"
+    );
+
+    let mut p27_text = String::new();
+    let p27 = doc
+        .build_page_render_tree(26)
+        .expect("HWP 2020 p27 render tree");
+    fully_visible_text(&p27.root, f64::NEG_INFINITY, f64::INFINITY, &mut p27_text);
+    assert!(
+        p27_text.contains("사업체노동력조사"),
+        "p27은 HWP 2020이 소유한 다음 사업체 조사 줄부터 재개해야 한다"
+    );
+    assert!(
+        !p27_text.contains("시간당 근로임금은"),
+        "p27에 p26의 마지막 source line이 중복됐다"
     );
 
     let mut escapes = Vec::new();

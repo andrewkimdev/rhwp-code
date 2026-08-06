@@ -9559,6 +9559,23 @@ impl LayoutEngine {
             (offset - first_visible_content_height).max(0.0)
         } else if compensate_first_visible {
             offset + first_visible_content_height
+        } else if self.profile.get().hwpx_stored_layout()
+            && terminal
+            && offset > 0.5
+            && !first_visible_starts_after_table
+            && cell.paragraphs.get(para_idx).is_some_and(|paragraph| {
+                paragraph.controls.iter().any(|control| {
+                    matches!(control, Control::Table(nested) if nested.row_count == 1 && nested.col_count == 1)
+                })
+            })
+        {
+            // The HWPX outer RowBreak cell's last source unit is already
+            // painted by the preceding fragment. Its terminal 1×1 child uses
+            // a fresh viewport, so the raw source offset would paint that same
+            // unit at the new page top. Advance by precisely one visible child
+            // line; this preserves the terminal tail while starting from the
+            // next physical source owner (#3637 HWP 2020 p26→p27).
+            offset + first_visible_content_height
         } else {
             offset
         };
