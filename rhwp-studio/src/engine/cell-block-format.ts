@@ -5,6 +5,16 @@
  * 그래서 대상 산출은 "행/열 범위 + 제외 셀"에서 셀 인덱스를 골라내는 별도 경로가 된다.
  * 이 모듈은 wasm/커서 상태 없이 그 산출만 담당해 단위 테스트가 가능하게 한다.
  */
+import type { ParaFormatTarget } from './command';
+
+/** 셀 블록이 가리키는 표와 그 안에서 선택된 셀 인덱스 목록 (제외 셀 반영 후) */
+export type SelectedCellBlock = {
+  sec: number;
+  ppi: number;
+  ci: number;
+  cellIndices: number[];
+};
+
 export type CellRowCol = { row: number; col: number };
 
 export type CellBlockRange = {
@@ -42,4 +52,31 @@ export function selectCellIndicesInRange(
     cellIndices.push(cellIdx);
   }
   return cellIndices;
+}
+
+/**
+ * 셀 블록 안 모든 셀의 모든 문단을 문단 서식 대상으로 펼친다.
+ *
+ * ApplyParaFormatCommand 는 target 목록을 그대로 받아 target 별 before/after paraShapeId 로
+ * 되돌리므로, 목록을 늘리는 것만으로 셀 블록 전체가 한 번의 Undo 단위가 된다.
+ */
+export function paraFormatTargetsForCellBlock(
+  block: SelectedCellBlock,
+  paraCountAt: (cellIdx: number) => number,
+): ParaFormatTarget[] {
+  const targets: ParaFormatTarget[] = [];
+  for (const cellIdx of block.cellIndices) {
+    const paraCount = paraCountAt(cellIdx);
+    for (let cellParaIdx = 0; cellParaIdx < paraCount; cellParaIdx++) {
+      targets.push({
+        kind: 'cell',
+        sec: block.sec,
+        parentPara: block.ppi,
+        controlIdx: block.ci,
+        cellIdx,
+        cellParaIdx,
+      });
+    }
+  }
+  return targets;
 }
