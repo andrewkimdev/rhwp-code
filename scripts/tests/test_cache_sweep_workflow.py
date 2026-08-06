@@ -124,7 +124,7 @@ class CacheSweepWorkflowTests(unittest.TestCase):
                 "DRY_RUN": "false",
                 "KEEP_GENERATIONS": "2",
                 "SWEEP_ORPHAN_REFS": "true",
-                "LIMIT_GB": "10",
+                "LIMIT_BYTES": "10000000000",
                 "WARN_PERCENT": "80",
                 "FAIL_PERCENT": "95",
             },
@@ -425,6 +425,39 @@ class BooleanInputExpressionTests(unittest.TestCase):
         # cron 기본 false 이므로 `==` 형태여야 한다.
         self.assertIn("github.event_name == 'workflow_dispatch'", expression)
         self.assertIn("&& inputs.dry_run", expression)
+
+
+class LimitUnitTests(unittest.TestCase):
+    """[#4080] 한도를 바이트로 명시하고 십진 해석을 고정한다.
+
+    GitHub 문서는 캐시 한도를 "10 GB" 라고만 쓰고 십진(10^9)인지 이진(2^30)인지
+    밝히지 않는다. 둘의 차이는 7.4% 라 임계 발화 시점이 달라진다. 2026-08-06 실측
+    10,241,001,878 B 는 십진으로 102.4%, 이진으로 95.4% 로 읽힌다 — 한쪽은 한도 초과이고
+    다른 쪽은 아니다.
+
+    쿼터 가드는 늦게 우는 것보다 일찍 우는 편이 안전하므로 보수적인 십진을 쓴다.
+    `LIMIT_GB` 처럼 단위가 코드에 숨는 형태로 되돌아가지 않게 계약으로 고정한다.
+    """
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
+
+    def test_limit_is_declared_in_bytes(self):
+        self.assertIn('LIMIT_BYTES: "10000000000"', self.workflow)
+        self.assertNotIn("LIMIT_GB", self.workflow)
+
+    def test_script_reads_the_byte_limit_without_unit_multiplication(self):
+        match = re.search(r"const limitBytes = (.+);", self.workflow)
+        self.assertIsNotNone(match)
+        expression = match.group(1) if match else ""
+        self.assertIn("LIMIT_BYTES", expression)
+        self.assertNotIn("1024", expression, "한도에 이진 배수를 다시 곱하면 안 된다")
+
+    def test_summary_states_the_raw_byte_limit(self):
+        # 표시는 GiB 로 유지하되(#3684 이후 시계열과 대조 가능), 한도의 원시 바이트를
+        # 함께 남겨 어떤 해석을 썼는지 로그만 보고 알 수 있게 한다.
+        self.assertIn("limitBytes} B", self.workflow)
 
 
 if __name__ == "__main__":
