@@ -23,6 +23,56 @@ use crate::model::paragraph::Paragraph;
 use crate::model::shape::CaptionDirection;
 use crate::model::style::{Alignment, BorderLine};
 
+/// Returns the content table inside transparent, empty 1×1 wrapper tables.
+///
+/// HWPX can retain a shell table solely as the host for a nested table.  The
+/// shell's one empty paragraph carries no independently visible content; its
+/// row geometry is therefore the nested table's geometry.  Keep this narrow:
+/// any text, an additional paragraph, or a non-1×1 grid makes the outer table
+/// semantically observable and stops unwrapping.
+fn transparent_nested_table(table: &crate::model::table::Table) -> &crate::model::table::Table {
+    if table.row_count != 1 || table.col_count != 1 || table.cells.len() != 1 {
+        return table;
+    }
+
+    let cell = &table.cells[0];
+    if cell.paragraphs.len() != 1 {
+        return table;
+    }
+    let para = &cell.paragraphs[0];
+    if para
+        .text
+        .chars()
+        .any(|ch| !ch.is_whitespace() && ch != '\r' && ch != '\n')
+    {
+        return table;
+    }
+    let Some(nested) = para.controls.iter().find_map(|control| match control {
+        Control::Table(table) => Some(table.as_ref()),
+        _ => None,
+    }) else {
+        return table;
+    };
+
+    transparent_nested_table(nested)
+}
+
+/// Resolves the table that owns a `PartialTable` row cursor.
+///
+/// Pagination only names an inner table's rows when a cursor lies outside the
+/// outer wrapper's one-row domain.  Keep a genuine 1×1 outer table intact until
+/// that proof exists; it may own a deliberate visible frame.
+fn fragment_row_geometry_table(
+    table: &crate::model::table::Table,
+    end_row: usize,
+) -> &crate::model::table::Table {
+    if end_row <= table.row_count as usize {
+        table
+    } else {
+        transparent_nested_table(table)
+    }
+}
+
 /// 분할 셀 조각에서 실제로 보이는 첫 줄의 저장 vpos를 찾는다.
 ///
 /// `cell_line_ranges_from_cut`은 문단 중간 줄에서 시작할 수 있다. 문단 첫 줄을
@@ -1515,6 +1565,7 @@ impl LayoutEngine {
                                                 visible_height: split.visible_height,
                                                 flow_height: split.flow_height,
                                                 offset_within_start: split.offset_within_start,
+                                                content_offset: split.content_offset,
                                                 terminal: split.terminal,
                                                 recursive_cut: split.recursive_cut.clone(),
                                             })
@@ -1525,6 +1576,7 @@ impl LayoutEngine {
                                                 visible_height: split.visible_height,
                                                 flow_height: split.flow_height,
                                                 offset_within_start: split.offset_within_start,
+                                                content_offset: split.content_offset,
                                                 terminal: split.terminal,
                                                 recursive_cut: split.recursive_cut.clone(),
                                             })
@@ -1806,10 +1858,21 @@ impl LayoutEngine {
             Some(p) => p,
             None => return y_start,
         };
-        let table = match para.controls.get(control_index) {
+        let outer_table = match para.controls.get(control_index) {
             Some(Control::Table(t)) => t,
             _ => return y_start,
         };
+        // Pagination can deliberately use the rows of a transparent 1×1 wrapper's
+        // nested table.  The measured-table path has used that effective table since
+        // the wrapper-unwrapping rule was introduced, but a `PartialTable` still
+        // identifies its source by the outer control.  Rendering the outer 1-row
+        // table with an inner-table row cursor made a continuation beginning at row
+        // 1 paint no remaining rows at all (#3637, HWP 2020 p7).
+        //
+        // Only unwrap when the fragment cursor is outside the outer table's row
+        // domain.  A genuine 1×1 table containing a nested table can otherwise be
+        // intentionally rendered as its own one-row frame.
+        let table = fragment_row_geometry_table(outer_table, end_row);
 
         if table.cells.is_empty() {
             return y_start;

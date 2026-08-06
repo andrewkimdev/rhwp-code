@@ -96,10 +96,12 @@ fn nested_table_starts_inside_its_parent_cell() {
     let bytes = std::fs::read(sample_path()).expect("표본 읽기");
     let doc = rhwp::wasm_api::HwpDocument::from_bytes(&bytes).expect("파싱");
     let page_count = doc.page_count();
-    assert!(
-        page_count >= 30,
-        "쪽이 너무 적다({page_count}) — 중첩 표가 걸치는 뒷쪽들이 있어야 이 경로를 탄다. \
-         표본이 바뀌었는지 확인하라"
+    // HWP 2020 PrintToPDFEx fresh oracle (2026-08-06) is 31 pages.  This also
+    // prevents the terminal run of empty paragraphs after the last nested table
+    // from materializing as a 32nd blank page.
+    assert_eq!(
+        page_count, 31,
+        "HWP 2020 기준 31쪽과 달라졌다 — 중첩 표 조각 또는 문서 말미 빈 문단의 쪽 소유를 확인하라"
     );
 
     let mut escapes = Vec::new();

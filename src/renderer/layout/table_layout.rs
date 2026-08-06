@@ -1423,6 +1423,10 @@ pub(crate) struct NestedTableSplit {
     pub flow_height: f64,
     /// start_row 내부 오프셋: 이미 이전 페이지에 렌더링된 start_row 상단 부분의 높이
     pub offset_within_start: f64,
+    /// 셀 유닛 스트림에서 이 조각이 시작하는 원본 소비 위치. mixed nested tail은
+    /// 물리 y 보정 때문에 `offset_within_start`에 첫 가시 유닛을 더할 수 있으므로,
+    /// 다음 깊이의 동일한 유닛 컷을 재구성할 때는 이 원본 값을 사용한다.
+    pub content_offset: f64,
     /// [#3658] 이 조각이 해당 셀 콘텐츠의 **마지막** 조각인가 (컷이 마지막 유닛까지
     /// 포함 — end_cut 종료). true 면 이어받을 continuation 이 없으므로 셀 하단 초과
     /// 줄 드롭(다음 쪽 소속 줄 제외용)을 적용하지 않는다 — 꼬리 문단 유실 방지.
@@ -1448,6 +1452,7 @@ pub(crate) fn calc_nested_split_rows(
             visible_height: 0.0,
             flow_height: 0.0,
             offset_within_start: 0.0,
+            content_offset: 0.0,
             terminal: false,
             recursive_cut: None,
         };
@@ -1517,6 +1522,7 @@ pub(crate) fn calc_nested_split_rows(
         visible_height,
         flow_height: visible_height,
         offset_within_start: 0.0,
+        content_offset: offset.max(0.0),
         terminal: false,
         recursive_cut: None,
     }
@@ -1553,6 +1559,16 @@ struct HorizontalCellVars {
     /// 단순 row filter의 첫 조각과 구분해, 미래 중첩 표의 위치 상한을 풀 수 있는
     /// 유일한 문맥으로 쓴다 (#2007/#3637).
     single_row_continuation: bool,
+    /// 부모 RowBreak 조각이 이 1×1 표에 명시적으로 전달한 물리 viewport인가.
+    /// 첫 조각(offset=0)도 포함한다. 표 셀의 유닛 컷을 재구성할 때 continuation과
+    /// 구분하지 않고 같은 소유 범위를 적용해야 한다.
+    single_row_fragment: bool,
+    /// 현재 1행 continuation이 앞 조각에서 이미 소비한 높이. 중첩 표도 같은
+    /// 물리 viewport를 이어 그리려면 이 누적 오프셋을 그대로 받아야 한다.
+    single_row_continuation_offset: Option<f64>,
+    /// 같은 조각의 원본 unit 소비 위치. 물리 y 보정과 분리해 다음 중첩 표의
+    /// unit 경계를 계산한다.
+    single_row_fragment_content_offset: Option<f64>,
     /// [#3658] 분할 렌더(row_filter)가 이 셀 콘텐츠의 마지막 조각인가.
     /// true 면 셀 하단 초과 줄 드롭(다음 쪽 소속 줄 제외)을 적용하지 않는다 —
     /// 이어받을 continuation 이 없어 드롭된 꼬리 줄은 영구 유실되기 때문.
@@ -2053,15 +2069,22 @@ impl LayoutEngine {
         // PR #4122의 재귀 child cursor가 있으면 자식 RowCut이 continuation 소유권을
         // 직접 결정한다. 기존 1×1 위치/정렬 보정은 그 cursor가 없는 scalar fallback
         // continuation에서만 적용해 같은 흐름 오프셋을 두 번 소비하지 않는다.
-        let scalar_single_row_continuation = nested_split.is_some_and(|split| {
+        let scalar_single_row_fragment = nested_split.is_some_and(|split| {
             row_count == 1
                 && col_count == 1
                 && split.start_row == 0
                 && split.end_row >= 1
-                && split.offset_within_start > 0.5
                 && split.recursive_cut.is_none()
         });
-
+        let scalar_single_row_continuation_offset = nested_split.and_then(|split| {
+            (scalar_single_row_fragment && split.offset_within_start > 0.5)
+                .then_some(split.offset_within_start)
+        });
+        let scalar_single_row_fragment_content_offset = nested_split
+            .filter(|_| scalar_single_row_fragment)
+            .map(|split| split.content_offset);
+        let scalar_single_row_continuation =
+            scalar_single_row_continuation_offset.is_some();
         let mut row_col_x = build_row_col_x(
             table,
             &col_widths,
@@ -2384,6 +2407,9 @@ impl LayoutEngine {
             row_y_shift,
             split_y_offset,
             scalar_single_row_continuation,
+            scalar_single_row_continuation_offset,
+            scalar_single_row_fragment,
+            scalar_single_row_fragment_content_offset,
             split_terminal,
             clamp_header_negative_para_offset,
             inline_table_flow_y_shift,
@@ -3818,6 +3844,9 @@ impl LayoutEngine {
             outer_host_stored_vpos_hu,
             inline_table_flow_y_shift,
             single_row_continuation,
+            single_row_continuation_offset,
+            single_row_fragment,
+            single_row_fragment_content_offset,
             split_terminal,
         } = v;
         let inner_area = LayoutRect {
@@ -3826,6 +3855,31 @@ impl LayoutEngine {
             width: inner_width,
             height: inner_height,
         };
+        // 1×1 RowBreak 표는 행을 다시 자를 수 없으므로, 부모가 넘긴 픽셀
+        // viewport를 이 셀 자신의 유닛 경계로 되돌린다. 여기서 얻은 범위는
+        // `layout_partial_table`의 start_cut/end_cut와 같은 의미다. 단순히 현재
+        // 셀 하단에서 줄을 버리면 중첩 표/비인라인 컨트롤은 이후 쪽 소유를 잃고
+        // SVG clip에만 가려진다 (#3637 HWP 2020 p25–p30).
+        // 마지막 조각은 다음 페이지로 넘길 소유자가 없다. 이때 viewport cut을
+        // 적용하면 한컴이 같은 쪽에 보존하는 꼬리 문단/중첩 표를 영구 유실한다.
+        // 기존 line-fit 경로도 `split_terminal`에서 같은 예외를 두었다 (#3658).
+        let fragment_cut_units = if single_row_fragment && row_filter.is_some() && !split_terminal {
+            let offset = single_row_fragment_content_offset
+                .unwrap_or_else(|| single_row_continuation_offset.unwrap_or(0.0))
+                .max(0.0);
+            // 앞 조각의 콘텐츠는 `content_cell_y`가 이미 음수 방향으로 옮겨 놓고
+            // 물리 Cell clip이 위쪽을 제거한다. 여기서 start까지 다시 버리면 현
+            // 페이지 상단에 이어져야 할 줄이 사라진다. 따라서 현재 페이지 **하단**
+            // 까지만 정확히 자르고, 앞부분은 같은 논리 원점에서 배치시킨다.
+            let end = self
+                .cell_units_fitting_height(cell, table, styles, offset + cell_h.max(0.0))
+                .max(0);
+            Some((0, end))
+        } else {
+            None
+        };
+        let fragment_line_ranges = fragment_cut_units
+            .map(|(start, end)| self.cell_line_ranges_from_cut(cell, table, styles, start, end));
 
         // 셀 내 문단 + 컨트롤 통합 레이아웃
         let mut para_y = text_y_start;
@@ -3835,6 +3889,29 @@ impl LayoutEngine {
             .zip(cell.paragraphs.iter())
             .enumerate()
         {
+            let (start_line, end_line) = fragment_line_ranges
+                .as_ref()
+                .and_then(|ranges| ranges.get(cp_idx).copied())
+                .unwrap_or((0, composed.lines.len()));
+            let mixed_nested_split = fragment_cut_units.and_then(|(start, end)| {
+                self.mixed_nested_split_from_cut(cell, table, styles, start, end, cp_idx)
+            });
+            let visible_non_inline_controls = fragment_cut_units.is_some_and(|(start, end)| {
+                self.cell_cut_contains_non_inline_control_units(
+                    cell, table, styles, start, end, cp_idx,
+                )
+            });
+            // 빈 host 문단은 블록 중첩 표만 담을 수 있다. 그러므로 이 조각이
+            // 실제 unit cut을 가진 경우에만 빈 범위를 건너뛴다. 일반 표까지
+            // 건너뛰면 `근거설명`처럼 text_len=0인 host의 Table control 자체가
+            // 방출되지 않는다 (76076 regulatory analysis p34).
+            if fragment_cut_units.is_some()
+                && start_line >= end_line
+                && mixed_nested_split.is_none()
+                && !visible_non_inline_controls
+            {
+                continue;
+            }
             let cell_context = if let Some(ref ctx) = enclosing_cell_ctx {
                 let mut new_ctx = ctx.clone();
                 if let Some(last) = new_ctx.path.last_mut() {
@@ -3987,27 +4064,7 @@ impl LayoutEngine {
 
             if !has_block_table_ctrl {
                 let is_last_para = cp_idx + 1 == composed_paras.len();
-                // 분할 중첩 표: 셀 하단을 초과하는 줄은 렌더링하지 않음.
-                // [#3658] 단, 종료 조각(split_terminal)은 예외 — 이어받을 continuation
-                // 이 없으므로 드롭하면 꼬리 줄이 영구 유실된다. 재적층 드리프트로
-                // 수 px 넘치는 마지막 줄은 오버플로 감수하고 렌더한다.
-                let end_line = if row_filter.is_some() && !split_terminal {
-                    let cell_bottom = cell_y + cell_h;
-                    let mut sim_y = para_y;
-                    let mut fit = composed.lines.len();
-                    for (li, line) in composed.lines.iter().enumerate() {
-                        let lh = hwpunit_to_px(line.line_height, self.dpi);
-                        if sim_y + lh > cell_bottom + 0.5 {
-                            fit = li;
-                            break;
-                        }
-                        sim_y += lh + hwpunit_to_px(line.line_spacing, self.dpi);
-                    }
-                    fit
-                } else {
-                    composed.lines.len()
-                };
-                let numbered_comp = if end_line > 0 {
+                let numbered_comp = if start_line == 0 && end_line > start_line {
                     self.apply_paragraph_numbering(
                         Some(composed),
                         para,
@@ -4025,7 +4082,7 @@ impl LayoutEngine {
                     styles,
                     &inner_area,
                     para_y,
-                    0,
+                    start_line,
                     end_line,
                     section_index,
                     cp_idx,
@@ -4099,6 +4156,12 @@ impl LayoutEngine {
             for (ctrl_idx, ctrl) in para.controls.iter().enumerate() {
                 match ctrl {
                     Control::Picture(pic) => {
+                        if !pic.common.treat_as_char
+                            && fragment_cut_units.is_some()
+                            && !visible_non_inline_controls
+                        {
+                            continue;
+                        }
                         if pic.common.treat_as_char {
                             let pic_w = hwpunit_to_px(pic.common.width as i32, self.dpi);
                             // [Task #928] paragraph_layout 이 inline picture 를 emit 한
@@ -4465,6 +4528,12 @@ impl LayoutEngine {
                         has_preceding_text = true;
                     }
                     Control::Shape(shape) => {
+                        if !shape.common().treat_as_char
+                            && fragment_cut_units.is_some()
+                            && !visible_non_inline_controls
+                        {
+                            continue;
+                        }
                         if shape.common().treat_as_char {
                             let shape_w = hwpunit_to_px(shape.common().width as i32, self.dpi);
                             // [Task #928] paragraph_layout 의 run_tacs 처리 (라인 2026-2034)
@@ -5053,6 +5122,10 @@ impl LayoutEngine {
                                 width: (inner_area.width - tac_text_offset).max(0.0),
                                 height: (inner_area.height - (nested_y - inner_area.y)).max(0.0),
                             };
+                            // 이 셀 조각의 unit cut이 만든 중첩 표 slice를 다음 깊이에도
+                            // 그대로 넘긴다. 픽셀 높이만으로 다시 행을 추정하면 첫 조각과
+                            // continuation이 같은 행을 각각 재렌더해 쪽 소유가 깨진다.
+                            let nested_split = mixed_nested_split.as_ref();
                             let table_h = self.layout_table(
                                 tree,
                                 cell_node,
@@ -5071,13 +5144,16 @@ impl LayoutEngine {
                                 0.0,
                                 0.0,
                                 None,
-                                None,
+                                nested_split,
                                 None,
                                 None,
                                 false,
                                 clamp_header_negative_para_offset,
                             );
-                            para_y = nested_y + table_h;
+                            para_y = nested_y
+                                + nested_split
+                                    .map(|split| split.flow_height)
+                                    .unwrap_or(table_h);
                         }
                         has_preceding_text = true;
                     }
@@ -5256,6 +5332,9 @@ impl LayoutEngine {
         row_y_shift: f64,
         split_y_offset: f64,
         scalar_single_row_continuation: bool,
+        single_row_continuation_offset: Option<f64>,
+        single_row_fragment: bool,
+        single_row_fragment_content_offset: Option<f64>,
         split_terminal: bool,
         clamp_header_negative_para_offset: bool,
         inline_table_flow_y_shift: f64,
@@ -5772,6 +5851,9 @@ impl LayoutEngine {
                         outer_host_stored_vpos_hu,
                         inline_table_flow_y_shift,
                         single_row_continuation: scalar_single_row_continuation,
+                        single_row_continuation_offset,
+                        single_row_fragment,
+                        single_row_fragment_content_offset,
                         split_terminal,
                     },
                 );
@@ -9584,6 +9666,7 @@ impl LayoutEngine {
             // space only; `offset_within_start` above remains the full
             // consumed content origin.
             offset_within_start: row_offset_within_start,
+            content_offset: offset,
             terminal,
             recursive_cut,
         })
@@ -9651,6 +9734,7 @@ impl LayoutEngine {
             visible_height,
             flow_height: visible_height,
             offset_within_start: 0.0,
+            content_offset: 0.0,
             terminal,
             recursive_cut: Some(NestedTableCut {
                 start_row: first_row,

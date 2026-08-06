@@ -166,7 +166,11 @@ struct BlockTableContinuationSource<'a> {
     para_index: usize,
     control_index: usize,
     paragraph: &'a Paragraph,
+    /// 페이지 항목과 부동 배치 속성은 바깥 표의 것으로 보존한다. 다만 빈 1×1
+    /// 래퍼는 측정기와 렌더러가 내부 표를 직접 쓰므로, 행 컷 계산도 같은 유효
+    /// 표를 사용해야 `MeasuredTable`의 행 수와 컷 대상 행 수가 일치한다.
     table: &'a crate::model::table::Table,
+    row_geometry_table: &'a crate::model::table::Table,
     measured_table: &'a MeasuredTable,
     styles: &'a ResolvedStyleSet,
 }
@@ -2648,6 +2652,41 @@ fn is_stored_anchor_picture_table(table: &crate::model::table::Table) -> bool {
             || is_two_row_picture_caption_rowbreak_table(table))
 }
 
+/// 측정기와 렌더러가 풀어 쓰는 빈 1×1 래퍼 표의 실제 행 기하를 돌려준다.
+///
+/// 래퍼의 page-anchor·caption·PageItem 메타데이터는 원본 표에 남아 있어야 한다.
+/// 반면 `MeasuredTable`과 행 컷(`advance_row_cut`)은 내부 표의 행을 기준으로
+/// 동작한다. 두 경로가 다른 표를 참조하면 행 수가 1 대 N으로 갈라져, 보이지
+/// 않는 래퍼 행 높이가 쪽 소비에 더해진다. `table_layout` 및
+/// `HeightMeasurer::measure_table_impl`의 unwrap 조건과 의도적으로 동일하다.
+fn row_geometry_table(table: &crate::model::table::Table) -> &crate::model::table::Table {
+    let mut effective = table;
+    loop {
+        if effective.row_count != 1 || effective.col_count != 1 || effective.cells.len() != 1 {
+            return effective;
+        }
+        let cell = &effective.cells[0];
+        if cell.paragraphs.len() != 1 {
+            return effective;
+        }
+        let para = &cell.paragraphs[0];
+        let has_visible_text = para
+            .text
+            .chars()
+            .any(|ch| !ch.is_whitespace() && ch != '\r' && ch != '\n');
+        if has_visible_text {
+            return effective;
+        }
+        let Some(nested) = para.controls.iter().find_map(|control| match control {
+            Control::Table(table) => Some(table.as_ref()),
+            _ => None,
+        }) else {
+            return effective;
+        };
+        effective = nested;
+    }
+}
+
 /// 1×1 RowBreak 표의 실측 높이가 선언 객체 높이와 같은 범위인지 판별한다.
 ///
 /// 그림 표가 아니더라도 이 형상은 한컴이 empty host의 raw vpos에 직접 배치할 수
@@ -4472,6 +4511,7 @@ impl TypesetEngine {
             control_index: job.control_index,
             paragraph,
             table,
+            row_geometry_table: row_geometry_table(table),
             measured_table,
             styles,
         };
@@ -7034,6 +7074,14 @@ impl TypesetEngine {
                 }
             }
         }
+
+        // 한컴은 문서의 마지막에 남은 빈 문단 묶음 때문에 별도 빈 쪽을 만들지
+        // 않는다. 일반 흐름에서는 이 문단들이 앞 쪽의 tail로 흡수되지만, 큰 표의
+        // 마지막 fragment 뒤에서는 저장 vpos가 다음 쪽을 가리킬 수 있다. 그 경우
+        // rhwp가 100HU짜리 빈 line-seg만 담은 페이지를 확정하면 실제 출력보다 한
+        // 쪽이 늘어난다 (#3637 HWP 2020 oracle 31쪽 → 32쪽). 명시적인 page/section
+        // break나 가시 컨트롤은 보존하고, 정말 빈 문단만 있는 마지막 쪽만 버린다.
+        Self::discard_terminal_blank_only_page(&mut st.pages, paragraphs);
 
         // 페이지 번호 + 머리말/꼬리말 할당
         Self::finalize_pages(
@@ -19286,6 +19334,9 @@ impl TypesetEngine {
                 return None;
             }
         };
+        // HeightMeasurer가 빈 1×1 래퍼를 내부 표로 재귀 측정한다. 이 아래의
+        // 행-분할 데이터도 반드시 같은 표를 기준으로 만들어야 한다.
+        let row_geometry_table = row_geometry_table(table);
 
         let declared_table_height = (declared_object_total - host_spacing_total).max(0.0);
         let declared_table_does_not_fit_remaining =
@@ -19383,7 +19434,7 @@ impl TypesetEngine {
         // §4대로 rowspan 행은 MeasuredTable 행 높이를 권위로 쓴다(렌더러도 동일).
         let rowspan_touched: Vec<bool> = (0..row_count)
             .map(|r| {
-                table.cells.iter().any(|c| {
+                row_geometry_table.cells.iter().any(|c| {
                     c.row_span > 1
                         && (c.row as usize) <= r
                         && r < c.row as usize + c.row_span as usize
@@ -19400,12 +19451,12 @@ impl TypesetEngine {
         // 이 판정은 파일명/페이지가 아니라 표 셀 내용 높이와 저장 행 높이의 차이에 근거한다.
         let cut_row_h: Vec<f64> = (0..row_count)
             .map(|r| {
-                let has_single_row_cells = table
+                let has_single_row_cells = row_geometry_table
                     .cells
                     .iter()
                     .any(|c| c.row as usize == r && c.row_span == 1);
                 let row_cut_h = if has_single_row_cells {
-                    layout_engine.row_cut_content_height(table, r, &[], &[], styles)
+                    layout_engine.row_cut_content_height(row_geometry_table, r, &[], &[], styles)
                 } else {
                     0.0
                 };
@@ -19980,6 +20031,7 @@ impl TypesetEngine {
             control_index: ctrl_idx,
             paragraph: para,
             table,
+            row_geometry_table,
             measured_table: mt,
             styles,
         };
@@ -20168,6 +20220,7 @@ impl TypesetEngine {
         let ctrl_idx = source.control_index;
         let para = source.paragraph;
         let table = source.table;
+        let row_geometry_table = source.row_geometry_table;
         let mt = source.measured_table;
         let styles = source.styles;
         // [#2424 프로파일] fragment 루프 하위 단계 누적 — closure 1회 = fragment 판정 1회.
@@ -20226,7 +20279,7 @@ impl TypesetEngine {
                 && !start_cut.is_empty()
                 && can_intra_split
                 && layout_engine
-                    .advance_row_cut(table, cursor_row, &start_cut, f64::MAX, styles)
+                    .advance_row_cut(row_geometry_table, cursor_row, &start_cut, f64::MAX, styles)
                     .consumed_height
                     <= 0.0
             {
@@ -20365,7 +20418,7 @@ impl TypesetEngine {
             // 동일 leading_header_rows 를 사용하므로 desync(오버플로) 없음.
             let header_overhead =
                 if is_continuation && mt.repeat_header && mt.has_header_cells && row_count > 1 {
-                    let hr: Vec<usize> = table
+                    let hr: Vec<usize> = row_geometry_table
                         .leading_header_rows()
                         .into_iter()
                         .filter(|&r| r < cursor_row)
@@ -20461,7 +20514,7 @@ impl TypesetEngine {
                 st,
                 layout_engine,
                 mt,
-                table,
+                row_geometry_table,
                 styles,
                 cut_row_h,
                 whole_row_fit_h,
@@ -20528,7 +20581,7 @@ impl TypesetEngine {
             {
                 let mut anchor_offsets: Vec<f64> = Vec::new();
                 let mut anchor_unresolved = false;
-                for cell in &table.cells {
+                for cell in &row_geometry_table.cells {
                     for (cp_idx, cp) in cell.paragraphs.iter().enumerate() {
                         if !cp
                             .controls
@@ -20539,7 +20592,12 @@ impl TypesetEngine {
                         }
                         let row = (cell.row as usize).min(row_count.saturating_sub(1));
                         let row_prefix: f64 = (0..row).map(|x| cut_row_h[x] + cs).sum();
-                        match layout_engine.cell_para_unit_offset(cell, table, styles, cp_idx) {
+                        match layout_engine.cell_para_unit_offset(
+                            cell,
+                            row_geometry_table,
+                            styles,
+                            cp_idx,
+                        ) {
                             Some(off) => anchor_offsets.push(row_prefix + off),
                             None => anchor_unresolved = true,
                         }
@@ -20552,7 +20610,7 @@ impl TypesetEngine {
                 if all_beyond {
                     let pad = if mt.allows_row_break_split() {
                         layout_engine.row_remaining_visible_padding_height(
-                            table,
+                            row_geometry_table,
                             cursor_row,
                             &[],
                             styles,
@@ -20569,7 +20627,7 @@ impl TypesetEngine {
                             st,
                             layout_engine,
                             mt,
-                            table,
+                            row_geometry_table,
                             styles,
                             cut_row_h,
                             whole_row_fit_h,
@@ -20672,7 +20730,13 @@ impl TypesetEngine {
                     && partial_height < MIN_TOP_KEEP_PX
                     && (cursor_row..end_row).all(|r| {
                         let su: &[usize] = if r == cursor_row { &start_cut } else { &[] };
-                        !layout_engine.row_cut_range_has_visible_content(table, r, su, &[], styles)
+                        !layout_engine.row_cut_range_has_visible_content(
+                            row_geometry_table,
+                            r,
+                            su,
+                            &[],
+                            styles,
+                        )
                     });
                 if skip_terminal_empty_sliver {
                     continuation.finish(row_count, false);
@@ -21373,6 +21437,51 @@ impl TypesetEngine {
                     }
                 }
             }
+        }
+    }
+
+    /// 끝 페이지가 가시 내용이나 명시적인 쪽/구역 나누기 없이 빈 문단만 가진 경우
+    /// 제거한다.
+    ///
+    /// HWPX는 편집 중 남은 빈 문단에도 저장 vpos를 보존한다. 마지막 표 조각이 앞
+    /// 쪽을 거의 채우면 그 vpos가 빈 문단을 새 물리 쪽으로 보낼 수 있지만, 한컴
+    /// 출력은 이를 새 빈 쪽으로 인쇄하지 않는다. 여기서 앞 쪽의 실내용/의도적인
+    /// 페이지 나누기와 가시 control은 절대 제거하지 않는다.
+    fn discard_terminal_blank_only_page(pages: &mut Vec<PageContent>, paragraphs: &[Paragraph]) {
+        if pages.len() <= 1 {
+            return;
+        }
+        let Some(last_page) = pages.last() else {
+            return;
+        };
+        let mut has_item = false;
+        let blank_only = last_page.column_contents.iter().all(|column| {
+            if !column.wrap_around_paras.is_empty() {
+                return false;
+            }
+            column.items.iter().all(|item| {
+                let PageItem::FullParagraph { para_index } = item else {
+                    return false;
+                };
+                has_item = true;
+                let Some(para) = paragraphs.get(*para_index) else {
+                    return false;
+                };
+                let no_visible_text = para
+                    .text
+                    .replace(|ch: char| ch.is_control(), "")
+                    .trim()
+                    .is_empty();
+                no_visible_text
+                    && para.controls.is_empty()
+                    && !matches!(
+                        para.column_type,
+                        ColumnBreakType::Page | ColumnBreakType::Section
+                    )
+            })
+        });
+        if has_item && blank_only {
+            pages.pop();
         }
     }
 
