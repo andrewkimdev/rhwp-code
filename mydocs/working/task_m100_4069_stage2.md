@@ -51,7 +51,7 @@ orphan/sliver 완화 규칙으로 흡수하지 않는다.
 ### 자동 테스트
 
 - `cargo test --profile release-test --tests`: exit 0
-  - 라이브러리 3,290개: 3,282 passed, 8 ignored, 0 failed
+  - 라이브러리 3,293개: 3,285 passed, 8 ignored, 0 failed
   - 모든 통합 test binary 통과
 - 핵심 focused 회귀 34개 통과
   - #4069 4개: 17쪽, 2·3쪽 cursor, 10·11쪽 frame, 15·16쪽 child table
@@ -69,7 +69,7 @@ orphan/sliver 완화 규칙으로 흡수하지 않는다.
 프로젝트 표준 Docker Compose 절차로 `wasm-pack 0.15.0` 빌드를 새로 수행했다.
 
 - 최종 `pkg/rhwp_bg.wasm` SHA-256:
-  `1a16df5eba2f5c3e006b4f1ad1c98c86127ad1273d89c0a5151badc002da1e70`
+  `17e14d48222321195f8d42f6f1e998a883a720472fc67aab7d46d41c1b423549`
 - 생성된 `rhwp.js`와 `rhwp.d.ts`: 기존 바인딩과 차이 없음
 - Node 직접 로드: #4069 17쪽, #2430 39쪽
 - WASM HTML 물리 16쪽: 빈 TextLine `top=200.33px`, 첫 문장 `top=224.33px`,
@@ -95,6 +95,10 @@ render-tree 텍스트 계약, 자동 구조 후보, 한컴 PDF review를 함께 
 
 #2430의 추가 빈 Enter 판정 근거는 `output/4069/issue2430-p16-fixed/`에 일반·디버그
 PNG/SVG와 render tree, 수정 전·한컴 PDF 바로가기로 남겼다.
+
+PR 준비 시 최신 `upstream/devel` `d634e608b`를 병합한 head `eb699faa2`에서 위 전체
+Cargo·Native Skia·WASM 검증을 다시 실행했다. 메인 `pkg`의 새 WASM을 직접 로드해도
+#4069 17쪽, #2430 39쪽과 물리 16쪽 `24.94px` 간격이 유지됐다.
 
 ## 단계 판정
 
