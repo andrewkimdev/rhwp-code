@@ -130,7 +130,7 @@ class CiImpactWorkflowTests(unittest.TestCase):
         ):
             with self.subTest(step=step_name):
                 self.assertIn(
-                    "if: ${{ steps.detect.outputs.fast_pass != 'true' }}",
+                    "if: ${{ steps.finalize.outputs.fast_pass != 'true' }}",
                     self._step(step_name, self.preflight),
                 )
 
