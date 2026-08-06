@@ -2,14 +2,15 @@
 kind: report
 status: active
 canonical: mydocs/report/task_m100_4055_report.md
-last_verified: 2026-08-05
+last_verified: 2026-08-06
 ---
 
 # #4055 최종 보고 — B1 스파이크: 차트 데이터 편집 실현성
 
 - **Issue**: [#4055](https://github.com/edwardkim/rhwp/issues/4055)
 - **부모**: [#3683](https://github.com/edwardkim/rhwp/issues/3683) Track B 착수 순서 3번
-- **검증 환경**: 로컬(Rust 프로브) + **한컴 오피스 육안 판정**(작업지시자, 2026-08-05)
+- **검증 환경**: 로컬(Rust 프로브) + 한컴 오피스 육안 판정(작업지시자, 2026-08-05) +
+  **HWP 2020 MCP 독립 재현**(2026-08-06)
 
 ## 결론 한 줄
 
@@ -66,6 +67,25 @@ PDF 의 페이지 그리기 스트림을 해시로 갈랐다(메타데이터·�
 조건으로 끌고 올 뻔했다.
 
 변종 8개 전부 오류·복구 대화상자 없이 열렸다.
+
+### HWP 2020 MCP 독립 재현
+
+수동 판정에 사용한 같은 변종 8개와 대조군 2개를 HWP 2020 MCP로 PDF 변환했다. 전 건이
+`status=success`, `run_status=0`, `validation=ok`, 1페이지 A4를 반환했다. PDF 원본 10개는
+[`pdf/issue_4055_b1_spike/`](../../pdf/issue_4055_b1_spike/)에 보존했다.
+
+144 DPI 첫 페이지 렌더 SHA-256은 수동 판정과 같은 두 그룹이었다.
+
+```text
+반영   d2effc5d35f5b0ebc5906ed89cb3faf708da6d38d7041df902bd7e569c8c9811
+       X-A · X-C · X-D · H-A · H-C · H-D
+미반영 6ff074f9e35ef2c67eebee4c8d9cee56e53a7ba527b3403833a567f9fabf3c67
+       00-control ×2 · X-B · H-B
+```
+
+대표 이미지는
+[`pr_4061_hancom2020_control.png`](../pr/assets/pr_4061_hancom2020_control.png)와
+[`pr_4061_hancom2020_ooxml.png`](../pr/assets/pr_4061_hancom2020_ooxml.png)에 보존했다.
 
 ## 2. #3683 전제의 정정
 
@@ -184,11 +204,11 @@ HWPX 에서 ①만 고치면 한컴 화면은 맞지만 ②(중첩 사본)가 �
 
 | 경로 | 내용 |
 |---|---|
-| `tests/issue_4055_b1_chart_edit_probe.rs` | 프로브 8건. **프로덕션 코드 변경 0** |
+| `tests/issue_4055_b1_chart_edit_probe.rs` + `tests/support/issue_4055_chart_probe.rs` | 프로브 10건(활성 9, 생성기 1 ignore). **프로덕션 코드 변경 0** |
 | `output/issue_4055_b1_spike/` | 한컴 판정용 변종 10 + 판정표 (gitignored) |
 
 ```
-cargo test --profile release-test --test issue_4055_b1_chart_edit_probe  → 7 passed, 1 ignored
+cargo test --profile release-test --test issue_4055_b1_chart_edit_probe  → 9 passed, 1 ignored
 cargo clippy --profile release-test --all-targets -- -D warnings          → 통과
 cargo fmt (해당 파일)                                                      → 통과
 ```

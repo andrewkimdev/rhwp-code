@@ -2,21 +2,25 @@
 kind: working
 status: active
 canonical: mydocs/working/task_m100_4055_stage2.md
-last_verified: 2026-08-05
+last_verified: 2026-08-06
 ---
 
 # #4055 Stage 2·3 — 변이 생성기와 중첩 CFB 재포장 (S2·S3 재료, S4)
 
 - **Issue**: [#4055](https://github.com/edwardkim/rhwp/issues/4055)
-- **결론**: **S4 = 무손실.** 변종 9개 조립 완료 — **S2·S3 은 작업지시자 한컴 판정 대기.**
+- **결론**: **S4의 스트림 payload는 보존되지만, `mini_cfb`는 루트 CLSID를 잃는다.** 변종
+  10개 조립 완료. S2·S3은 이후 전수 한컴 판정과 HWP 2020 MCP 독립 재현으로 닫혔다.
 
 ## 1. S4 — 중첩 CFB 재포장은 무손실인가
 
-**답: 그렇다. 코퍼스 28종 전건.**
+**답: 스트림 바이트에는 그렇지만, CFB 전체에는 아니다. 코퍼스 28종 전건.**
 
 `nested_cfb_repack_preserves_every_stream` 이 코퍼스 전건에 대해
 스트림 전수 열거 → `mini_cfb::build_cfb` 재포장 → 재열거 후 **스트림 집합과 각 스트림
 바이트의 동일성**을 단언한다. 재포장본이 `parse_ole_container` 소비 경로도 그대로 탄다.
+그러나 이 검사는 CFB 디렉터리 메타데이터까지 보존한다는 뜻이 아니다. Stage 4에서 확인한 대로
+`mini_cfb::build_cfb`는 중첩 OLE Root Entry CLSID를 0으로 만들며, 한컴 호환 재포장에는
+원본 CLSID를 전달·보존하는 API가 선행돼야 한다.
 
 함께 확인한 것: **`parse_ole_container` 가 모르는 스트림은 코퍼스에 하나도 없다.**
 그 4종(`Contents`·`OOXMLChartContents`·`\x02OlePres000`·`\x01Ole10Native`)이 전부다.
@@ -38,7 +42,7 @@ Windows 에서 `cfb` crate 는 경로를 **구분자를 섞어** 돌려준다.
 `BinData\BIN0001.OLE` 라는 **이름에 역슬래시가 든 루트 스트림 하나**로 뭉개진다.
 조용히 깨지는 종류라, 재포장을 프로덕션에 들일 때 반드시 짚어야 한다.
 
-## 2. Stage 2 — 변종 9개
+## 2. Stage 2 — 변종 10개
 
 기준 샘플 `samples/chart/세로막대형/묶은세로막대형` 의 **첫 계열 첫 값**을 `4.3` → `91.7`
 로 바꿨다. 원본 최대값이 `5` 라 반영되면 첫 막대가 차트를 뚫고 솟는다 — 확대해서 숫자를
@@ -49,9 +53,10 @@ Windows 에서 `cfb` crate 는 경로를 **구분자를 섞어** 돌려준다.
 | `00-control-원본.hwpx` | 4.3 | 4.3 | 4.3 | 유지 | 40,484 B |
 | `00-control-원본.hwp` | — | 4.3 | 4.3 | 유지 | 36,864 B |
 | `X-A-zip파트만.hwpx` | **91.7** | 4.3 | 4.3 | 유지 | 40,385 B |
-| `X-B-레거시만.hwpx` | 4.3 | 4.3 | **91.7** | 유지 | 37,585 B |
-| `X-C-셋다.hwpx` | **91.7** | **91.7** | **91.7** | 유지 | 37,487 B |
-| `X-D-셋다+EMF제거.hwpx` | **91.7** | **91.7** | **91.7** | **제거** | 25,347 B |
+| `X-B-레거시만.hwpx` | 4.3 | 4.3 | **91.7** | 유지 | 37,605 B |
+| `X-C-셋다.hwpx` | **91.7** | **91.7** | **91.7** | 유지 | 37,506 B |
+| `X-D-셋다+EMF제거.hwpx` | **91.7** | **91.7** | **91.7** | **제거** | 25,369 B |
+| `H-A-중첩OOXML만.hwp` | — | **91.7** | 4.3 | 유지 | 33,792 B |
 | `H-B-레거시만.hwp` | — | 4.3 | **91.7** | 유지 | 33,792 B |
 | `H-C-둘다.hwp` | — | **91.7** | **91.7** | 유지 | 33,792 B |
 | `H-D-둘다+EMF제거.hwp` | — | **91.7** | **91.7** | **제거** | 21,504 B |
@@ -90,13 +95,13 @@ Windows 에서 `cfb` crate 는 경로를 **구분자를 섞어** 돌려준다.
 
 ## 4. 다음
 
-`output/issue_4055_b1_spike/` 의 9개 파일을 한컴에서 열어 **첫 막대가 솟은 변종**을
-확인하면 S2·S3 이 닫힌다. `X-A` 에서 이미 솟으면 나머지는 열지 않아도 된다.
+`output/issue_4055_b1_spike/` 의 변종 8개와 대조군 2개는 전수 판정했다. 세부 결과와 HWP
+2020 MCP 독립 재현은 [Stage 4](task_m100_4055_stage4.md)와 최종 보고서에 기록했다.
 
 ## 5. 검증
 
 ```
-cargo test --profile release-test --test issue_4055_b1_chart_edit_probe   → 6 passed
+cargo test --profile release-test --test issue_4055_b1_chart_edit_probe   → 9 passed, 1 ignored
 cargo clippy --profile release-test --all-targets -- -D warnings          → 통과
 cargo fmt (해당 파일)                                                      → 통과
 ```
