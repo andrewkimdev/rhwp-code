@@ -75,3 +75,31 @@ test('접기/펼치기 toggle click 은 개요 항목으로 전파되지 않는�
     'toggle click 이 전파를 막지 않으면 접을 때 이동까지 함께 일어난다',
   );
 });
+
+test('토글 뒤 초점을 같은 항목의 버튼으로 되돌린다', () => {
+  // buildOutline() 이 패널을 다시 그리면서 초점 버튼이 사라진다. 되돌리지 않으면
+  // activeElement 가 body 로 떨어져 두 번째 Enter/Space 부터 죽는다 (headless 재현).
+  const handler = withoutLineComments(
+    sliceBlock(renderOutlineTree, 'toggle.addEventListener("click"'),
+  );
+
+  const rebuilt = handler.indexOf('buildOutline()');
+  const refocused = handler.indexOf('focusOutlineToggle(');
+  assert.notEqual(rebuilt, -1, 'toggle click 이 buildOutline() 을 부르지 않는다');
+  assert.notEqual(refocused, -1, '재렌더 뒤 초점을 되돌리는 호출이 없다');
+  assert.ok(rebuilt < refocused, '초점 복원은 재렌더 뒤에 일어나야 한다');
+
+  assert.match(
+    renderOutlineTree,
+    /item\.dataset\.outlineKey\s*=\s*key;/,
+    '초점 복원이 항목을 다시 찾을 수 있도록 data-outline-key 가 필요하다',
+  );
+
+  const focusHelper = sliceBlock(viewerSource, 'function focusOutlineToggle');
+  assert.match(
+    focusHelper,
+    /data-outline-key=/,
+    'focusOutlineToggle 이 data-outline-key 로 같은 항목을 찾아야 한다',
+  );
+  assert.match(focusHelper, /\.focus\(\)/, 'focusOutlineToggle 이 초점을 주지 않는다');
+});

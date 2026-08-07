@@ -1061,6 +1061,13 @@ function buildOutlineTree(entries: OutlineNavigationItem[]): OutlineTreeNode[] {
   return roots;
 }
 
+/** 재렌더로 사라진 초점을 같은 개요 항목의 접기/펼치기 버튼으로 되돌린다. */
+function focusOutlineToggle(key: string): void {
+  const panel = navPanels.get("outline");
+  const selector = `.nav-outline-item[data-outline-key="${CSS.escape(key)}"] .nav-outline-toggle`;
+  panel?.querySelector<HTMLElement>(selector)?.focus();
+}
+
 function renderOutlineTree(panel: HTMLElement, nodes: OutlineTreeNode[]): void {
   for (const node of nodes) {
     const { entry } = node;
@@ -1071,6 +1078,7 @@ function renderOutlineTree(panel: HTMLElement, nodes: OutlineTreeNode[]): void {
     item.className = "nav-item nav-outline-item";
     item.style.paddingLeft = `${(Math.max(1, entry.level) - 1) * 12 + 2}px`;
     item.tabIndex = 0;
+    item.dataset.outlineKey = key;
     const label = `${entry.number} ${entry.title}`.trim() || "(제목 없음)";
     item.title = label;
 
@@ -1084,9 +1092,14 @@ function renderOutlineTree(panel: HTMLElement, nodes: OutlineTreeNode[]): void {
       toggle.setAttribute("aria-expanded", String(expanded));
       toggle.addEventListener("click", (event) => {
         event.stopPropagation();
+        // buildOutline() 이 패널을 통째로 다시 그려 이 버튼이 DOM 에서 사라진다.
+        // 초점을 되돌리지 않으면 activeElement 가 body 로 떨어져 두 번째 Enter/Space
+        // 부터 아무 데도 가지 않는다 — 키보드만으로는 한 번밖에 접지 못한다.
+        const refocus = document.activeElement === toggle;
         collapsedOutlineKeys[expanded ? "add" : "delete"](key);
         saveViewerState();
         buildOutline();
+        if (refocus) focusOutlineToggle(key);
       });
       item.appendChild(toggle);
     } else {
