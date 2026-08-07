@@ -16,7 +16,14 @@ param(
   [Parameter(Mandatory = $true)][string]$HeartbeatPath,
   [Parameter(Mandatory = $true)][int]$ExpectMajor,
   [Parameter(Mandatory = $true)][string]$Root,
-  [int]$RecycleEvery = 0
+  [int]$RecycleEvery = 0,
+  # Throwaway opens before the measured list, to absorb the blocking first Open() described
+  # in Start-Warmup below. 0 disables.
+  [int]$WarmupDocs = 5,
+  # Hide the Hangul document window through COM. Off by default: Hangul 2018 (major 10)
+  # DEADLOCKS in Open() when the window is hidden, even through the COM route. Hiding is
+  # cosmetic and does not affect the fingerprint (verified 2022 hidden vs visible, see guide).
+  [switch]$HideWindow
 )
 
 $ErrorActionPreference = 'Stop'
@@ -51,8 +58,12 @@ function New-HwpInstance {
     $null = $h.SetMessageBoxMode(0x00020000)
     # Only effective when Hancom's FilePathCheckerModule is registered; harmless otherwise.
     try { $null = $h.RegisterModule("FilePathCheckDLL", "FilePathCheckerModule") } catch { }
-    # Hide through COM only. Win32 ShowWindow(SW_HIDE) on the Hangul frame deadlocks automation.
-    try { $h.XHwpWindows.Item(0).Visible = $false } catch { }
+    # Window hiding is OPT-IN. Win32 ShowWindow(SW_HIDE) deadlocks automation on every version,
+    # and on Hangul 2018 even the COM route below deadlocks the first Open() -- the call never
+    # returns and the pass stalls on document 1. Leaving the window visible costs nothing.
+    if ($HideWindow) {
+      try { $h.XHwpWindows.Item(0).Visible = $false } catch { }
+    }
     $newPid = 0
     for ($i = 0; $i -lt 100; $i++) {
       $after = @(Get-Process Hwp -ErrorAction SilentlyContinue | ForEach-Object { $_.Id })
@@ -103,6 +114,37 @@ try {
 }
 Write-Heartbeat "ready ver=$($script:hwp.Version)"
 
+function Start-Warmup {
+  # The first Open() on a Hangul instance that follows a force-killed one can block for minutes
+  # (reproduced on 2018 and 2020, section 8 of the guide). The supervisor stall-kills it, the
+  # replacement instance blocks the same way, and the pass burns its opening documents on ERR --
+  # which resume then treats as done, losing them for good. So spend the block on a throwaway
+  # open instead, retrying on a fresh instance until one succeeds.
+  #
+  # The warm-up target is the list's own first document; opening it twice costs nothing. Extra
+  # documents processed before the measured ones do not change fingerprints -- hermetic
+  # (one instance per document) and single-instance measurement agreed 200/200, report section 3 --
+  # and every version's pass warms up identically anyway.
+  if ($WarmupDocs -le 0 -or $files.Count -eq 0) { return }
+  $warmFile = $files[0]
+  for ($w = 1; $w -le $WarmupDocs; $w++) {
+    Write-Heartbeat "warmup $w/$WarmupDocs"
+    try {
+      $null = $script:hwp.Open($warmFile, "", "forceopen:true")
+      try { $null = $script:hwp.Clear(1) } catch { }
+      Write-Heartbeat "warmup ok after $w"
+      return
+    } catch {
+      try { $null = $script:hwp.Clear(1) } catch {
+        Close-HwpInstance
+        try { New-HwpInstance } catch { }
+      }
+    }
+  }
+  Write-Heartbeat "warmup exhausted after $WarmupDocs"
+}
+Start-Warmup
+
 $n = 0
 foreach ($f in $files) {
   $rel = $f
@@ -111,38 +153,54 @@ foreach ($f in $files) {
   }
   if ($done.Contains($rel)) { continue }
 
-  Write-Heartbeat $rel
+  # Two attempts. When the supervisor stall-kills the instance the document that was open at
+  # the time fails, and without a retry it is recorded ERR -- which resume then treats as done,
+  # so the document is lost for good. That matters because the very first Open() on an instance
+  # that follows a force-killed one blocks long enough to be stall-killed itself (reproduced on
+  # Hangul 2018 and 2020, section 8 of the guide): every pass would silently drop its first
+  # document. Re-measuring on the fresh instance is equivalent -- hermetic and single-instance
+  # measurement agreed 200/200 (report section 3).
   $status = 'OK'; $pages = -1; $paras = -1; $fp = ''; $bc = 0
-  try {
-    $null = $script:hwp.Open($f, "", "forceopen:true")
-    $pages = [int]$script:hwp.PageCount
-    $null = $script:hwp.HAction.Run("MoveDocEnd")
-    # GetPos() uses [out] params and is not callable from PowerShell; GetPosBySet() is.
-    $endSet = $script:hwp.GetPosBySet()
-    $maxPara = [int]$endSet.Item("Para")
-    $info = $script:hwp.XHwpDocuments.Item(0).XHwpDocumentInfo
-    $sb = New-Object System.Text.StringBuilder
-    $prev = -1
-    for ($p = 0; $p -le $maxPara; $p++) {
-      $null = $script:hwp.SetPos(0, $p, 0)
-      $pg = [int]$info.CurrentPage
-      if ($pg -ne $prev) {
-        if ($bc -gt 0) { $null = $sb.Append(',') }
-        $null = $sb.Append($pg).Append('@').Append($p)
-        $prev = $pg
-        $bc++
+  for ($attempt = 1; $attempt -le 2; $attempt++) {
+    # Inside the loop: a retry runs against a new PID and must reset the supervisor's stall timer.
+    Write-Heartbeat $rel
+    $status = 'OK'; $pages = -1; $paras = -1; $fp = ''; $bc = 0
+    try {
+      $null = $script:hwp.Open($f, "", "forceopen:true")
+      $pages = [int]$script:hwp.PageCount
+      $null = $script:hwp.HAction.Run("MoveDocEnd")
+      # GetPos() uses [out] params and is not callable from PowerShell; GetPosBySet() is.
+      $endSet = $script:hwp.GetPosBySet()
+      $maxPara = [int]$endSet.Item("Para")
+      $info = $script:hwp.XHwpDocuments.Item(0).XHwpDocumentInfo
+      $sb = New-Object System.Text.StringBuilder
+      $prev = -1
+      for ($p = 0; $p -le $maxPara; $p++) {
+        $null = $script:hwp.SetPos(0, $p, 0)
+        $pg = [int]$info.CurrentPage
+        if ($pg -ne $prev) {
+          if ($bc -gt 0) { $null = $sb.Append(',') }
+          $null = $sb.Append($pg).Append('@').Append($p)
+          $prev = $pg
+          $bc++
+        }
       }
-    }
-    $paras = $maxPara + 1
-    $fp = $sb.ToString()
-    try { $null = $script:hwp.Clear(1) } catch { }
-  } catch {
-    $status = 'ERR'
-    $fp = ($_.Exception.Message -replace "[`t`r`n]", ' ')
-    # A dead or hung instance (supervisor kill, COM fault) must be replaced before continuing.
-    try { $null = $script:hwp.Clear(1) } catch {
-      Close-HwpInstance
-      try { New-HwpInstance } catch { }
+      $paras = $maxPara + 1
+      $fp = $sb.ToString()
+      try { $null = $script:hwp.Clear(1) } catch { }
+      break
+    } catch {
+      $status = 'ERR'
+      $fp = ($_.Exception.Message -replace "[`t`r`n]", ' ')
+      # A dead or hung instance (supervisor kill, COM fault) must be replaced before continuing.
+      $replaced = $false
+      try { $null = $script:hwp.Clear(1) } catch {
+        Close-HwpInstance
+        try { New-HwpInstance; $replaced = $true } catch { }
+      }
+      # Only retry when the instance itself died and was replaced. A failure the live instance
+      # shrugged off is document-specific (broken file, unsupported feature) and would repeat.
+      if (-not $replaced) { break }
     }
   }
   $writer.WriteLine("$rel`t$status`t$pages`t$paras`t$bc`t$fp")

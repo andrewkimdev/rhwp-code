@@ -25,12 +25,47 @@ if ($found.Count -eq 0) { Write-Output '  (none found under Hnc)' }
 $found | Format-Table -AutoSize
 
 Write-Output '=== COM registration ==='
-$hklm = (Get-ItemProperty "HKLM:\SOFTWARE\Classes\WOW6432Node\CLSID\$CLSID\LocalServer32" -ErrorAction SilentlyContinue).'(default)'
-Write-Output "  HKLM (machine default): $hklm"
-$hkcu = (Get-ItemProperty "HKCU:\Software\Classes\Wow6432Node\CLSID\$CLSID\LocalServer32" -ErrorAction SilentlyContinue).'(default)'
-if ($hkcu) { Write-Output "  HKCU (override, wins): $hkcu" } else { Write-Output '  HKCU (override): none -- machine default applies' }
+# Both registry views matter. A 32-bit caller reads Wow6432Node, a 64-bit caller reads the
+# plain CLSID path, and the two can hold DIFFERENT values -- reading only one view reports
+# "no override" while an override is in fact in effect and picking the version.
+function Get-LocalServer32([string]$hive) {
+  $r = [ordered]@{}
+  foreach ($view in @('CLSID', 'Wow6432Node\CLSID')) {
+    $r[$view] = (Get-ItemProperty "${hive}:\Software\Classes\$view\$CLSID\LocalServer32" -ErrorAction SilentlyContinue).'(default)'
+  }
+  return $r
+}
+$hklm = Get-LocalServer32 'HKLM'
+$hkcu = Get-LocalServer32 'HKCU'
+foreach ($view in $hklm.Keys) {
+  $v = $hklm[$view]
+  Write-Output ("  HKLM {0,-18} {1}" -f $view, $(if ($v) { $v } else { '(not set)' }))
+}
+foreach ($view in $hkcu.Keys) {
+  $v = $hkcu[$view]
+  Write-Output ("  HKCU {0,-18} {1}" -f $view, $(if ($v) { $v } else { '(not set)' }))
+}
+$overrides = @($hkcu.Values | Where-Object { $_ })
+if ($overrides.Count -eq 0) {
+  Write-Output '  -> no HKCU override; the machine default applies'
+} else {
+  Write-Output '  -> HKCU override is in effect and WINS over the machine default'
+  if (@($overrides | Sort-Object -Unique).Count -gt 1) {
+    Write-Warning 'The two HKCU views disagree. Run restore_com_default.ps1, or start a pass (it sets both).'
+  }
+}
 
 Write-Output '=== what COM actually hands out right now ==='
+# The probe below starts an instance and then kills every Hwp.exe. Doing that while a pass is
+# running would both add a CONCURRENT instance (the one thing that corrupts the measurement)
+# and terminate the worker's instance. If Hangul is already up, report and skip.
+$live = @(Get-Process Hwp -ErrorAction SilentlyContinue)
+if ($live.Count -gt 0) {
+  Write-Output "  skipped: $($live.Count) Hwp.exe already running (a pass may be in progress)."
+  Write-Output '  probing would run a second instance and then kill them all. Close Hangul and rerun.'
+  foreach ($p in $live) { Write-Output ("  running exe = " + $p.Path) }
+  return
+}
 try {
   $h = New-Object -ComObject HWPFrame.HwpObject
   Write-Output ("  hwp.Version = " + $h.Version)

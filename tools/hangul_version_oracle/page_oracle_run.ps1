@@ -23,7 +23,14 @@ param(
   [Parameter(Mandatory = $true)][string]$Root,
   [int]$Workers = 1,
   [int]$StallSeconds = 300,
-  [int]$RecycleEvery = 0
+  [int]$RecycleEvery = 0,
+  # Throwaway opens each worker performs before the measured list. Absorbs the first-Open()
+  # block that follows a force-killed instance; without it a pass loses its opening documents
+  # to ERR and resume never retries them. 0 disables.
+  [int]$WarmupDocs = 5,
+  # Hide the Hangul document window through COM. Off by default -- Hangul 2018 deadlocks in
+  # Open() when hidden. Only pass this on 2022+ and only if the visible window is in the way.
+  [switch]$HideWindow
 )
 
 $ErrorActionPreference = 'Stop'
@@ -137,15 +144,31 @@ function Start-Worker($i) {
   $wargs = @(
     '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', (Join-Path $here 'page_oracle_worker.ps1'),
     '-ListPath', $s.List, '-OutPath', $s.Out, '-HeartbeatPath', $s.HB,
-    '-ExpectMajor', $expectMajor, '-Root', $Root, '-RecycleEvery', $RecycleEvery
+    '-ExpectMajor', $expectMajor, '-Root', $Root, '-RecycleEvery', $RecycleEvery,
+    '-WarmupDocs', $WarmupDocs
   )
+  if ($HideWindow) { $wargs += '-HideWindow' }
   $s.Proc = Start-Process -FilePath 'powershell.exe' -ArgumentList $wargs -PassThru -WindowStyle Hidden
   Write-Output "[sup] worker $i started (pid $($s.Proc.Id))"
 }
 
 function Get-DoneCount($path) {
   if (-not (Test-Path -LiteralPath $path)) { return 0 }
-  try { return @([System.IO.File]::ReadAllLines($path, [System.Text.Encoding]::UTF8)).Count } catch { return 0 }
+  # The worker holds this file open for append. A plain read throws IOException, and the catch
+  # below would then report 0 forever: the progress line stays at 0/N for the whole pass, and a
+  # worker that finished normally looks unfinished and gets restarted until the restart cap.
+  # Opening with FileShare.ReadWrite lets the supervisor read alongside the writer.
+  try {
+    $fs = New-Object System.IO.FileStream($path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
+    try {
+      $sr = New-Object System.IO.StreamReader($fs, (New-Object System.Text.UTF8Encoding($false)))
+      try {
+        $n = 0
+        while ($null -ne $sr.ReadLine()) { $n++ }
+        return $n
+      } finally { $sr.Dispose() }
+    } finally { $fs.Dispose() }
+  } catch { return 0 }
 }
 
 for ($i = 0; $i -lt $Workers; $i++) { Start-Worker $i }
