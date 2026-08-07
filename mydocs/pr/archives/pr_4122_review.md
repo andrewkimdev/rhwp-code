@@ -2,7 +2,7 @@
 kind: pr_review
 status: local-validation-passed
 canonical: mydocs/manual/pr_review_workflow.md
-last_verified: 2026-08-06
+last_verified: 2026-08-07
 ---
 
 # PR #4122 검토 — #4069 중첩 RowBreak 저장 프레임 조판 복원
@@ -15,8 +15,8 @@ last_verified: 2026-08-06
 
 최신 `upstream/devel`을 병합한 뒤 전체 release-test, Native Skia, clippy, doc test, 표준 Docker
 WASM 빌드와 직접 로드를 통과했다. #4069 17쪽 전체 시각 스윕에서 누락·자동 flagged page가 없고,
-작업지시자가 rhwp-studio에서 시각 판정 통과를 확인했다. 최신 GitHub Actions와 메인터너 승인 전에는
-ready/merge하지 않는다.
+작업지시자가 rhwp-studio에서 이 PR의 pagination 수정 범위를 시각 판정 통과로 확인했다. 최신 GitHub
+Actions와 메인터너 승인 전에는 ready/merge하지 않는다.
 
 ## 검토 경로
 
@@ -75,7 +75,7 @@ validated code head: eb699faa2bd4b4d2427ed15b8eb3b17ea36737eb
 | 역할 | 경로 | SHA-256 |
 | --- | --- | --- |
 | #4069 입력 | `samples/basic/issue2007_nested_cell_pagination_42065.hwp` | `bebd4ce3691246b0fb3ae332e1d40bc51d9035cddb9fc3d378466b6a8a2b5626` |
-| #4069 한컴 2020 PDF | `pdf/basic/issue2007_nested_cell_pagination_42065-2020.pdf` | `1f9d2f5705a64899c2b081832d2e6548dfe7bc3b9d1fb1b92f41221d39c8b3e7` |
+| #4069 한컴 2020 PDF | `pdf/basic/issue2007_nested_cell_pagination_42065-2020.pdf` | `9b0390f856bb9ad43337679babf6677209b7c7ab678b6616fcc6d6d5551ff1c4` |
 | #2430 입력 | `samples/task2430/1382000_domestic_violence_survey.hwp` | `a3c6a227d26c41c7de9aa258f470001a629da90fa606cdddcbd385add43b7381` |
 | #2430 한컴 2020 PDF | `pdf/issue2430/1382000_domestic_violence_survey-2020-print.pdf` | `5f92d3282c0772cd8fbe72e0fadfa49e2cde8ee7d788b6fbafe51bbd4e59e024` |
 
@@ -104,7 +104,13 @@ validated code head: eb699faa2bd4b4d2427ed15b8eb3b17ea36737eb
   일치한다.
 - #2430 물리 16쪽의 셀 상단 첫 문장 간격은 0.94px에서 24.94px로 회복됐다. 한컴 PDF 측 측정값은
   약 27px이다.
-- 작업지시자가 rhwp-studio에서 최종 시각 판정 통과를 확인했다.
+- 작업지시자가 rhwp-studio에서 이 PR의 pagination 수정 범위를 최종 시각 판정 통과로 확인했다.
+
+2026-08-07 정답지는 2쪽의 `U+F02B1`이 사각형 안 숫자 1로 정상 출력된 한컴 PDF로 교체했다.
+교체 전 PDF의 같은 표식에도 두부 글자 오류가 있어 Canvas2D의 기존 결함을 가렸지만, 이 결함은
+#4122 변경에서 발생한 회귀가 아니다. 원문 PUA를 보존하는 IR과 CanvasKit 합성 경로는 정상이고,
+기본 Canvas2D parity 보완은 #536 후속 stacked PR
+[#4139](https://github.com/edwardkim/rhwp/pull/4139)로 분리한다.
 
 대표 증거:
 

@@ -5,7 +5,8 @@
 - 작업 브랜치: `local/task4069-redesign`
 - Stage 1 중간 커밋: `7c9ce05e6`
 - 기준 문서: `samples/basic/issue2007_nested_cell_pagination_42065.hwp`
-- 한컴 정답지: `pdf/basic/issue2007_nested_cell_pagination_42065-2020.pdf` (17쪽)
+- 한컴 정답지: `pdf/basic/issue2007_nested_cell_pagination_42065-2020.pdf` (17쪽,
+  SHA-256 `9b0390f856bb9ad43337679babf6677209b7c7ab678b6616fcc6d6d5551ff1c4`)
 
 ## 최종 결과
 
@@ -16,6 +17,11 @@ Stage 1의 2·3쪽 재귀 cursor를 유지하면서 두 종류의 저장 프레�
 - 15쪽: `조달청` 제목 다음의 짧은 1×1 자식 표를 원자로 미루지 않고 현재 저장 프레임의
   남은 공간에서 시작한다. 표의 말미까지 15쪽에 이어지고 `<이해관계자 협의>`는 16쪽에서 시작한다.
 - 전체: 한컴 정답지와 같은 17쪽이며, 2·3·10·11·15·16쪽의 누락·중복·겹침 계약을 모두 만족한다.
+
+2026-08-07에 작업지시자가 2쪽의 `U+F02B1` 표식이 정상 출력된 한컴 PDF로 정답지를
+교체했다. 이 교체는 위 pagination 판정을 바꾸지 않는다. 다만 기본 Canvas2D가 이 원문 PUA를
+두부 글자로 그리던 별도 backend parity 결함이 드러났으며, #536 후속 stacked PR
+[#4139](https://github.com/edwardkim/rhwp/pull/4139)에서 분리해 수정한다.
 
 ## 구현 계약
 

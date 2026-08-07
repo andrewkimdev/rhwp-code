@@ -5,7 +5,8 @@
 - 작업 브랜치: `local/task4069-redesign`
 - 중간 커밋: `7c9ce05e6` (`fix(renderer): #4069 중첩 RowBreak cursor를 재귀 투영`)
 - 기준 문서: `samples/basic/issue2007_nested_cell_pagination_42065.hwp`
-- 한컴 정답지: `pdf/basic/issue2007_nested_cell_pagination_42065-2020.pdf` (17쪽)
+- 한컴 정답지: `pdf/basic/issue2007_nested_cell_pagination_42065-2020.pdf` (17쪽,
+  SHA-256 `9b0390f856bb9ad43337679babf6677209b7c7ab678b6616fcc6d6d5551ff1c4`)
 
 ## 단계 결과
 
