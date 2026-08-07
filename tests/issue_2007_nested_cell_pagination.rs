@@ -197,6 +197,30 @@ fn contains_painted_text(node: &RenderNode, needle: &str, clip: Option<ClipRect>
         .any(|child| contains_painted_text(child, needle, clip))
 }
 
+/// Substring이 같은 페이지의 다른 본문에 나타나도 제목 소유권으로 오인하지 않도록,
+/// trim한 TextRun 전체가 정확히 일치하는 가시 text만 센다.
+fn contains_exact_painted_text(node: &RenderNode, expected: &str, clip: Option<ClipRect>) -> bool {
+    if !node.visible {
+        return false;
+    }
+    let clip = match &node.node_type {
+        RenderNodeType::TableCell(cell) if cell.clip => {
+            clip.and_then(|active| active.intersect(ClipRect::from_node(node)))
+        }
+        _ => clip,
+    };
+    if matches!(
+        node.node_type,
+        RenderNodeType::TextRun(ref run) if run.text.trim() == expected
+    ) && clip.is_some_and(|active| active.intersects_node(node))
+    {
+        return true;
+    }
+    node.children
+        .iter()
+        .any(|child| contains_exact_painted_text(child, expected, clip))
+}
+
 /// Return the painted right extent of a nested table's own outer vertical
 /// border.  `LineNode` stores its centerline, so account for half its stroke.
 fn nested_table_right_border_paint_extent(table: &RenderNode) -> Option<f64> {
@@ -750,16 +774,24 @@ fn issue_2007_single_cell_continuation_does_not_repaint_boundary_fragments() {
     let doc = rhwp::wasm_api::HwpDocument::from_bytes(&bytes)
         .expect("parse issue2007_nested_cell_pagination_42065.hwp");
 
-    // p12는 직전 1×1 continuation의 마지막 법률 문장이 아니라 다음 표의
-    // "중앙선거관리위원회"에서 시작해야 한다. 첫 visible unit을 content origin에
-    // 반영하지 않으면 그 직전 줄을 재도색하면서 이후 모든 heading이 아래로 drift한다.
+    // p11은 명시적 쪽 나누기 앞에서 끝나고 p12가 정확한 다음 제목
+    // "중앙선거관리위원회"로 시작해야 한다. substring 검사는 p12 뒤쪽의
+    // "중앙선거관리위원회규칙"에도 매치하므로 exact TextRun owner를 고정한다.
+    let p11 = doc
+        .build_page_render_tree(10)
+        .expect("issue2007 p11 render tree");
+    let p11_clip = Some(ClipRect::from_node(&p11.root));
+    assert!(
+        !contains_exact_painted_text(&p11.root, "중앙선거관리위원회", p11_clip),
+        "p11 must not paint the p12-owned heading after an explicit page break"
+    );
     let p12 = doc
         .build_page_render_tree(11)
         .expect("issue2007 p12 render tree");
     let p12_clip = Some(ClipRect::from_node(&p12.root));
     assert!(
-        contains_painted_text(&p12.root, "중앙선거관리위원회", p12_clip),
-        "p12 must contain its first reference heading"
+        contains_exact_painted_text(&p12.root, "중앙선거관리위원회", p12_clip),
+        "p12 must contain its exact first reference heading"
     );
     assert!(
         !contains_painted_text(
