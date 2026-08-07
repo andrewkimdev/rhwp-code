@@ -46,6 +46,12 @@ $writer.AutoFlush = $true
 $script:hwp = $null
 $script:hwpPid = 0
 
+function Get-HwpMajor([string]$version) {
+  $match = [System.Text.RegularExpressions.Regex]::Match($version, '^\s*(\d+)')
+  if (-not $match.Success) { throw "cannot parse Hangul version: $version" }
+  return [int]$match.Groups[1].Value
+}
+
 function New-HwpInstance {
   # Serialize COM creation so the freshly spawned Hwp.exe PID is unambiguous even if a
   # second worker is running (the supervisor needs the PID to kill a stalled instance).
@@ -74,7 +80,7 @@ function New-HwpInstance {
     # Re-verify on every instance: a recycle or crash-recovery must not silently pick up
     # another Hangul version if the CLSID override changed mid-run.
     $v = $h.Version
-    if ([int](($v -split ',')[0].Trim()) -ne $ExpectMajor) {
+    if ((Get-HwpMajor $v) -ne $ExpectMajor) {
       throw "version mismatch: expected major $ExpectMajor, got $v"
     }
     $script:hwp = $h
