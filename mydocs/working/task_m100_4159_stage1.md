@@ -32,3 +32,59 @@
 
 실제 fixture 구조 래칫을 red로 고정한 뒤 최소 구현, SVG·Canvas2D 시각 증적, 기존 #2007
 페이지네이션 회귀를 순서대로 수행한다.
+
+## 4. red → green 구현
+
+실제 물리 3쪽 구조 래칫은 수정 전 다음 값으로 실패했다.
+
+```text
+line_bottom=827.273, clip_bottom=824.880
+```
+
+`table_partial.rs`에 종료 분할 셀 clip 포섭 헬퍼를 추가했다. `cell_cut_window`의 끝이
+`usize::MAX`인 마지막 유닛 조각이고 `clip=true`인 셀만 대상으로, 실제 재귀 `Table` 자손의
+최하단까지 셀 bbox를 확장한다. 비종료 조각과 중첩 표가 없는 셀은 그대로 둔다. 셀 배경과
+외부 edge grid의 좌표는 바꾸지 않는다.
+
+합성 unit은 terminal 셀이 80px에서 재귀 stroke 하단인 86px까지 확장되고, 같은 노드에
+nonterminal을 지정하면 80px를 유지하는 계약을 고정한다.
+
+## 5. 실제 fixture 래칫
+
+- 물리 2쪽에 제2호와 폭 500px 이상의 종료 bottom 선이 미리 나오지 않는다.
+- 물리 3쪽 종료 bottom `Line`의 stroke 하단이 모든 `clip=true` 조상 TableCell 안에 있다.
+- SVG의 outer `cell-clip` 하단과 bottom stroke 하단이 모두 `827.273px`다.
+- 기존 #4069 계약인 17쪽, 2·3쪽 cursor, 10·11쪽 저장 프레임, 15·16쪽 자식 표 이음을 유지한다.
+
+## 6. 집중 검증 결과
+
+| 검증 | 결과 |
+| --- | --- |
+| 수정 전 실제 구조 래칫 | RED, `827.273 > 824.880` 재현 |
+| `cargo test --lib issue_4159_` | PASS, 2 passed |
+| release-test + Native Skia `--lib issue_4159_` | PASS, 2 passed |
+| release-test `issue_2007_nested_cell_pagination` | PASS, 6 passed |
+| focused Clippy, `cargo fmt --check`, `git diff --check` | PASS |
+| `rhwp-studio: npx tsc --noEmit` | PASS |
+| 표준 release WASM build | PASS, compile·wasm-bindgen·wasm-opt·`pkg` packaging 완료 |
+| `npm run e2e:issue-4159` | PASS, 17쪽 + 종료선 픽셀 1,196/1,203 |
+| `npm run e2e:issue-536` | PASS, 인접 물리 2쪽 6개 계약 |
+| `npm run e2e:manifest-check` | PASS, tracked 86개 / manifest 86행 |
+
+## 7. 시각 증적
+
+`output/4159/`:
+
+- `hancom-p003.png` — 한컴 2020 기준 물리 3쪽
+- `issue2007_p003_bottom_border_canvas2d.png` — 수정 후 새 WASM Canvas2D 물리 3쪽
+- `issue2007_p003_bottom_border_crop.png` — 종료 수평선 픽셀 crop
+- `render_tree_003_fixed.json` — 브라우저 PageLayerTree
+- `render-tree-fixed/render_tree_003.json` — native PageRenderTree
+- `svg-fixed/issue2007_nested_cell_pagination_42065_003.svg` — 수정 후 SVG
+
+한컴 기준과 수정 후 Canvas2D 모두 좌·중·우 세로선과 표 전체 bottom 선이 닫혀 있다.
+
+## 8. 남은 게이트
+
+`local_validation.md` 4.3의 전체 PR 검증은 집중 결과를 작업지시자에게 보고하고 별도 승인받아
+실행한다. 원격 push·PR·이슈 comment도 아직 수행하지 않았다.

@@ -58,6 +58,53 @@ fn cell_content_bottom(cell_y: f64, cell_h: f64, pad_bottom: f64) -> f64 {
     cell_y + cell_h - pad_bottom
 }
 
+/// [#4159] 종료 분할 셀의 clip이 재귀 중첩 표 전체 stroke를 포섭하도록 확장한다.
+///
+/// 재귀 표는 셀의 `inner_y`(top padding 뒤)에서 시작하지만 바깥 셀과 같은 fragment
+/// 높이를 사용할 수 있다. 이때 중첩 표의 마지막 border만 padding만큼 셀 bbox 밖으로
+/// 내려간다. 이어질 유닛이 없는 terminal 조각에서는 그 stroke도 현재 쪽 소속이므로
+/// clip에 포함한다. 비종료 조각은 다음 쪽 콘텐츠 노출을 막기 위해 절대 확장하지 않는다.
+fn expand_terminal_cell_clip_to_nested_table_descendants(
+    cell_node: &mut RenderNode,
+    terminal: bool,
+) {
+    if !terminal || !matches!(&cell_node.node_type, RenderNodeType::TableCell(cell) if cell.clip) {
+        return;
+    }
+
+    fn subtree_bottom(node: &RenderNode) -> f64 {
+        node.children
+            .iter()
+            .fold(node.bbox.y + node.bbox.height, |bottom, child| {
+                bottom.max(subtree_bottom(child))
+            })
+    }
+
+    fn nested_table_bottom(node: &RenderNode) -> Option<f64> {
+        node.children.iter().fold(None, |bottom, child| {
+            let candidate = if matches!(child.node_type, RenderNodeType::Table(_)) {
+                Some(subtree_bottom(child))
+            } else {
+                nested_table_bottom(child)
+            };
+            match (bottom, candidate) {
+                (Some(a), Some(b)) => Some(a.max(b)),
+                (Some(a), None) => Some(a),
+                (None, Some(b)) => Some(b),
+                (None, None) => None,
+            }
+        })
+    }
+
+    let Some(content_bottom) = nested_table_bottom(cell_node) else {
+        return;
+    };
+    let grown_height = content_bottom - cell_node.bbox.y;
+    if grown_height > cell_node.bbox.height {
+        cell_node.bbox.height = grown_height;
+    }
+}
+
 // 표 수평 정렬 보조 타입은 table_layout.rs에 통합됨
 
 /// [Task #1025] `row` 를 포함하는 rowspan 블록 범위 `[b_start, b_end)`.
@@ -1688,6 +1735,16 @@ impl LayoutEngine {
                 self.add_footnote_superscripts(tree, &mut cell_node, para, styles);
             }
 
+            // [#4159] `end_cut=[]`인 종료 유닛 창은 이후 continuation이 없다. 재귀
+            // 중첩 표의 bottom stroke가 top padding만큼 셀 clip을 넘는 경우에만
+            // 현재 셀 bbox를 포섭 확장한다. `eu < usize::MAX` 비종료 조각은 보존한다.
+            let terminal_cell_fragment =
+                cut_units.is_some_and(|(_, end_unit)| end_unit == usize::MAX);
+            expand_terminal_cell_clip_to_nested_table_descendants(
+                &mut cell_node,
+                terminal_cell_fragment,
+            );
+
             // 셀 테두리를 엣지 그리드에 수집 (인접 셀 중복 제거)
             if let Some(bs) = border_style {
                 let cell_end_row_idx = cell_row + cell.row_span as usize;
@@ -2456,9 +2513,15 @@ impl LayoutEngine {
 
 #[cfg(test)]
 mod tests {
-    use super::{cell_content_bottom, fragment_vpos_origin};
+    use super::{
+        cell_content_bottom, expand_terminal_cell_clip_to_nested_table_descendants,
+        fragment_vpos_origin,
+    };
     use crate::model::paragraph::{LineSeg, Paragraph};
     use crate::model::table::Cell;
+    use crate::renderer::render_tree::{
+        BoundingBox, LineNode, RenderNode, RenderNodeType, TableCellNode, TableNode,
+    };
 
     fn paragraph_with_vpos(vposes: &[i32]) -> Paragraph {
         Paragraph {
@@ -2492,5 +2555,55 @@ mod tests {
         // Center/Bottom valign의 text_y_start에는 이미 offset이 들어 있다. 물리 셀
         // 하단은 어떤 valign이든 cell_y + cell_h - pad_bottom으로 고정된다.
         assert_eq!(cell_content_bottom(100.0, 80.0, 7.0), 173.0);
+    }
+
+    fn clipped_cell_with_overflowing_nested_table() -> RenderNode {
+        let mut cell = RenderNode::new(
+            1,
+            RenderNodeType::TableCell(TableCellNode {
+                col: 0,
+                row: 0,
+                col_span: 1,
+                row_span: 1,
+                border_fill_id: 0,
+                text_direction: 0,
+                clip: true,
+                model_cell_index: Some(0),
+            }),
+            BoundingBox::new(10.0, 20.0, 100.0, 80.0),
+        );
+        let mut table = RenderNode::new(
+            2,
+            RenderNodeType::Table(TableNode {
+                row_count: 1,
+                col_count: 1,
+                border_fill_id: 0,
+                section_index: None,
+                para_index: None,
+                control_index: None,
+            }),
+            BoundingBox::new(15.0, 25.0, 90.0, 80.0),
+        );
+        table.children.push(RenderNode::new(
+            3,
+            RenderNodeType::Line(LineNode::new(15.0, 104.0, 105.0, 104.0, Default::default())),
+            BoundingBox::new(15.0, 104.0, 90.0, 2.0),
+        ));
+        cell.children.push(table);
+        cell
+    }
+
+    #[test]
+    fn issue_4159_terminal_cell_clip_contains_nested_table_stroke() {
+        let mut cell = clipped_cell_with_overflowing_nested_table();
+        expand_terminal_cell_clip_to_nested_table_descendants(&mut cell, true);
+        assert_eq!(cell.bbox.height, 86.0);
+    }
+
+    #[test]
+    fn issue_4159_nonterminal_cell_clip_does_not_expose_nested_tail() {
+        let mut cell = clipped_cell_with_overflowing_nested_table();
+        expand_terminal_cell_clip_to_nested_table_descendants(&mut cell, false);
+        assert_eq!(cell.bbox.height, 80.0);
     }
 }
