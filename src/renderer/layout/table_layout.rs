@@ -9909,7 +9909,7 @@ impl LayoutEngine {
         let hi = end_unit.min(units.len()).max(lo);
         let mut total = 0.0;
         let mut offset = 0.0;
-        let mut visible_units: Vec<(f64, bool, bool)> = Vec::new();
+        let mut visible_units: Vec<(f64, bool, bool, f64)> = Vec::new();
         let mut recursive_total = 0usize;
         let mut recursive_start = 0usize;
         let mut has_non_recursive_fragment = false;
@@ -9934,30 +9934,57 @@ impl LayoutEngine {
                     unit.height,
                     unit.mixed_nested_trailing,
                     unit.mixed_nested_recursive,
+                    unit.mixed_nested_content_height,
                 ));
             }
         }
+        // `terminal` is scoped to this mixed nested stream, not the host
+        // cell's entire unit list.  A completed inner table can be followed
+        // by another paragraph/table in the same outer cell; treating it as
+        // non-terminal drops its final reservation and shortens the current
+        // frame (42065 p13→p15).
+        let terminal = !units
+            .iter()
+            .skip(hi)
+            .any(|unit| unit.para_idx == para_idx && unit.mixed_nested_fragment);
         // A non-terminal fragment must not paint the synthetic trailing unit:
         // its successor owns that source window.  The terminal fragment is
         // different — that trailing unit can contain the final ordinary
         // paragraphs after the nested table, so discarding it clips the
         // document's last content (42065 p17's section 4).
-        let terminal = end_unit >= units.len();
         if offset > 0.5 && !terminal {
             while visible_units
                 .last()
-                .is_some_and(|(_, trailing, _)| *trailing)
+                .is_some_and(|(_, trailing, _, _)| *trailing)
             {
                 visible_units.pop();
             }
         }
-        let flow_visible: f64 = visible_units.iter().map(|(h, _, _)| *h).sum();
+        let flow_visible: f64 = visible_units.iter().map(|(h, _, _, _)| *h).sum();
         let recursive_visible = visible_units
             .iter()
-            .filter(|(_, _, recursive)| *recursive)
+            .filter(|(_, _, recursive, _)| *recursive)
             .count();
         let recursive_cut = if recursive_total > 0 && !has_non_recursive_fragment {
-            let recursive_end = recursive_start + recursive_visible;
+            // The terminal page can begin with a synthetic trailing unit that
+            // only reserved physical flow on the preceding viewport.  It has
+            // no visible child content and must not become the recursive
+            // child's first source owner (42065 p17: 32px blank before the
+            // heading).  Keep the unit in outer flow accounting and advance
+            // only the authoritative child cursor past it.
+            let leading_trailing = if terminal && offset > 0.5 {
+                visible_units
+                    .iter()
+                    .take_while(|(_, trailing, recursive, content_height)| {
+                        *trailing && *recursive && *content_height <= 0.5
+                    })
+                    .count()
+            } else {
+                0
+            };
+            let recursive_start = recursive_start + leading_trailing;
+            let recursive_end =
+                recursive_start + recursive_visible.saturating_sub(leading_trailing);
             Some(NestedTableCut {
                 start_row: 0,
                 end_row: 1,
@@ -9983,12 +10010,12 @@ impl LayoutEngine {
         let visible: f64 = flow_visible;
         let first_visible_content_height = visible_units
             .iter()
-            .find_map(|(height, trailing, _)| (!*trailing).then_some(*height))
+            .find_map(|(height, trailing, _, _)| (!*trailing).then_some(*height))
             .unwrap_or(0.0);
         let last_visible_content_height = visible_units
             .iter()
             .rev()
-            .find_map(|(height, trailing, _)| (!*trailing).then_some(*height))
+            .find_map(|(height, trailing, _, _)| (!*trailing).then_some(*height))
             .unwrap_or(0.0);
         let first_visible_starts_after_table = units
             .iter()
@@ -10019,6 +10046,7 @@ impl LayoutEngine {
         let compensate_first_visible = recursive_cut.is_none()
             && offset > 0.5
             && single_cell_nested_continuation
+            && !terminal
             && !first_visible_starts_after_table;
         let offset_within_start = if recursive_cut.is_some() {
             (offset - first_visible_content_height).max(0.0)
@@ -10426,7 +10454,7 @@ impl LayoutEngine {
                     paragraph.controls.iter().any(|control| {
                         matches!(control, Control::Table(nested) if nested.row_count == 1 && nested.col_count == 1)
                     })
-                });
+            });
             if offset_within_start > 0.5 {
                 if terminal && single_cell_nested_continuation {
                     // Keep the parent RowBreak cell in lockstep with the

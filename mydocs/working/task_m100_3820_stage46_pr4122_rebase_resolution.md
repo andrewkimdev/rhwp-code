@@ -1,6 +1,6 @@
 ---
 kind: investigation
-status: in_progress
+status: completed
 canonical: mydocs/working/task_m100_3820_stage1.md
 last_verified: 2026-08-07
 ---
@@ -63,3 +63,10 @@ PDF 기반 회귀를 갖고 있다. 따라서 어느 한쪽 파일 전체를 선
 
 검증은 다른 작업의 산출물과 분리한 `target/task-3820-3821-fidelity-rebase`에서
 `CARGO_INCREMENTAL=0`으로 수행한다. 실패하면 baseline을 올리지 않고 원인 코드를 수정한다.
+
+## 종료 판정
+
+PR #4122의 재귀 child cursor와 기존 paint/fallback 보정을 함께 보존한 리베이스 충돌 해소는
+`8fc0e2ef8`에 고정했다. 이후 issue2007 p12–p15에서 확인된 부모 `RowCut` 소유 경계 문제는
+리베이스 자체와 분리해 [Stage 47](task_m100_3820_stage47_issue2007_parent_cut_analysis.md)에서
+분석한다.

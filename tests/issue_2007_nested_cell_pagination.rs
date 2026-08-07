@@ -491,9 +491,10 @@ fn issue_2007_nested_cell_content_paginates() {
     );
     let heading_top =
         first_text_run_top(&tree.root, carried_heading).expect("p8 carried table heading text run");
+    // 한컴 2020 PDF bbox의 제목 yMin=88.610521pt, 96dpi 환산 118.147px.
     assert!(
-        (120.0..=123.0).contains(&heading_top),
-        "p8 heading must be inside the current nested-cell viewport, got y={heading_top}"
+        (117.5..=119.0).contains(&heading_top),
+        "p8 heading must match the Hancom PDF viewport, got y={heading_top}"
     );
 }
 
@@ -553,7 +554,7 @@ fn issue_2007_intra_paragraph_saved_frame_break_is_preserved() {
     );
     assert!(
         page11.contains(FRAME_CONTINUATION),
-        "11쪽에 문단 내부 vpos reset 이후 줄이 없다: {page11}"
+        "11쪽에 문단 내부 vpos reset 이후 줄이 없다"
     );
     assert!(
         page11.contains(NEXT_ARTICLE),
@@ -845,7 +846,10 @@ fn issue_2007_continuation_frame_restarts_and_drops_previous_page_residual() {
     // new full-width top edge *inside* the continuation viewport instead of
     // retaining a centerline that clipPath/Canvas cuts in half.
     for (page_index, needle) in [
-        (10, "금융거래정보를 요구하는 경우에는"),
+        (
+            10,
+            "행하여야 하며, 다른 목적 등을 위하여 조사권을 남용하여서는 아니된다.",
+        ),
         (14, "금융위원회는 관계자에 대한 조사실적"),
     ] {
         let tree = doc
