@@ -184,23 +184,23 @@ cargo fmt --all -- --check       # CI와 같은 포맷 검증
 
 ```bash
 # 개체(표·그림) geometry 무회귀 — 원커맨드: devel 을 worktree 빌드해 baseline 자동 생성 후
-# 현 트리와 대조, PR 본문용 markdown 요약(out/ovr/ovr_diff.md)까지 출력
-python tools/object_visual_regression.py --preset ovr5 -o out/ovr --diff-against devel
+# 현 트리와 대조, PR 본문용 markdown 요약(output/ovr/ovr_diff.md)까지 출력
+python tools/object_visual_regression.py --preset ovr5 -o output/ovr --diff-against devel
 
 # (수동 3단계 흐름도 그대로 동작 — 수정 전 baseline 저장, 수정 후 비교)
-python tools/object_visual_regression.py <샘플.hwp> -o out/ovr --no-hwp --save-baseline
-python tools/object_visual_regression.py <샘플.hwp> -o out/ovr2 --no-hwp --baseline out/ovr/baseline.json
+python tools/object_visual_regression.py <샘플.hwp> -o output/ovr --no-hwp --save-baseline
+python tools/object_visual_regression.py <샘플.hwp> -o output/ovr2 --no-hwp --baseline output/ovr/baseline.json
 
 # 편집-스윕 — 편집 경로 PR(vpos·pagination·undo)의 가짜 페이지 변동 검출
 # devel 과 브랜치에서 각각 스윕 → 공통/해소/신규 분류 리포트 (신규 존재 시 exit 1)
-cargo run --release --example edit_sweep -- samples -o out/sweep/branch.tsv
-cargo run --release --example edit_sweep -- --compare out/sweep/devel.tsv out/sweep/branch.tsv -o out/sweep/report.md
+cargo run --release --example edit_sweep -- samples -o output/sweep/branch.tsv
+cargo run --release --example edit_sweep -- --compare output/sweep/devel.tsv output/sweep/branch.tsv -o output/sweep/report.md
 
 # 라운드트립 시각 기하 회귀
 cargo run --release --bin rhwp -- render-diff <샘플.hwp>
 
 # HWPX→HWP 변환 페이지네이션 정합
-python tools/roundtrip_fidelity_harness.py --files <샘플.hwpx> --workdir out/rtf -o out/rtf/result.tsv
+python tools/roundtrip_fidelity_harness.py --files <샘플.hwpx> --workdir output/rtf -o output/rtf/result.tsv
 ```
 
 - OVR(개체 시각 회귀)로 "변경 범위 밖 문서의 개체가 움직이지 않았음"을 결과와 함께
