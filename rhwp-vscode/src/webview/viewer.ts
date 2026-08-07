@@ -1102,6 +1102,10 @@ function renderOutlineTree(panel: HTMLElement, nodes: OutlineTreeNode[]): void {
     item.appendChild(labelElement);
     item.addEventListener("click", () => navigateToOutline(entry));
     item.addEventListener("keydown", (event) => {
+      // 접기/펼치기 버튼에 초점이 있는 Enter/Space 는 버튼의 기본 동작(click)이다.
+      // 여기서 받아 preventDefault 하면 그 기본 동작이 취소되고 이동까지 겹쳐
+      // 키보드만으로는 접기/펼치기가 동작하지 않는다.
+      if (event.target !== item) return;
       if (event.key === "Enter" || event.key === " ") {
         event.preventDefault();
         navigateToOutline(entry);

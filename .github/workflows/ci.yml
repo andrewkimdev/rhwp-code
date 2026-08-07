@@ -996,6 +996,9 @@ jobs:
       - name: Compile VS Code extension
         run: npm --prefix rhwp-vscode run compile
 
+      - name: Verify VS Code webview outline keyboard contract
+        run: node --test scripts/frontend-vscode-outline.test.mjs
+
       - name: Verify font asset contracts
         run: node --test scripts/frontend-font-assets.test.mjs
 
