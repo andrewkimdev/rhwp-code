@@ -2,7 +2,7 @@
 kind: guide
 status: active
 canonical: mydocs/manual/verification/visual_verification_governance.md
-last_verified: 2026-08-03
+last_verified: 2026-08-08
 ---
 
 # PDF/SVG visual sweep 가이드
@@ -37,6 +37,9 @@ PR에서는 이 가이드를 직접 시작점으로 쓴다.
 그림 앞 문단의 `float-owner-shift`, 표 fragment, page-count ledger는 sweep이 다시 계산하지 않으므로
 fidelity 원장을 함께 보존해야 한다.
 이 bridge의 render tree가 없거나 JSON이 손상되면 sweep은 `flagged=0`을 보고하지 않고 실패해야 한다.
+`fidelity_compare`의 Python 환경과 실행 명령은
+[도구 README](../../../tools/fidelity_compare/README.md)를 따른다. 저장소 로컬 `venv/`의 공통
+계약은 그 문서가 연결하는 [개발 환경 가이드](../dev_environment_guide.md)가 정의한다.
 
 ## 필수 도구
 

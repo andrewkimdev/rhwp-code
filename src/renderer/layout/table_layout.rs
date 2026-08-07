@@ -8049,6 +8049,14 @@ impl LayoutEngine {
                         900.0
                     };
                     let total_frag_h: f64 = frags.iter().map(|fragment| fragment.height).sum();
+                    // 저장된 fragment 높이가 표의 물리 행 높이보다 작을 수 있다. 특히
+                    // 59043 p35/p36의 1×1 child는 fragment 합이 body보다 3.6px 작지만
+                    // 실제 행 기하는 1336px라 한 쪽에 들어가지 않는다. fragment 합만
+                    // 보면 이 표를 atom으로 소비해 p36 source owner가 사라진다.
+                    // page의 남은 공간이 아니라 문서 고유 물리 높이만 사용해
+                    // `cell_units_cache`가 page context에 의존하지 않게 한다.
+                    let physical_nested_h = self.calc_nested_table_height(nt, styles);
+                    let exceeds_physical_page = physical_nested_h > multi_page_px + 0.5;
                     // [#4069 Stage 3] 한 페이지 이하 1×1 자식 표라도 host line이
                     // 저장 프레임 하단까지 차지하고 다음 문단이 새 프레임으로
                     // rewind하면 현재 쪽의 남은 공간에서 시작해야 한다. 원자 처리하면
@@ -8056,7 +8064,9 @@ impl LayoutEngine {
                     // HWP5 저장 경계로 확인된 경우만 열어 form-002/#1891의 일반
                     // 단일 페이지 중첩 표 배치는 유지한다.
                     if frags.len() > 1
-                        && (total_frag_h > multi_page_px || stored_frame_tail_before_next_para)
+                        && (total_frag_h > multi_page_px
+                            || exceeds_physical_page
+                            || stored_frame_tail_before_next_para)
                     {
                         let om_top = hwpunit_to_px(nt.outer_margin_top as i32, self.dpi);
                         let om_bot = hwpunit_to_px(nt.outer_margin_bottom as i32, self.dpi);

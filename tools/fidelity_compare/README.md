@@ -15,10 +15,16 @@
 ## 요구사항
 
 ```bash
-pip install pypdf                     # text-only 후보 원장
-pip install pypdfium2 pillow          # PDF 렌더 + 픽셀 diff(비-text-only)
+# 저장소 루트에서 최초 1회
+python3.12 -m venv venv
+venv/bin/python -m pip install pypdf pypdfium2 pillow
 # Chrome/Chromium 설치 필요 (SVG → PNG 캡처)
 ```
+
+저장소 로컬 `venv/`의 설치·Git 제외 계약은
+[개발 환경 가이드](../../mydocs/manual/dev_environment_guide.md)를 따른다. 시스템 Python에
+직접 설치하거나 `--break-system-packages`를 사용하지 않는다. 아래 POSIX 예시는 저장소 루트의
+`venv/bin/python`을 사용하며 Windows에서는 `venv\\Scripts\\python.exe`로 바꾼다.
 
 `--text-only`는 `pypdf`만 필요하며 Chrome과 `pypdfium2`를 요구하지 않는다.
 
@@ -35,30 +41,30 @@ Linux 예시:
 
 ```bash
 # rhwp와 google-chrome/chromium이 PATH에 있으면 환경변수 없이 실행
-python3 tools/fidelity_compare/fidelity_compare.py plan 0 9 \
+venv/bin/python tools/fidelity_compare/fidelity_compare.py plan 0 9 \
   --out-dir /tmp/rhwp-fidelity-plan
 
 # 저장소 밖 빌드·배포 경로를 쓸 때만 명시적으로 지정
 RHWP_BIN=/opt/rhwp/bin/rhwp \
 CHROME_BIN=/usr/bin/google-chrome \
-python3 tools/fidelity_compare/fidelity_compare.py plan 0 9 \
+venv/bin/python tools/fidelity_compare/fidelity_compare.py plan 0 9 \
   --out-dir /tmp/rhwp-fidelity-plan
 ```
 
 ## 사용
 
 ```bash
-python tools/fidelity_compare/fidelity_compare.py <키> <시작쪽> <끝쪽>   # 0 기준, 끝쪽 포함
+venv/bin/python tools/fidelity_compare/fidelity_compare.py <키> <시작쪽> <끝쪽>   # 0 기준, 끝쪽 포함
 # 예: 업무계획 전체 35쪽
-python tools/fidelity_compare/fidelity_compare.py plan 0 34
+venv/bin/python tools/fidelity_compare/fidelity_compare.py plan 0 34
 
 # 저장소 밖에 산출해 worktree를 깨끗하게 유지
-python tools/fidelity_compare/fidelity_compare.py plan 0 9 \
+venv/bin/python tools/fidelity_compare/fidelity_compare.py plan 0 9 \
   --out-dir /tmp/rhwp-fidelity-plan
 
 # REG에 없는 HWP/PDF 쌍: 215쪽 첫 후보 수집에는 PNG/Chrome을 생략하고 SVG를 한 번만 전수 생성
 RHWP_BIN=target/release-test/rhwp \
-python3 tools/fidelity_compare/fidelity_compare.py 0 214 \
+venv/bin/python tools/fidelity_compare/fidelity_compare.py 0 214 \
   --source 'samples/입력.hwp' \
   --reference-pdf 'pdf/한컴-기준.pdf' \
   --label issue-3738-hwp \

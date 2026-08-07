@@ -764,14 +764,15 @@ impl LayoutEngine {
             // 그대로 visible 처리한다면 (= 실제 split 적용 안 받은 cell, 예: inner-table-01.hwp
             // cell[10] '사업개요' 라벨) 원본 cell.vertical_align 을 사용한다. split 적용으로
             // line 일부가 잘린 cell 만 Top 강제.
-            let cell_was_split = if let Some(ref ranges) = line_ranges {
+            let cell_was_split = cut_units.is_some_and(|(start_unit, end_unit)| {
+                let unit_len = self.cell_units(cell, table, styles).len();
+                start_unit > 0 || end_unit < unit_len
+            }) || line_ranges.as_ref().is_some_and(|ranges| {
                 ranges.iter().enumerate().any(|(i, &(s, e))| {
                     let total = composed_paras.get(i).map(|c| c.lines.len()).unwrap_or(0);
                     s != 0 || e != total
                 })
-            } else {
-                false
-            };
+            });
             // [#4042] 쪽 경계로 실제 잘리는 셀은 세로 가운데/아래 정렬이 성립하지 않는다.
             // 한컴 조판 규칙: 용지 시작 y 에서 아래로 흐르며 쪽 경계에 닿으면 자른다 —
             // 가시 슬라이스(inner_height)보다 콘텐츠가 큰 셀은 위에서부터 흘러야 하며,
