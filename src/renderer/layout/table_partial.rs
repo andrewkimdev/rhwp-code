@@ -115,7 +115,156 @@ fn block_cut_index(
         .position(|c| c.row == cell.row && c.col == cell.col)
 }
 
+/// [#4128 추출] 행내 `row_span==1` 셀의 col 오름차순 컷 벡터 서수.
+/// `advance_row_cut` 부기와 동일한 순서 (기존 인라인 식의 명명).
+fn single_row_cut_index(
+    table: &crate::model::table::Table,
+    cell: &crate::model::table::Cell,
+) -> usize {
+    table
+        .cells
+        .iter()
+        .filter(|c| c.row_span == 1 && c.row == cell.row && c.col < cell.col)
+        .count()
+}
+
+/// [#4128 추출] 이 페이지 조각에서 `cell` 의 가시 유닛 창 `[su, eu)`.
+/// `apply_start`/`apply_end` 는 셀이 분할 시작/끝 행(블록)에 걸렸는지 여부
+/// (`is_split_start_row`/`is_split_end_row` 판정 결과). `units_len` 이 있으면
+/// 그 범위로 클램프하고, 없으면 `usize::MAX` 센티널을 유지한다.
+#[allow(clippy::too_many_arguments)]
+fn cell_cut_window(
+    table: &crate::model::table::Table,
+    cell: &crate::model::table::Cell,
+    is_block_split: bool,
+    apply_start: bool,
+    start_block: Option<(usize, usize)>,
+    apply_end: bool,
+    end_block: Option<(usize, usize)>,
+    start_cut: &[usize],
+    end_cut: &[usize],
+    units_len: Option<usize>,
+) -> (usize, usize) {
+    let (su, eu) = if is_block_split {
+        let su = match (apply_start, start_block) {
+            (true, Some((bs, be))) => block_cut_index(table, bs, be, cell)
+                .and_then(|i| start_cut.get(i).copied())
+                .unwrap_or(0),
+            _ => 0,
+        };
+        let eu = match (apply_end, end_block) {
+            (true, Some((bs, be))) => block_cut_index(table, bs, be, cell)
+                .and_then(|i| end_cut.get(i).copied())
+                .unwrap_or(usize::MAX),
+            _ => usize::MAX,
+        };
+        (su, eu)
+    } else {
+        let cut_idx = single_row_cut_index(table, cell);
+        let su = if apply_start {
+            start_cut.get(cut_idx).copied().unwrap_or(0)
+        } else {
+            0
+        };
+        let eu = if apply_end {
+            end_cut.get(cut_idx).copied().unwrap_or(usize::MAX)
+        } else {
+            usize::MAX
+        };
+        (su, eu)
+    };
+    match units_len {
+        Some(len) => {
+            let su = su.min(len);
+            (su, eu.clamp(su, len))
+        }
+        None => (su, eu),
+    }
+}
+
 impl LayoutEngine {
+    /// [#4128] 이 PartialTable 페이지 조각에 `cell` 의 대상 위치가 실제로 렌더되는가.
+    /// pagination 메타데이터(행 범위 + 유닛 컷)와 memoize 된 `cell_units` 만 사용하며
+    /// render tree 를 짓지 않는다. 분할 게이트 판정은 `layout_partial_table_cells`
+    /// 의 셀 방출 판정과 동일 산식 — 드리프트 금지.
+    ///
+    /// `target`: `(cell_para_idx, target_line, at_line_start)`. `None` 은 셀 전체 질의
+    /// (행/블록 겹침만 판정). 컷 경계(`ord == eu`)는 대상 offset 이 정확히 줄 시작일
+    /// 때만 포함한다 — legacy 오름차순 스캔의 inclusive run 매치
+    /// (`offset <= char_start + count`)가 이전 조각을 먼저 돌려주는 동작과 결과
+    /// 페이지가 일치해야 하기 때문.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn partial_table_page_contains_cell_position(
+        &self,
+        table: &crate::model::table::Table,
+        cell: &crate::model::table::Cell,
+        start_row: usize,
+        end_row: usize,
+        start_cut: &[usize],
+        end_cut: &[usize],
+        is_block_split: bool,
+        target: Option<(usize, usize, bool)>,
+        styles: &ResolvedStyleSet,
+    ) -> bool {
+        let cell_row = cell.row as usize;
+        let cell_end_row = cell_row + (cell.row_span as usize).max(1);
+        // 행/블록 겹침 없음 → 이 조각에 셀 없음. 반복 헤더 사본은 원본 행 페이지가
+        // legacy 첫-히트와 같으므로 후보에 넣지 않는다.
+        if cell_row >= end_row || cell_end_row <= start_row {
+            return false;
+        }
+        let Some((cell_para_idx, target_line, at_line_start)) = target else {
+            return true;
+        };
+        // 분할 게이트 — layout_partial_table_cells 와 동일 판정
+        let split_start_block = if is_block_split && !start_cut.is_empty() {
+            Some(rowspan_block_range(table, start_row))
+        } else {
+            None
+        };
+        let split_end_block = if is_block_split && !end_cut.is_empty() {
+            Some(rowspan_block_range(table, end_row.saturating_sub(1)))
+        } else {
+            None
+        };
+        let is_split_start_row = if is_block_split {
+            split_start_block.is_some_and(|(s, e)| cell_row < e && cell_end_row > s)
+        } else {
+            !start_cut.is_empty() && cell_row == start_row
+        };
+        let is_split_end_row = if is_block_split {
+            split_end_block.is_some_and(|(s, e)| cell_row < e && cell_end_row > s)
+        } else {
+            !end_cut.is_empty() && cell_row == end_row.saturating_sub(1)
+        };
+        if !(is_split_start_row || is_split_end_row) {
+            return true; // 이 조각에서 셀이 컷되지 않음 → 전체 가시
+        }
+        // 비블록 컷 모델은 row_span==1 셀만 부기 — rowspan 걸침 셀은 보수적 포함
+        // (straddle 높이 컷 경로는 페이지 후보를 좁힐 권위가 아니다).
+        if !is_block_split && cell.row_span > 1 {
+            return true;
+        }
+        let Some(ord) = self.cell_unit_ordinal_for(cell, table, styles, cell_para_idx, target_line)
+        else {
+            return true; // 유닛 매핑 실패(빈 셀 등) → 보수적 포함
+        };
+        let units_len = self.cell_units(cell, table, styles).len();
+        let (su, eu) = cell_cut_window(
+            table,
+            cell,
+            is_block_split,
+            is_split_start_row,
+            split_start_block,
+            is_split_end_row,
+            split_end_block,
+            start_cut,
+            end_cut,
+            Some(units_len),
+        );
+        ord >= su && (ord < eu || (ord == eu && at_line_start))
+    }
+
     /// [#2029 추출] 부분 표의 셀 방출 루프 — 셀 geometry/배경/반복 헤더와 셀
     /// 문단 배치를 `table_node.children` 에 방출한다. 셀-간 캐리 없음(실측 muts 0,
     /// 외부 sink = table_node 단일) — 원본 무변경 이동.
@@ -354,39 +503,18 @@ impl LayoutEngine {
             // 분할 행: [Task #993/#1025] start_cut/end_cut(유닛 컷)으로 표시할 줄 범위 계산.
             // 블록 분할이면 블록-셀 (row,col) 인덱스, 그 외는 행내 row_span==1 col 인덱스.
             let cut_units: Option<(usize, usize)> = if is_in_split_row {
-                let pair = if is_block_split {
-                    let su = match (is_split_start_row, split_start_block) {
-                        (true, Some((bs, be))) => block_cut_index(table, bs, be, cell)
-                            .and_then(|i| start_cut.get(i).copied())
-                            .unwrap_or(0),
-                        _ => 0,
-                    };
-                    let eu = match (is_split_end_row, split_end_block) {
-                        (true, Some((bs, be))) => block_cut_index(table, bs, be, cell)
-                            .and_then(|i| end_cut.get(i).copied())
-                            .unwrap_or(usize::MAX),
-                        _ => usize::MAX,
-                    };
-                    (su, eu)
-                } else {
-                    let cut_idx = table
-                        .cells
-                        .iter()
-                        .filter(|c| c.row_span == 1 && c.row == cell.row && c.col < cell.col)
-                        .count();
-                    let su = if is_split_start_row {
-                        start_cut.get(cut_idx).copied().unwrap_or(0)
-                    } else {
-                        0
-                    };
-                    let eu = if is_split_end_row {
-                        end_cut.get(cut_idx).copied().unwrap_or(usize::MAX)
-                    } else {
-                        usize::MAX
-                    };
-                    (su, eu)
-                };
-                Some(pair)
+                Some(cell_cut_window(
+                    table,
+                    cell,
+                    is_block_split,
+                    is_split_start_row,
+                    split_start_block,
+                    is_split_end_row,
+                    split_end_block,
+                    start_cut,
+                    end_cut,
+                    None,
+                ))
             } else if is_rowbreak_straddle {
                 // [Task #1748] 높이 기반 유닛 컷. 이전 프래그먼트 소비 높이(prior_h)는
                 // 2b 오버라이드와 동일한 식으로 재계산 — 온전 행은 컷 측정
@@ -682,6 +810,9 @@ impl LayoutEngine {
                 let mixed_nested_split = cut_units.and_then(|(su, eu)| {
                     self.mixed_nested_split_from_cut(cell, table, styles, su, eu, cp_idx)
                 });
+                let nested_cursor_split = cut_units.and_then(|(su, eu)| {
+                    self.nested_table_split_from_cut_units(cell, table, styles, su, eu, cp_idx)
+                });
                 // [Task #1073] 이 문단이 per-중첩행 유닛으로 분해됐으면(가시 텍스트 없음 +
                 // 단일 중첩 표 2행+) 컷에 들어온 유닛의 `nested_row` 에서 중첩 행 범위를
                 // 얻어 NestedTableSplit 으로 넘긴다.
@@ -691,9 +822,13 @@ impl LayoutEngine {
                 // 단위여서, 문단이 여럿인 셀은 아래 `available_h` 휴리스틱으로 폴백했고 그
                 // 분기는 오프셋을 0.0 으로 고정하므로 연속 페이지가 행 0 부터 다시 그리고
                 // 뒤 행이 어느 페이지에도 나오지 않았다.
-                let nested_cut_rows: Option<(usize, usize)> = cut_units.and_then(|(su, eu)| {
-                    self.nested_row_range_from_cut_units(cell, table, styles, su, eu, cp_idx)
-                });
+                let nested_cut_rows: Option<(usize, usize)> = if nested_cursor_split.is_some() {
+                    None
+                } else {
+                    cut_units.and_then(|(su, eu)| {
+                        self.nested_row_range_from_cut_units(cell, table, styles, su, eu, cp_idx)
+                    })
+                };
                 let visible_non_inline_controls = cut_units.is_some_and(|(su, eu)| {
                     self.cell_cut_contains_non_inline_control_units(
                         cell, table, styles, su, eu, cp_idx,
@@ -706,6 +841,7 @@ impl LayoutEngine {
                 // content_y_accum 은 가시 콘텐츠만 추적하므로 스킵 시 전진하지 않는다.
                 if start_line >= end_line
                     && mixed_nested_split.is_none()
+                    && nested_cursor_split.is_none()
                     && !visible_non_inline_controls
                 {
                     continue;
@@ -1333,6 +1469,17 @@ impl LayoutEngine {
                                                 flow_height: split.flow_height,
                                                 offset_within_start: split.offset_within_start,
                                                 terminal: split.terminal,
+                                                recursive_cut: split.recursive_cut.clone(),
+                                            })
+                                        } else if let Some(split) = nested_cursor_split.as_ref() {
+                                            Some(NestedTableSplit {
+                                                start_row: split.start_row,
+                                                end_row: split.end_row,
+                                                visible_height: split.visible_height,
+                                                flow_height: split.flow_height,
+                                                offset_within_start: split.offset_within_start,
+                                                terminal: split.terminal,
+                                                recursive_cut: split.recursive_cut.clone(),
                                             })
                                         } else if let Some((row_lo, row_hi)) = nested_cut_rows {
                                             // [Task #1073] 페이지네이션 컷의 중첩행 범위로 직접
@@ -1371,6 +1518,7 @@ impl LayoutEngine {
                                                 terminal: cut_units
                                                     .is_some_and(|(_, eu)| eu == usize::MAX),
                                                 offset_within_start: 0.0,
+                                                recursive_cut: None,
                                             })
                                         } else if nested_h > available_h + 0.5 {
                                             let ncol = nested_table.col_count as usize;
@@ -1413,30 +1561,72 @@ impl LayoutEngine {
                                         });
                                         new_ctx
                                     });
-                                    let table_h_rendered = self.layout_table(
-                                        tree,
-                                        &mut cell_node,
-                                        nested_table,
-                                        section_index,
-                                        styles,
-                                        outline_numbering_id,
-                                        &ctrl_area,
-                                        nested_y,
-                                        bin_data_content,
-                                        None,
-                                        1,
-                                        None,
-                                        para_alignment,
-                                        nested_ctx,
-                                        0.0,
-                                        0.0,
-                                        None,
-                                        split_ref,
-                                        None,
-                                        None,
-                                        false,
-                                        clamp_header_negative_para_offset,
-                                    );
+                                    let table_h_rendered = if let Some(recursive_cut) = split_info
+                                        .as_ref()
+                                        .and_then(|split| split.recursive_cut.as_ref())
+                                    {
+                                        // [#4069] 측정이 자식 표의 행·CellUnit 범위를
+                                        // 재귀 투영한 경우 렌더도 같은 범위를 부분 표 경로에
+                                        // 넘긴다. scalar y clip으로 표 전체를 매 쪽 재방출하면
+                                        // vpos 리셋 프레임의 앞·뒤 문단이 서로 겹치므로, 동일
+                                        // cursor가 선택한 문단/줄/자식 표만 방출해야 한다.
+                                        let nested_host = Paragraph {
+                                            controls: vec![Control::Table(Box::new(
+                                                (**nested_table).clone(),
+                                            ))],
+                                            ..Default::default()
+                                        };
+                                        let nested_paragraphs = [nested_host];
+                                        self.layout_partial_table(
+                                            tree,
+                                            &mut cell_node,
+                                            &nested_paragraphs,
+                                            0,
+                                            0,
+                                            section_index,
+                                            styles,
+                                            outline_numbering_id,
+                                            &ctrl_area,
+                                            nested_y,
+                                            bin_data_content,
+                                            recursive_cut.start_row,
+                                            recursive_cut.end_row,
+                                            recursive_cut.start_row > 0
+                                                || !recursive_cut.start_cut.is_empty(),
+                                            &recursive_cut.start_cut,
+                                            &recursive_cut.end_cut,
+                                            recursive_cut.is_block_split,
+                                            0.0,
+                                            0.0,
+                                            None,
+                                            clamp_header_negative_para_offset,
+                                        ) - nested_y
+                                    } else {
+                                        self.layout_table(
+                                            tree,
+                                            &mut cell_node,
+                                            nested_table,
+                                            section_index,
+                                            styles,
+                                            outline_numbering_id,
+                                            &ctrl_area,
+                                            nested_y,
+                                            bin_data_content,
+                                            None,
+                                            1,
+                                            None,
+                                            para_alignment,
+                                            nested_ctx,
+                                            0.0,
+                                            0.0,
+                                            None,
+                                            split_ref,
+                                            None,
+                                            None,
+                                            false,
+                                            clamp_header_negative_para_offset,
+                                        )
+                                    };
                                     let visible_table_h = mixed_nested_split
                                         .as_ref()
                                         .map(|split| split.flow_height)
@@ -1766,20 +1956,18 @@ impl LayoutEngine {
                     let mut has_row_cut = false;
                     for c in &rcells {
                         let units = self.cell_units(c, table, styles);
-                        let su = match (in_start, start_block) {
-                            (true, Some((bs, be))) => block_cut_index(table, bs, be, c)
-                                .and_then(|i| start_cut.get(i).copied())
-                                .unwrap_or(0),
-                            _ => 0,
-                        }
-                        .min(units.len());
-                        let eu = match (in_end, end_block) {
-                            (true, Some((bs, be))) => block_cut_index(table, bs, be, c)
-                                .and_then(|i| end_cut.get(i).copied())
-                                .unwrap_or(units.len()),
-                            _ => units.len(),
-                        }
-                        .clamp(su, units.len());
+                        let (su, eu) = cell_cut_window(
+                            table,
+                            c,
+                            true,
+                            in_start,
+                            start_block,
+                            in_end,
+                            end_block,
+                            start_cut,
+                            end_cut,
+                            Some(units.len()),
+                        );
                         if eu > su {
                             has_visible_range = true;
                         }
