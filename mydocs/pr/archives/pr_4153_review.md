@@ -41,9 +41,14 @@
 ## CI와 판정
 
 메인터너 보정 head `3a7c88b13`에서 GitHub Actions full CI, CodeQL, Native Skia, slow shard와
-일반 shard 1/3·2/3·3/3, Build & Test가 모두 성공했다. 이 문서와 오늘할일은 그 code candidate
-뒤의 문서 전용 trailing commit이다.
+일반 shard 1/3·2/3·3/3, Build & Test가 모두 성공했다. review·오늘할일 head `9edcf0829`도
+review-only fast-pass preflight와 Build & Test aggregate를 통과했다.
 
-**권고: 수용.** trailing commit을 push한 뒤에는 같은 PR source branch의 녹색 code candidate를
+검토 중 source보다 최신인 `upstream/devel`의 오늘할일 전체를 복사하면 source에 없는 archive link가
+깨짐을 Markdown 링크 검사로 확인했다. 최신 devel을 source에 merge하지 않고 현재 PR 항목만 변경되지 않은
+section 경계에 넣은 뒤 merge tree 링크 검사로 확인하는 절차를 PR workflow와 collaborator 외부 PR 가이드에
+보강했다.
+
+**권고: 수용.** 이번 문서 보강 commit을 push한 뒤에는 같은 PR source branch의 녹색 code candidate를
 review-only fast-pass로 재사용할 수 있는지와 최신 head의 preflight·Build & Test aggregate·mergeable
 상태를 다시 확인한다. 최종 merge는 작업지시자 승인을 전제로 한다.

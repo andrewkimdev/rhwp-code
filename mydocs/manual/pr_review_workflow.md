@@ -125,6 +125,23 @@ base 반영을 강제하지 않는 정책이면, 같은 PR·같은 source reposi
 재사용해 trailing review-only commit을 fast-pass할 수 있다. contributor가 source·test를 새로 push한 경우에는
 그 새 code head의 CI를 먼저 통과시킨 뒤 review 기록을 한 번만 이어 붙인다.
 
+#### 3.2.1 최신 `devel` 오늘할일을 보존하는 trailing 기록
+
+contributor source branch의 `mydocs/orders/YYYYMMDD.md`가 최신 `upstream/devel`보다 오래될 수 있다.
+이 경우 review 기록을 추가하려고 최신 `devel`의 오늘할일 전체를 source에 복사하거나 `devel`을 merge/rebase하면,
+source에 없는 archive link를 도입하거나 today add/add 충돌과 불필요한 full CI를 만들 수 있다.
+
+1. `git fetch upstream devel` 뒤 `git diff HEAD..upstream/devel -- mydocs/orders/YYYYMMDD.md`로 최신 base의
+   변경 구간을 확인한다.
+2. contributor source에 이미 있는 오늘할일은 보존하고, 현재 PR의 항목만 위 diff에서 변경되지 않은 section
+   경계에 추가한다. 최신 `devel`의 다른 PR 기록을 source branch에 복사하지 않는다.
+3. trailing 문서 commit을 만든 뒤 최신 `upstream/devel`에서 merge simulation을 수행한다. merge tree의
+   `git diff --check`와 변경한 오늘할일·review 문서의 Markdown 링크 검사가 모두 통과해야 한다.
+
+이 방식은 source history를 선형으로 유지하면서, 실제 merge tree에는 최신 `devel`의 기존 오늘 기록과
+현재 PR 기록이 함께 남는지 확인한다. 변경되지 않은 경계를 찾을 수 없거나 simulation이 충돌하면 source에
+`devel`을 억지로 병합하지 말고 작업지시자에게 보고한다.
+
 ### 3.3 순차로 유지할 일
 
 공유 상태를 바꾸거나 선행 결과가 필요한 작업은 아래 순서를 지킨다.
