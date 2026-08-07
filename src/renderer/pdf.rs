@@ -526,6 +526,32 @@ fn default_mono_family() -> &'static str {
 
 /// 폰트 데이터베이스를 초기화 (시스템 폰트 + 프로젝트 폰트 로드)
 #[cfg(not(target_arch = "wasm32"))]
+/// fontdb 는 `Source::File` 폰트의 바이트를 `with_face_data` 호출마다(=텍스트
+/// 셰이핑마다) 매번 새로 open+mmap+munmap 한다(fontdb 0.23 `with_face_data`,
+/// `load_font_file_impl` 참고 — 같은 프로세스 안에서 같은 파일을 반복해서
+/// 열고 닫는다). 문서 하나에 텍스트런이 많으면 이 반복 open/mmap이 export-pdf
+/// convert 단계 self-time의 상당 부분을 차지한다(hwpx-template-engine 리포
+/// docs/rhwp-convert-분석.md 3절, samply flamegraph 실측 — self-time의 44%가
+/// `__munmap`/`__open`/`__mmap`).
+///
+/// fontdb는 이미 이 문제의 해법을 제공한다: `make_shared_face_data`가
+/// `Source::File`을 한 번만 mmap한 `Arc<Mmap>` 기반 `Source::SharedFile`로
+/// 바꿔주면, 이후의 모든 `with_face_data` 호출이 그 매핑을 재사용한다. 매핑된
+/// 파일이 프로세스 실행 중 디스크에서 바뀔 수 있어 `unsafe`로 표시돼 있지만,
+/// 이 프로세스는 렌더링 한 번을 위해 짧게 살고 죽으며 `--font-path`로 넘어온
+/// 폰트 파일은 그 사이 다른 프로세스가 바꿀 일이 없으므로 안전하다. 이미
+/// `Source::Binary`/`Source::SharedFile`인 얼굴에는 이 호출이 그냥 기존
+/// 참조를 복제해 돌려줄 뿐이라 무해하다.
+#[cfg(not(target_arch = "wasm32"))]
+fn share_face_data(fontdb: &mut usvg::fontdb::Database) {
+    let ids: Vec<usvg::fontdb::ID> = fontdb.faces().map(|face| face.id).collect();
+    for id in ids {
+        unsafe {
+            fontdb.make_shared_face_data(id);
+        }
+    }
+}
+
 fn create_fontdb(options: &PdfExportOptions) -> usvg::fontdb::Database {
     let mut fontdb = usvg::fontdb::Database::new();
     fontdb.load_system_fonts();
@@ -533,6 +559,7 @@ fn create_fontdb(options: &PdfExportOptions) -> usvg::fontdb::Database {
     // 종전의 ttfs/hwp·ttfs/windows(로컬 전용)와 /mnt/c/Windows/Fonts(WSL2 전용)는
     // 제거했다 — 서버·컨테이너에서 무의미하고 /mnt/c 는 #2268 간헐 행의 원인이었다.
     crate::renderer::font_paths::load_into_fontdb(&mut fontdb, &options.font_paths);
+    share_face_data(&mut fontdb);
     fontdb.set_serif_family(options.fallback_serif.as_str());
     fontdb.set_sans_serif_family(options.fallback_sans.as_str());
     fontdb.set_monospace_family(options.fallback_mono.as_str());
