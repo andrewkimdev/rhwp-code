@@ -4,6 +4,7 @@
 - **계획서**: [`mydocs/plans/task_m100_4159.md`](../plans/task_m100_4159.md)
 - **브랜치**: `task_m100_4159_nested_table_bottom_clip`
 - **분기 기준**: `upstream/devel` `06f8ebcca`
+- **PR 직전 통합 기준**: `upstream/devel` `23ff5b6f1` (merge commit `e6f09003b`)
 - **작업 시각**: 2026-08-07 KST
 
 ## 1. 기준 진단
@@ -94,7 +95,7 @@ nonterminal을 지정하면 80px를 유지하는 계약을 고정한다.
 | 검증 | 결과 |
 | --- | --- |
 | `CARGO_INCREMENTAL=0 cargo build --release` | PASS |
-| `CARGO_INCREMENTAL=0 cargo test --release --lib` | PASS, 3,292 passed / 10 ignored |
+| `CARGO_INCREMENTAL=0 cargo test --release --lib` | PASS, 3,305 passed / 10 ignored |
 | `CARGO_INCREMENTAL=0 cargo test --profile release-test --tests` | PASS |
 | Native Skia `skia --lib` | PASS, 58 passed |
 | Native Skia `issue_2225_missing_picture_placeholder` | PASS, 2 passed |
@@ -109,3 +110,8 @@ nonterminal을 지정하면 80px를 유지하는 계약을 고정한다.
 | `npm run e2e:manifest-check` | PASS, tracked 86개 / manifest 86행 |
 
 GitHub push·PR·이슈 comment는 아직 수행하지 않았다.
+
+PR 생성 승인 뒤 원격 `devel`이 `23ff5b6f1`까지 전진한 것을 확인했다. 이를 merge commit
+`e6f09003b`으로 통합한 새 code head에서 위 전체 게이트를 다시 실행했으며 모두 통과했다.
+PR 고유 diff는 9개 파일, 589 additions / 2 deletions로 유지되고 `upstream/devel`은 새 head의
+조상이다.

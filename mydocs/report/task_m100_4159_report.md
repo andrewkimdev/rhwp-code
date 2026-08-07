@@ -2,7 +2,8 @@
 
 - **Issue**: [#4159](https://github.com/edwardkim/rhwp/issues/4159)
 - **브랜치**: `task_m100_4159_nested_table_bottom_clip`
-- **기준**: `upstream/devel` `06f8ebcca`
+- **초기 기준**: `upstream/devel` `06f8ebcca`
+- **PR 직전 통합 기준**: `upstream/devel` `23ff5b6f1` (merge commit `e6f09003b`)
 - **계획서**: [`mydocs/plans/task_m100_4159.md`](../plans/task_m100_4159.md)
 - **단계 기록**: [`mydocs/working/task_m100_4159_stage1.md`](../working/task_m100_4159_stage1.md)
 - **작성 시각**: 2026-08-07 KST
@@ -27,7 +28,7 @@ SVG의 outer clip 하단은 `827.273px`로 stroke 하단과 일치한다.
 
 ## 3. 검증 요약
 
-- release build 및 library 3,292 passed / 10 ignored
+- release build 및 library 3,305 passed / 10 ignored
 - 전체 `release-test --tests` PASS
 - Native Skia library 58 passed, 지정 integration 2 passed / 4 passed
 - 전체 타깃 Clippy, fmt, diff, doc-test 4 passed / 2 ignored
@@ -39,7 +40,8 @@ SVG의 outer clip 하단은 `827.273px`로 stroke 하단과 일치한다.
 - 작업지시자 rhwp-studio 시각 판정 PASS: 물리 2쪽 사각형 숫자 및 물리 3쪽 표 하단선 정상
 
 증적은 `output/4159/`에 있다. 작업지시자 승인에 따른 `local_validation.md` 4.3 전체
-PR-CI형 로컬 게이트까지 통과했다.
+PR-CI형 로컬 게이트까지 통과했다. 원격 `devel` 전진을 통합한 `e6f09003b`에서도 같은 전체
+게이트와 새 WASM 브라우저 검증을 다시 통과했다.
 
 ## 4. 원격 상태
 
