@@ -34,6 +34,7 @@ SVG의 outer clip 하단은 `827.273px`로 stroke 하단과 일치한다.
 - 신규 #4159 E2E와 기존 #536 E2E PASS
 - E2E manifest tracked 86개 / 86행 일치
 - 한컴 2020 물리 3쪽과 수정 후 Canvas2D 시각 대조 완료
+- 작업지시자 rhwp-studio 시각 판정 PASS: 물리 2쪽 사각형 숫자 및 물리 3쪽 표 하단선 정상
 
 증적은 `output/4159/`에 있다. 전체 PR-CI형 로컬 게이트는 작업지시자 별도 승인 후 실행한다.
 
