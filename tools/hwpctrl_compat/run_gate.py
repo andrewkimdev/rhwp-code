@@ -64,6 +64,16 @@ def cleanup_spawned_hwp(baseline: set[str]) -> None:
         subprocess.run(["taskkill", "/F", "/PID", pid], capture_output=True, check=False)
 
 
+def wait_for_hwp_exit(baseline: set[str], settle_seconds: float, poll_seconds: float = 0.25) -> set[str]:
+    """`com.Quit()` 뒤 비동기 종료를 기다리고, 상한 뒤에도 남은 PID만 돌려준다."""
+    deadline = time.monotonic() + settle_seconds
+    leftovers = new_hwp_pids(baseline)
+    while leftovers and time.monotonic() < deadline:
+        time.sleep(min(poll_seconds, max(0.0, deadline - time.monotonic())))
+        leftovers = new_hwp_pids(baseline)
+    return leftovers
+
+
 def stored_oracle_status(path: Path, expect_version: str | None) -> str:
     """`--skip-ocx`가 읽을 기존 정답지가 현재 오라클인지 판정한다."""
     if not path.exists():
@@ -121,6 +131,12 @@ def main() -> int:
     ap.add_argument("--only", help="시나리오 id 하나만")
     ap.add_argument("--timeout", type=int, default=300, help="시나리오당 초 (COM 무응답 대비)")
     ap.add_argument(
+        "--quit-settle-seconds",
+        type=float,
+        default=10.0,
+        help="COM Quit 뒤 한글 프로세스 자연 종료 대기 시간 (기본 10초)",
+    )
+    ap.add_argument(
         "--expect-version",
         default=ORACLE_VERSION,
         help=(
@@ -165,7 +181,7 @@ def main() -> int:
             try:
                 status[name] = run_ocx(path, ocx_dir, args.timeout, args.expect_version)
             finally:
-                leftovers = new_hwp_pids(baseline)
+                leftovers = wait_for_hwp_exit(baseline, args.quit_settle_seconds)
                 if leftovers and args.cleanup_spawned:
                     cleanup_spawned_hwp(baseline)
                     leftovers = new_hwp_pids(baseline)

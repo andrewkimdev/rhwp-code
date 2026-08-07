@@ -168,9 +168,9 @@ compare.py  → L2 반환값 diff · L3 IR/레코드 diff · L4 픽셀 diff → 
 과거 캠페인에서 실제로 오판을 만든 것들이다. 하니스 v1 에 전부 넣는다.
 
 1. **COM hang** — stall-watchdog 필수. 시작 시 기존 한글 프로세스가 있으면 종료하지 않고
-   `OCCUPIED`로 중단한다. clean start 뒤 시간 제한이 지나도 기본은 남은 PID를 `LEFTOVER`로
-   보고하고 자동 종료하지 않는다. 전용 Windows 계정에서만 `--cleanup-spawned`를 명시해 새 PID를
-   정리할 수 있다.
+   `OCCUPIED`로 중단한다. `com.Quit()` 뒤 자연 종료를 최대 10초 기다린 뒤에도 남은 PID만
+   `LEFTOVER`로 보고하고 자동 종료하지 않는다. 전용 Windows 계정에서만 `--cleanup-spawned`를
+   명시해 새 PID를 정리할 수 있다.
 2. **동시 실행 금지** — COM 판정은 직렬. 병렬은 서로의 인스턴스를 죽인다.
 3. **보안 다이얼로그** — `FilePathCheckerModule.dll` 을 `HKCU\Software\HNC\HwpAutomation\Modules`
    에 등록(`hwp_com_automation` 메모).

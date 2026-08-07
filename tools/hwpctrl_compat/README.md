@@ -57,8 +57,9 @@ python tools/hwpctrl_compat/build_ledger.py --check   # CI 게이트: 스펙↔�
 - **문서 하나당 프로세스 하나.** 한 프로세스에서 `Hwp()` 두 번은 `com_error` 로 죽는다.
 - **동시 실행 금지.** 서로의 `Hwp.exe` 를 죽여 "무응답" 오판을 만든다. `run_gate.py` 는 직렬이다.
 - **시간 제한과 정리.** 시작 시 한글 프로세스가 하나라도 있으면 `OCCUPIED`로 중단하며, 종료하지
-  않는다. clean start 뒤에도 남은 PID는 `LEFTOVER`로 실패시켜 자동 종료하지 않는다. 전용 Windows
-  계정에서만 명시적으로 `--cleanup-spawned`를 주면 그 실행 뒤 새 PID를 종료할 수 있다.
+  않는다. `com.Quit()` 뒤 최대 10초 동안 자연 종료를 기다린 뒤에도 남은 PID만 `LEFTOVER`로
+  실패시켜 자동 종료하지 않는다. 전용 Windows 계정에서만 명시적으로 `--cleanup-spawned`를 주면
+  그 실행 뒤 새 PID를 종료할 수 있다.
 - **오라클은 한글2022(major 12)로 고정한다.** `12, 0, 0, 4547`과 `12.0.0.4547` 표기를 모두
   12로 판정한다. 버전이 어긋나면 **시나리오를 아예 돌리지 않고** 이전 `returns.json`과 저장본을
   지운 뒤 `<id>.rejected.json`만 남긴다. `--skip-ocx`도 기존 정답지의 버전을 다시 검사해 다른

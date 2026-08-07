@@ -14,7 +14,7 @@ sys.path.insert(0, str(HERE))
 from compare import selected_oracle_paths
 from extract_spec import verify
 from oracle_version import matches_expected_version
-from run_gate import hwp_pids, new_hwp_pids, stored_oracle_status
+from run_gate import hwp_pids, new_hwp_pids, stored_oracle_status, wait_for_hwp_exit
 from runner_ocx import clear_previous_outputs
 
 
@@ -74,6 +74,13 @@ class HarnessContractTests(unittest.TestCase):
         tasklist = 'Hwp.exe,101,Console,1,10 K\r\nHwpFrame.exe,202,Console,1,10 K\r\n'
         with patch("run_gate.hwp_pids", return_value=hwp_pids(tasklist)):
             self.assertEqual(new_hwp_pids({"101"}), {"202"})
+
+    def test_quit_settle_waits_for_asynchronous_hancom_exit(self) -> None:
+        from unittest.mock import patch
+
+        with patch("run_gate.new_hwp_pids", side_effect=[{"202"}, set()]), patch("run_gate.time.sleep") as sleep:
+            self.assertEqual(wait_for_hwp_exit({"101"}, 10.0), set())
+        sleep.assert_called_once()
 
     def test_tracked_spec_keeps_all_declared_parameter_set_items(self) -> None:
         spec_dir = HERE.parents[1] / "npm" / "hwpctrl-ocx" / "spec"
