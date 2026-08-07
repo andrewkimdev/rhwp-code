@@ -1,7 +1,14 @@
 #!/usr/bin/env python3
-"""개요 탐색(`get_outline_navigation`) 검증용 최소 HWPX fixture 를 만든다.
+"""개요 탐색(`get_outline_navigation`) 검증용 HWPX fixture 를 만든다.
 
-한 파일 안에 두 경계를 함께 담는다.
+두 개를 낸다.
+
+- `outline_navigation_table_cell_number.hwpx` — 리뷰 지적을 좁게 재현하는 최소 fixture.
+- `outline_navigation_panel_demo.hwpx` — 패널을 실제로 눌러 볼 데모. 3수준 계층 15개
+  개요가 3쪽에 걸쳐 있어 접기/펼치기·방향키 훑기·이동(스크롤)을 모두 확인할 수 있고,
+  가운데에 표 셀 번호 경계도 들어 있다.
+
+최소 fixture 는 한 파일 안에 두 경계를 함께 담는다.
 
 1. 개요 계층 — `개요 1`(수준 0) 아래 `개요 2`(수준 1). 목록이 계층으로 접히는지,
    번호가 `1.` / `가.` 로 확장되는지 확인한다.
@@ -30,8 +37,16 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / "samples" / "hwpx" / "ref" / "ref_empty.hwpx"
-OUTPUT = ROOT / "samples" / "pr4093" / "outline_navigation_table_cell_number.hwpx"
+OUTPUT_DIR = ROOT / "samples" / "pr4093"
+OUTPUT = OUTPUT_DIR / "outline_navigation_table_cell_number.hwpx"
+DEMO_OUTPUT = OUTPUT_DIR / "outline_navigation_panel_demo.hwpx"
 ZIP_TIMESTAMP = (1980, 1, 1, 0, 0, 0)
+
+# ref_empty 의 개요 문단 모양 — paraPr 2~4 가 개요 1~3 수준이고 style 도 같은 번호다.
+# 번호 정의 id 1 의 서식은 수준별로 `^1.` / `^2.`(HANGUL_SYLLABLE) / `^3)` 이라
+# 화면에는 `1.` / `가.` / `1)` 로 나온다.
+OUTLINE_LEVELS = {0: (2, 2), 1: (3, 3), 2: (4, 4)}
+BODY_PARA_PR = 0
 
 # ref_empty 의 paraPr 는 0~19 다. 20 번으로 "개요와 같은 번호 정의를 쓰는 NUMBER 문단"을
 # 추가한다 — paraPr 2(개요 1)에서 heading 만 NUMBER/idRef=1 로 바꾼 사본이다.
@@ -62,10 +77,17 @@ def lineseg(horz_size: int) -> str:
     )
 
 
-def paragraph(para_id: int, para_pr: int, style: int, text: str, horz_size: int = 42520) -> str:
+def paragraph(
+    para_id: int,
+    para_pr: int,
+    style: int,
+    text: str,
+    horz_size: int = 42520,
+    page_break: bool = False,
+) -> str:
     return (
-        f'<hp:p id="{para_id}" paraPrIDRef="{para_pr}" styleIDRef="{style}" pageBreak="0"'
-        ' columnBreak="0" merged="0">'
+        f'<hp:p id="{para_id}" paraPrIDRef="{para_pr}" styleIDRef="{style}"'
+        f' pageBreak="{1 if page_break else 0}" columnBreak="0" merged="0">'
         f'<hp:run charPrIDRef="0"><hp:t>{text}</hp:t></hp:run>'
         f"{lineseg(horz_size)}</hp:p>"
     )
@@ -118,10 +140,8 @@ def zip_info(name: str, compression: int) -> zipfile.ZipInfo:
     return info
 
 
-def main() -> int:
-    if not SOURCE.is_file():
-        raise RuntimeError(f"기준 문서가 없다: {SOURCE}")
-
+def write_fixture(output: Path, body: str) -> None:
+    """`ref_empty` 의 머리말·구역 설정을 그대로 쓰고 본문만 갈아 끼운 HWPX 를 쓴다."""
     with zipfile.ZipFile(SOURCE) as source:
         entries = {name: source.read(name) for name in source.namelist()}
 
@@ -135,7 +155,22 @@ def main() -> int:
     entries["Contents/header.xml"] = header.encode("utf-8")
 
     # 문단 0 은 secPr 를 품은 원본 빈 문단이라 그대로 두고 그 뒤에 본문을 붙인다.
-    body = "".join(
+    section = entries["Contents/section0.xml"].decode("utf-8")
+    section = replace_once(section, "</hs:sec>", f"{body}</hs:sec>", "구역 끝")
+    entries["Contents/section0.xml"] = section.encode("utf-8")
+
+    with zipfile.ZipFile(output, "w") as archive:
+        # mimetype 은 HWPX 규약상 첫 항목이자 무압축이어야 한다.
+        archive.writestr(zip_info("mimetype", zipfile.ZIP_STORED), entries.pop("mimetype"))
+        for name, payload in entries.items():
+            archive.writestr(zip_info(name, zipfile.ZIP_DEFLATED), payload)
+
+    print(f"wrote {output.relative_to(ROOT)}")
+
+
+def minimal_body() -> str:
+    """리뷰 지적을 좁게 재현하는 본문 5문단."""
+    return "".join(
         [
             # 1 → "1."
             paragraph(2000, 2, 2, "개요"),
@@ -151,17 +186,77 @@ def main() -> int:
             paragraph(2005, 2, 2, "요구사항"),
         ]
     )
-    section = entries["Contents/section0.xml"].decode("utf-8")
-    section = replace_once(section, "</hs:sec>", f"{body}</hs:sec>", "구역 끝")
-    entries["Contents/section0.xml"] = section.encode("utf-8")
 
-    with zipfile.ZipFile(OUTPUT, "w") as output:
-        # mimetype 은 HWPX 규약상 첫 항목이자 무압축이어야 한다.
-        output.writestr(zip_info("mimetype", zipfile.ZIP_STORED), entries.pop("mimetype"))
-        for name, payload in entries.items():
-            output.writestr(zip_info(name, zipfile.ZIP_DEFLATED), payload)
 
-    print(f"wrote {OUTPUT.relative_to(ROOT)}")
+def demo_body() -> str:
+    """패널을 눌러 볼 데모 본문 — 3수준 개요 15개가 3쪽에 걸쳐 있다.
+
+    개요마다 본문 두 줄을 딸려 보내 이동(스크롤)이 눈에 보이게 하고, 3쪽 머리에서
+    표 셀 번호 경계를 한 번 더 통과시킨다 — 패널 번호와 본문 번호가 같아야 한다.
+    """
+    parts: list[str] = []
+    para_id = 3000
+
+    def add(level: int | None, text: str, page_break: bool = False) -> None:
+        nonlocal para_id
+        para_pr, style = OUTLINE_LEVELS[level] if level is not None else (BODY_PARA_PR, 0)
+        parts.append(paragraph(para_id, para_pr, style, text, page_break=page_break))
+        para_id += 1
+
+    def body_lines(topic: str) -> None:
+        add(None, f"{topic} 설명 문단 — 개요를 눌렀을 때 이 자리로 스크롤한다.")
+        add(None, f"{topic} 보충 문단 — 방향키로 훑는 동안에는 화면이 움직이지 않아야 한다.")
+
+    # 1쪽 — 1. 아래 2·3수준
+    add(0, "총칙")
+    body_lines("총칙")
+    add(1, "목적")
+    body_lines("목적")
+    add(2, "배경")
+    body_lines("배경")
+    add(2, "적용 범위")
+    body_lines("적용 범위")
+    add(1, "용어 정의")
+    body_lines("용어 정의")
+
+    # 2쪽 — 같은 계층이 한 수준 되감기는지 본다
+    add(0, "본문 규정", page_break=True)
+    body_lines("본문 규정")
+    add(1, "요구사항")
+    body_lines("요구사항")
+    add(2, "기능 요구")
+    body_lines("기능 요구")
+    add(2, "비기능 요구")
+    body_lines("비기능 요구")
+    add(1, "제약 조건")
+    body_lines("제약 조건")
+
+    # 3쪽 — 표 셀 번호 경계. 셀 문단이 4 를 가져가므로 뒤 개요는 5. 다.
+    add(0, "표가 낀 구간", page_break=True)
+    body_lines("표가 낀 구간")
+    parts.append(
+        table_host_paragraph(para_id, paragraph(para_id + 1, NUMBER_PARA_PR_ID, 0, "표 셀 번호 문단", 39000))
+    )
+    para_id += 2
+    add(1, "표 뒤 하위 개요")
+    body_lines("표 뒤 하위 개요")
+    add(0, "부칙")
+    body_lines("부칙")
+    add(1, "시행일")
+    body_lines("시행일")
+    add(1, "경과 조치")
+    body_lines("경과 조치")
+
+    return "".join(parts)
+
+
+def main() -> int:
+    if not SOURCE.is_file():
+        raise RuntimeError(f"기준 문서가 없다: {SOURCE}")
+
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    write_fixture(OUTPUT, minimal_body())
+    write_fixture(DEMO_OUTPUT, demo_body())
     return 0
 
 

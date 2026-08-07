@@ -12,6 +12,7 @@
 use rhwp::wasm_api::HwpDocument;
 
 const FIXTURE: &str = "samples/pr4093/outline_navigation_table_cell_number.hwpx";
+const DEMO_FIXTURE: &str = "samples/pr4093/outline_navigation_panel_demo.hwpx";
 
 /// SVG `<text>` 내용만 이어 붙이고 공백을 지운 문자열.
 fn page_text(doc: &HwpDocument, page: u32) -> String {
@@ -30,6 +31,18 @@ fn page_text(doc: &HwpDocument, page: u32) -> String {
         rest = &after[close..];
     }
     out.chars().filter(|c| !c.is_whitespace()).collect()
+}
+
+/// 개요 항목의 쪽 번호만.
+fn entries_pages(doc: &HwpDocument) -> Vec<u32> {
+    let json: serde_json::Value =
+        serde_json::from_str(&doc.get_outline_navigation().unwrap()).expect("개요 탐색 JSON");
+    json["outline"]
+        .as_array()
+        .expect("outline 배열")
+        .iter()
+        .map(|item| item["page"].as_u64().unwrap_or_default() as u32)
+        .collect()
 }
 
 fn outline_entries(doc: &HwpDocument) -> Vec<(String, String, u64)> {
@@ -86,5 +99,61 @@ fn outline_numbers_match_rendered_numbers_across_table_cell_number() {
     assert!(
         rendered.contains("1.개요"),
         "렌더된 앞 개요가 1. 이 아니다: {rendered}"
+    );
+}
+
+/// 패널 데모 fixture — 3수준 계층 15개가 3쪽에 걸쳐 있고, 가운데에 같은 표 셀 경계가 있다.
+///
+/// 실제 문서 모양에서 패널이 보여줄 값을 통째로 고정한다. 손으로 눌러 볼 때 기대치를
+/// 이 목록으로 확인할 수 있고(`samples/pr4093/README.md`), 수준·쪽 계산이 틀어지면
+/// 여기서 잡힌다.
+#[test]
+fn panel_demo_outline_matches_rendered_document() {
+    let bytes = std::fs::read(DEMO_FIXTURE).unwrap();
+    let doc = HwpDocument::from_bytes(&bytes).unwrap();
+
+    assert_eq!(doc.page_count(), 3, "데모 fixture 는 3쪽이어야 한다");
+
+    let entries = outline_entries(&doc);
+    let shape: Vec<(&str, &str, u64)> = entries
+        .iter()
+        .map(|(number, title, level)| (number.as_str(), title.as_str(), *level))
+        .collect();
+
+    assert_eq!(
+        shape,
+        vec![
+            ("1.", "총칙", 1),
+            ("가.", "목적", 2),
+            ("1)", "배경", 3),
+            ("2)", "적용 범위", 3),
+            ("나.", "용어 정의", 2),
+            ("2.", "본문 규정", 1),
+            ("가.", "요구사항", 2),
+            ("1)", "기능 요구", 3),
+            ("2)", "비기능 요구", 3),
+            ("나.", "제약 조건", 2),
+            ("3.", "표가 낀 구간", 1),
+            ("가.", "표 뒤 하위 개요", 2),
+            // 표 셀의 NUMBER 문단이 4 를 가져갔으므로 다음 최상위 개요는 5. 다.
+            ("5.", "부칙", 1),
+            ("가.", "시행일", 2),
+            ("나.", "경과 조치", 2),
+        ],
+    );
+
+    // 이동 대상 쪽도 함께 고정한다 — 패널에서 누르면 이 쪽으로 스크롤한다.
+    let pages: Vec<u32> = entries_pages(&doc);
+    assert_eq!(pages, vec![1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 3, 3, 3, 3, 3]);
+
+    // 화면 대조 — 표 셀 경계를 지난 뒤 개요가 렌더러와 같은 5. 인지.
+    let page3 = page_text(&doc, 2);
+    assert!(
+        page3.contains("5.부칙"),
+        "렌더된 부칙이 5. 가 아니다: {page3}"
+    );
+    assert!(
+        !page3.contains("4.부칙"),
+        "렌더된 부칙이 4. 로 그려졌다: {page3}"
     );
 }
