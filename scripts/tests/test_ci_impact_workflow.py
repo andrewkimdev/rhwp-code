@@ -18,12 +18,74 @@ WORKER_MARKER = "  # [#2393] 기본 테스트 병렬화"
 # default-feature worker 는 이 파일을 통째로 cfg-out 하므로, Native Skia job 이
 # 명시적으로 실행하지 않으면 **어디에서도 돌지 않는다.**
 #
-# 게이트는 중첩될 수 있다 — `render_p37_direct_pdf_export.rs` 는
-# `#![cfg(all(not(target_arch = "wasm32"), feature = "native-skia"))]` 형태다.
-# 따라서 정확 일치가 아니라 inner attribute 안의 feature 언급을 본다.
-FILE_GATED_NATIVE_SKIA = re.compile(
-    r'#!\[cfg\((?:[^\[\]]|\[[^\]]*\])*feature\s*=\s*"native-skia"'
-)
+# 판별은 양쪽 방향의 오탐을 모두 막아야 한다. 한쪽으로 좁으면 부류를 놓치고,
+# 반대쪽으로 넓으면 배선할 이유가 없는 파일을 배선하라고 요구한다.
+#
+# - 게이트는 중첩된다 — `render_p37_direct_pdf_export.rs` 는
+#   `#![cfg(all(not(target_arch = "wasm32"), feature = "native-skia"))]` 형태라
+#   정확 일치로 좁히면 놓친다. 그래서 괄호 균형으로 술어를 잘라 본다.
+# - `not(feature = "native-skia")` 는 **정반대 조건**이다. 그 파일은 native-skia
+#   빌드에서 오히려 cfg-out 되므로 job 에 배선하면 0건짜리 target 이 된다.
+#   부정 문맥 안의 언급은 세지 않는다.
+# - 이 저장소는 한국어 `//!` 문서에 cfg 속성을 자주 인용한다. 인용은 게이트가
+#   아니므로 줄 주석을 먼저 지운다.
+_INNER_CFG_OPEN = re.compile(r"#!\[\s*cfg\s*\(")
+_FEATURE_NATIVE_SKIA = re.compile(r'feature\s*=\s*"native-skia"')
+_CALL_NAME_BEFORE_PAREN = re.compile(r"(\w+)\s*$")
+
+
+def _strip_line_comments(source: str) -> str:
+    """`//`·`///`·`//!` 로 시작하는 줄을 지운다."""
+    return "\n".join(
+        "" if line.lstrip().startswith("//") else line
+        for line in source.splitlines()
+    )
+
+
+def _inner_cfg_predicates(source: str) -> list[str]:
+    """inner attribute `#![cfg(...)]` 의 술어를 괄호 균형으로 잘라낸다."""
+    predicates = []
+    for opened in _INNER_CFG_OPEN.finditer(source):
+        depth = 1
+        index = opened.end()
+        while index < len(source) and depth > 0:
+            if source[index] == "(":
+                depth += 1
+            elif source[index] == ")":
+                depth -= 1
+            index += 1
+        if depth == 0:
+            predicates.append(source[opened.end():index - 1])
+    return predicates
+
+
+def _requires_native_skia_enabled(predicate: str) -> bool:
+    """술어가 native-skia 를 **켠** 상태로 요구하는가. `not(...)` 안이면 아니다."""
+    enclosing: list[str] = []
+    index = 0
+    while index < len(predicate):
+        found = _FEATURE_NATIVE_SKIA.match(predicate, index)
+        if found:
+            if "not" not in enclosing:
+                return True
+            index = found.end()
+            continue
+        char = predicate[index]
+        if char == "(":
+            name = _CALL_NAME_BEFORE_PAREN.search(predicate[:index])
+            enclosing.append(name.group(1) if name else "")
+        elif char == ")" and enclosing:
+            enclosing.pop()
+        index += 1
+    return False
+
+
+def source_is_file_gated_native_skia(source: str) -> bool:
+    """소스 텍스트가 파일 전체를 native-skia **활성** 조건으로 게이트하는가."""
+    return any(
+        _requires_native_skia_enabled(predicate)
+        for predicate in _inner_cfg_predicates(_strip_line_comments(source))
+    )
 
 
 def file_gated_native_skia_tests() -> list[str]:
@@ -31,7 +93,7 @@ def file_gated_native_skia_tests() -> list[str]:
     return sorted(
         path.stem
         for path in TESTS_DIR.glob("*.rs")
-        if FILE_GATED_NATIVE_SKIA.search(path.read_text(encoding="utf-8"))
+        if source_is_file_gated_native_skia(path.read_text(encoding="utf-8"))
     )
 
 
@@ -257,6 +319,35 @@ class CiImpactWorkflowTests(unittest.TestCase):
         # 함수 게이트 파일은 이 부류가 아니다 — 별도 축(#4132)이다.
         self.assertNotIn("issue_2225_missing_picture_placeholder", found)
         self.assertNotIn("cli_exit_codes", found)
+
+    def test_discovery_rejects_negated_gates_and_quoted_attributes(self) -> None:
+        """[PR #4170 리뷰] 발견 패턴의 **반대 방향** 오탐도 막는다.
+
+        위 테스트는 "놓치지 않는가" 만 본다. 넓은 쪽 오탐은 저장소에 해당 파일이
+        생기기 전까지 드러나지 않으므로 합성 입력으로 고정한다.
+
+        - `not(feature = "native-skia")` 는 native-skia 빌드에서 오히려 cfg-out
+          되므로, 배선을 요구하면 0건짜리 target 이 생긴다.
+        - 이 저장소는 한국어 `//!` 문서에 cfg 속성을 자주 인용한다. 인용은
+          게이트가 아니다.
+        """
+        for source in [
+            '#![cfg(feature = "native-skia")]',
+            '#![cfg(all(not(target_arch = "wasm32"), feature = "native-skia"))]',
+            '#![cfg(all(\n    not(target_arch = "wasm32"),\n    feature = "native-skia"\n))]',
+        ]:
+            with self.subTest(gated=source):
+                self.assertTrue(source_is_file_gated_native_skia(source))
+
+        for source in [
+            '#![cfg(not(feature = "native-skia"))]',
+            '#![cfg(all(not(target_arch = "wasm32"), not(feature = "native-skia")))]',
+            '//! `#![cfg(feature = "native-skia")]` 로 파일을 게이트한다',
+            '// #![cfg(feature = "native-skia")]',
+            '#![cfg(not(target_arch = "wasm32"))]',
+        ]:
+            with self.subTest(not_gated=source):
+                self.assertFalse(source_is_file_gated_native_skia(source))
 
     def test_every_file_gated_native_skia_test_is_wired(self) -> None:
         """[#4040] 파일 게이트된 native-skia test 는 job·classifier 양쪽에 있어야 한다.

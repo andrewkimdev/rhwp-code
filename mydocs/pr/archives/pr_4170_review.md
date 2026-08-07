@@ -35,7 +35,7 @@ base: d634e608be45d2fd072364a21952a8409d01d9ea
 | PR | [#4170](https://github.com/edwardkim/rhwp/pull/4170) |
 | 작성자 | `postmelee` (collaborator self-merge) |
 | 대상 / head | `devel` / `issue-4040-native-targets` (upstream branch) |
-| 규모 | 8 files, +534 / -0 (기능 변경은 workflow 6줄 + classifier 7줄) |
+| 규모 | 9 files, +790 / -0 — 본 문서 포함. 기능 변경은 workflow 6줄 + classifier 7줄 |
 | 관련 issue | [#4040](https://github.com/edwardkim/rhwp/issues/4040), [#4132](https://github.com/edwardkim/rhwp/issues/4132), [#2083](https://github.com/edwardkim/rhwp/issues/2083), [#2292](https://github.com/edwardkim/rhwp/issues/2292), [#2293](https://github.com/edwardkim/rhwp/issues/2293), [#3790](https://github.com/edwardkim/rhwp/issues/3790) |
 | metadata | label·milestone·review request 없음 |
 
@@ -78,7 +78,8 @@ base: d634e608be45d2fd072364a21952a8409d01d9ea
 | --- | --- |
 | `test_every_file_gated_native_skia_test_is_wired` (신규) | 저장소 → job·classifier |
 | `test_native_skia_integration_targets_are_classifier_inputs` (기존, 유지) | job → classifier |
-| `test_discovery_finds_the_known_file_gated_native_skia_tests` (신규) | 발견 패턴 자체 |
+| `test_discovery_finds_the_known_file_gated_native_skia_tests` (신규) | 발견 패턴 — 좁은 쪽 |
+| `test_discovery_rejects_negated_gates_and_quoted_attributes` (신규) | 발견 패턴 — 넓은 쪽 |
 | `test_native_skia_targets_run_in_both_profiles` (신규) | 두 프로파일 대칭 |
 
 기존 단방향 테스트를 지우지 않고 남긴 이유는 역방향(job 에는 있는데 classifier 에 없음)을 계속
@@ -86,6 +87,23 @@ base: d634e608be45d2fd072364a21952a8409d01d9ea
 
 `#4080` 의 `test_workflow_contract_wiring.py` 와 같은 방어를 적용했다 — 발견 패턴이 망가지면 부류
 강제가 조용히 무의미해지므로 패턴 자체를 단언한다.
+
+### 리뷰 지적 반영 — 발견 패턴의 넓은 쪽
+
+최초 판별식은 정규식 한 줄이라 `feature = "native-skia"` 가 **어떤 문맥에 있든** 매치했다. 좁은 쪽
+오탐(중첩 게이트 놓침)은 RED 재현에서 잡혔지만 넓은 쪽은 남아 있었다.
+
+| 입력 | 최초 | 반영 후 |
+| --- | --- | --- |
+| `#![cfg(not(feature = "native-skia"))]` | 매치 | 제외 |
+| `//! \`#![cfg(feature = "native-skia")]\` 로 게이트한다` | 매치 | 제외 |
+
+`not(...)` 로 게이트된 파일은 native-skia 빌드에서 **오히려 cfg-out** 되므로, 배선을 요구하면 0건짜리
+target 이 생긴다. 인용은 애초에 게이트가 아니며, 이 저장소는 한국어 `//!` 문서에 cfg 속성을 자주
+인용한다. 둘 다 저장소에 해당 파일이 생기기 전에는 드러나지 않으므로 합성 입력으로 고정했다.
+
+판별식을 괄호 균형 파싱 + 부정 문맥 추적으로 바꾸고, 줄 주석을 먼저 지운다. 기존 RED 재현은
+그대로 성립한다 — 되돌린 상태에서 여전히 세 파일만 지목하며 1건 실패한다.
 
 ## 검증
 
@@ -103,7 +121,7 @@ base: d634e608be45d2fd072364a21952a8409d01d9ea
 
 | 검증 | 결과 |
 | --- | --- |
-| workflow 계약 테스트 5개 파일 | 57 passed / 0 failed |
+| workflow 계약 테스트 5개 파일 | 58 passed / 0 failed |
 | `node --test ci-impact-classifier.test.cjs` | 28 passed (fixture 1건 추가) |
 | `actionlint .github/workflows/ci.yml` | 통과, 진단 없음 |
 | `node --check scripts/ci-impact-classifier.cjs` | 통과 |
