@@ -2,7 +2,7 @@
 kind: investigation
 status: in_progress
 canonical: mydocs/working/task_m100_3820_stage1.md
-last_verified: 2026-08-07
+last_verified: 2026-08-08
 ---
 
 # Task #3820 Stage 50 — 리베이스 보정 전체 회귀
@@ -111,6 +111,48 @@ table의 가시 viewport에 들어오지 못한 독립적인 표 조각 소유 �
 fallback mixed-fragment 경로가 canonical `CellUnit`의 hard boundary를 잃는 것이 남은
 원인 후보다. 현재 구현과 실패 회귀는 upstream rebase 전 체크포인트로 보존하며 해결
 완료로 판정하지 않는다.
+
+## 최신 upstream 리베이스와 #4159 충돌 보정
+
+Stage 50 체크포인트를 최신 `upstream/devel` `3a16ddd40` 위로 리베이스했다. 리베이스 후
+HEAD는 `757fa69e9`이며, `upstream/devel...HEAD`는 `0/64`로 최신 upstream을 모두
+포함한다. 충돌 해소에서는 upstream #4159의 terminal nested-cell clip 계약과 이
+브랜치의 issue2007 1×1 continuation viewport 계약을 모두 보존했다.
+
+리베이스 직후 issue2007 integration 15종 중 다음 한 건이 실패했다.
+
+```text
+issue_4159_terminal_nested_bottom_border_is_inside_all_cell_clips
+비종료 물리 2쪽에 종료 bottom 선이 미리 노출됐다:
+bbox=(101.24, 996.34, 653.8533, 0.5)
+```
+
+실패 선은 upstream #4159의 terminal clip 확장이 아니라 이 브랜치의 fragment-frame
+재구성 경로가 만든 합성선이었다. 물리 p2의 실제 대상은 비종료 9×2 표였지만,
+`ends_after_clip`이라는 순수 기하 조건만으로 셀 clip 하단에 전체 폭 선을 추가했다.
+반면 한컴 PDF 기준으로 합성 하단선이 필요한 p10 대상은 비종료 1×1 RowBreak
+continuation이다.
+
+따라서 `reconstruct_nested_table_fragment_frame()`와
+`repair_clipped_nested_table_fragment_frame()`의 **하단 가로 frame 재구성만** 실제
+대상 `TableNode`가 1×1일 때 허용했다. 다음 동작은 변경하지 않았다.
+
+- continuation 상단 frame 재구성
+- 좌·우 세로선과 paint-safe `frame_bottom` 좌표
+- upstream #4159의 실제 terminal 셀 clip 확장
+- p10 비종료 1×1 하단 frame
+
+보정 후 상반된 두 focused 계약과 integration 파일 전체가 통과했다.
+
+```text
+issue_4159_terminal_nested_bottom_border_is_inside_all_cell_clips: 1 passed
+issue_2007_continuation_frame_restarts_and_drops_previous_page_residual: 1 passed
+issue_2007_nested_cell_pagination: 15 passed / 0 failed
+```
+
+이 결과는 p2 9×2 표의 조기 종료선을 제거하면서 p3의 실제 terminal 하단선과 p10의
+비종료 1×1 physical fragment frame을 동시에 보존한다. 전체 release-test, Native Skia
+3종, clippy는 이 focused 보정 커밋 뒤 별도로 실행해 최종 상태를 판정한다.
 
 ## 집중 회귀 진행
 

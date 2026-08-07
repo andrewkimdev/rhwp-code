@@ -439,6 +439,22 @@ fn fragment_horizontal_frame_y(
     }
 }
 
+/// Only the borderless 1×1 RowBreak continuation contract needs a synthetic
+/// bottom edge at a physical page clip.  A multi-cell nested table owns real
+/// row boundaries on later fragments; turning a purely geometric
+/// `ends_after_clip` result into a full-width rule exposes a premature terminal
+/// border on the preceding page (#4159, issue2007 p2).
+fn reconstructs_clipped_fragment_bottom(table_node: &RenderNode) -> bool {
+    matches!(
+        &table_node.node_type,
+        RenderNodeType::Table(TableNode {
+            row_count: 1,
+            col_count: 1,
+            ..
+        })
+    )
+}
+
 /// Make one full-width fragment edge paint-safe without producing a double
 /// rule. Native table layout commonly leaves the source border exactly on the
 /// clip edge.  The old broad `has_fragment_border_line` tolerance treated that
@@ -825,7 +841,7 @@ fn reconstruct_nested_table_fragment_frame(
                 style.clone(),
             );
         }
-        if ends_after_clip {
+        if ends_after_clip && reconstructs_clipped_fragment_bottom(table_node) {
             ensure_fragment_horizontal_frame_inside_clip(
                 tree,
                 table_node,
@@ -1073,7 +1089,7 @@ fn repair_clipped_nested_table_fragment_frame(
                     style.clone(),
                 );
             }
-            if ends_after_clip {
+            if ends_after_clip && reconstructs_clipped_fragment_bottom(table_node) {
                 ensure_fragment_horizontal_frame_inside_clip(
                     tree,
                     table_node,
