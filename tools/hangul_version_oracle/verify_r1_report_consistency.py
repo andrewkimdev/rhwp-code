@@ -22,6 +22,7 @@ Exit code: 1 if any FAIL, else 2 if any CONTRADICTION, else 0.
 """
 
 import argparse
+import html
 import re
 import sys
 from pathlib import Path
@@ -32,6 +33,7 @@ MANUAL = REPO / "mydocs/manual/verification/hangul_version_oracle.md"
 TOOLS = REPO / "tools/hangul_version_oracle"
 
 results = []  # (id, verdict, subject, detail)
+DOC_CELL = r"(?:``.*?``|`[^`]+`|<code>.*?</code>)"
 
 
 def add(check_id, verdict, subject, detail=""):
@@ -51,6 +53,14 @@ def int_(s):
     return int(s.replace(",", "").replace("*", ""))
 
 
+def document_path(cell):
+    if cell.startswith("``"):
+        return cell[2:-2]
+    if cell.startswith("`"):
+        return cell[1:-1]
+    return html.unescape(cell.removeprefix("<code>").removesuffix("</code>"))
+
+
 def parse_tables(text):
     s4 = section(text, r"\n## 4\. ", r"\n## 5\. ")
     s51 = section(text, r"### 5\.1 ", r"### 5\.2 ")
@@ -63,21 +73,21 @@ def parse_tables(text):
     t = {}
 
     t["page_delta"] = [
-        {"doc": m[0] or m[1], "p2022": int_(m[2]), "p2024": int_(m[3]), "delta": int(m[4])}
+        {"doc": document_path(m[0]), "p2022": int_(m[1]), "p2024": int_(m[2]), "delta": int(m[3])}
         for m in re.findall(
-            r"^\| (?:``(.+)``|`([^`]+)`) \| ([\d,]+) \| ([\d,]+) \| ([+-]\d+) \|$", s51, re.M
+            rf"^\| ({DOC_CELL}) \| ([\d,]+) \| ([\d,]+) \| ([+-]\d+) \|$", s51, re.M
         )
     ]
     t["break_diff"] = [
-        {"doc": m[0] or m[1], "pages": int_(m[2]), "d2022": m[3], "d2024": m[4]}
+        {"doc": document_path(m[0]), "pages": int_(m[1]), "d2022": m[2], "d2024": m[3]}
         for m in re.findall(
-            r"^\| (?:``(.+)``|`([^`]+)`) \| ([\d,]+) \| `([^`]+)` \| `([^`]+)` \|$", s52, re.M
+            rf"^\| ({DOC_CELL}) \| ([\d,]+) \| `([^`]+)` \| `([^`]+)` \|$", s52, re.M
         )
     ]
     t["para_diff"] = [
-        {"doc": m[0] or m[1], "n2022": int_(m[2]), "n2024": int_(m[3])}
+        {"doc": document_path(m[0]), "n2022": int_(m[1]), "n2024": int_(m[2])}
         for m in re.findall(
-            r"^\| (?:``(.+)``|`([^`]+)`) \| ([\d,]+) \| ([\d,]+) \|$", s53, re.M
+            rf"^\| ({DOC_CELL}) \| ([\d,]+) \| ([\d,]+) \|$", s53, re.M
         )
     ]
     t["src_table"] = {
@@ -99,24 +109,26 @@ def parse_tables(text):
     ]
 
     t["unconfirmed"] = [
-        {"verdict": m[0].strip(), "doc": m[1] or m[2], "detail": m[3].strip(), "rerun": m[4].strip()}
+        {"verdict": m[0].strip(), "doc": document_path(m[1]), "detail": m[2].strip(), "rerun": m[3].strip()}
         for m in re.findall(
-            r"^\| ([A-Z_]+) \| (?:``(.+)``|`([^`]+)`) \| ([^|]+) \| ([^|]+) \|$", s6, re.M
+            rf"^\| ([A-Z_]+) \| ({DOC_CELL}) \| ([^|]+) \| ([^|]+) \|$", s6, re.M
         )
     ]
     t["d2020_2022"] = [
-        {"kind": m[0], "doc": m[1] or m[2], "detail": m[3].strip()}
+        {"kind": m[0], "doc": document_path(m[1]), "detail": m[2].strip()}
         for m in re.findall(
-            r"^\| ([A-Z_]+) \| (?:``(.+)``|`([^`]+)`) \| ([^|]+) \|$", s8, re.M
+            rf"^\| ([A-Z_]+) \| ({DOC_CELL}) \| ([^|]+) \|$", s8, re.M
         )
     ]
 
     m = re.search(
-        r"^\| 다름 ([\d,]+)건 \| \*\*([\d,]+) \(([\d.]+)%\)\*\* \| (\d+) \| (\d+) \|$", s4, re.M
+        r"^\| 다름 ([\d,]+)건 \| \*\*([\d,]+) \(([\d.]+)%\)\*\* \| (\d+) \| (\d+)(?: \| (\d+))? \|$",
+        s4,
+        re.M,
     )
     t["verif"] = (
         {"raw": int_(m.group(1)), "conf": int_(m.group(2)), "pct": float(m.group(3)),
-         "fp": int(m.group(4)), "fail": int(m.group(5))}
+         "fp": int(m.group(4)), "fail": int(m.group(5)), "initial_err": int(m.group(6) or 0)}
         if m else None
     )
     m = re.search(r"^\| 동일 ([\d,]+)건 \| \*\*0\*\* \| ([\d,]+) \| 0 \|$", s4, re.M)
@@ -243,22 +255,26 @@ def main():
 
     # --- section 4 vs section 6 -------------------------------------------------
     v = t["verif"]
-    add("R16", "PASS" if v and v["conf"] + v["fp"] + v["fail"] == v["raw"]
+    add("R16", "PASS" if v and v["conf"] + v["fp"] + v["fail"] + v["initial_err"] == v["raw"]
         and abs(100 * v["conf"] / (v["raw"] - v["fail"]) - v["pct"]) <= 0.051 else "FAIL",
         "4. verification table arithmetic",
-        f"{v['raw']} = {v['conf']}+{v['fp']}+{v['fail']}; {v['pct']}% = {v['conf']}/{v['raw'] - v['fail']} "
+        f"{v['raw']} = {v['conf']}+{v['fp']}+{v['fail']}+{v['initial_err']}; {v['pct']}% = {v['conf']}/{v['raw'] - v['fail']} "
         "(denominator excludes rerun failures)" if v else "table row not parsed")
     add("R17", "PASS" if v and len(unconf) == v["raw"] - v["conf"] else "FAIL",
         "6. unconfirmed rows", f"parsed {len(unconf)} vs {v['raw']}-{v['conf']}" if v else "n/a")
     rerun_match = sum(1 for r in unconf if "MATCH" in r["rerun"])
-    rerun_fail = sum(1 for r in unconf if "ERR" in r["rerun"] or "failed" in r["rerun"])
-    ok = v and (rerun_match, rerun_fail) == (v["fp"], v["fail"])
+    rerun_fail = sum(
+        1 for r in unconf
+        if r["verdict"] != "ERR" and ("ERR" in r["rerun"] or "failed" in r["rerun"])
+    )
+    initial_err = sum(1 for r in unconf if r["verdict"] == "ERR")
+    ok = v and (rerun_match, rerun_fail, initial_err) == (v["fp"], v["fail"], v["initial_err"])
     add("R18", "PASS" if ok else "CONTRADICTION",
         "4. false-positive/failure split vs 6. table",
-        f"4. claims {v['fp']} rerun-identical + {v['fail']} rerun failures; 6. rows show "
-        f"rerun=MATCH x{rerun_match}, rerun failure x{rerun_fail}. Which side is right "
+        f"4. claims {v['fp']} rerun-identical + {v['fail']} rerun failures + {v['initial_err']} initial ERR; 6. rows show "
+        f"rerun=MATCH x{rerun_match}, rerun failure x{rerun_fail}, initial ERR x{initial_err}. Which side is right "
         "needs the raw diff_unconfirmed.tsv" if not ok else
-        f"{rerun_match}/{rerun_fail} matches 4. table")
+        f"{rerun_match}/{rerun_fail}/{initial_err} matches 4. table")
 
     # --- section 8: the 2020 baseline -------------------------------------------
     add("R19", "PASS" if len(d2020) == 5 == t["raw3"].get(("2020", "2022")) else "FAIL",
@@ -309,7 +325,7 @@ def main():
     # implies a non-OK status (recorded as ERR/MISSING in whichever diff touches that
     # version -- compare_passes.ps1 records those as rows too) or unequal tuples.
     union = t["raw3"].get(("2020", "2022"), 0) + d22_24 - len(overlap)
-    m263 = re.search(r"합집합 ([\d,]+)건", text)
+    m263 = re.search(r"합집합 (?:\*\*)?([\d,]+)건", text)
     claimed_union = int_(m263.group(1)) if m263 else None
     add("R22", "PASS" if claimed_union == union else "CONTRADICTION",
         "8. verify-list union count",
