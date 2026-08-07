@@ -92,8 +92,28 @@ raw PUA와 `borderType=0`은 바꾸지 않았다. `composer.rs`의 텍스트 표
 <text x="87.13" y="169.60" ...>1</text>
 ```
 
-## 6. 남은 게이트
+## 6. 전체 PR 검증 결과
 
-`local_validation.md` 4.3의 전체 `release-test --tests`, `clippy --all-targets`, Native Skia
-전체 3종은 집중 결과를 작업지시자에게 보고한 뒤 별도 승인받아 실행한다. 원격 push·PR·이슈
-comment도 아직 수행하지 않았다.
+집중 결과를 보고한 뒤 작업지시자 승인을 받아 `local_validation.md` 4.3의 renderer 전체 게이트를
+실행했다.
+
+| 검증 | 결과 |
+| --- | --- |
+| `CARGO_INCREMENTAL=0 cargo build --release` | PASS |
+| `CARGO_INCREMENTAL=0 cargo test --release --lib` | PASS, 3,292 passed / 10 ignored / 0 failed |
+| `CARGO_INCREMENTAL=0 cargo test --profile release-test --tests` | PASS, 모든 통합 테스트 0 failed |
+| Native Skia 공식 3종 | PASS, 58 + 2 + 4 passed |
+| `cargo fmt --check`, `git diff --check` | PASS |
+| `CARGO_INCREMENTAL=0 cargo clippy --all-targets -- -D warnings` | PASS |
+| `CARGO_INCREMENTAL=0 cargo test --doc` | PASS, 4 passed / 2 ignored |
+| `rhwp-studio: npx tsc --noEmit` | PASS |
+| `rhwp-studio: npm test` | PASS, Node 22에서 765 passed / 0 failed |
+| 표준 release WASM build | PASS, compile·wasm-bindgen·wasm-opt·`pkg` packaging 완료 |
+| 새 WASM의 `e2e:issue-4158` / `e2e:issue-536` | PASS, 7 + 6개 계약 |
+| `e2e:manifest-check` | PASS, tracked 86개 / manifest 86행 |
+
+샌드박스 내부의 Node 22/24에서는 `spawnSync` 자식 stdout이 비어 결과 마커 기반 Studio 테스트
+5개가 실패했지만, 같은 Node 22 명령을 샌드박스 밖에서 실행하면 765개가 모두 통과했다. 직접
+드라이버도 정상 마커를 출력하므로 제품 회귀가 아니라 실행 격리의 pipe 캡처 현상으로 판정했다.
+
+원격 push·PR·이슈 comment는 아직 수행하지 않았다.

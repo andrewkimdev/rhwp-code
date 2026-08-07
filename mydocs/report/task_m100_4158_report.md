@@ -37,8 +37,18 @@ IR text / CharOverlapInfo               → preserve
 - 기존 물리 2쪽 #536 E2E 6개 계약 PASS
 - 실제 SVG에서 `<rect>`+숫자 1과 raw PUA 부재 확인
 - 17쪽 한컴 PDF 물리 10쪽과 시각 대조 완료
+- release build와 library 3,292 passed / 10 ignored / 0 failed
+- `release-test --tests` 전체 PASS, Native Skia 공식 3종 58 + 2 + 4 PASS
+- 전체 타깃 Clippy, fmt, diff, doc test, Studio TypeScript PASS
+- CI 동등 Node 22 Studio test 765 passed / 0 failed
+- 새 WASM으로 #4158 7개와 기존 #536 6개 브라우저 계약 재통과
+- E2E manifest tracked 86개 / 86행 일치
 
-증적은 `output/4158/`에 있다. 전체 PR-CI형 로컬 게이트는 작업지시자 별도 승인 후 실행한다.
+증적은 `output/4158/`에 있다. 전체 PR-CI형 로컬 게이트까지 작업지시자 승인 아래 완료했다.
+
+샌드박스 내부에서는 Node `spawnSync` 자식 stdout 캡처가 비어 마커 기반 5개가 실패했으나, 같은
+Node 22 전체 명령을 샌드박스 밖에서 실행하면 765개가 모두 통과했다. 이는 제품 코드 실패와
+분리해 기록한다.
 
 ## 4. 원격 상태
 
