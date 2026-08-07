@@ -54,10 +54,10 @@ terminal tail은 기존 reservation을 보존한다.
 
 ### 증적
 
-- [compare](/Users/tsjang/rhwp/mydocs/pr/assets/task_m100_3820_stage22_issue2007_full_pdf_fidelity/compare_p009_after.png)
-- [overlay](/Users/tsjang/rhwp/mydocs/pr/assets/task_m100_3820_stage22_issue2007_full_pdf_fidelity/overlay_p009_after.png)
-- [review](/Users/tsjang/rhwp/mydocs/pr/assets/task_m100_3820_stage22_issue2007_full_pdf_fidelity/review_p009_after.png)
-- [overlay metrics](/Users/tsjang/rhwp/mydocs/pr/assets/task_m100_3820_stage22_issue2007_full_pdf_fidelity/overlay_metrics_p009_after.json)
+- [compare](../pr/assets/task_m100_3820_stage22_issue2007_full_pdf_fidelity/compare_p009_after.png)
+- [overlay](../pr/assets/task_m100_3820_stage22_issue2007_full_pdf_fidelity/overlay_p009_after.png)
+- [review](../pr/assets/task_m100_3820_stage22_issue2007_full_pdf_fidelity/review_p009_after.png)
+- [overlay metrics](../pr/assets/task_m100_3820_stage22_issue2007_full_pdf_fidelity/overlay_metrics_p009_after.json)
 
 이 보정은 p9 제목 누락에 한정한다. 전체 17쪽의 PDF fidelity 완료를 주장하지 않으며,
 Stage 22의 나머지 페이지별 raster 대조와 p13 owner drift 조사는 계속한다.
