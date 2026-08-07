@@ -113,6 +113,26 @@ fn fully_visible_text(node: &RenderNode, clip_top: f64, clip_bottom: f64, out: &
     }
 }
 
+/// page 밖에 시작한 셀 TextLine은 SVG clip으로 숨겨도 사용자에게 보이지 않는다.
+/// 다음 페이지 소유 줄을 현재 page의 RenderTree에 생성하지 않는지를 직접 고정한다.
+fn cell_lines_starting_below_page(
+    node: &RenderNode,
+    inside_cell: bool,
+    page_bottom: f64,
+    found: &mut Vec<f64>,
+) {
+    let inside_cell = inside_cell || matches!(&node.node_type, RenderNodeType::TableCell(_));
+    if inside_cell
+        && matches!(&node.node_type, RenderNodeType::TextLine(_))
+        && node.bbox.y >= page_bottom - TOLERANCE_PX
+    {
+        found.push(node.bbox.y);
+    }
+    for child in &node.children {
+        cell_lines_starting_below_page(child, inside_cell, page_bottom, found);
+    }
+}
+
 /// 중첩 표가 부모 셀 안에서 시작해, 쪽 아래로 컨테이너째 흘러내리지 않는다.
 #[test]
 fn nested_table_starts_inside_its_parent_cell() {
@@ -157,6 +177,21 @@ fn nested_table_starts_inside_its_parent_cell() {
     assert!(
         !p27_text.contains("시간당 근로임금은"),
         "p27에 p26의 마지막 source line이 중복됐다"
+    );
+
+    // p28 하단의 12×3 손자 표는 이 쪽에 들어오는 두 행만 그리고, 나머지는 p29
+    // continuation이 소유한다. 전체 표를 먼저 만든 뒤 조상 Cell clip으로 숨기면 SVG는
+    // 겉보기에는 맞아도 쪽 하단 밖 TextLine이 남아 overflow-cell gate를 우회한다.
+    let p28 = doc
+        .build_page_render_tree(27)
+        .expect("HWP 2020 p28 render tree");
+    let mut p28_hidden_cell_lines = Vec::new();
+    let p28_bottom = p28.root.bbox.y + p28.root.bbox.height;
+    cell_lines_starting_below_page(&p28.root, false, p28_bottom, &mut p28_hidden_cell_lines);
+    assert!(
+        p28_hidden_cell_lines.is_empty(),
+        "p28 Cell clip 아래에 다음 쪽 소유 TextLine이 {}개 남았다: {p28_hidden_cell_lines:?}",
+        p28_hidden_cell_lines.len(),
     );
 
     let mut escapes = Vec::new();

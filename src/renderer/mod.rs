@@ -1201,15 +1201,24 @@ fn installed_render_font_alias(font_family: &str) -> Option<&'static str> {
     }
 }
 
+/// SVG/CSS `font-family`에서 쓸 단일 인용 family 이름.
+///
+/// font name 자체에 작은따옴표나 역슬래시가 들어갈 수 있으므로 단순히 `'{}'`로
+/// 감싸면 `Tom's Handwriting` 같은 이름이 중간에서 끝나 잘못된 CSS가 된다.
+fn css_single_quoted_font_family(font_family: &str) -> String {
+    let escaped = font_family.replace('\\', "\\\\").replace('\'', "\\'");
+    format!("'{escaped}'")
+}
+
 /// [#3314] 렌더용 폴백 체인 문자열: `요청 face → (한컴 대체 face) → (base family) → generic 체인`.
 pub fn render_font_family_chain(font_family: &str) -> String {
     let fb = generic_fallback(font_family);
-    let mut families = vec![format!("'{}'", font_family)];
+    let mut families = vec![css_single_quoted_font_family(font_family)];
     if let Some(alias) = installed_render_font_alias(font_family) {
-        families.push(format!("'{}'", alias));
+        families.push(css_single_quoted_font_family(alias));
     }
     if let Some(base) = base_family_without_weight_suffix(font_family) {
-        families.push(format!("'{}'", base));
+        families.push(css_single_quoted_font_family(&base));
     }
     families.push(fb.to_string());
     families.join(",")
@@ -2113,6 +2122,11 @@ mod tests {
         assert!(chain.starts_with("'Noto Serif KR Black','Noto Serif KR',"));
         let plain = render_font_family_chain("맑은 고딕");
         assert!(plain.starts_with("'맑은 고딕','Malgun Gothic'"));
+        assert!(render_font_family_chain("Tom's Handwriting")
+            .starts_with("'Tom\\'s Handwriting','Malgun Gothic'"));
+        assert!(
+            render_font_family_chain(r"Legacy\Face").starts_with(r"'Legacy\\Face','Malgun Gothic'")
+        );
 
         assert_eq!(
             render_font_family_chain("한양중고딕"),

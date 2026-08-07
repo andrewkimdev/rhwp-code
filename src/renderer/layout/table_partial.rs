@@ -10,7 +10,8 @@ use super::border_rendering::{
     build_row_col_x, collect_cell_borders, render_edge_borders, render_transparent_borders,
 };
 use super::table_layout::{
-    calc_nested_split_rows, extend_completed_nested_table_border_clips, NestedTableSplit,
+    calc_nested_split_rows, effective_margin_left_line, extend_completed_nested_table_border_clips,
+    NestedTableSplit,
 };
 use super::text_measurement::{estimate_text_width, resolved_to_text_style};
 use super::utils::find_bin_data;
@@ -1010,6 +1011,50 @@ impl LayoutEngine {
                         _ => 0.0,
                     })
                     .sum();
+                // `layout_table`의 empty-TAC 경로와 같은 줄별 폭 계약을 partial
+                // RowBreak fragment에도 쓴다. 빈 paragraph의 image controls는 source
+                // char position이 같아도 HWP LINE_SEG가 각각의 flow slot을 보존한다.
+                let tac_line_widths: Vec<f64> = {
+                    let mut line_widths = vec![0.0f64; composed.lines.len().max(1)];
+                    for ctrl in &para.controls {
+                        let (is_tac, width) = match ctrl {
+                            Control::Picture(pic) if pic.common.treat_as_char => {
+                                (true, hwpunit_to_px(pic.common.width as i32, self.dpi))
+                            }
+                            Control::Shape(shape) if shape.common().treat_as_char => {
+                                (true, hwpunit_to_px(shape.common().width as i32, self.dpi))
+                            }
+                            Control::Equation(eq) => {
+                                (true, hwpunit_to_px(eq.common.width as i32, self.dpi))
+                            }
+                            Control::Table(table) if table.common.treat_as_char => (
+                                true,
+                                hwpunit_to_px(
+                                    table.common.width as i32
+                                        + table.outer_margin_left as i32
+                                        + table.outer_margin_right as i32,
+                                    self.dpi,
+                                ),
+                            ),
+                            _ => (false, 0.0),
+                        };
+                        if !is_tac {
+                            continue;
+                        }
+                        if composed.lines.len() <= 1 {
+                            line_widths[0] += width;
+                            continue;
+                        }
+                        if let Some(line_width) = line_widths.iter_mut().find(|line_width| {
+                            **line_width == 0.0 || **line_width + width <= inner_width + 0.5
+                        }) {
+                            *line_width += width;
+                        } else if let Some(last) = line_widths.last_mut() {
+                            *last += width;
+                        }
+                    }
+                    line_widths
+                };
 
                 // 표 컨트롤이 없는 문단: 텍스트 먼저, 컨트롤 나중 (기존 동작)
                 // 표 컨트롤이 있는 문단: 문단 앞 간격 적용 → 표 먼저 배치 → 텍스트(엔터 등) 나중
@@ -1098,14 +1143,64 @@ impl LayoutEngine {
                         }
                         _ => inner_area.x,
                     };
+                    // Normal and partial table layout used to differ here: the normal
+                    // path maps picture-only TACs to their saved LINE_SEG slots, while
+                    // this fallback accumulated every picture on the first slot. Keep
+                    // this state local to the empty-run fallback; text-bearing and
+                    // same-line TAC handling stays on the original path.
+                    let all_runs_empty = composed.lines.iter().all(|line| line.runs.is_empty());
+                    let para_margin_left = styles
+                        .para_styles
+                        .get(para.para_shape_id as usize)
+                        .map(|style| style.margin_left)
+                        .unwrap_or(0.0);
+                    let para_indent = styles
+                        .para_styles
+                        .get(para.para_shape_id as usize)
+                        .map(|style| style.indent)
+                        .unwrap_or(0.0);
+                    let mut empty_tac_seq_index = 0usize;
+                    let mut empty_tac_current_line = 0usize;
+                    let first_tac_width = tac_line_widths
+                        .first()
+                        .copied()
+                        .unwrap_or(total_inline_width);
+                    let mut empty_tac_x = match para_alignment {
+                        Alignment::Center | Alignment::Distribute => {
+                            inner_area.x + (inner_area.width - first_tac_width).max(0.0) / 2.0
+                        }
+                        Alignment::Right => {
+                            inner_area.x + (inner_area.width - first_tac_width).max(0.0)
+                        }
+                        _ => {
+                            inner_area.x
+                                + effective_margin_left_line(para_margin_left, para_indent, 0)
+                        }
+                    };
+                    let mut empty_tac_y = para_y_before_compose;
                     let mut rendered_top_and_bottom_non_inline = false;
 
                     for (ctrl_idx, ctrl) in para.controls.iter().enumerate() {
                         match ctrl {
                             Control::Picture(pic) => {
+                                let visible_non_inline_control =
+                                    cut_units.map_or(true, |(su, eu)| {
+                                        self.cell_cut_starts_non_inline_control(
+                                            cell, table, styles, su, eu, cp_idx, ctrl_idx,
+                                        )
+                                    });
+                                let fragment_owned_square_flow =
+                                    self.profile.get().native_hwp5_layout()
+                                        && cut_units.is_some()
+                                        && visible_non_inline_control
+                                        && pic.common.flow_with_text
+                                        && matches!(
+                                            pic.common.text_wrap,
+                                            crate::model::shape::TextWrap::Square
+                                        );
                                 if !pic.common.treat_as_char
                                     && cut_units.is_some()
-                                    && !visible_non_inline_controls
+                                    && !visible_non_inline_control
                                 {
                                     continue;
                                 }
@@ -1127,6 +1222,79 @@ impl LayoutEngine {
                                                 })
                                         });
                                     if !will_render_inline {
+                                        if all_runs_empty && para.line_segs.len() > 1 {
+                                            let target_line =
+                                                empty_tac_seq_index.min(para.line_segs.len() - 1);
+                                            empty_tac_seq_index += 1;
+                                            if target_line > empty_tac_current_line {
+                                                empty_tac_current_line = target_line;
+                                                let line_width = tac_line_widths
+                                                    .get(target_line)
+                                                    .copied()
+                                                    .unwrap_or(0.0);
+                                                let line_margin = effective_margin_left_line(
+                                                    para_margin_left,
+                                                    para_indent,
+                                                    target_line,
+                                                );
+                                                empty_tac_x = match para_alignment {
+                                                    Alignment::Center | Alignment::Distribute => {
+                                                        inner_area.x
+                                                            + (inner_area.width - line_width)
+                                                                .max(0.0)
+                                                                / 2.0
+                                                    }
+                                                    Alignment::Right => {
+                                                        inner_area.x
+                                                            + (inner_area.width - line_width)
+                                                                .max(0.0)
+                                                    }
+                                                    _ => inner_area.x + line_margin,
+                                                };
+                                                let first_vpos = para
+                                                    .line_segs
+                                                    .first()
+                                                    .map(|line| line.vertical_pos)
+                                                    .unwrap_or(0);
+                                                if let Some(segment) =
+                                                    para.line_segs.get(target_line)
+                                                {
+                                                    empty_tac_y = para_y_before_compose
+                                                        + hwpunit_to_px(
+                                                            segment.vertical_pos - first_vpos,
+                                                            self.dpi,
+                                                        );
+                                                }
+                                            }
+                                            let pic_h =
+                                                hwpunit_to_px(pic.common.height as i32, self.dpi);
+                                            let clamped_w = pic_w.min(inner_area.width);
+                                            let clamped_h = if pic_w > 0.0 {
+                                                pic_h * (clamped_w / pic_w)
+                                            } else {
+                                                pic_h
+                                            };
+                                            let pic_area = LayoutRect {
+                                                x: empty_tac_x,
+                                                y: empty_tac_y,
+                                                width: clamped_w,
+                                                height: clamped_h,
+                                            };
+                                            self.layout_picture(
+                                                tree,
+                                                &mut cell_node,
+                                                pic,
+                                                &pic_area,
+                                                bin_data_content,
+                                                Alignment::Left,
+                                                Some(section_index),
+                                                Some(cell_context.parent_para_index),
+                                                Some(ctrl_idx),
+                                                Some(&cell_context),
+                                            );
+                                            empty_tac_x += clamped_w;
+                                            continue;
+                                        }
                                         // 단독 이미지(텍스트 없는 문단): 직접 렌더링
                                         let pic_h =
                                             hwpunit_to_px(pic.common.height as i32, self.dpi);
@@ -1263,7 +1431,13 @@ impl LayoutEngine {
                                     // 그림 자체 pos vert_align 은 무시한다. compute_object_position
                                     // 은 그림 pos vert_align 을 따르므로 콘텐츠 box·그림 높이 기준
                                     // 셀 valign 위치를 강제한다.
-                                    let pic_y = if top_and_bottom_para
+                                    let pic_y = if fragment_owned_square_flow {
+                                        // p0처럼 같은 physical fragment가 여러 Square
+                                        // control을 소유할 때, negative saved offset은
+                                        // 이전 source ladder의 값이다. current fragment의
+                                        // flow anchor를 다시 위로 끌어올리지 않는다.
+                                        picture_anchor_y
+                                    } else if top_and_bottom_para
                                         && pic.common.flow_with_text
                                         && !unrestricted_take_place_cell_float
                                     {
@@ -1290,31 +1464,6 @@ impl LayoutEngine {
                                         width: pic_w,
                                         height: pic_h,
                                     };
-                                    if std::env::var("RHWP_DIAG_CELLPIC").is_ok()
-                                        && para_index == 98
-                                        && cell.row == 2
-                                        && cell.col == 0
-                                    {
-                                        eprintln!(
-                                            "DIAG_CELLPIC pi={} cell=({},{}) cp={} ctrl={} cut={:?} cell={:.1}..{:.1} para_before={:.1} para_after={:.1} anchor={:.1} object_y={:.1} valign={:?} voff={} flow={} wrap={:?}",
-                                            para_index,
-                                            cell.row,
-                                            cell.col,
-                                            cp_idx,
-                                            ctrl_idx,
-                                            cut_units,
-                                            cell_y,
-                                            cell_y + cell_h,
-                                            para_y_before_compose,
-                                            para_y,
-                                            picture_anchor_y,
-                                            pic_y,
-                                            pic.common.vert_align,
-                                            pic.common.vertical_offset as i32,
-                                            pic.common.flow_with_text,
-                                            pic.common.text_wrap,
-                                        );
-                                    }
                                     let mut pic_for_layout = pic.clone();
                                     pic_for_layout.common.horizontal_offset = 0;
                                     pic_for_layout.common.vertical_offset = 0;
@@ -1355,6 +1504,9 @@ impl LayoutEngine {
                                         crate::model::shape::TextWrap::TopAndBottom
                                     ) {
                                         rendered_top_and_bottom_non_inline = true;
+                                    } else if fragment_owned_square_flow {
+                                        para_y +=
+                                            self.cell_non_inline_control_flow_height(&pic.common);
                                     } else {
                                         para_y += self.non_inline_control_flow_height(&pic.common);
                                     }
@@ -1362,6 +1514,10 @@ impl LayoutEngine {
                                 has_preceding_text = true;
                             }
                             Control::Shape(shape) => {
+                                // TextBox를 포함한 Shape는 한 control이 여러 physical
+                                // fragment에 걸쳐 내부 문단을 이어 그릴 수 있다. Picture의
+                                // entry-only owner 규칙을 Shape에 적용하면 뒤 fragment의
+                                // 잔여 TextBox가 통째로 사라진다(rowbreak p17).
                                 if !shape.common().treat_as_char
                                     && cut_units.is_some()
                                     && !visible_non_inline_controls

@@ -6,8 +6,8 @@
 //!
 //! 권위 정답지는 한글 2022 편집기 37쪽
 //! (`pdf/issue1921/59043_regulatory_analysis-2022.pdf`, 편집기 PageCount=37 정합).
-//! 잔여 +5는 2단 배치 밀도(부동 표 흐름 패킹) 축으로 #1921 후속 과제 — 본 테스트는
-//! 현재 도달값 39를 핀해 개선(37 방향)과 회귀(40+)를 모두 표면화한다.
+//! 현재 페이지 수는 권위 정답지와 같은 37쪽이다. 과거 중간 도달값 39쪽을 고정하던
+//! provisional pin은 PDF 직접 대조 뒤 정답지 pin으로 승격했다.
 
 use std::fs;
 use std::path::Path;
@@ -18,6 +18,7 @@ use rhwp::wasm_api::HwpDocument;
 const SAMPLE: &str = "samples/issue1921/59043_regulatory_analysis.hwp";
 const PAGE_8: u32 = 7;
 const PAGE_11: u32 = 10;
+const PAGE_12: u32 = 11;
 
 fn page_count_of(rel: &str) -> u32 {
     let repo_root = env!("CARGO_MANIFEST_DIR");
@@ -70,10 +71,9 @@ fn collect_images<'a>(node: &'a RenderNode, images: &mut Vec<&'a RenderNode>) {
 fn regulatory_59043_page_count_pin() {
     let pages = page_count_of("samples/issue1921/59043_regulatory_analysis.hwp");
     assert_eq!(
-        pages, 39,
-        "issue1921 59043 현 핀 39쪽 (한글 2022 정답지 37쪽, 잔여 +2=배치 밀도·페이지 소유 fidelity 축). \
-         실측 {}p — 40p+면 과분할 회귀, 38p 이하면 한글 PDF 직접 대조 후 핀과 \
-         잔여 정합성 기록을 갱신할 것.",
+        pages, 37,
+        "issue1921 59043은 한글 2022 정답지와 같은 37쪽이어야 함. 실측 {}p — \
+         페이지 수가 같더라도 p8/p11의 물리 cell containment를 별도 확인할 것.",
         pages
     );
 }
@@ -107,7 +107,8 @@ fn regulatory_59043_page8_square_picture_stays_in_its_table_cell() {
     }
 }
 
-/// 한컴 2022 PDF p11의 pi=98 row 2에는 Square 사진 두 개가 해당 cell 안에 배치된다.
+/// 한컴 2022 PDF p11의 pi=98 row 0에는 동영상 1개가 있고, row 2에는 제품 사진
+/// 3개와 제품 상자 1개가 해당 cell 안에 배치된다.
 /// 저장 vpos가 있는 RowBreak cell에서 그림 높이를 다시 일반 flow로 더하면 다음 fragment가
 /// 소유해야 할 그림이 앞 page의 cell 밖으로 올라간다. 페이지 수 핀만으로는 이 소유권
 /// 역전을 감지하지 못하므로, p11의 물리 cell containment를 고정한다.
@@ -125,8 +126,8 @@ fn regulatory_59043_page11_square_pictures_stay_in_row2_fragment() {
     collect_images(cell, &mut images);
     assert_eq!(
         images.len(),
-        2,
-        "p11 row 2의 시작 Square 사진 두 개가 같은 fragment에서 렌더되어야 함"
+        4,
+        "p11 row 2의 PDF 소유 이미지 네 개가 같은 fragment에서 렌더되어야 함"
     );
     for image in images {
         let bottom = image.bbox.y + image.bbox.height;
@@ -136,4 +137,47 @@ fn regulatory_59043_page11_square_pictures_stay_in_row2_fragment() {
             image.bbox
         );
     }
+}
+
+/// 한컴 2022 PDF p12의 pi=98 row 4에는 empty paragraph의 TAC 사진 두 개가 각자의
+/// 저장 LINE_SEG slot에 위·아래로 들어간다. partial RowBreak fallback이 첫 slot의 x만
+/// 누적하면 둘째 사진은 셀 우측 밖으로 나가므로, 셀 containment와 vertical order를 함께 고정한다.
+#[test]
+fn regulatory_59043_page12_empty_tac_pictures_follow_distinct_line_slots() {
+    let doc = load_document();
+    let tree = doc
+        .build_page_render_tree(PAGE_12)
+        .unwrap_or_else(|e| panic!("render {SAMPLE} page 12: {e}"));
+    let table = find_table(&tree.root, 98, 0).expect("p12 SNS 사례 표(pi=98, ci=0)");
+    let cell = find_cell(table, 4, 0).expect("p12 SNS 사례 표의 4행");
+    let cell_left = cell.bbox.x;
+    let cell_right = cell.bbox.x + cell.bbox.width;
+    let cell_top = cell.bbox.y;
+    let cell_bottom = cell.bbox.y + cell.bbox.height;
+    let mut images = Vec::new();
+    collect_images(cell, &mut images);
+    assert_eq!(
+        images.len(),
+        2,
+        "p12 row 4의 empty TAC 사진 두 개가 모두 같은 cell fragment에 있어야 함"
+    );
+    images.sort_by(|left, right| left.bbox.y.total_cmp(&right.bbox.y));
+    for image in &images {
+        let right = image.bbox.x + image.bbox.width;
+        let bottom = image.bbox.y + image.bbox.height;
+        assert!(
+            image.bbox.x >= cell_left - 0.75
+                && right <= cell_right + 0.75
+                && image.bbox.y >= cell_top - 0.75
+                && bottom <= cell_bottom + 0.75,
+            "p12 row 4 TAC 사진이 cell 밖으로 돌출: image={:?}, cell=({cell_left:.1}..{cell_right:.1}, {cell_top:.1}..{cell_bottom:.1})",
+            image.bbox
+        );
+    }
+    assert!(
+        images[0].bbox.y + images[0].bbox.height <= images[1].bbox.y + 0.75,
+        "p12 row 4 TAC 사진은 각각의 LINE_SEG slot에 위·아래로 배치돼야 함: first={:?}, second={:?}",
+        images[0].bbox,
+        images[1].bbox
+    );
 }

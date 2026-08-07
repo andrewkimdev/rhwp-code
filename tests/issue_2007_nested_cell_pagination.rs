@@ -330,6 +330,7 @@ fn nested_table_bottom_border_is_painted(
 fn has_direct_bottom_frame_inside_clip(table: &RenderNode, clip_bottom: f64) -> bool {
     let left = table.bbox.x;
     let right = table.bbox.x + table.bbox.width;
+    let table_bottom = table.bbox.y + table.bbox.height;
     table.children.iter().any(|child| {
         matches!(
             &child.node_type,
@@ -338,9 +339,8 @@ fn has_direct_bottom_frame_inside_clip(table: &RenderNode, clip_bottom: f64) -> 
                     && (line.y1 - line.y2).abs() <= 0.1
                     && (line.x1.min(line.x2) - left).abs() <= 0.6
                     && (line.x1.max(line.x2) - right).abs() <= 0.6
-                    && line.y1 <= clip_bottom + 0.01
-                    && clip_bottom - line.y1 <= line.style.width.max(1.0) + 0.6
-                    && line.y1 + line.style.width / 2.0 <= clip_bottom - 0.001
+                    && (line.y1 - table_bottom).abs() <= 0.6
+                    && line.y1 + line.style.width / 2.0 <= clip_bottom + 0.01
         )
     })
 }
@@ -884,17 +884,38 @@ fn issue_2007_continuation_frame_restarts_and_drops_previous_page_residual() {
     );
 
     // p10의 새 1×1 frame은 다음 페이지까지 계속되므로 source의 실제 하단선은
-    // viewport 밖에 있다. 한컴 PDF처럼 현재 조각의 하단 frame을 다시 그리되,
-    // stroke 전체가 clip 안에 남아야 한다.
+    // viewport 밖에 있다. 현재 fragment의 기하 자체를 viewport 안으로 자른 뒤,
+    // 한컴 PDF처럼 현재 조각의 하단 frame을 다시 그리되 stroke 전체가 clip 안에
+    // 남아야 한다. 과거에는 overflow된 원 table bbox를 전제로 이 합성 frame 경로를
+    // 검사했지만, viewport split 이후에는 그 overflow 자체가 회귀다.
     let p10_outer = find_table_fragment(&p10.root, 7, 1).expect("p10 outer pi=7 ci=1 continuation");
     let p10_outer_cell = direct_table_cell(p10_outer).expect("p10 outer direct Cell");
     let p10_inner =
         find_innermost_table_containing_text(&p10.root, "독점규제 및 공정거래에 관한 법률")
             .expect("p10 bordered table below the unbordered RowBreak wrapper");
     let p10_clip_bottom = p10_outer_cell.bbox.y + p10_outer_cell.bbox.height;
+    let p10_inner_bottom = p10_inner.bbox.y + p10_inner.bbox.height;
+    let p10_page_clip = Some(ClipRect::from_node(&p10.root));
     assert!(
-        p10_inner.bbox.y + p10_inner.bbox.height > p10_clip_bottom + 1.0,
-        "p10 fixture must retain an overflowing continuation table for the fragment-frame regression"
+        contains_painted_text(
+            &p10.root,
+            "조사공무원은 이 법의 시행을 위하여 필요한 최소한의 범위 안에서 조사를",
+            p10_page_clip,
+        ),
+        "p10 must keep the first line of 제50조의2 like the Hancom PDF"
+    );
+    assert!(
+        !contains_painted_text(
+            &p10.root,
+            "행하여야 하며, 다른 목적 등을 위하여 조사권을 남용하여서는 아니된다",
+            p10_page_clip,
+        ),
+        "p10 must not paint the second line owned by p11"
+    );
+    assert!(
+        p10_inner_bottom <= p10_clip_bottom + 0.75,
+        "p10 continuation table must be clipped into its physical fragment: table bottom={:.1}, clip bottom={p10_clip_bottom:.1}",
+        p10_inner_bottom
     );
     assert!(
         has_direct_bottom_frame_inside_clip(p10_inner, p10_clip_bottom),

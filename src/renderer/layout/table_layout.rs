@@ -52,7 +52,7 @@ pub(crate) fn issue2424_profile_enabled() -> bool {
 /// - positive indent: line 0 에만 +indent 적용 (첫줄 들여쓰기)
 /// - negative indent (hanging): line N≥1 에 +|indent| 적용
 /// - indent=0: 모든 line 에 margin_left 만 적용
-fn effective_margin_left_line(margin_left: f64, indent: f64, line_n: usize) -> f64 {
+pub(super) fn effective_margin_left_line(margin_left: f64, indent: f64, line_n: usize) -> f64 {
     let line_indent = if indent > 0.0 {
         if line_n == 0 {
             indent
@@ -1465,6 +1465,9 @@ pub(super) struct CellUnit {
     mixed_nested_starts_after_table: bool,
     top_and_bottom_flow: bool,
     empty_spacer: bool,
+    /// Square/Tight/Through non-inline flow fragment가 걸친 원 문단 control index 범위
+    /// (inclusive). 높이·unit 경계는 바꾸지 않고 partial renderer의 page owner 판단에만 쓴다.
+    non_inline_control_range: Option<(usize, usize)>,
 }
 
 /// [#4069] 중첩 표의 셀 흐름을 바깥 셀 컷 원장으로 투영한 한 조각.
@@ -1749,6 +1752,80 @@ impl LayoutEngine {
             }
         }
         (top_and_bottom_h, other_h)
+    }
+
+    /// 텍스트 없는 legacy HWP5 host 문단에 수평으로 나란히 놓인 Square/Tight/Through
+    /// 개체들의 vertical flow band. 일반 경로는 control 높이를 합산한다. 여기서는
+    /// 모든 개체가 paragraph-relative nonnegative offset이고 interval이 공통으로
+    /// 겹친다는 좁은 증거가 있을 때만, paragraph origin부터 가장 먼 bottom까지의
+    /// physical band를 반환한다. 서로 다른 세로 band나 stale negative offset을 가진
+    /// 개체는 `None`으로 돌려 기존 합산 계약을 그대로 보존한다.
+    fn paragraph_parallel_other_non_inline_flow_band_height(
+        &self,
+        controls: &[Control],
+    ) -> Option<f64> {
+        if controls.len() < 2 {
+            return None;
+        }
+
+        let mut latest_start = 0.0f64;
+        let mut earliest_end = f64::INFINITY;
+        let mut furthest_bottom = 0.0f64;
+        for control in controls {
+            let common = match control {
+                Control::Picture(picture) => &picture.common,
+                Control::Shape(shape) => shape.common(),
+                _ => return None,
+            };
+            if common.treat_as_char
+                || !matches!(
+                    common.text_wrap,
+                    TextWrap::Square | TextWrap::Tight | TextWrap::Through
+                )
+                || !matches!(common.vert_rel_to, VertRelTo::Para)
+            {
+                return None;
+            }
+            let offset_hu = signed_hwpunit(common.vertical_offset);
+            if offset_hu < 0 {
+                return None;
+            }
+            let start = hwpunit_to_px(offset_hu, self.dpi);
+            let height = self.cell_non_inline_control_flow_height(common);
+            if height <= 0.5 {
+                return None;
+            }
+            let end = start + height;
+            latest_start = latest_start.max(start);
+            earliest_end = earliest_end.min(end);
+            furthest_bottom = furthest_bottom.max(end);
+        }
+
+        (latest_start + 0.5 < earliest_end).then_some(furthest_bottom)
+    }
+
+    /// Square/Tight/Through cell-flow의 control별 높이. 기존 aggregate 높이 계산과 같은
+    /// contract를 유지하되, 16px fragment unit이 어떤 source control에 해당하는지 복원한다.
+    fn paragraph_cell_other_non_inline_control_heights(
+        &self,
+        controls: &[Control],
+    ) -> Vec<(usize, f64)> {
+        controls
+            .iter()
+            .enumerate()
+            .filter_map(|(control_idx, control)| {
+                let common = match control {
+                    Control::Picture(picture) => &picture.common,
+                    Control::Shape(shape) => shape.common(),
+                    _ => return None,
+                };
+                if common.treat_as_char || matches!(common.text_wrap, TextWrap::TopAndBottom) {
+                    return None;
+                }
+                let height = self.cell_non_inline_control_flow_height(common);
+                (height > 0.5).then_some((control_idx, height))
+            })
+            .collect()
     }
 
     fn cell_has_top_and_bottom_non_inline_flow(&self, cell: &crate::model::table::Cell) -> bool {
@@ -2127,6 +2204,32 @@ impl LayoutEngine {
             row_y[i + 1] =
                 row_y[i] + row_heights[i] + if i + 1 < row_count { cell_spacing } else { 0.0 };
         }
+
+        // 부모 셀 조각이 전달한 viewport보다 큰 손자 표는, source-unit split이 따로
+        // 없는 경우에도 이 조각에서 실제 보이는 행까지만 생성한다. 종전에는 이 경우
+        // 전체 행을 RenderTree에 넣은 다음 조상 Cell clip으로만 숨겼다. clip은 SVG
+        // 잉크는 가리지만 쪽 하단 밖 TextLine까지 없애지는 않아, 다음 쪽 소유인 줄이
+        // 현재 쪽의 `LAYOUT_OVERFLOW_CELL`로 계상됐다(#3637 p28).
+        //
+        // 저장된 split은 source 소유를 표현하므로 항상 우선한다. 여기의 geometry
+        // fallback은 split 부재 + 실제 중첩 표(depth>0)로 한정한다. 저장 파일은 이
+        // 크기의 표에도 `treat_as_char` 비트를 남길 수 있으므로 그 비트로 제외하지
+        // 않으며, 다음 조각은 부모 RowBreak viewport가 다시 호출해 소유한다.
+        let inferred_viewport_split = if nested_split.is_none()
+            && depth > 0
+            && col_area.height > 0.0
+            && row_y.last().copied().unwrap_or(0.0) > col_area.height + 0.5
+        {
+            Some(calc_nested_split_rows(
+                &row_heights,
+                cell_spacing,
+                0.0,
+                col_area.height,
+            ))
+        } else {
+            None
+        };
+        let nested_split = nested_split.or(inferred_viewport_split.as_ref());
 
         // 중첩 표 부분 렌더링: row_y를 시프트하여 보이는 행만 표시
         let (row_y_shift, split_row_range, split_y_offset) = if let Some(split) = nested_split {
@@ -3955,11 +4058,11 @@ impl LayoutEngine {
         // 마지막 조각은 다음 페이지로 넘길 소유자가 없다. 이때 viewport cut을
         // 적용하면 한컴이 같은 쪽에 보존하는 꼬리 문단/중첩 표를 영구 유실한다.
         // 기존 line-fit 경로도 `split_terminal`에서 같은 예외를 두었다 (#3658).
-        let fragment_cut_units = if self.profile.get().hwpx_stored_layout()
-            && single_row_fragment
-            && row_filter.is_some()
-            && !split_terminal
-        {
+        // Stage 42 diagnostic: make the same source-unit viewport available to
+        // native HWP5 RowBreak fragments as to stored HWPX fragments.  The
+        // selected overflow fixtures and issue2007 ownership tests determine
+        // the final, narrower eligibility predicate.
+        let fragment_cut_units = if single_row_fragment && row_filter.is_some() && !split_terminal {
             let offset = single_row_fragment_content_offset
                 .unwrap_or_else(|| single_row_continuation_offset.unwrap_or(0.0))
                 .max(0.0);
@@ -4251,9 +4354,20 @@ impl LayoutEngine {
             for (ctrl_idx, ctrl) in para.controls.iter().enumerate() {
                 match ctrl {
                     Control::Picture(pic) => {
+                        let visible_non_inline_control =
+                            fragment_cut_units.map_or(true, |(su, eu)| {
+                                self.cell_cut_starts_non_inline_control(
+                                    cell, table, styles, su, eu, cp_idx, ctrl_idx,
+                                )
+                            });
+                        let fragment_owned_square_flow = self.profile.get().native_hwp5_layout()
+                            && fragment_cut_units.is_some()
+                            && visible_non_inline_control
+                            && pic.common.flow_with_text
+                            && matches!(pic.common.text_wrap, TextWrap::Square);
                         if !pic.common.treat_as_char
                             && fragment_cut_units.is_some()
-                            && !visible_non_inline_controls
+                            && !visible_non_inline_control
                         {
                             continue;
                         }
@@ -4510,7 +4624,14 @@ impl LayoutEngine {
                             //   TOP    = content_top + vOffset
                             //   CENTER = content_top + (content_h − pic_h + vOffset)/2
                             //   BOTTOM = content_bottom − pic_h − vOffset
-                            let pic_y = if reset_relocated_stored_picture_offset {
+                            let pic_y = if fragment_owned_square_flow {
+                                // partial-table와 같은 source-owner 계약: 현재 cut이
+                                // 소유한 Square flow picture는 page-local flow anchor를
+                                // 쓴다. 이전 source ladder의 negative vOffset을 다시
+                                // 적용하면 같은 paragraph의 후속 control이 fragment 위로
+                                // 빠진다.
+                                picture_anchor_y
+                            } else if reset_relocated_stored_picture_offset {
                                 // 이 형상은 cell의 Center 값이 현 물리 페이지의 정렬 계약이
                                 // 아니라 stale 음수 offset과 짝을 이룬 이전 페이지 ladder다.
                                 // page-local content top이 한컴 PDF의 그림 상단이다.
@@ -4616,6 +4737,8 @@ impl LayoutEngine {
                             }
                             if matches!(pic.common.text_wrap, TextWrap::TopAndBottom) {
                                 rendered_top_and_bottom_non_inline = true;
+                            } else if fragment_owned_square_flow {
+                                para_y += self.cell_non_inline_control_flow_height(&pic.common);
                             } else {
                                 para_y += self.non_inline_control_flow_height(&pic.common);
                             }
@@ -4623,6 +4746,9 @@ impl LayoutEngine {
                         has_preceding_text = true;
                     }
                     Control::Shape(shape) => {
+                        // Shape/TextBox는 control entry 뒤의 physical fragment에서도
+                        // 잔여 내부 문단을 계속 렌더한다. entry-only 판정은 원자적으로
+                        // 소유하는 Picture에만 적용한다.
                         if !shape.common().treat_as_char
                             && fragment_cut_units.is_some()
                             && !visible_non_inline_controls
@@ -7057,6 +7183,28 @@ impl LayoutEngine {
             .paragraphs
             .iter()
             .any(|p| !p.text.trim().is_empty() || !p.controls.is_empty());
+        // Native HWP5 RowBreak 표에는 문단 기준 Square/Tight/Through 개체 사이에,
+        // 실제 줄간격이 아니라 개체 anchor를 저장한 연속 빈 문단 사다리가 남을 수 있다.
+        // 이를 일반 em line으로 누적하면 row cut의 physical footprint가 Hancom보다 커져
+        // 다음 개체 owner가 한 page 늦어진다 (59043 p11/p12). 단일 빈 줄은 저자가
+        // 의도한 여백일 수 있으므로, 양쪽이 non-inline flow 문단인 2개 이상 run만 대상이다.
+        // HWPX/CellBreak/TAC에는 stored-layout 의미가 달라 이 predicate를 적용하지 않는다.
+        let native_hwp5_rowbreak_float_ladder =
+            self.profile.get().native_hwp5_layout() && is_block_rowbreak_table;
+        let plain_empty_paragraph: Vec<bool> = cell
+            .paragraphs
+            .iter()
+            .map(|p| p.text.trim().is_empty() && p.controls.is_empty())
+            .collect();
+        let other_non_inline_flow_paragraph: Vec<bool> = cell
+            .paragraphs
+            .iter()
+            .map(|p| {
+                self.paragraph_cell_other_non_inline_control_heights(&p.controls)
+                    .iter()
+                    .any(|(_, height)| *height > 0.5)
+            })
+            .collect();
         let mut units: Vec<CellUnit> = Vec::new();
         let split_non_inline_extra =
             |extra_h: f64, top_and_bottom_h: f64, other_h: f64| -> (f64, f64) {
@@ -7095,6 +7243,7 @@ impl LayoutEngine {
                         mixed_nested_starts_after_table: false,
                         top_and_bottom_flow: false,
                         empty_spacer: false,
+                        non_inline_control_range: None,
                     });
                     non_inline_h -= h;
                 }
@@ -7120,28 +7269,79 @@ impl LayoutEngine {
                 mixed_nested_starts_after_table: false,
                 top_and_bottom_flow: true,
                 empty_spacer: false,
+                non_inline_control_range: None,
             });
         };
         let append_non_inline_units = |units: &mut Vec<CellUnit>,
                                        para_idx: usize,
                                        extra_h: f64,
                                        top_and_bottom_h: f64,
-                                       other_h: f64| {
+                                       other_h: f64|
+         -> std::ops::Range<usize> {
             let (top_extra_h, other_extra_h) =
                 split_non_inline_extra(extra_h, top_and_bottom_h, other_h);
             // TopAndBottom flow 는 그림/도형이 통째로 다음 조각에 넘어가야 해서 atomic 으로
             // 유지한다. Square/Tight/Through flow 는 텍스트 박스 꼬리가 페이지를 걸쳐
             // 이어질 수 있으므로 기존 fragment 모델을 유지한다.
+            let other_start = units.len();
             append_fragment_units(units, para_idx, other_extra_h);
+            let other_end = units.len();
             append_atomic_unit(units, para_idx, top_extra_h);
+            other_start..other_end
         };
+        // 기존 16px generic fragment의 높이·개수·순서는 그대로 두고, 각 fragment가
+        // 겹치는 Square/Tight/Through source control range만 복원한다. TopAndBottom
+        // atomic unit은 이 metadata의 대상이 아니다.
+        let tag_other_non_inline_control_units =
+            |units: &mut [CellUnit], range: std::ops::Range<usize>, controls: &[(usize, f64)]| {
+                if range.is_empty() || controls.is_empty() {
+                    return;
+                }
+                let source_h: f64 = controls.iter().map(|(_, height)| *height).sum();
+                let represented_h: f64 = units[range.clone()].iter().map(|unit| unit.height).sum();
+                if source_h <= 0.5 || represented_h <= 0.5 {
+                    return;
+                }
+                // TopAndBottom과 섞인 문단에서는 기존 비례 분할로 other flow가
+                // 축소되어 있으므로, current unit 좌표를 source other-flow 좌표로
+                // 환산한 뒤 겹치는 control 범위를 기록한다.
+                let scale = represented_h / source_h;
+                let mut rendered_offset = 0.0;
+                for unit in &mut units[range] {
+                    let source_start = rendered_offset / scale;
+                    let source_end = (rendered_offset + unit.height) / scale;
+                    let mut control_start = 0.0;
+                    let mut first = None;
+                    let mut last = None;
+                    for (control_idx, control_h) in controls {
+                        let control_end = control_start + control_h;
+                        if control_end > source_start + 0.001 && control_start < source_end - 0.001
+                        {
+                            first.get_or_insert(*control_idx);
+                            last = Some(*control_idx);
+                        }
+                        control_start = control_end;
+                    }
+                    unit.non_inline_control_range = first.zip(last);
+                    rendered_offset += unit.height;
+                }
+            };
         for (pi, p) in cell.paragraphs.iter().enumerate() {
             let is_block_rowbreak = matches!(
                 table.page_break,
                 crate::model::table::TablePageBreak::RowBreak
             ) && !table.common.treat_as_char;
-            let (para_top_and_bottom_h, para_other_non_inline_h) =
+            let (para_top_and_bottom_h, summed_para_other_non_inline_h) =
                 self.paragraph_cell_non_inline_control_flow_parts(&p.controls);
+            let para_other_non_inline_h =
+                if native_hwp5_rowbreak_float_ladder && p.text.trim().is_empty() {
+                    self.paragraph_parallel_other_non_inline_flow_band_height(&p.controls)
+                        .unwrap_or(summed_para_other_non_inline_h)
+                } else {
+                    summed_para_other_non_inline_h
+                };
+            let para_other_non_inline_controls =
+                self.paragraph_cell_other_non_inline_control_heights(&p.controls);
             let para_non_inline_h = para_top_and_bottom_h + para_other_non_inline_h;
             let mut comp = compose_paragraph(p);
             crate::renderer::composer::recompose_for_cell_width(&mut comp, p, inner_width, styles);
@@ -7193,12 +7393,33 @@ impl LayoutEngine {
                     // 다음 문단이 중첩 control을 host하면 그 vpos는 control 배치
                     // 좌표이므로 빈 Enter의 독립 줄박스 증거로 사용하지 않는다.
                     || preserve_forward_stored_empty_spacer);
-            let collapse_empty_rowbreak_spacer = is_block_rowbreak
+            let legacy_single_cell_empty_spacer = is_block_rowbreak
                 && table.row_count == 1
                 && table.col_count == 1
                 && is_empty_spacer_para
                 && cell_has_visible_content
                 && !preserve_vpos_empty_spacer;
+            let collapse_native_float_ladder_spacer = if native_hwp5_rowbreak_float_ladder
+                && is_empty_spacer_para
+                && cell_has_visible_content
+            {
+                let run_start = (0..pi)
+                    .rev()
+                    .find(|&idx| !plain_empty_paragraph[idx])
+                    .map_or(0, |idx| idx + 1);
+                let run_end = ((pi + 1)..para_count)
+                    .find(|&idx| !plain_empty_paragraph[idx])
+                    .unwrap_or(para_count);
+                run_end - run_start >= 2
+                    && run_start > 0
+                    && run_end < para_count
+                    && other_non_inline_flow_paragraph[run_start - 1]
+                    && other_non_inline_flow_paragraph[run_end]
+            } else {
+                false
+            };
+            let collapse_empty_rowbreak_spacer =
+                legacy_single_cell_empty_spacer || collapse_native_float_ladder_spacer;
             let is_last_para = pi + 1 == para_count;
             // [Task #1488] 가시 텍스트 문단 여부 — 비가시(빈) 오버레이 스페이서 문단이 만든
             // vpos 리셋을 하드 브레이크(강제 페이지 분할)에서 제외하기 위한 게이트.
@@ -7649,6 +7870,7 @@ impl LayoutEngine {
                                         mixed_nested_starts_after_table: false,
                                         top_and_bottom_flow: false,
                                         empty_spacer: false,
+                                        non_inline_control_range: None,
                                     });
                                     unit_cum += uh;
                                     driver_before = driver_after;
@@ -7695,15 +7917,21 @@ impl LayoutEngine {
                             mixed_nested_starts_after_table: false,
                             top_and_bottom_flow: false,
                             empty_spacer: false,
+                            non_inline_control_range: None,
                         });
                         unit_cum += uh;
                     }
-                    append_non_inline_units(
+                    let non_inline_range = append_non_inline_units(
                         &mut units,
                         pi,
                         para_non_inline_extra_h,
                         para_top_and_bottom_h,
                         para_other_non_inline_h,
+                    );
+                    tag_other_non_inline_control_units(
+                        &mut units,
+                        non_inline_range,
+                        &para_other_non_inline_controls,
                     );
                     continue;
                 } else if nested_tables.len() == 1 && nested_tables[0].row_count == 1 {
@@ -7776,15 +8004,21 @@ impl LayoutEngine {
                                 mixed_nested_starts_after_table: fragment.starts_after_table,
                                 top_and_bottom_flow: false,
                                 empty_spacer: false,
+                                non_inline_control_range: None,
                             });
                             unit_cum += uh;
                         }
-                        append_non_inline_units(
+                        let non_inline_range = append_non_inline_units(
                             &mut units,
                             pi,
                             para_non_inline_extra_h,
                             para_top_and_bottom_h,
                             para_other_non_inline_h,
+                        );
+                        tag_other_non_inline_control_units(
+                            &mut units,
+                            non_inline_range,
+                            &para_other_non_inline_controls,
                         );
                         continue;
                     }
@@ -7869,6 +8103,7 @@ impl LayoutEngine {
                             mixed_nested_starts_after_table: false,
                             top_and_bottom_flow: false,
                             empty_spacer: false,
+                            non_inline_control_range: None,
                         });
                         unit_cum += lh;
                     }
@@ -7972,16 +8207,22 @@ impl LayoutEngine {
                                 mixed_nested_starts_after_table: fragment.starts_after_table,
                                 top_and_bottom_flow: false,
                                 empty_spacer: false,
+                                non_inline_control_range: None,
                             });
                             unit_cum += fragment.height;
                         }
                     }
-                    append_non_inline_units(
+                    let non_inline_range = append_non_inline_units(
                         &mut units,
                         pi,
                         para_non_inline_extra_h,
                         para_top_and_bottom_h,
                         para_other_non_inline_h,
+                    );
+                    tag_other_non_inline_control_units(
+                        &mut units,
+                        non_inline_range,
+                        &para_other_non_inline_controls,
                     );
                     continue;
                 }
@@ -8122,6 +8363,7 @@ impl LayoutEngine {
                     mixed_nested_starts_after_table: false,
                     top_and_bottom_flow: para_top_and_bottom_flow_unit,
                     empty_spacer: is_empty_spacer_para,
+                    non_inline_control_range: None,
                 });
                 unit_cum += para_h;
             } else {
@@ -8213,16 +8455,22 @@ impl LayoutEngine {
                         mixed_nested_starts_after_table: false,
                         top_and_bottom_flow: para_top_and_bottom_flow_unit,
                         empty_spacer: is_empty_spacer_para,
+                        non_inline_control_range: None,
                     });
                     unit_cum += lh;
                 }
             }
-            append_non_inline_units(
+            let non_inline_range = append_non_inline_units(
                 &mut units,
                 pi,
                 para_non_inline_extra_h,
                 para_top_and_bottom_h,
                 para_other_non_inline_h,
+            );
+            tag_other_non_inline_control_units(
+                &mut units,
+                non_inline_range,
+                &para_other_non_inline_controls,
             );
         }
 
@@ -8414,6 +8662,40 @@ impl LayoutEngine {
             && !unit.mixed_nested_fragment
             && !unit.mixed_nested_trailing
             && unit.mixed_nested_content_height <= 0.0
+    }
+
+    /// `unit_idx`가 tagged Square/Tight/Through control의 source entry라면, 그
+    /// control이 차지하는 마지막 generic unit의 exclusive index를 돌려준다. 같은
+    /// 16px fragment가 경계에서 두 control range에 걸칠 수 있으므로, entry가 되는
+    /// control 모두의 마지막 unit 중 가장 뒤를 사용한다.
+    fn entering_non_inline_control_range_end(units: &[CellUnit], unit_idx: usize) -> Option<usize> {
+        let unit = units.get(unit_idx)?;
+        let (first_control, last_control) = unit.non_inline_control_range?;
+        let mut range_end = None;
+        for control_idx in first_control..=last_control {
+            let control_start = units.iter().position(|candidate| {
+                candidate.para_idx == unit.para_idx
+                    && candidate
+                        .non_inline_control_range
+                        .is_some_and(|(first, last)| first <= control_idx && control_idx <= last)
+            });
+            if control_start != Some(unit_idx) {
+                continue;
+            }
+            let control_end = units
+                .iter()
+                .rposition(|candidate| {
+                    candidate.para_idx == unit.para_idx
+                        && candidate
+                            .non_inline_control_range
+                            .is_some_and(|(first, last)| {
+                                first <= control_idx && control_idx <= last
+                            })
+                })
+                .map(|idx| idx + 1)?;
+            range_end = Some(range_end.unwrap_or(0).max(control_end));
+        }
+        range_end
     }
 
     fn would_orphan_non_inline_flow_before_spacer(
@@ -8614,28 +8896,14 @@ impl LayoutEngine {
         let allow_midpage_reset_absorb =
             self.profile.get().hwpx_stored_layout() || row_has_top_and_bottom_flow;
         let rewind_internal_hard_break_orphan = Self::row_has_prior_rowspan_cover(table, row);
+        let native_hwp5_atomic_non_inline_entry = self.profile.get().native_hwp5_layout()
+            && matches!(
+                table.page_break,
+                crate::model::table::TablePageBreak::RowBreak
+            )
+            && !table.common.treat_as_char;
         for (i, cell) in row_cells.iter().enumerate() {
             let units = self.cell_units(cell, table, styles);
-            if std::env::var("RHWP_CUT_DBG").is_ok() {
-                let desc: Vec<String> = units
-                    .iter()
-                    .map(|u| {
-                        format!(
-                            "h={:.1}{}{}{}v{}..{}",
-                            u.height,
-                            if u.empty_spacer { " sp" } else { "" },
-                            if u.top_and_bottom_flow { " tb" } else { "" },
-                            if u.hard_break_before { " hb " } else { " " },
-                            u.vis_start,
-                            u.vis_end,
-                        )
-                    })
-                    .collect();
-                eprintln!(
-                    "CUT_DBG row={row} cell={i} avail={avail_height:.1} units=[{}]",
-                    desc.join(" | ")
-                );
-            }
             let start = start_cut.get(i).copied().unwrap_or(0).min(units.len());
             let mut j = start;
             let mut h = 0.0f64;
@@ -8659,6 +8927,23 @@ impl LayoutEngine {
                 {
                     j = units.len();
                     break;
+                }
+                // CellUnit fragment는 Square/Tight/Through control의 source range를
+                // 나눌 수 있지만 renderer는 entry fragment에서 picture 전체를 한 번
+                // emit한다. native HWP5 RowBreak에서 entry만 넣으면 cell clip이 picture
+                // 를 자르고 continuation은 owner가 없어지는 반쪽 control이 된다. 이미
+                // content를 소비한 page에서는 range 전체가 fit할 때만 시작한다. page보다
+                // 큰 control의 fresh fragment(start/h==0)는 기존 progress 경로를 보존한다.
+                if native_hwp5_atomic_non_inline_entry && h > 0.5 {
+                    if let Some(control_end) =
+                        Self::entering_non_inline_control_range_end(&units, j)
+                    {
+                        let control_height: f64 =
+                            units[j..control_end].iter().map(|unit| unit.height).sum();
+                        if h + control_height > avail_height + 0.5 {
+                            break;
+                        }
+                    }
                 }
                 // [Task #1658] 미세 fragment 낭비 페이지 방지: 거대 셀이 페이지를 가로질러 분할될
                 // 때 셀 내용 vpos reset(hard_break_before)이 촘촘하면, 잔여공간이 충분한데도 reset 마다
@@ -9550,6 +9835,67 @@ impl LayoutEngine {
         })
     }
 
+    /// `cell_cut_contains_non_inline_control_units`의 control-identity 버전.
+    ///
+    /// Square/Tight/Through flow fragment는 control range의 **첫** unit을 포함한 cut만
+    /// picture/shape를 emit한다. 같은 control의 뒷 unit은 다음 physical fragment에서
+    /// 다시 image를 paint하지 않는다. legacy/TopAndBottom unit처럼 range가 없는 경우에는
+    /// 기존 paragraph-level 판정을 유지해 저장 형식별 기존 contract를 바꾸지 않는다.
+    pub(crate) fn cell_cut_starts_non_inline_control(
+        &self,
+        cell: &crate::model::table::Cell,
+        table: &crate::model::table::Table,
+        styles: &ResolvedStyleSet,
+        start_unit: usize,
+        end_unit: usize,
+        para_idx: usize,
+        control_idx: usize,
+    ) -> bool {
+        let Some(para) = cell.paragraphs.get(para_idx) else {
+            return false;
+        };
+        let has_non_inline_control =
+            para.controls
+                .get(control_idx)
+                .is_some_and(|control| match control {
+                    Control::Picture(picture) => !picture.common.treat_as_char,
+                    Control::Shape(shape) => !shape.common().treat_as_char,
+                    _ => false,
+                });
+        if !has_non_inline_control {
+            return false;
+        }
+
+        let units = self.cell_units(cell, table, styles);
+        let lo = start_unit.min(units.len());
+        let hi = end_unit.min(units.len()).max(lo);
+        let control_start = units.iter().position(|unit| {
+            unit.para_idx == para_idx
+                && unit
+                    .non_inline_control_range
+                    .is_some_and(|(first, last)| first <= control_idx && control_idx <= last)
+        });
+        if let Some(start) = control_start {
+            return lo <= start && start < hi;
+        }
+
+        let mut saw_legacy_candidate = false;
+        for unit in units.iter().take(hi).skip(lo) {
+            let candidate = unit.para_idx == para_idx
+                && unit.vis_start == unit.vis_end
+                && !unit.empty_spacer
+                && unit.nested_row.is_none()
+                && !unit.mixed_nested_fragment;
+            if !candidate {
+                continue;
+            }
+            if unit.non_inline_control_range.is_none() {
+                saw_legacy_candidate = true;
+            }
+        }
+        saw_legacy_candidate
+    }
+
     pub(crate) fn mixed_nested_split_from_cut(
         &self,
         cell: &crate::model::table::Cell,
@@ -9640,6 +9986,11 @@ impl LayoutEngine {
             .iter()
             .find_map(|(height, trailing, _)| (!*trailing).then_some(*height))
             .unwrap_or(0.0);
+        let last_visible_content_height = visible_units
+            .iter()
+            .rev()
+            .find_map(|(height, trailing, _)| (!*trailing).then_some(*height))
+            .unwrap_or(0.0);
         let first_visible_starts_after_table = units
             .iter()
             .skip(lo)
@@ -9707,6 +10058,27 @@ impl LayoutEngine {
             // physical tail. Otherwise the source remains in export-text but
             // SVG/Canvas clips it (42065 p17 section 4).
             flow_visible + first_visible_content_height * 2.0 + 4.0
+        } else if self.profile.get().native_hwp5_layout() && compensate_first_visible && !terminal {
+            // `compensate_first_visible` advances the child content origin by
+            // one unit because the preceding viewport already reserved it.
+            // Native HWP5 must shorten the child paint viewport by the same
+            // unit; otherwise its end advances one line past the RowCut and
+            // both adjacent pages paint that line (42065 p10/p11).  Keep the
+            // parent flow height unchanged so pagination/sibling placement
+            // continues to use the authoritative RowCut geometry.
+            (flow_visible - first_visible_content_height).max(0.0)
+        } else if self.profile.get().native_hwp5_layout()
+            && is_offset_continuation
+            && first_visible_starts_after_table
+            && !terminal
+        {
+            // A new physical block can begin inside a continuation cut.  Its
+            // first unit is not a preceding-page reservation, but the cut's
+            // final unit is the successor viewport reservation.  Do not let
+            // that final line extend the nested paint window past the RowCut
+            // owner boundary (42065 p10/p11).
+            (flow_visible + first_visible_content_height - 4.0 - last_visible_content_height)
+                .max(visible)
         } else if is_offset_continuation && !compensate_first_visible {
             // Mixed text+nested-table units include a small layout allowance
             // (`nested_h + 4.0`) so pagination has enough flow room. That
