@@ -74,6 +74,16 @@ base/head at review: devel @ a5698255e / docs/codex-memory-20260807 @ 7508ee061
 - PR 전체가 review-only 허용 경로이므로 CI preflight가 B 경로 fast-pass를 선택하는지 확인한다.
 - 최신 head의 preflight와 최종 `Build & Test` aggregate 성공을 확인한 뒤에만 Ready 전환 및 merge한다.
 
+## 검토 중 기준선 갱신
+
+Draft 생성 뒤 `devel`이 #4140 merge commit `0fdac31ba`까지 전진해 PR이 충돌 상태가 됐다. 최신
+`upstream/devel`을 merge했으며, 충돌은 `mydocs/orders/20260807.md`의 EOF 추가 위치 한 곳뿐이었다.
+#4140의 누적 PR 기록을 먼저 두고 #4148 기록을 이어 양쪽 섹션을 모두 보존했다.
+
+merge tree를 최신 `upstream/devel`과 비교한 PR 고유 diff는 문서 8개뿐이며, #4140의 source·test 변경은
+기준선 parent에서만 유입돼 PR 고유 변경에 포함되지 않는다. merge commit push 뒤 최신 head의 CI만 최종
+판정에 사용한다.
+
 ## 최종 권고
 
 로컬 문서 검증과 변경 범위 분리가 완료됐다. archive review와 오늘할일을 추가한 최신 head를 push한 뒤
