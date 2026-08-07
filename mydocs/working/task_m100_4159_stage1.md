@@ -109,7 +109,9 @@ nonterminal을 지정하면 80px를 유지하는 계약을 고정한다.
 | 새 WASM의 #4159 / #536 E2E | PASS |
 | `npm run e2e:manifest-check` | PASS, tracked 86개 / manifest 86행 |
 
-GitHub push·PR·이슈 comment는 아직 수행하지 않았다.
+검증 후보를 원본 저장소 branch에 push하고 `devel` 대상 Open PR
+[#4174](https://github.com/edwardkim/rhwp/pull/4174)를 생성했다. #4159 comment·close와 PR merge는
+아직 수행하지 않았다.
 
 PR 생성 승인 뒤 원격 `devel`이 `23ff5b6f1`까지 전진한 것을 확인했다. 이를 merge commit
 `e6f09003b`으로 통합한 새 code head에서 위 전체 게이트를 다시 실행했으며 모두 통과했다.

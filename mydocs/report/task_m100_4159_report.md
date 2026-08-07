@@ -45,4 +45,6 @@ PR-CI형 로컬 게이트까지 통과했다. 원격 `devel` 전진을 통합한
 
 ## 4. 원격 상태
 
-로컬 구현·검증 커밋까지만 수행한다. GitHub push, PR 생성, #4159 comment·close는 수행하지 않았다.
+원본 저장소의 `task_m100_4159_nested_table_bottom_clip` branch를 push하고 `devel` 대상 Open PR
+[#4174](https://github.com/edwardkim/rhwp/pull/4174)를 생성했다. #4159 comment·close와 PR merge는
+수행하지 않았다.
