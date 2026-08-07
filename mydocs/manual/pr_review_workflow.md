@@ -2,7 +2,7 @@
 kind: canonical
 status: active
 canonical: mydocs/manual/pr_review_workflow.md
-last_verified: 2026-07-25
+last_verified: 2026-08-07
 ---
 
 # PR 리뷰 · 통합 워크플로우 매뉴얼
@@ -28,6 +28,23 @@ rhwp의 PR 처리는 외부 contributor PR, collaborator self PR, collaborator�
 소스, 테스트, CI workflow, golden/baseline, 기존 샘플 변경은 maintainer라도 일반 PR과 최신 CI를
 기본으로 한다. GitHub review, comment, push, ready 전환, merge, close는 각각 작업지시자의 명시 승인을
 받은 뒤에만 수행한다.
+
+### 1.1 PR 번호 채번과 review 기록
+
+PR 번호는 PR을 생성할 때 채번된다. 따라서 collaborator self PR의 번호 기반 review 기록은
+다음 순서로 같은 PR에 포함한다.
+
+1. 구현과 로컬 검증이 끝난 후보 commit을 원격 작업 branch에 push한다.
+2. 작업지시자의 PR 생성 승인 후 Open PR을 생성해 번호 `N`을 받는다. 완료된 후보에
+   번호만 확보하려고 Draft를 생성하지 않는다.
+3. reviewer assign 승인과 역할별 접수 절차를 수행한 뒤 `pr_N_review.md`와 필요한 오늘할일을
+   작성해 같은 source branch에 review 기록 commit으로 push한다.
+4. review 기록이 포함된 최신 head의 required check를 확인하고, 작업지시자 승인 후 merge한다.
+
+외부 contributor PR처럼 PR이 이미 존재하는 경우에는 발급된 번호로 바로 review 접수를 시작한다.
+Draft는 WIP 공유나 조기 검토가 필요하고 그 상태 변경을 작업지시자가 명시적으로 승인한 경우에만
+사용한다. 정확한 생성 순서와 승인 게이트는 [문서와 Git 워크플로우](codex/docs_and_git_workflow.md#internal-task-pr-approval)를
+따른다.
 
 ## 2. 필수 라우팅
 
