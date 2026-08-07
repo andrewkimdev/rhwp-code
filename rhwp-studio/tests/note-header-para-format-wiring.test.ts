@@ -101,3 +101,26 @@ test('되돌리기 라우팅을 거친다 (executeOperation 경유)', () => {
   const executeOperationCount = [...block.matchAll(/this\.executeOperation\(/g)].length;
   assert.equal(executeOperationCount, 2, '머리말/꼬리말과 각주 각각 executeOperation 을 거쳐야 한다');
 });
+
+test('스냅샷 되돌리기 뒤에도 머리말/꼬리말·각주 편집 문맥을 복원한다', () => {
+  const inputHandler = source('src/engine/input-handler.ts');
+  const command = source('src/engine/command.ts');
+  const start = inputHandler.indexOf('private applyParaFormatInNoteOrHeader');
+  const end = inputHandler.indexOf('\n  private ', start + 1);
+  const block = inputHandler.slice(start, end === -1 ? undefined : end);
+
+  // SnapshotCommand 는 컨텍스트가 없으면 undo/redo에서 본문 명령으로 취급해 HF/FN 모드를
+  // 빠져나간다. 두 갈래 모두 현재 커서 문맥을 descriptor에 넘겨야 한다.
+  assert.match(block, /operationType: 'applyParaFormatInHf',[\s\S]*?editContext: \{[\s\S]*?mode: 'headerFooter'/);
+  assert.match(block, /operationType: 'applyParaFormatInFootnote',[\s\S]*?editContext: \{[\s\S]*?mode: 'footnote'/);
+  assert.match(
+    command,
+    /editContext\?: EditContext;[\s\S]*?export class SubmodeSnapshotCommand extends SnapshotCommand[\s\S]*?editContext\(\): EditContext \{ return this\.context; \}/,
+    '서브모드 전용 snapshot 명령이 descriptor의 HF/FN 문맥을 undo/redo 복원 경로로 노출해야 한다',
+  );
+  assert.match(
+    inputHandler,
+    /desc\.editContext[\s\S]*?new SubmodeSnapshotCommand\(/,
+    'HF/FN 문맥을 가진 snapshot은 일반 SnapshotCommand 대신 전용 명령을 써야 한다',
+  );
+});

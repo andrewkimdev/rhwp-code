@@ -6,7 +6,7 @@ import { CaretRenderer } from './caret-renderer';
 import { FieldMarkerRenderer } from './field-marker-renderer';
 import { SelectionRenderer } from './selection-renderer';
 import { CommandHistory } from './history';
-import { DeleteSelectionCommand, ApplyCharFormatCommand, ApplyParaFormatCommand, SnapshotCommand, SetFormValueCommand, TextMutationEffectAccumulator, IMMEDIATE_TEXT_MUTATION_EFFECTS } from './command';
+import { DeleteSelectionCommand, ApplyCharFormatCommand, ApplyParaFormatCommand, SnapshotCommand, SubmodeSnapshotCommand, SetFormValueCommand, TextMutationEffectAccumulator, IMMEDIATE_TEXT_MUTATION_EFFECTS } from './command';
 import type { OperationDescriptor, ParaFormatTarget, RefreshPolicy, TextMutationEffects, EditCommand, EditContext, FormValueTarget } from './command';
 import { selectCellIndicesInRange, paraFormatTargetsForCellBlock } from './cell-block-format';
 import type { SelectedCellBlock } from './cell-block-format';
@@ -1988,9 +1988,18 @@ export class InputHandler {
       const sectionIdx = cur.hfSectionIdx;
       const applyTo = cur.hfApplyTo;
       const hfParaIdx = cur.hfParaIdx;
+      const hfCharOffset = cur.hfCharOffset;
       this.executeOperation({
         kind: 'snapshot',
         operationType: 'applyParaFormatInHf',
+        editContext: {
+          mode: 'headerFooter',
+          sectionIdx,
+          isHeader,
+          applyTo,
+          paraIdx: hfParaIdx,
+          charOffset: hfCharOffset,
+        },
         operation: (wasm) => {
           wasm.applyParaFormatInHf(sectionIdx, isHeader, applyTo, hfParaIdx, propsJson);
           return { ...cursorBefore };
@@ -2005,9 +2014,22 @@ export class InputHandler {
       const paraIdx = cur.fnParaIdx;
       const controlIdx = cur.fnControlIdx;
       const innerParaIdx = cur.fnInnerParaIdx;
+      const charOffset = cur.fnCharOffset;
+      const footnoteIndex = cur.fnFootnoteIndex;
+      const pageNum = cur.fnPageNum;
       this.executeOperation({
         kind: 'snapshot',
         operationType: 'applyParaFormatInFootnote',
+        editContext: {
+          mode: 'footnote',
+          sectionIdx,
+          paraIdx,
+          controlIdx,
+          footnoteIndex,
+          pageNum,
+          innerParaIdx,
+          charOffset,
+        },
         operation: (wasm) => {
           wasm.applyParaFormatInFootnote(sectionIdx, paraIdx, controlIdx, innerParaIdx, propsJson);
           return { ...cursorBefore };
@@ -2481,7 +2503,17 @@ export class InputHandler {
       }
       case 'snapshot': {
         const cursorBefore = this.cursor.getPosition();
-        const cmd = new SnapshotCommand(desc.operationType, cursorBefore, cursorBefore, desc.operation);
+        // 일반 snapshot은 구조 편집의 본문 복귀 의미를 유지한다. HF/FN 안에서만
+        // 문맥을 보존하는 전용 명령을 써서 undo/redo의 대상 범위를 호출부가 드러낸다.
+        const cmd = desc.editContext
+          ? new SubmodeSnapshotCommand(
+              desc.operationType,
+              cursorBefore,
+              cursorBefore,
+              desc.operation,
+              desc.editContext,
+            )
+          : new SnapshotCommand(desc.operationType, cursorBefore, cursorBefore, desc.operation);
         const newPos = this.history.execute(cmd, this.wasm);
         const markPastedFieldEndOutside = this.pastedFieldEndOutsidePending;
         // 무변경 경로에서도 pending 플래그는 소비한다 — 남겨 두면 다음 연산으로 샌다.
