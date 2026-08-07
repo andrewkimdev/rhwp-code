@@ -27,17 +27,20 @@ SVG의 outer clip 하단은 `827.273px`로 stroke 하단과 일치한다.
 
 ## 3. 검증 요약
 
-- release-test 실제 fixture 6 passed
-- Native Skia feature release-test unit 2 passed
-- focused Clippy, fmt, diff, Studio TypeScript PASS
-- release WASM compile·wasm-bindgen·wasm-opt·packaging PASS
+- release build 및 library 3,292 passed / 10 ignored
+- 전체 `release-test --tests` PASS
+- Native Skia library 58 passed, 지정 integration 2 passed / 4 passed
+- 전체 타깃 Clippy, fmt, diff, doc-test 4 passed / 2 ignored
+- Studio TypeScript 및 전체 `npm test` 802 passed
+- 새 release WASM compile·wasm-bindgen·wasm-opt·packaging PASS
 - 신규 #4159 E2E와 기존 #536 E2E PASS
 - E2E manifest tracked 86개 / 86행 일치
 - 한컴 2020 물리 3쪽과 수정 후 Canvas2D 시각 대조 완료
 - 작업지시자 rhwp-studio 시각 판정 PASS: 물리 2쪽 사각형 숫자 및 물리 3쪽 표 하단선 정상
 
-증적은 `output/4159/`에 있다. 전체 PR-CI형 로컬 게이트는 작업지시자 별도 승인 후 실행한다.
+증적은 `output/4159/`에 있다. 작업지시자 승인에 따른 `local_validation.md` 4.3 전체
+PR-CI형 로컬 게이트까지 통과했다.
 
 ## 4. 원격 상태
 
-로컬 구현 커밋까지만 수행한다. GitHub push, PR 생성, #4159 comment·close는 수행하지 않았다.
+로컬 구현·검증 커밋까지만 수행한다. GitHub push, PR 생성, #4159 comment·close는 수행하지 않았다.

@@ -87,7 +87,25 @@ nonterminal을 지정하면 80px를 유지하는 계약을 고정한다.
 작업지시자 rhwp-studio 시각 판정도 통과했다. 물리 2쪽의 사각형 숫자가 정상 출력되고,
 물리 3쪽의 표 하단 테두리가 전체 너비로 정상 출력되는 것을 확인했다.
 
-## 8. 남은 게이트
+## 8. 전체 PR 검증
 
-`local_validation.md` 4.3의 전체 PR 검증은 집중 결과를 작업지시자에게 보고하고 별도 승인받아
-실행한다. 원격 push·PR·이슈 comment도 아직 수행하지 않았다.
+작업지시자 승인 뒤 `local_validation.md` 4.3의 전체 게이트를 순서대로 실행했다.
+
+| 검증 | 결과 |
+| --- | --- |
+| `CARGO_INCREMENTAL=0 cargo build --release` | PASS |
+| `CARGO_INCREMENTAL=0 cargo test --release --lib` | PASS, 3,292 passed / 10 ignored |
+| `CARGO_INCREMENTAL=0 cargo test --profile release-test --tests` | PASS |
+| Native Skia `skia --lib` | PASS, 58 passed |
+| Native Skia `issue_2225_missing_picture_placeholder` | PASS, 2 passed |
+| Native Skia `render_p37_direct_pdf_export` | PASS, 4 passed |
+| `cargo fmt --check`, `git diff --check` | PASS |
+| `CARGO_INCREMENTAL=0 cargo clippy --all-targets -- -D warnings` | PASS |
+| `CARGO_INCREMENTAL=0 cargo test --doc` | PASS, 4 passed / 2 ignored |
+| `rhwp-studio: npx tsc --noEmit` | PASS |
+| `rhwp-studio: npm test` | PASS, 802 passed |
+| 새 release WASM build | PASS, compile·wasm-bindgen·wasm-opt·`pkg` packaging 완료 |
+| 새 WASM의 #4159 / #536 E2E | PASS |
+| `npm run e2e:manifest-check` | PASS, tracked 86개 / manifest 86행 |
+
+GitHub push·PR·이슈 comment는 아직 수행하지 않았다.
