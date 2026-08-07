@@ -96,14 +96,29 @@ powershell -File tools\hangul_version_oracle\list_hangul_versions.ps1
 `-HwpVersion`에 넣을 값은 여기 `Version` 열(설치 폴더명 `Hnc\Office <값>`)이다.
 
 버전 major는 바이너리에서 직접 읽으므로 **설치만 되어 있으면 어느 릴리스든 쓸 수 있다.**
-실측 대응: **2022 = 12.x**, **2024 = 13.x** (r1에서 확인). 2018 = 10.x, 2020 = 11.x는 같은 계열의 역산이며,
-스크립트는 하드코딩된 표를 쓰지 않으므로 실제 값과 어긋날 일이 없다.
+실측 대응(네 릴리스를 같은 기계에 병렬 설치해 확인): **2018 = 10.x**(10.0.0.5060),
+**2020 = 11.x**(11.0.0.1623), **2022 = 12.x**(12.0.0.535), **2024 = 13.x**(13.0.0.564).
+스크립트는 하드코딩된 표를 쓰지 않고 바이너리에서 major를 읽으므로 실제 값과 어긋날 일이 없다.
+
+HKCU 오버라이드는 **32비트·64비트 레지스트리 뷰 두 곳**(`CLSID`와 `Wow6432Node\CLSID`)에 있고 값이
+서로 다를 수 있다. 한쪽만 읽으면 오버라이드가 걸려 있는데도 "없음"으로 보인다. `list_hangul_versions.ps1`은
+두 뷰를 모두 출력하며, 값이 어긋나면 경고한다. 패스 스크립트는 두 뷰에 함께 쓰므로 패스를 한 번 돌리면
+정렬된다.
+
+측정이 진행 중일 때는 이 스크립트를 돌리지 않는다. COM 인스턴스를 하나 더 띄우고 끝에 모든 `Hwp.exe`를
+종료하기 때문이다. `Hwp.exe`가 이미 떠 있으면 스크립트가 스스로 프로브를 건너뛴다.
 
 ### 5.2 버전별 패스
 
 버전마다 한 번씩, **순차로** 돌린다.
 
 ```powershell
+powershell -File tools\hangul_version_oracle\page_oracle_run.ps1 `
+  -HwpVersion 2018 -ListPath corpus_10k.txt -OutDir pass2018 -Root 'D:\hwpdocs_10k_share'
+
+powershell -File tools\hangul_version_oracle\page_oracle_run.ps1 `
+  -HwpVersion 2020 -ListPath corpus_10k.txt -OutDir pass2020 -Root 'D:\hwpdocs_10k_share'
+
 powershell -File tools\hangul_version_oracle\page_oracle_run.ps1 `
   -HwpVersion 2022 -ListPath corpus_10k.txt -OutDir pass2022 -Root 'D:\hwpdocs_10k_share'
 
@@ -112,6 +127,7 @@ powershell -File tools\hangul_version_oracle\page_oracle_run.ps1 `
 ```
 
 표준 경로가 아니면 `-HwpVersion` 대신 `-HwpExe 'C:\...\Hwp.exe'`를 쓴다.
+`-HideWindow`는 쓰지 않는다(8절) — 한글 2018이 교착한다.
 
 각 패스는 시작할 때 **오버라이드가 실제로 먹었는지 COM을 한 번 띄워 확인**하고, 어긋나면 즉시 중단한다
 (패스 하나를 통째로 버리는 대신 몇 초 만에 알려준다). 워커도 인스턴스를 만들 때마다 major를 다시 검증한다.
@@ -119,7 +135,8 @@ powershell -File tools\hangul_version_oracle\page_oracle_run.ps1 `
 산출물은 `OutDir/result_0.tsv`이며 컬럼은 `relpath / status / pages / paras / breakCount / fingerprint`다.
 중단해도 같은 명령을 다시 주면 남은 문서부터 이어서 한다.
 
-**실측 소요**(10,000건, 워커 1개): 2022 약 22분, 2024 약 28분.
+**실측 소요**(10,000건, 워커 1개): 2020 약 22분, 2022 약 22분, 2024 약 28분.
+2018은 완주 기록이 없다(8절의 기동 블록).
 
 ### 5.3 비교
 
@@ -138,12 +155,21 @@ powershell -File tools\hangul_version_oracle\compare_passes.ps1 `
 재실행**하고, 같은 분류로 재현된 것만 확정한다. r1에서는 이 절차로 254건 중 247건(98.8%)이 재현됐고
 대조군 100건에서 새 차이는 0건이었다.
 
+`build_verify_list.ps1`이 차이 문서 전량 + 무작위 대조군을 **섞어** 목록을 만든다. 순서를 바꾸는 것이
+핵심이다 — 한 인스턴스 안에서 페이지네이션 상태가 문서 사이로 넘어가므로, 같은 순서로 다시 돌리면 같은
+오차가 그대로 재현된다.
+
 ```powershell
-# diff.tsv 의 경로 + 무작위 대조군을 섞어 verify_list.txt 를 만든 뒤
+powershell -File tools\hangul_version_oracle\build_verify_list.ps1 `
+  -DiffPath diff.tsv -PassDir pass2022 -Root 'D:\hwpdocs_10k_share' -OutPath verify_list.txt -Controls 100
+
 powershell -File tools\hangul_version_oracle\page_oracle_run.ps1 -HwpVersion 2022 -ListPath verify_list.txt -OutDir verify2022 -Root 'D:\hwpdocs_10k_share'
 powershell -File tools\hangul_version_oracle\page_oracle_run.ps1 -HwpVersion 2024 -ListPath verify_list.txt -OutDir verify2024 -Root 'D:\hwpdocs_10k_share'
 powershell -File tools\hangul_version_oracle\compare_passes.ps1 -DirA verify2022 -DirB verify2024 -OutPath verify_diff.tsv
 ```
+
+대조군을 빼지 말 것. 대조군이 없으면 재실행은 차이를 **잃을** 수만 있고 처음 실행이 놓친 차이를 드러내지
+못해, 거짓 음성률이 보이지 않는 채로 남는다.
 
 ### 5.5 복원
 
@@ -197,15 +223,35 @@ r1 실측(HWPX 3,418건): 한글 2020이 70.7%로 최빈, 2024 저장분은 1.0%
 
 ## 8. 알려진 함정
 
-- **`ShowWindow(SW_HIDE)`로 한글 창을 숨기지 말 것.** 자동화가 교착된다 — r1에서 워커 전원이 첫 문서에서
-  정지했고 숨김을 중단하자 즉시 재개됐다. 창은 COM `XHwpWindows.Visible = false`로만 다룬다.
+- **한글 창을 숨기지 말 것.** 기본값이 "숨기지 않음"인 이유다.
+  - Win32 `ShowWindow(SW_HIDE)`는 **모든 버전에서** 자동화를 교착시킨다 — r1에서 워커 전원이 첫 문서에서
+    정지했고 숨김을 중단하자 즉시 재개됐다.
+  - COM `XHwpWindows.Item(0).Visible = false`는 2022·2024에서는 안전하지만 **한글 2018에서는 이것만으로도
+    첫 `Open()`이 반환하지 않는다.** 화면에 대화상자는 뜨지 않고 숨겨진 `HNC_DIALOG`만 남아, 겉보기에는
+    그냥 멈춘 것처럼 보인다.
+  - 그래서 숨김은 `-HideWindow` **옵트인**이다. 숨김 여부는 지문에 영향이 없다 — 2022·같은 200문서를
+    숨김/표시로 각각 재어 **200/200 완전 일치**를 확인했다. 2018을 섞어 재려면 숨김을 쓰지 않으면 된다.
 - **`GetPos()`는 PowerShell에서 호출할 수 없다**(`[out]` 파라미터). `GetPosBySet()`을 쓴다.
 - **FilePathCheckerModule은 없어도 된다.** `RegisterModule`이 `False`를 반환해도 r1의 10,000건 × 2버전
   전 구간에서 파일 접근 보안 대화상자는 한 번도 뜨지 않았다. `SetMessageBoxMode(0x00020000)`이면 충분하다.
 - **PowerShell 스크립트에 한글 주석을 넣지 말 것.** Windows PowerShell 5.1은 BOM 없는 `.ps1`을 ANSI로
   읽어 파싱이 깨진다. `tools/hangul_version_oracle/`의 스크립트는 전부 ASCII다.
 - 문서 하나가 한글을 멈춰 세우는 일이 있다. 감시자가 `-StallSeconds`(기본 300) 초과 시 해당 `Hwp.exe`만
-  종료하고 워커가 복구한다. 그 문서는 `ERR`로 남으므로 마지막에 따로 재시도한다.
+  종료하고 워커가 복구한다. 워커는 인스턴스가 실제로 교체된 경우에 한해 그 문서를 **새 인스턴스에서 한 번
+  더 시도**한다(살아 있는 인스턴스가 넘긴 실패는 문서 자체의 문제라 재시도해도 같다).
+- **강제 종료 뒤 첫 `Open()`이 돌아오지 않는다 — 미해결.** 위의 숨김 교착과는 **다른 현상**이고, 창을
+  숨기지 않아도 일어난다. 2018·2020에서 재현되며 2022·2024에서는 관측되지 않았다.
+  - 통제 실험에서 **5쪽짜리 문서 하나를 여는 데 180초를 넘겨도 반환하지 않았다.** 그동안 `Hwp.exe`는
+    CPU를 거의 쓰지 않고, 창을 열거하면 시작 화면 `글`만 있고 문서 창은 뜨지 않았으며 대화상자도 없다.
+  - 감시자가 정지로 보고 죽이면 **교체된 인스턴스도 같은 자리에서 막힌다.**
+  - 완화책 둘이 들어 있지만 **둘 다 충분하지 않다.** ① 인스턴스가 실제로 교체된 경우 그 문서를 새
+    인스턴스에서 한 번 더 시도한다. ② `-WarmupDocs`(기본 5)가 목록에 들어가기 전 첫 문서를 버리는
+    용도로 열어 블록을 흡수한다. 워밍업이 인스턴스에 문서를 더 통과시켜도 지문은 바뀌지 않는다
+    (hermetic ↔ 단일 인스턴스 200/200 일치). 그럼에도 2020에서 워밍업이 연속으로 막히는 상태가 있었다.
+  - **상시 조건이 아니다** — 2020 전체 패스 10,000건은 이 현상 없이 완주했다. 이 상태에 빠졌다면 그
+    버전으로는 측정이 안 되므로, 원인이 밝혀지기 전에는 **패스가 0건에서 몇 분째 멈춰 있는지 먼저
+    확인**하고 재시도 여부를 판단한다. 의심 대상: 강제 종료가 남기는 상태, 한컴 자동 업데이트
+    구성요소(`HncUpdateService`/`HncUpdateTray`).
 
 ## 9. 관련
 
