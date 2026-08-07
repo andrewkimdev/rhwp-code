@@ -6,7 +6,7 @@ import { CaretRenderer } from './caret-renderer';
 import { FieldMarkerRenderer } from './field-marker-renderer';
 import { SelectionRenderer } from './selection-renderer';
 import { CommandHistory } from './history';
-import { DeleteSelectionCommand, ApplyCharFormatCommand, ApplyParaFormatCommand, SnapshotCommand, SetFormValueCommand, TextMutationEffectAccumulator, IMMEDIATE_TEXT_MUTATION_EFFECTS } from './command';
+import { DeleteSelectionCommand, ApplyCharFormatCommand, ApplyParaFormatCommand, SnapshotCommand, SubmodeSnapshotCommand, SetFormValueCommand, TextMutationEffectAccumulator, IMMEDIATE_TEXT_MUTATION_EFFECTS } from './command';
 import type { OperationDescriptor, ParaFormatTarget, RefreshPolicy, TextMutationEffects, EditCommand, EditContext, FormValueTarget } from './command';
 import { selectCellIndicesInRange, paraFormatTargetsForCellBlock } from './cell-block-format';
 import type { SelectedCellBlock } from './cell-block-format';
@@ -1956,11 +1956,89 @@ export class InputHandler {
   /** 커서 위치 문단에 문단 서식을 적용한다 */
   private applyParaFormat(props: Record<string, unknown>): void {
     try {
+      if (this.applyParaFormatInNoteOrHeader(props)) return;
       const targets = this.getParaFormatTargetsAtCursor();
       this.executeParaFormatCommand(targets, props);
     } catch (err) {
       console.warn('[InputHandler] applyParaFormat 실패:', err);
     }
+  }
+
+  /**
+   * 머리말/꼬리말·각주 문단에 문단 서식을 적용한다. 해당 문맥이 아니면 false.
+   *
+   * 코어에는 `applyParaFormatInHf` / `applyParaFormatInFootnote` 가 이미 있는데 호출하는
+   * 곳이 없었다 — `getParaFormatTargetsForRange` 가 두 문맥에서 빈 배열을 반환해 정렬·줄
+   * 간격이 아무 반응 없이 끝났다. 조회 쪽(`getParaProperties`)은 두 문맥을 정확히 분기하고
+   * 있어 툴바 표시만 맞고 적용은 안 되는 상태였다.
+   *
+   * `ApplyParaFormatCommand` 의 되돌리기는 문단 모양 ID 를 `setParaShapeId` /
+   * `setCellParaShapeId` 로 복원하는데 이 두 문맥용 setter 가 코어에 없다. 되돌리기를
+   * 포기하지 않으려고 표 구조 변경과 같은 스냅샷 경로를 쓴다.
+   * 근본 해결: 코어에 `setParaShapeIdInHf` / `setParaShapeIdInFootnote` 를 추가하고
+   * `ParaFormatTarget` 에 두 갈래를 넣어 네 문맥(본문/셀/머리말/각주)을 한 커맨드로 통일한다.
+   */
+  private applyParaFormatInNoteOrHeader(props: Record<string, unknown>): boolean {
+    const cur = this.cursor;
+    const propsJson = JSON.stringify(props);
+    const cursorBefore = cur.getPosition();
+
+    if (cur.isInHeaderFooter()) {
+      const isHeader = cur.headerFooterMode === 'header';
+      const sectionIdx = cur.hfSectionIdx;
+      const applyTo = cur.hfApplyTo;
+      const hfParaIdx = cur.hfParaIdx;
+      const hfCharOffset = cur.hfCharOffset;
+      this.executeOperation({
+        kind: 'snapshot',
+        operationType: 'applyParaFormatInHf',
+        editContext: {
+          mode: 'headerFooter',
+          sectionIdx,
+          isHeader,
+          applyTo,
+          paraIdx: hfParaIdx,
+          charOffset: hfCharOffset,
+        },
+        operation: (wasm) => {
+          wasm.applyParaFormatInHf(sectionIdx, isHeader, applyTo, hfParaIdx, propsJson);
+          return { ...cursorBefore };
+        },
+      });
+      return true;
+    }
+
+    if (cur.isInFootnote()) {
+      // 인자 축은 조회 쪽(getParaProperties)과 같다 — sec / para / controlIdx / innerParaIdx.
+      const sectionIdx = cur.fnSectionIdx;
+      const paraIdx = cur.fnParaIdx;
+      const controlIdx = cur.fnControlIdx;
+      const innerParaIdx = cur.fnInnerParaIdx;
+      const charOffset = cur.fnCharOffset;
+      const footnoteIndex = cur.fnFootnoteIndex;
+      const pageNum = cur.fnPageNum;
+      this.executeOperation({
+        kind: 'snapshot',
+        operationType: 'applyParaFormatInFootnote',
+        editContext: {
+          mode: 'footnote',
+          sectionIdx,
+          paraIdx,
+          controlIdx,
+          footnoteIndex,
+          pageNum,
+          innerParaIdx,
+          charOffset,
+        },
+        operation: (wasm) => {
+          wasm.applyParaFormatInFootnote(sectionIdx, paraIdx, controlIdx, innerParaIdx, propsJson);
+          return { ...cursorBefore };
+        },
+      });
+      return true;
+    }
+
+    return false;
   }
 
   private executeParaFormatCommand(targets: ParaFormatTarget[], props: Record<string, unknown>): boolean {
@@ -2195,19 +2273,10 @@ export class InputHandler {
       const pos = this.cursor.getPosition();
       const inFootnote = this.cursor.isInFootnote();
       const inCell = !inFootnote && pos.parentParaIndex !== undefined;
-      const paraProps = inFootnote
-        ? this.wasm.getParaPropertiesInFootnote(
-            this.cursor.fnSectionIdx,
-            this.cursor.fnParaIdx,
-            this.cursor.fnControlIdx,
-            this.cursor.fnInnerParaIdx,
-          )
-        : inCell
-        ? this.wasm.getCellParaPropertiesAt(
-            pos.sectionIndex, pos.parentParaIndex!, pos.controlIndex!,
-            pos.cellIndex!, pos.cellParaIndex!,
-          )
-        : this.wasm.getParaPropertiesAt(pos.sectionIndex, pos.paragraphIndex);
+      // 문단 모양 대화상자와 같은 리더를 쓴다. 여기에 갈래를 따로 두면 문맥이 하나 빠져도
+      // 컴파일이 통과하고, 실제로 머리말/꼬리말 갈래가 빠져 있었다 — 머리말 편집 중 툴바와
+      // 눈금자가 본문 문단 값을 보여줬다(대화상자는 머리말 값을 정확히 읽는데).
+      const paraProps = this.getParaProperties();
       this.eventBus.emit('cursor-para-changed', paraProps);
 
       // 스타일 드롭다운 갱신용
@@ -2434,7 +2503,17 @@ export class InputHandler {
       }
       case 'snapshot': {
         const cursorBefore = this.cursor.getPosition();
-        const cmd = new SnapshotCommand(desc.operationType, cursorBefore, cursorBefore, desc.operation);
+        // 일반 snapshot은 구조 편집의 본문 복귀 의미를 유지한다. HF/FN 안에서만
+        // 문맥을 보존하는 전용 명령을 써서 undo/redo의 대상 범위를 호출부가 드러낸다.
+        const cmd = desc.editContext
+          ? new SubmodeSnapshotCommand(
+              desc.operationType,
+              cursorBefore,
+              cursorBefore,
+              desc.operation,
+              desc.editContext,
+            )
+          : new SnapshotCommand(desc.operationType, cursorBefore, cursorBefore, desc.operation);
         const newPos = this.history.execute(cmd, this.wasm);
         const markPastedFieldEndOutside = this.pastedFieldEndOutsidePending;
         // 무변경 경로에서도 pending 플래그는 소비한다 — 남겨 두면 다음 연산으로 샌다.
