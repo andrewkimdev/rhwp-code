@@ -1,6 +1,6 @@
 ---
 kind: pr_review
-status: local-validation-passed
+status: visual-validation-passed
 canonical: mydocs/manual/pr_review_workflow.md
 last_verified: 2026-08-07
 ---
@@ -13,9 +13,9 @@ last_verified: 2026-08-07
 글꼴에 맡겨 두부 글자를 출력하던 결함을, CanvasKit과 같은 bounded 사각형+숫자 합성으로
 보완했다. 실제 HWP의 물리 2쪽에서 사각 외곽과 내부 숫자 잉크를 확인했다.
 
-이 PR은 #4122의 pagination 변경 위에 쌓였지만 그 변경에서 발생한 회귀는 아니다. #4122를
-먼저 merge한 뒤 base를 `devel`로 retarget하고, 최신 CI와 작업지시자의 최종 시각 판정을 확인한
-뒤에만 ready/merge한다.
+이 PR은 #4122의 pagination 변경 위에 쌓였지만 그 변경에서 발생한 회귀는 아니다. 작업지시자는
+2026-08-07 대표 asset과 rhwp-studio 결과를 시각 판정 통과로 확인했다. #4122를 먼저 merge한 뒤
+base를 `devel`로 retarget하고 최신 CI를 확인한 뒤에만 ready/merge한다.
 
 ## 검토 경로
 
@@ -93,14 +93,14 @@ sandbox 안 Studio test는 중첩 Node driver 5개의 종료코드가 0인데 st
 - 자동 후보: 별도 full-page compare 후보를 사용하지 않고 대상 TextRun의 pixel topology를 직접 판정
 - 결정 지표: 사각 잉크 33x34px, 예상 30.7px의 82%..118% 범위, 내부 숫자 잉크 82px
 - 수행자 직접 확인: `규제 신설 내용` 앞 표식이 사각형 안 숫자 1로 표시됨
-- 작업지시자 최종 시각 판정: Draft 검토 단계에서 대기
+- 작업지시자 최종 시각 판정: 2026-08-07 통과
 
 ![#4139 Canvas2D 사각 안 숫자 1](../assets/pr_4139_536_boxed_pua_canvas2d_p002.png)
 
 ## 남은 게이트
 
-1. review·asset trailing commit을 push한 최신 head에서 GitHub Actions를 확인한다.
-2. 작업지시자가 대표 asset 또는 rhwp-studio에서 최종 시각 판정을 한다.
-3. #4122를 먼저 merge한다.
-4. #4139 base를 `devel`로 retarget하고 diff·mergeability·required checks를 다시 확인한다.
-5. #536은 merge 뒤에도 open으로 유지한다.
+1. #4122를 먼저 merge한다.
+2. #4139 base를 `devel`로 retarget한다. 현재 workflow의 PR base filter가 `main`·`devel`이라
+   stacked base에서는 checks가 생성되지 않으며, retarget 뒤 최신 head의 Actions를 확인한다.
+3. diff·mergeability·required checks를 다시 확인한 뒤 ready/merge한다.
+4. #536은 merge 뒤에도 open으로 유지한다.

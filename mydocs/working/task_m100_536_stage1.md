@@ -66,4 +66,4 @@ SHA-256은 `1f9d2f5705a64899c2b081832d2e6548dfe7bc3b9d1fb1b92f41221d39c8b3e7`이
 임시 산출물은 `output/536/issue2007_p002_canvas2d.png`, 저장소 대표 asset은
 `mydocs/pr/assets/pr_4139_536_boxed_pua_canvas2d_p002.png`에 둔다. 수행자 확인에서는 사각형 안
 숫자 1이 정상 표시된다. 작업지시자가 승인한 PR 직전 전체 검증은 완료했으며, 최종 시각 판정은
-Draft PR 검토 게이트로 남긴다.
+2026-08-07 통과했다. #4122 merge, #4139의 `devel` retarget와 최신 CI는 후속 게이트로 남긴다.
