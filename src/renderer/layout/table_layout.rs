@@ -2273,8 +2273,7 @@ impl LayoutEngine {
         let scalar_single_row_fragment_content_offset = nested_split
             .filter(|_| scalar_single_row_fragment)
             .map(|split| split.content_offset);
-        let scalar_single_row_continuation =
-            scalar_single_row_continuation_offset.is_some();
+        let scalar_single_row_continuation = scalar_single_row_continuation_offset.is_some();
         let mut row_col_x = build_row_col_x(
             table,
             &col_widths,

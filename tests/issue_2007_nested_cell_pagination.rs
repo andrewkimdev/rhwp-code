@@ -437,6 +437,64 @@ fn issue_2007_nested_cell_content_paginates() {
         pages, 17,
         "#4069 중첩 흐름 분할 회귀 — 페이지 수 {pages} (한컴 2020 기준 17)"
     );
+
+    // p8(0-based 7)은 큰 1×1 RowBreak 표의 continuation이다. 이전에는 cell clip 밖에
+    // 남아 있는 수천 px 자손까지 partial Table bbox/body clip을 확장해 Canvas/WASM
+    // paint 후보가 현재 쪽을 벗어났다. 페이지 수 17만으로는 이 구조 결함을 못 잡는다.
+    let tree = doc
+        .build_page_render_tree(7)
+        .expect("issue2007 p8 render tree");
+    let fragment =
+        find_table_fragment(&tree.root, 7, 1).expect("issue2007 p8의 원본 pi=7 ci=1 표 조각");
+    let fragment_bottom = fragment.bbox.y + fragment.bbox.height;
+    assert!(
+        fragment_bottom <= tree.root.bbox.height + 0.5,
+        "p8 RowBreak 표 조각 bbox가 쪽 밖으로 새어 Canvas/WASM paint 범위를 오염한다: \
+         bottom={fragment_bottom:.1}, page_height={:.1}",
+        tree.root.bbox.height
+    );
+    let fragment_cell =
+        direct_table_cell(fragment).expect("issue2007 p8 RowBreak 표 조각의 직접 clipped cell");
+    let clip_bottom = fragment_cell.bbox.y + fragment_cell.bbox.height;
+    assert!(
+        !has_painted_horizontal_line_in_bottom_residue(fragment, clip_bottom),
+        "p8 paints the next fragment's top border at the preceding page bottom; \
+         clip_bottom={clip_bottom:.1}"
+    );
+    assert!(
+        !contains_painted_text(
+            &tree.root,
+            "및 정치부문에 존재하는 것으로 인식되는 부패의 정도를 측정",
+            Some(ClipRect::from_node(&tree.root)),
+        ),
+        "p8 continuation이 p7 마지막 줄을 다시 paint한다 — mixed nested split의 콘텐츠 원점이 한 unit 앞서 있다"
+    );
+
+    // p7 끝에는 7×3 표의 제목이 남을 공간처럼 보이지만, 표 본체는 cell clip을
+    // 통과하지 못한다. 한컴은 제목을 표와 분리하지 않고 p8에 함께 배치한다.
+    let p7 = doc
+        .build_page_render_tree(6)
+        .expect("issue2007 p7 render tree");
+    let p7_clip = Some(ClipRect::from_node(&p7.root));
+    let carried_heading = "해외 반부패 전담기구 조사기능 현황";
+    assert!(
+        !contains_painted_text(&p7.root, carried_heading, p7_clip),
+        "p7 must not paint a table heading whose table starts on p8"
+    );
+    assert!(
+        contains_painted_text(
+            &tree.root,
+            carried_heading,
+            Some(ClipRect::from_node(&tree.root))
+        ),
+        "p8 must retain the heading with its first visible table rows"
+    );
+    let heading_top =
+        first_text_run_top(&tree.root, carried_heading).expect("p8 carried table heading text run");
+    assert!(
+        (120.0..=123.0).contains(&heading_top),
+        "p8 heading must be inside the current nested-cell viewport, got y={heading_top}"
+    );
 }
 
 #[test]
@@ -495,7 +553,7 @@ fn issue_2007_intra_paragraph_saved_frame_break_is_preserved() {
     );
     assert!(
         page11.contains(FRAME_CONTINUATION),
-        "11쪽에 문단 내부 vpos reset 이후 줄이 없다"
+        "11쪽에 문단 내부 vpos reset 이후 줄이 없다: {page11}"
     );
     assert!(
         page11.contains(NEXT_ARTICLE),
@@ -531,66 +589,6 @@ fn issue_2007_saved_frame_tail_nested_table_starts_before_next_frame() {
     assert!(
         page16.contains(NEXT_FRAME),
         "16쪽이 이해관계자 협의 저장 프레임에서 재개하지 않았다"
-    );
-
-    // p8(0-based 7)은 큰 1×1 RowBreak 표의 continuation이다. 이전에는 cell clip 밖에
-    // 남아 있는 수천 px 자손까지 partial Table bbox/body clip을 확장해 Canvas/WASM
-    // paint 후보가 현재 쪽을 벗어났다. 페이지 수 17만으로는 이 구조 결함을 못 잡는다.
-    let tree = doc
-        .build_page_render_tree(7)
-        .expect("issue2007 p8 render tree");
-    let fragment =
-        find_table_fragment(&tree.root, 7, 1).expect("issue2007 p8의 원본 pi=7 ci=1 표 조각");
-    let fragment_bottom = fragment.bbox.y + fragment.bbox.height;
-    assert!(
-        fragment_bottom <= tree.root.bbox.height + 0.5,
-        "p8 RowBreak 표 조각 bbox가 쪽 밖으로 새어 Canvas/WASM paint 범위를 오염한다: \
-         bottom={fragment_bottom:.1}, page_height={:.1}",
-        tree.root.bbox.height
-    );
-    let fragment_cell =
-        direct_table_cell(fragment).expect("issue2007 p8 RowBreak 표 조각의 직접 clipped cell");
-    let clip_bottom = fragment_cell.bbox.y + fragment_cell.bbox.height;
-    assert!(
-        !has_painted_horizontal_line_in_bottom_residue(fragment, clip_bottom),
-        "p8 paints the next fragment's top border at the preceding page bottom; \
-         clip_bottom={clip_bottom:.1}"
-    );
-    assert!(
-        !contains_painted_text(
-            &tree.root,
-            "및 정치부문에 존재하는 것으로 인식되는 부패의 정도를 측정",
-            Some(ClipRect::from_node(&tree.root)),
-        ),
-        "p8 continuation이 p7 마지막 줄을 다시 paint한다 — mixed nested split의 콘텐츠 원점이 한 unit 앞서 있다"
-    );
-
-    // p7 끝에는 7×3 표의 제목이 남을 공간처럼 보이지만, 표 본체는 cell clip을
-    // 통과하지 못한다. 한컴은 제목을 표와 분리하지 않고 p8에 함께 배치한다. 종전
-    // rhwp는 제목을 p7 하단에 paint하고 p8에서는 같은 source line을 clip 위에 남겨
-    // 사라지게 했다.
-    let p7 = doc
-        .build_page_render_tree(6)
-        .expect("issue2007 p7 render tree");
-    let p7_clip = Some(ClipRect::from_node(&p7.root));
-    let carried_heading = "해외 반부패 전담기구 조사기능 현황";
-    assert!(
-        !contains_painted_text(&p7.root, carried_heading, p7_clip),
-        "p7 must not paint a table heading whose table starts on p8"
-    );
-    assert!(
-        contains_painted_text(
-            &tree.root,
-            carried_heading,
-            Some(ClipRect::from_node(&tree.root))
-        ),
-        "p8 must retain the heading with its first visible table rows"
-    );
-    let heading_top =
-        first_text_run_top(&tree.root, carried_heading).expect("p8 carried table heading text run");
-    assert!(
-        (120.0..=123.0).contains(&heading_top),
-        "p8 heading must be inside the current nested-cell viewport, got y={heading_top}"
     );
 }
 
