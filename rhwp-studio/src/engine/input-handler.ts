@@ -1850,6 +1850,9 @@ export class InputHandler {
   private applyCharFormat(props: Partial<CharProperties>): void {
     const block = this.getSelectedCellBlock();
     if (block) {
+      // F5 블록에서 Ctrl+클릭으로 모든 셀을 제외한 경우다. 빈 블록을 일반 텍스트
+      // 선택 없음으로 fallback하면 앵커 셀 하나를 바꾸므로, history도 만들지 않고 끝낸다.
+      if (block.cellIndices.length === 0) return;
       this.applyCharFormatToCellBlock(block, props);
       return;
     }
@@ -1996,7 +1999,6 @@ export class InputHandler {
       range,
       this.cursor.getExcludedCells(),
     );
-    if (cellIndices.length === 0) return null;
     return { sec: ctx.sec, ppi: ctx.ppi, ci: ctx.ci, cellIndices };
   }
 

@@ -49,6 +49,18 @@ test('Ctrl+클릭으로 제외한 셀은 대상에서 빠진다', () => {
   assert.deepEqual(picked, [0, 1, 3]);
 });
 
+test('모든 셀을 Ctrl+클릭으로 제외하면 빈 블록이 된다', () => {
+  const picked = selectCellIndicesInRange(
+    4, gridCellInfo(2),
+    { startRow: 0, startCol: 0, endRow: 1, endCol: 1 },
+    new Set([
+      excludedCellKey(0, 0), excludedCellKey(0, 1),
+      excludedCellKey(1, 0), excludedCellKey(1, 1),
+    ]),
+  );
+  assert.deepEqual(picked, []);
+});
+
 test('제외 셀 키 형식은 CursorState 가 조립하는 것과 같은 함수여야 한다', () => {
   // 조립하는 쪽과 조회하는 쪽이 형식을 따로 갖고 있으면 한쪽만 바뀌어도 조회가 조용히
   // 빗나가 제외 셀이 무시된다. 리터럴 재조립을 금지하고 단일 함수를 쓰는지 본다.
@@ -112,6 +124,22 @@ test('문단 서식 대상 산출은 텍스트 선택보다 셀 블록을 먼저
     '셀 블록 대상 산출을 호출하지 않는다');
 });
 
+test('빈 셀 블록 문단 서식은 앵커 셀로 fallback 하지 않는다', () => {
+  const ih = source('src/engine/input-handler.ts');
+  const blockStart = ih.indexOf('private getSelectedCellBlock()');
+  const blockEnd = ih.indexOf('\n  }', blockStart);
+  const blockBody = ih.slice(blockStart, blockEnd);
+  assert.notEqual(blockStart, -1, 'getSelectedCellBlock 을 찾지 못했다');
+  assert.doesNotMatch(blockBody, /if \(cellIndices\.length === 0\) return null;/,
+    '모든 셀 제외를 셀 블록 아님으로 바꿔 앵커 셀 fallback을 허용한다');
+
+  const paraStart = ih.indexOf('private getParaFormatTargetsAtCursor()');
+  const paraEnd = ih.indexOf('\n  }', paraStart);
+  const paraBody = ih.slice(paraStart, paraEnd);
+  assert.match(paraBody, /if \(block\) return this\.getParaFormatTargetsForCellBlock\(block\);/,
+    '빈 셀 블록을 빈 문단 서식 대상으로 유지하지 않는다');
+});
+
 test('글자 서식 대상 판정은 셀 블록 선택도 대상으로 인정한다', () => {
   // hasSelection() 은 anchor/fnAnchor 만 본다. 서식 가드가 그것만 보면 셀 블록 선택에서
   // 통째로 반환돼 굵게/기울임/글꼴 크기가 아무 일도 하지 않는다.
@@ -160,6 +188,15 @@ test('글자 서식 적용 진입점이 셀 블록 분기를 먼저 호출한다
   assert.ok(blockAt < selAt, '셀 블록 분기가 텍스트 선택 분기보다 뒤에 있다');
   assert.match(body, /this\.applyCharFormatToCellBlock\(block, props\)/,
     '셀 블록 적용 경로를 호출하지 않는다');
+});
+
+test('빈 셀 블록 글자 서식은 history 없이 no-op 이다', () => {
+  const ih = source('src/engine/input-handler.ts');
+  const start = ih.indexOf('private applyCharFormat(props');
+  assert.notEqual(start, -1, 'applyCharFormat 을 찾지 못했다');
+  const body = ih.slice(start, ih.indexOf('\n  }', start));
+  assert.match(body, /if \(block\.cellIndices\.length === 0\) return;/,
+    '모든 셀 제외 시 글자 서식이 no-op으로 끝나지 않는다');
 });
 
 test('모양 붙여넣기도 같은 셀 산출 함수를 쓴다', () => {
