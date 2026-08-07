@@ -18163,11 +18163,13 @@ impl TypesetEngine {
                 end_row = r;
             } else {
                 let split_candidate_rows_height = consumed + cs_before + split_total;
-                // HWPX RowBreak 연속 조각은 작은 측정 drift에는 종전 여유를
-                // 유지한다. 다만 mixed nested tail이 한 줄을 넘겨 현재 쪽에
-                // 물리적으로 더 그려지면 다음 쪽 source owner를 건너뛴다. 이
-                // 현상은 새 쪽에서 시작하는 continuation에만 나타나므로, 그
-                // 좁은 형상만 재-cut한다 (#3637 HWP 2020 p26 → p27).
+                // HWPX RowBreak 조각은 작은 측정 drift에는 종전 여유를 유지한다.
+                // 다만 1×1 nested child가 든 행은 inner viewport의 물리 tail이
+                // `advance_row_cut` 논리 높이보다 크게 그려질 수 있다. 이 tail을
+                // 64px HWPX 일반 여유로 수용하면 다음 source unit이 현재 page clip
+                // 뒤에 숨고 마지막 page가 사라진다 (#3637 HWP 2020 p26 → p27,
+                // #2097 75544 p65 → p66). 새 continuation 시작 또는 새 표 안의
+                // 후행 nested row라는 두 물리 경계에만 정확한 재-cut을 적용한다.
                 const MIXED_NESTED_OWNER_DRIFT_MIN_PX: f64 = 16.0;
                 // source owner가 drift하는 것은 현재 분할 row에 1×1 nested child가
                 // 직접 있는 경우로 확인됐다. 1×1 child가 없는 giant cell(#1949)은
@@ -18181,12 +18183,19 @@ impl TypesetEngine {
                             })
                         })
                 });
+                let continuation_nested_owner_boundary =
+                    r == cursor_row && is_continuation && !row_start_cut.is_empty();
+                // 새 표의 앞선 행들이 현재 쪽에 먼저 놓인 뒤 마지막 1×1 child 행이
+                // 시작될 때는 logical cut tail이 0px로 보고될 수 있다. 그러나 실제
+                // child viewport·frame은 다음 쪽 source unit을 가리므로, 이 역시
+                // 한 fragment owner로 취급해야 한다 (#2097 75544 p65 → p66).
+                let fresh_late_nested_row =
+                    r > cursor_row && !is_continuation && row_start_cut.is_empty();
+                let nested_physical_tail = split_total > res.consumed_height + padding + 0.5;
                 let mixed_nested_owner_guard = st.profile.hwpx_stored_layout()
                     && row_has_single_cell_nested
-                    && r == cursor_row
-                    && is_continuation
-                    && !row_start_cut.is_empty()
-                    && split_total > res.consumed_height + padding + 0.5
+                    && (continuation_nested_owner_boundary
+                        || (fresh_late_nested_row && !nested_physical_tail))
                     && split_candidate_rows_height - avail_for_rows
                         > MIXED_NESTED_OWNER_DRIFT_MIN_PX;
                 let split_row_overflow_tolerance =
@@ -19372,13 +19381,25 @@ impl TypesetEngine {
             }
         };
         // HWPX의 빈 1×1 wrapper는 측정기와 renderer가 모두 내부 표를 행 기하로
-        // 사용한다. native HWP5의 RowBreak wrapper는 반대로 바깥 표의 clip/frame이
-        // continuation 계약을 가진다. 그 입력에 inner-row cursor를 적용하면
-        // source owner가 한 조각씩 늦어지는 42065 회귀가 된다.
-        let row_geometry_table = if st.profile.native_hwp5_layout() {
+        // 사용한다. native HWP5에서 바깥 clip/frame 소유가 필요한 경우도 실제
+        // 1×1 RowBreak wrapper뿐이다. 모든 native 표에 바깥 행 기하를 적용하면
+        // 일반 중첩 표의 행 cursor가 달라져 59043 pagination이 39 -> 41쪽으로
+        // 회귀한다. 따라서 physical continuation 계약이 있는 wrapper로만 좁힌다.
+        let effective_row_geometry_table = row_geometry_table(table);
+        let hwp5_single_cell_rowbreak_wrapper = (st.profile.native_hwp5_layout()
+            || st.profile.hwp5_origin_hwpx())
+            && table.row_count == 1
+            && table.col_count == 1
+            && matches!(
+                table.page_break,
+                crate::model::table::TablePageBreak::RowBreak
+            )
+            && effective_row_geometry_table.row_count == 1
+            && effective_row_geometry_table.col_count == 1;
+        let row_geometry_table = if hwp5_single_cell_rowbreak_wrapper {
             table
         } else {
-            row_geometry_table(table)
+            effective_row_geometry_table
         };
 
         let declared_table_height = (declared_object_total - host_spacing_total).max(0.0);

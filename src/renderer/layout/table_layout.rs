@@ -549,12 +549,76 @@ fn text_line_has_non_whitespace_text(node: &RenderNode) -> bool {
         })
 }
 
+/// A complete source line belongs to the next RowBreak fragment when only a
+/// sub-glyph sliver reaches the current clipped cell.  SVG/Canvas would still
+/// paint that sliver because clipping works on ink geometry, producing a
+/// duplicate heading at the preceding page bottom (issue2007 p16 -> p17).
+///
+/// Limit this to the same six-pixel residue window used for a future table
+/// border: it never hides a usable line, and the successor fragment remains
+/// responsible for the full line.
+fn suppress_bottom_clipped_text_residue(node: &mut RenderNode, clip_bottom: f64) {
+    for child in &mut node.children {
+        if !child.visible || !text_line_has_non_whitespace_text(child) {
+            continue;
+        }
+        let line_top = child.bbox.y;
+        let line_bottom = line_top + child.bbox.height;
+        let visible_sliver = clip_bottom - line_top;
+        if line_top < clip_bottom - NESTED_FRAGMENT_EDGE_EPSILON_PX
+            && line_bottom > clip_bottom + NESTED_FRAGMENT_EDGE_EPSILON_PX
+            && visible_sliver < NESTED_FRAGMENT_RESIDUAL_BORDER_PX
+        {
+            child.visible = false;
+        }
+    }
+}
+
+/// A continued nested-cell line can retain its prior-page absolute y while a
+/// one-pixel ink tail reaches this physical cell.  The outer page clip then
+/// hides the full line even though the source owner is this fragment
+/// (`rowbreak-problem-pages.hwpx` p8).  Rebase only that crossing line to the
+/// cell top; older, wholly off-page sibling lines remain hidden.
+///
+/// This is deliberately independent of the cell's `clip` flag.  A nested
+/// table can inherit its effective viewport from an ancestor RowBreak cell,
+/// leaving the inner cell itself unclipped in the render tree.
+fn rebase_nested_cell_top_residue_line(node: &mut RenderNode) {
+    if !matches!(node.node_type, RenderNodeType::TableCell(_)) {
+        return;
+    }
+
+    let cell_top = node.bbox.y;
+    let has_wholly_off_top_predecessor = node.children.iter().any(|child| {
+        child.visible
+            && text_line_has_non_whitespace_text(child)
+            && child.bbox.y + child.bbox.height < cell_top - NESTED_FRAGMENT_EDGE_EPSILON_PX
+    });
+    if !has_wholly_off_top_predecessor {
+        return;
+    }
+
+    for child in &mut node.children {
+        if !child.visible || !text_line_has_non_whitespace_text(child) {
+            continue;
+        }
+        let line_top = child.bbox.y;
+        let line_bottom = line_top + child.bbox.height;
+        if line_top < cell_top
+            && cell_top - line_top <= CLIPPED_TEXT_INK_TOP_OVERFLOW_PX * 4.0
+            && line_bottom >= cell_top - NESTED_FRAGMENT_EDGE_EPSILON_PX
+        {
+            translate_render_subtree_y(child, cell_top + CLIPPED_TEXT_INK_TOP_INSET_PX - line_top);
+        }
+    }
+}
+
 /// Preserve source ownership at a clipped cell's title/table seam and keep a
 /// first visible glyph out of the ancestor Canvas/SVG clip.
 ///
 /// This operates only on direct source siblings.  It never grows the clip:
 /// prior-page text remains hidden and a future-page tail cannot be exposed.
-fn repair_clipped_cell_text_table_seam(node: &mut RenderNode) {
+fn repair_clipped_cell_text_table_seam(node: &mut RenderNode, suppress_bottom_text_residue: bool) {
     let is_clipped_cell = matches!(
         &node.node_type,
         RenderNodeType::TableCell(TableCellNode { clip: true, .. })
@@ -634,6 +698,9 @@ fn repair_clipped_cell_text_table_seam(node: &mut RenderNode) {
         if line_top < clip_top && clip_top - line_top <= CLIPPED_TEXT_INK_TOP_OVERFLOW_PX {
             translate_render_subtree_y(child, clip_top + CLIPPED_TEXT_INK_TOP_INSET_PX - line_top);
         }
+    }
+    if suppress_bottom_text_residue {
+        suppress_bottom_clipped_text_residue(node, clip_bottom);
     }
 }
 
@@ -839,7 +906,15 @@ fn reconstruct_nested_table_descendant_fragment_frames(
 /// This runs after native table edges are emitted. It never changes a table
 /// with current-page content, and the small source-spacer translation is
 /// limited to the direct siblings following a suppressed residual tail.
-fn repair_clipped_nested_table_fragment_frame(tree: &mut PageRenderTree, node: &mut RenderNode) {
+fn repair_clipped_nested_table_fragment_frame(
+    tree: &mut PageRenderTree,
+    node: &mut RenderNode,
+    suppress_bottom_text_residue: bool,
+    repair_unclipped_hwpx_top_residue: bool,
+) {
+    if repair_unclipped_hwpx_top_residue {
+        rebase_nested_cell_top_residue_line(node);
+    }
     let is_clipped_cell = matches!(
         &node.node_type,
         RenderNodeType::TableCell(TableCellNode { clip: true, .. })
@@ -850,7 +925,7 @@ fn repair_clipped_nested_table_fragment_frame(tree: &mut PageRenderTree, node: &
 
     let clip_top = node.bbox.y;
     let clip_bottom = node.bbox.y + node.bbox.height;
-    repair_clipped_cell_text_table_seam(node);
+    repair_clipped_cell_text_table_seam(node, suppress_bottom_text_residue);
     suppress_future_nested_table_border_residue(node, clip_bottom);
     for table_index in 0..node.children.len() {
         if !node.children[table_index].visible
@@ -1066,14 +1141,26 @@ fn repair_clipped_nested_table_fragment_frame(tree: &mut PageRenderTree, node: &
 pub(super) fn extend_completed_nested_table_border_clips(
     tree: &mut PageRenderTree,
     node: &mut RenderNode,
+    suppress_bottom_text_residue: bool,
+    repair_unclipped_hwpx_top_residue: bool,
 ) {
     for child in &mut node.children {
-        extend_completed_nested_table_border_clips(tree, child);
+        extend_completed_nested_table_border_clips(
+            tree,
+            child,
+            suppress_bottom_text_residue,
+            repair_unclipped_hwpx_top_residue,
+        );
     }
     extend_table_horizontal_bbox_to_direct_cell_paint(node);
     extend_clipped_cell_horizontal_clip_to_nested_table_borders(node);
     extend_clipped_cell_vertical_clip_to_nearby_nested_table_borders(node);
-    repair_clipped_nested_table_fragment_frame(tree, node);
+    repair_clipped_nested_table_fragment_frame(
+        tree,
+        node,
+        suppress_bottom_text_residue,
+        repair_unclipped_hwpx_top_residue,
+    );
 }
 
 fn should_render_table_caption(table: &crate::model::table::Table, depth: usize) -> bool {
@@ -2525,7 +2612,12 @@ impl LayoutEngine {
         // Cell children may complete normal table-edge rendering only after
         // the parent cell loop. Correct their horizontal clip at this point
         // without changing the vertical continuation viewport.
-        extend_completed_nested_table_border_clips(tree, &mut table_node);
+        extend_completed_nested_table_border_clips(
+            tree,
+            &mut table_node,
+            self.profile.get().native_hwp5_layout() || self.profile.get().hwp5_origin_hwpx(),
+            self.profile.get().hwpx_container(),
+        );
 
         col_node.children.push(table_node);
 
@@ -4908,11 +5000,12 @@ impl LayoutEngine {
                         // 하단으로 미래 descendant를 clamp하면 42065 p17 제목이
                         // p16에 미리 들어온다. HWPX는 실제로 셀 밖으로 빠진 중첩 표만
                         // 막기 위해 아래의 좁은 누적-offset guard를 계속 적용한다.
-                        let native_hwp5_rowbreak_fragment = self.profile.get().native_hwp5_layout()
+                        let hwp5_rowbreak_fragment = (self.profile.get().native_hwp5_layout()
+                            || self.profile.get().hwp5_origin_hwpx())
                             && row_filter.is_some()
                             && table.row_count == 1
                             && table.col_count == 1;
-                        let nested_y = if single_row_continuation || native_hwp5_rowbreak_fragment {
+                        let nested_y = if single_row_continuation || hwp5_rowbreak_fragment {
                             nested_y
                         } else {
                             nested_y.min(inner_area.y + inner_area.height)
@@ -5137,12 +5230,11 @@ impl LayoutEngine {
                             // 이 셀 조각의 unit cut이 만든 중첩 표 slice를 다음 깊이에도
                             // 그대로 넘긴다. 픽셀 높이만으로 다시 행을 추정하면 첫 조각과
                             // continuation이 같은 행을 각각 재렌더해 쪽 소유가 깨진다.
-                            // #3637의 source-unit viewport는 HWPX wrapper가 보존한
-                            // 행 소유를 다음 깊이에 전달해야 한다. native HWP5 RowBreak
-                            // 1×1 wrapper는 이미 물리 cell clip과 누적 vpos로 같은
-                            // 조각을 표현한다. 여기에 HWPX split을 다시 전달하면 child
-                            // table의 viewport가 한 unit만큼 앞서 p16이 p17 제목을
-                            // 중복 paint한다(42065 HWP 2020).
+                            // Source-unit viewport ownership is encoded in HWPX wrapper
+                            // layouts. Native HWP5 RowBreak wrappers already carry the
+                            // equivalent physical cell clip and cumulative vpos; forwarding
+                            // the HWPX split there advances the child by one unit and paints
+                            // the next page heading early (42065 p16 -> p17).
                             let nested_split = self
                                 .profile
                                 .get()
@@ -11015,7 +11107,7 @@ mod row_cut_tests {
         // 로컬 좌표 재시작으로 보고 같은 쪽에 이어 담는다.
         let eng = LayoutEngine::new(96.0);
         eng.set_layout_profile(crate::model::provenance::LayoutCompatibilityProfile::new(
-            false, false, true, false, false,
+            false, false, true, true, false, false,
         ));
         let styles = ResolvedStyleSet::default();
         let t = rowbreak_table(vec![cell(
@@ -11038,7 +11130,7 @@ mod row_cut_tests {
         // 한컴 저장 쪽 경계로 보존한다.
         let eng = LayoutEngine::new(96.0);
         eng.set_layout_profile(crate::model::provenance::LayoutCompatibilityProfile::new(
-            false, false, true, false, false,
+            false, false, true, true, false, false,
         ));
         let styles = ResolvedStyleSet::default();
         let t = rowbreak_table(vec![cell(

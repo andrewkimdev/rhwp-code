@@ -215,3 +215,24 @@ fn issue_2308_nested_non_tac_table_keeps_saved_horizontal_cell_margin() {
          border_right={border_right:.1}; HWP PDF retains the saved 510HU cell margin"
     );
 }
+
+/// HWP 2024 PDF p34의 직접편익 표는 빈 host 문단 안에 1×1 블록 표를 둔다.
+/// 일반 표에는 unit cut이 없는데도 빈 composed line을 이유로 host를 건너뛰면,
+/// 표 테두리만 남고 `근거설명` 본문 전체가 사라진다.
+#[test]
+fn issue_2308_empty_host_paragraph_keeps_block_nested_table_content() {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("samples/76076_regulatory_analysis.hwp");
+    let bytes = fs::read(path).expect("read #2195 authority fixture");
+    let core = DocumentCore::from_bytes(&bytes).expect("parse #2195 authority fixture");
+    let p34 = core.build_page_render_tree(33).expect("render HWP PDF p34");
+    let p34_clip = Some(ClipRect::from_node(&p34.root));
+
+    let outer = find_table_with_owner_para(&p34.root, 336)
+        .expect("p34 direct-benefit outer table (pi=336)");
+    let nested =
+        find_nested_single_cell_table(outer).expect("p34 direct-benefit rationale nested table");
+    assert!(
+        text_run_is_fully_painted(nested, "분쇄기 등 회전기계", p34_clip),
+        "p34 direct-benefit rationale must retain the block nested-table body"
+    );
+}

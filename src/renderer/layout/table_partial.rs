@@ -1170,7 +1170,35 @@ impl LayoutEngine {
                                         pic.common.vert_rel_to,
                                         crate::model::shape::VertRelTo::Para
                                     );
-                                    let anchor_y = if top_and_bottom_para {
+                                    // #1921 p8: 빈 top-anchored 문단 안에 Square 부동 그림과
+                                    // TAC 그림이 함께 있으면 compose가 TAC 높이만큼 para_y를
+                                    // advance한다. Square 그림의 Para 기준은 advance 후 위치가
+                                    // 아니라 그 문단이 시작한 physical cell content top이다.
+                                    // vpos>0으로 실제로 밀린 빈 줄(#2226)과 일반 Square 셀은
+                                    // 이 조건에 포함하지 않는다.
+                                    let empty_top_anchored_square_with_inline_sibling = para
+                                        .text
+                                        .trim()
+                                        .is_empty()
+                                        && para
+                                            .line_segs
+                                            .first()
+                                            .is_some_and(|seg| seg.vertical_pos == 0)
+                                        && pic.common.flow_with_text
+                                        && matches!(
+                                            pic.common.text_wrap,
+                                            crate::model::shape::TextWrap::Square
+                                        )
+                                        && para.controls.iter().any(|ctrl| {
+                                            matches!(
+                                                ctrl,
+                                                Control::Picture(sibling) if sibling.common.treat_as_char
+                                            )
+                                        });
+                                    let anchor_y = if empty_top_anchored_square_with_inline_sibling
+                                    {
+                                        cell_y + pad_top
+                                    } else if top_and_bottom_para {
                                         if cut_units.is_some() && visible_non_inline_controls {
                                             // continuation 조각에 개체 flow 유닛이 실제 포함된 경우
                                             // 원본 line_seg vertical_pos 는 전체 셀 내부 좌표다. 그대로
@@ -1262,6 +1290,31 @@ impl LayoutEngine {
                                         width: pic_w,
                                         height: pic_h,
                                     };
+                                    if std::env::var("RHWP_DIAG_CELLPIC").is_ok()
+                                        && para_index == 98
+                                        && cell.row == 2
+                                        && cell.col == 0
+                                    {
+                                        eprintln!(
+                                            "DIAG_CELLPIC pi={} cell=({},{}) cp={} ctrl={} cut={:?} cell={:.1}..{:.1} para_before={:.1} para_after={:.1} anchor={:.1} object_y={:.1} valign={:?} voff={} flow={} wrap={:?}",
+                                            para_index,
+                                            cell.row,
+                                            cell.col,
+                                            cp_idx,
+                                            ctrl_idx,
+                                            cut_units,
+                                            cell_y,
+                                            cell_y + cell_h,
+                                            para_y_before_compose,
+                                            para_y,
+                                            picture_anchor_y,
+                                            pic_y,
+                                            pic.common.vert_align,
+                                            pic.common.vertical_offset as i32,
+                                            pic.common.flow_with_text,
+                                            pic.common.text_wrap,
+                                        );
+                                    }
                                     let mut pic_for_layout = pic.clone();
                                     pic_for_layout.common.horizontal_offset = 0;
                                     pic_for_layout.common.vertical_offset = 0;
@@ -1872,11 +1925,15 @@ impl LayoutEngine {
         // Only unwrap when the fragment cursor is outside the outer table's row
         // domain.  A genuine 1×1 table containing a nested table can otherwise be
         // intentionally rendered as its own one-row frame.
-        let table = if self.profile.get().native_hwp5_layout() {
-            outer_table
-        } else {
-            fragment_row_geometry_table(outer_table, end_row)
-        };
+        // A native HWP5 RowBreak wrapper owns its physical clip/frame only
+        // while the partial cursor still names its own outer row.  Once the
+        // cursor is outside that one-row domain, pagination has selected rows
+        // of the transparent nested content table.  Sending that cursor back
+        // through the outer wrapper paints the whole inner table in one page
+        // fragment (#1921 p16).  `fragment_row_geometry_table` preserves the
+        // outer table for its own row domain, so issue2007's native frame path
+        // remains intact.
+        let table = fragment_row_geometry_table(outer_table, end_row);
 
         if table.cells.is_empty() {
             return y_start;
@@ -2426,7 +2483,12 @@ impl LayoutEngine {
         // after the fragment cell loop. Preserve direct nested outer vertical
         // borders in the horizontal clip without widening the RowBreak
         // continuation viewport (issue2007 p2-p3).
-        extend_completed_nested_table_border_clips(tree, &mut table_node);
+        extend_completed_nested_table_border_clips(
+            tree,
+            &mut table_node,
+            self.profile.get().native_hwp5_layout() || self.profile.get().hwp5_origin_hwpx(),
+            self.profile.get().hwpx_container(),
+        );
 
         // [Task #1860/#3820] 노드-자식 포섭 불변: 분할 표 조각의 셀 내 절대위치 shape
         // (as-char 텍스트박스/그림 등)가 유닛 기반 셀 높이를 초과해 그려지면 표 노드
