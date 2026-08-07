@@ -19,7 +19,7 @@ use std::fs;
 use std::path::Path;
 
 use rhwp::document_core::DocumentCore;
-use rhwp::renderer::render_tree::{RenderNode, RenderNodeType};
+use rhwp::renderer::render_tree::{BoundingBox, RenderNode, RenderNodeType};
 
 fn page_text(node: &RenderNode, out: &mut String) {
     if let RenderNodeType::TextRun(run) = &node.node_type {
@@ -39,6 +39,44 @@ fn normalized_page_text(core: &DocumentCore, page: u32) -> String {
     text.chars()
         .filter(|character| !character.is_whitespace())
         .collect()
+}
+
+fn terminal_bottom_lines_with_cell_clips(
+    node: &RenderNode,
+    clip_ancestors: &mut Vec<BoundingBox>,
+    found: &mut Vec<(BoundingBox, Vec<BoundingBox>)>,
+) {
+    let pushes_clip = matches!(&node.node_type, RenderNodeType::TableCell(cell) if cell.clip);
+    if pushes_clip {
+        clip_ancestors.push(node.bbox);
+    }
+
+    if matches!(node.node_type, RenderNodeType::Line(_))
+        && node.bbox.y > 820.0
+        && node.bbox.width > 500.0
+        && node.bbox.height <= 2.0
+    {
+        found.push((node.bbox, clip_ancestors.clone()));
+    }
+    for child in &node.children {
+        terminal_bottom_lines_with_cell_clips(child, clip_ancestors, found);
+    }
+
+    if pushes_clip {
+        clip_ancestors.pop();
+    }
+}
+
+fn svg_number_attr(tag: &str, name: &str) -> f64 {
+    let marker = format!("{name}=\"");
+    let value = tag
+        .split_once(&marker)
+        .and_then(|(_, tail)| tail.split_once('"'))
+        .map(|(value, _)| value)
+        .unwrap_or_else(|| panic!("SVG attribute {name} missing: {tag}"));
+    value
+        .parse::<f64>()
+        .unwrap_or_else(|error| panic!("SVG attribute {name}={value}: {error}"))
 }
 
 #[test]
@@ -75,6 +113,10 @@ fn issue_2007_nested_cell_cursor_has_no_boundary_duplication() {
     assert!(
         page2.contains(FIRST_ITEM),
         "2쪽에 조문 대비표 제1호가 없다 — 첫 child cursor 누락"
+    );
+    assert!(
+        !page2.contains(SECOND_ITEM),
+        "3쪽 소속 조문 대비표 제2호가 2쪽에 미리 노출됐다 — 비종료 clip 회귀"
     );
     assert!(
         !page3.contains(FIRST_ITEM),
@@ -149,5 +191,88 @@ fn issue_2007_saved_frame_tail_nested_table_starts_before_next_frame() {
     assert!(
         page16.contains(NEXT_FRAME),
         "16쪽이 이해관계자 협의 저장 프레임에서 재개하지 않았다"
+    );
+}
+
+#[test]
+fn issue_4159_terminal_nested_bottom_border_is_inside_all_cell_clips() {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("samples/basic/issue2007_nested_cell_pagination_42065.hwp");
+    let bytes = fs::read(&path).expect("fixture read");
+    let core = DocumentCore::from_bytes(&bytes).expect("fixture parse");
+    let preceding_tree = core
+        .build_page_render_tree(1)
+        .expect("render physical page 2");
+    let mut premature = Vec::new();
+    terminal_bottom_lines_with_cell_clips(&preceding_tree.root, &mut Vec::new(), &mut premature);
+    assert!(
+        premature.is_empty(),
+        "비종료 물리 2쪽에 종료 bottom 선이 미리 노출됐다: {premature:?}"
+    );
+
+    let tree = core
+        .build_page_render_tree(2)
+        .expect("render physical page 3");
+
+    let mut found = Vec::new();
+    terminal_bottom_lines_with_cell_clips(&tree.root, &mut Vec::new(), &mut found);
+    assert_eq!(
+        found.len(),
+        1,
+        "물리 3쪽의 폭 500px 이상 종료 bottom 선을 하나만 찾아야 한다: {found:?}"
+    );
+
+    let (line, clips) = &found[0];
+    assert!(
+        !clips.is_empty(),
+        "종료 nested bottom 선에 clip=true TableCell 조상이 없다"
+    );
+    let line_bottom = line.y + line.height;
+    for clip in clips {
+        let clip_bottom = clip.y + clip.height;
+        assert!(
+            clip_bottom + 0.01 >= line_bottom,
+            "종료 nested bottom stroke가 조상 셀 clip에 잘린다: line_bottom={line_bottom:.3}, clip_bottom={clip_bottom:.3}, line={line:?}, clip={clip:?}"
+        );
+    }
+}
+
+#[test]
+fn issue_4159_svg_terminal_bottom_border_is_visible_inside_outer_cell_clip() {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("samples/basic/issue2007_nested_cell_pagination_42065.hwp");
+    let bytes = fs::read(&path).expect("fixture read");
+    let doc = rhwp::wasm_api::HwpDocument::from_bytes(&bytes).expect("fixture parse");
+    let svg = doc
+        .render_page_svg_native(2)
+        .expect("render physical page 3 SVG");
+
+    let outer_clip = svg
+        .lines()
+        .filter(|line| line.contains("<clipPath id=\"cell-clip"))
+        .find(|line| {
+            let x = svg_number_attr(line, "x");
+            let width = svg_number_attr(line, "width");
+            x < 80.0 && width > 650.0
+        })
+        .expect("physical page 3 outer split cell clip");
+    let bottom_line = svg
+        .lines()
+        .filter(|line| line.starts_with("<line "))
+        .find(|line| {
+            let x1 = svg_number_attr(line, "x1");
+            let x2 = svg_number_attr(line, "x2");
+            let y1 = svg_number_attr(line, "y1");
+            let y2 = svg_number_attr(line, "y2");
+            y1 > 820.0 && (y1 - y2).abs() < 0.01 && x2 - x1 > 500.0
+        })
+        .expect("physical page 3 terminal nested bottom SVG line");
+
+    let clip_bottom = svg_number_attr(outer_clip, "y") + svg_number_attr(outer_clip, "height");
+    let line_bottom =
+        svg_number_attr(bottom_line, "y1") + svg_number_attr(bottom_line, "stroke-width");
+    assert!(
+        clip_bottom + 0.01 >= line_bottom,
+        "SVG bottom stroke가 outer cell clip에 잘린다: line_bottom={line_bottom:.3}, clip_bottom={clip_bottom:.3}\n{outer_clip}\n{bottom_line}"
     );
 }
