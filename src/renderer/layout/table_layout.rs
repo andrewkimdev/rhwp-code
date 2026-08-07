@@ -6747,12 +6747,22 @@ impl LayoutEngine {
             } else {
                 900.0
             };
+            let nested_table_height = self.calc_nested_table_height(table, styles);
             let preserve_single_multi_page_boundary = stored_page_frame_boundaries == 1
                 // HWP5-origin HWPX는 변환 과정에서 단일 로컬 reset을 남길 수
                 // 있으므로 #3637의 31쪽 계약처럼 기존 HWPX 원장을 유지한다.
                 // 이 예외는 원본 HWP5 바이너리의 저장 좌표 계약에만 적용한다.
                 && self.profile.get().native_hwp5_layout()
-                && self.calc_nested_table_height(table, styles) > page_height + 0.5;
+                && nested_table_height > page_height + 0.5;
+            // direct HWPX도 물리 한 쪽을 넘는 1×1 표에 저장 reset이 하나 있으면
+            // canonical CellUnit의 높이/세분성이 필요하다(#3637: 1740.6px,
+            // body 971.3px). 다만 reset은 HWP5 source cursor로 승격하지 않고 아래
+            // scalar projection에서 제거한다. reset이 전혀 없는 issue1891의 깊은
+            // wrapper까지 이 조건에 포함하면 마지막 쪽 overflow가 34→56으로 는다.
+            let direct_hwpx_single_multi_page_projection = stored_page_frame_boundaries == 1
+                && self.profile.get().hwpx_stored_layout()
+                && !self.profile.get().hwp5_origin_hwpx()
+                && nested_table_height > page_height + 0.5;
             // canonical CellUnit의 hard-break 원장은 HWP5 저장 좌표 계약이다.
             // direct HWPX의 셀 lineSeg reset은 중첩 셀 로컬 viewport 재시작일 수
             // 있으므로, reset 수가 둘 이상이어도 이 경로로 승격하지 않는다.
@@ -6761,6 +6771,30 @@ impl LayoutEngine {
             // HWP5의 pagination marker를 보존하므로 canonical 경로를 유지한다.
             let canonical_stored_frame_profile =
                 self.profile.get().native_hwp5_layout() || self.profile.get().hwp5_origin_hwpx();
+            if let Ok(pattern) = std::env::var("RHWP_DIAG_MIXFRAG") {
+                if cell
+                    .paragraphs
+                    .iter()
+                    .any(|paragraph| paragraph.text.contains(&pattern))
+                {
+                    let nested_controls = cell
+                        .paragraphs
+                        .iter()
+                        .flat_map(|paragraph| paragraph.controls.iter())
+                        .filter(|control| matches!(control, Control::Table(_)))
+                        .count();
+                    eprintln!(
+                        "DIAG_MIXFRAG_PROFILE paras={} units={} resets={} authoritative={} nested_ctrls={} table_h={:.1} body_h={:.1}",
+                        cell.paragraphs.len(),
+                        units.len(),
+                        stored_page_frame_boundaries,
+                        has_authoritative_frame_boundary,
+                        nested_controls,
+                        nested_table_height,
+                        page_height,
+                    );
+                }
+            }
             // [#4069 Stage 2/Task #3820 Stage 48] 저장 프레임 경계는 문단 내부인지
             // 문단 사이인지와 무관하게 하나라도 부모 원장에 보존한다. 작은 로컬 reset은
             // `is_hwp5_stored_frame_rewind`의 body-half 조건에서 이미 제외된다.
@@ -6800,14 +6834,23 @@ impl LayoutEngine {
                     })
                     .collect();
             }
-            if self.profile.get().hwpx_stored_layout() && !self.profile.get().hwp5_origin_hwpx() {
+            if self.profile.get().hwpx_stored_layout()
+                && !self.profile.get().hwp5_origin_hwpx()
+                && (stored_page_frame_boundaries >= 2
+                    || has_authoritative_frame_boundary
+                    || direct_hwpx_single_multi_page_projection)
+            {
                 // PR #4122 이전 direct-HWPX fallback은 빈 host의 자식 표를
                 // 재귀적으로 평탄화하고, 같은 문단의 placeholder line과 표 높이를
                 // 한 번만 회계했다. 단순 legacy 재측정은 그 세 동작을 잃어
                 // #3637이 30쪽으로 과소 조판되거나 p26 source owner를 잃는다.
                 // 현재 canonical CellUnit은 그 재귀 원장을 이미 보유하므로, 높이와
                 // 가시 단위만 재사용하되 HWP5 전용 hard/stored cursor 의미를 제거해
-                // 검증된 HWPX scalar viewport 계약으로 투영한다.
+                // 검증된 HWPX scalar viewport 계약으로 투영한다. reset이 없는 일반
+                // 중첩 표까지 이 경로로 바꾸면 issue1891의 깊은 표가 마지막 쪽에서
+                // 22줄 더 밀리므로, canonical 승격 대상이었던 반복/authoritative
+                // reset 표에만 이 변환을 적용한다. reset 0개이거나 물리 한 쪽에
+                // 못 미치는 단일 reset 표는 legacy fallback을 유지한다.
                 return units
                     .iter()
                     .map(|unit| {
