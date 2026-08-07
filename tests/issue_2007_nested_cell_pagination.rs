@@ -532,6 +532,31 @@ fn issue_2007_nested_cell_cursor_has_no_boundary_duplication() {
 }
 
 #[test]
+fn issue_2007_recursive_partial_render_is_page_order_independent() {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("samples/basic/issue2007_nested_cell_pagination_42065.hwp");
+    let bytes = fs::read(&path).expect("fixture read");
+
+    // 재귀 partial-table 렌더는 같은 문서 원본을 사용하므로 앞 페이지 렌더 순서가
+    // 마지막 페이지의 cell-unit identity를 바꾸면 안 된다. 과거에는 매 페이지 만든
+    // 임시 Table clone의 cell 주소가 재사용되어, p1→p17 순차 렌더와 p17 단독 렌더가
+    // 서로 다른 캐시 entry를 적중했다.
+    let sequential = DocumentCore::from_bytes(&bytes).expect("sequential fixture parse");
+    for page_index in 0..16 {
+        let _ = normalized_page_text(&sequential, page_index);
+    }
+    let sequential_p17 = normalized_page_text(&sequential, 16);
+
+    let direct = DocumentCore::from_bytes(&bytes).expect("direct fixture parse");
+    let direct_p17 = normalized_page_text(&direct, 16);
+
+    assert_eq!(
+        sequential_p17, direct_p17,
+        "p17 render text changed after warming p1-p16; recursive partial tables must use stable model identity"
+    );
+}
+
+#[test]
 fn issue_2007_intra_paragraph_saved_frame_break_is_preserved() {
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("samples/basic/issue2007_nested_cell_pagination_42065.hwp");

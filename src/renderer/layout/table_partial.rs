@@ -24,6 +24,20 @@ use crate::model::paragraph::Paragraph;
 use crate::model::shape::CaptionDirection;
 use crate::model::style::{Alignment, BorderLine};
 
+/// `layout_partial_table_resolved`가 표 자체와 분리해 사용하는 host 문맥.
+///
+/// 일반 페이지 item은 원본 문단/control에서 이 값을 만들고, 재귀 child cursor는
+/// 임시 `Table::clone()` 없이 원본 중첩 표와 synthetic-equivalent 기본값을 넘긴다.
+#[derive(Clone, Copy)]
+struct PartialTableHostContext<'a> {
+    paragraphs: &'a [Paragraph],
+    para_index: usize,
+    control_index: usize,
+    repeat_fragment_outer_margin: bool,
+    pre_emitted_host_height: f64,
+    host_line_spacing: f64,
+}
+
 /// Returns the content table inside transparent, empty 1×1 wrapper tables.
 ///
 /// HWPX can retain a shell table solely as the host for a nested table.  The
@@ -374,7 +388,6 @@ impl LayoutEngine {
         tree: &mut PageRenderTree,
         table_node: &mut RenderNode,
         table: &crate::model::table::Table,
-        paragraphs: &[Paragraph],
         para_index: usize,
         control_index: usize,
         section_index: usize,
@@ -1881,19 +1894,23 @@ impl LayoutEngine {
                                         // 넘긴다. scalar y clip으로 표 전체를 매 쪽 재방출하면
                                         // vpos 리셋 프레임의 앞·뒤 문단이 서로 겹치므로, 동일
                                         // cursor가 선택한 문단/줄/자식 표만 방출해야 한다.
-                                        let nested_host = Paragraph {
-                                            controls: vec![Control::Table(Box::new(
-                                                (**nested_table).clone(),
-                                            ))],
-                                            ..Default::default()
-                                        };
-                                        let nested_paragraphs = [nested_host];
-                                        self.layout_partial_table(
+                                        // 이 cursor가 측정한 표는 문서 모델 안의 원본
+                                        // `nested_table`이다. 매 페이지 clone을 만들면
+                                        // `cell_units_cache`의 raw cell pointer가 allocator
+                                        // 재사용으로 다른 clone을 가리킬 수 있다. 일반 wrapper가
+                                        // 끝낸 table 해석 뒤의 구현을 원본 참조로 직접 호출한다.
+                                        self.layout_partial_table_resolved(
                                             tree,
                                             &mut cell_node,
-                                            &nested_paragraphs,
-                                            0,
-                                            0,
+                                            nested_table.as_ref(),
+                                            PartialTableHostContext {
+                                                paragraphs: &[],
+                                                para_index: 0,
+                                                control_index: 0,
+                                                repeat_fragment_outer_margin: false,
+                                                pre_emitted_host_height: 0.0,
+                                                host_line_spacing: 0.0,
+                                            },
                                             section_index,
                                             styles,
                                             outline_numbering_id,
@@ -2074,6 +2091,93 @@ impl LayoutEngine {
             Some(Control::Table(t)) => t,
             _ => return y_start,
         };
+        let repeat_fragment_outer_margin = repeats_native_empty_host_rowbreak_fragment_margin(
+            self.profile.get().native_hwp5_layout(),
+            paragraphs,
+            para_index,
+            control_index,
+        );
+        let pre_emitted_host_height = self
+            .pre_emitted_host_heights
+            .borrow()
+            .get(&para_index)
+            .copied()
+            .unwrap_or(0.0);
+        let host_line_spacing = para
+            .line_segs
+            .first()
+            .map(|seg| hwpunit_to_px(seg.line_spacing, self.dpi))
+            .unwrap_or(0.0);
+
+        self.layout_partial_table_resolved(
+            tree,
+            col_node,
+            outer_table.as_ref(),
+            PartialTableHostContext {
+                paragraphs,
+                para_index,
+                control_index,
+                repeat_fragment_outer_margin,
+                pre_emitted_host_height,
+                host_line_spacing,
+            },
+            section_index,
+            styles,
+            outline_numbering_id,
+            col_area,
+            y_start,
+            bin_data_content,
+            start_row,
+            end_row,
+            is_continuation,
+            start_cut,
+            end_cut,
+            is_block_split,
+            host_margin_left,
+            host_margin_right,
+            measured_table,
+            clamp_header_negative_para_offset,
+        )
+    }
+
+    /// 이미 원본 표와 host 문맥이 해석된 부분 표 렌더 구현.
+    ///
+    /// 재귀 child cursor는 이 경로를 직접 호출해 문서 소유 `&Table`의 안정 주소를
+    /// 유지한다. 그러면 `cell_units_cache`와 `table_nested_text_flag_cache`가 페이지마다
+    /// 생성·폐기되는 clone의 재사용 주소를 잘못 적중하지 않는다.
+    #[allow(clippy::too_many_arguments)]
+    fn layout_partial_table_resolved(
+        &self,
+        tree: &mut PageRenderTree,
+        col_node: &mut RenderNode,
+        outer_table: &crate::model::table::Table,
+        host: PartialTableHostContext<'_>,
+        section_index: usize,
+        styles: &ResolvedStyleSet,
+        outline_numbering_id: u16,
+        col_area: &LayoutRect,
+        y_start: f64,
+        bin_data_content: &[BinDataContent],
+        start_row: usize,
+        end_row: usize,
+        is_continuation: bool,
+        start_cut: &[usize],
+        end_cut: &[usize],
+        is_block_split: bool,
+        host_margin_left: f64,
+        host_margin_right: f64,
+        measured_table: Option<&MeasuredTable>,
+        clamp_header_negative_para_offset: bool,
+    ) -> f64 {
+        let PartialTableHostContext {
+            paragraphs,
+            para_index,
+            control_index,
+            repeat_fragment_outer_margin,
+            pre_emitted_host_height,
+            host_line_spacing,
+        } = host;
+
         // Pagination can deliberately use the rows of a transparent 1×1 wrapper's
         // nested table.  The measured-table path has used that effective table since
         // the wrapper-unwrapping rule was introduced, but a `PartialTable` still
@@ -2097,13 +2201,6 @@ impl LayoutEngine {
         if table.cells.is_empty() {
             return y_start;
         }
-
-        let repeat_fragment_outer_margin = repeats_native_empty_host_rowbreak_fragment_margin(
-            self.profile.get().native_hwp5_layout(),
-            paragraphs,
-            para_index,
-            control_index,
-        );
 
         // 분할 표 첫 부분: vert_offset 적용 (자리차지 표의 세로 오프셋).
         // [Task #712] HwpUnit=u32 이라 `vertical_offset > 0` 는 음수 비트표현
@@ -2131,13 +2228,7 @@ impl LayoutEngine {
             // (부동 RowBreak 표 91.2px 오버플로우). 표의 참 상단 = para_start+vert_off =
             // y_start+(vert_off−host_h). typeset 예산도 동일 감액을 적용한다.
             // host pre-emit 이 아니면 host_h=0 → 종전과 동일(회귀 없음).
-            let host_h = self
-                .pre_emitted_host_heights
-                .borrow()
-                .get(&para_index)
-                .copied()
-                .unwrap_or(0.0);
-            (hwpunit_to_px(vert_off_signed, self.dpi) - host_h).max(0.0)
+            (hwpunit_to_px(vert_off_signed, self.dpi) - pre_emitted_host_height).max(0.0)
         } else {
             0.0
         };
@@ -2586,7 +2677,6 @@ impl LayoutEngine {
             tree,
             &mut table_node,
             table,
-            paragraphs,
             para_index,
             control_index,
             section_index,
@@ -2741,11 +2831,6 @@ impl LayoutEngine {
         }
         if render_bottom_caption {
             if let Some(ref caption) = table.caption {
-                let host_line_spacing = para
-                    .line_segs
-                    .first()
-                    .map(|seg| hwpunit_to_px(seg.line_spacing, self.dpi))
-                    .unwrap_or(0.0);
                 let caption_y =
                     table_y + partial_table_height + host_line_spacing + caption_spacing;
                 self.layout_caption(
@@ -2804,11 +2889,6 @@ impl LayoutEngine {
                     0.0
                 }
         } else if render_bottom_caption {
-            let host_line_spacing = para
-                .line_segs
-                .first()
-                .map(|seg| hwpunit_to_px(seg.line_spacing, self.dpi))
-                .unwrap_or(0.0);
             caption_height
                 + host_line_spacing
                 + if caption_height > 0.0 {

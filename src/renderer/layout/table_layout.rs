@@ -1484,6 +1484,57 @@ pub(super) struct CellUnit {
     non_inline_control_range: Option<(usize, usize)>,
 }
 
+/// mixed nested unit의 source-owner 판정에 필요한 최소 의미 정보.
+///
+/// `CellUnit` 전체를 helper에 노출하지 않아도 viewport reservation 규칙을 독립적으로
+/// 회귀 고정할 수 있게 한다.
+#[derive(Debug, Clone, Copy)]
+struct MixedNestedOwnerMarker {
+    para_idx: usize,
+    fragment: bool,
+    trailing: bool,
+    content_height: f64,
+    height: f64,
+}
+
+impl From<&CellUnit> for MixedNestedOwnerMarker {
+    fn from(unit: &CellUnit) -> Self {
+        Self {
+            para_idx: unit.para_idx,
+            fragment: unit.mixed_nested_fragment,
+            trailing: unit.mixed_nested_trailing,
+            content_height: unit.mixed_nested_content_height,
+            height: unit.height,
+        }
+    }
+}
+
+/// 현재 cut 바로 뒤의 빈 trailing reservation이 mixed stream의 최종 source owner
+/// 다음에 놓였을 때만 그 높이를 반환한다.
+///
+/// 뒤에 실제 source unit이 하나라도 남아 있으면 scalar child renderer는 명시적인
+/// end-cut이 없으므로 viewport 확장이 미래 콘텐츠를 현재 쪽에 노출할 수 있다.
+fn trailing_reservation_after_final_source_owner(
+    para_idx: usize,
+    successor: Option<MixedNestedOwnerMarker>,
+    later_units: impl IntoIterator<Item = MixedNestedOwnerMarker>,
+) -> f64 {
+    let Some(successor) = successor.filter(|unit| {
+        unit.para_idx == para_idx && unit.fragment && unit.trailing && unit.content_height <= 0.5
+    }) else {
+        return 0.0;
+    };
+
+    let has_later_source_owner = later_units.into_iter().any(|unit| {
+        unit.para_idx == para_idx && unit.fragment && (!unit.trailing || unit.content_height > 0.5)
+    });
+    if has_later_source_owner {
+        0.0
+    } else {
+        successor.height
+    }
+}
+
 /// [#4069] 중첩 표의 셀 흐름을 바깥 셀 컷 원장으로 투영한 한 조각.
 ///
 /// 기존 `(height, trailing, content_height)` 튜플은 내부 셀의 강제 쪽 경계를
@@ -10064,6 +10115,14 @@ impl LayoutEngine {
             .iter()
             .skip(hi)
             .any(|unit| unit.para_idx == para_idx && unit.mixed_nested_fragment);
+        let successor_trailing_reservation = trailing_reservation_after_final_source_owner(
+            para_idx,
+            units.get(hi).map(MixedNestedOwnerMarker::from),
+            units
+                .iter()
+                .skip(hi.saturating_add(1))
+                .map(MixedNestedOwnerMarker::from),
+        );
         // A non-terminal fragment must not paint the synthetic trailing unit:
         // its successor owns that source window.  The terminal fragment is
         // different — that trailing unit can contain the final ordinary
@@ -10200,6 +10259,20 @@ impl LayoutEngine {
             // 늘려야 end_cut 안의 마지막 줄이 셀 clip 밖으로 잘리지 않는다. child cut이
             // source 끝을 제한하므로 다음 owner를 다시 그리지는 않는다(42065 p14/p15).
             flow_visible + first_visible_content_height
+        } else if recursive_cut.is_none()
+            && !terminal
+            && offset <= 0.5
+            && single_cell_nested_continuation
+            && successor_trailing_reservation > 0.5
+        {
+            // 현재 cut이 자식 1×1 표의 모든 실제 source unit을 포함하고, 바로 다음
+            // unit이 content 없는 trailing reservation이며 그 뒤에 실제 source owner가
+            // 없을 때 그 reservation은 다음 쪽의 text owner가 아니다. scalar child
+            // renderer는 물리 cell 높이로 같은 cut을 다시 계산하므로, 이 작은 예약
+            // 높이를 clip에 보존하지 않으면 셀 padding 때문에 마지막 실제 줄 하나가
+            // fitting budget 밖으로 밀린다(42065 p15).
+            // flow 높이는 아래에서 `flow_visible`을 유지해 다음 sibling 위치는 바꾸지 않는다.
+            flow_visible + successor_trailing_reservation
         } else if terminal_single_cell_tail {
             // The terminal 1×1 fragment has no successor to reserve space
             // for. Its final ordinary paragraphs are still laid out one
@@ -10927,7 +11000,10 @@ impl LayoutEngine {
 
 #[cfg(test)]
 mod row_cut_tests {
-    use super::{stored_layout_relocated_empty_rowbreak_picture_resets_offset, LayoutEngine};
+    use super::{
+        stored_layout_relocated_empty_rowbreak_picture_resets_offset,
+        trailing_reservation_after_final_source_owner, LayoutEngine, MixedNestedOwnerMarker,
+    };
     use crate::model::control::Control;
     use crate::model::image::Picture;
     use crate::model::paragraph::{LineSeg, Paragraph};
@@ -11004,6 +11080,56 @@ mod row_cut_tests {
             page_break: crate::model::table::TablePageBreak::RowBreak,
             ..table(cells)
         }
+    }
+
+    fn mixed_owner_marker(
+        para_idx: usize,
+        trailing: bool,
+        content_height: f64,
+        height: f64,
+    ) -> MixedNestedOwnerMarker {
+        MixedNestedOwnerMarker {
+            para_idx,
+            fragment: true,
+            trailing,
+            content_height,
+            height,
+        }
+    }
+
+    #[test]
+    fn trailing_reservation_does_not_extend_before_later_source_owner() {
+        let empty_reservation = mixed_owner_marker(7, true, 0.0, 3.75);
+        let later_source_owner = mixed_owner_marker(7, false, 18.0, 18.0);
+        let later_contentful_trailing_owner = mixed_owner_marker(7, true, 12.0, 12.0);
+
+        assert_eq!(
+            trailing_reservation_after_final_source_owner(
+                7,
+                Some(empty_reservation),
+                [later_source_owner],
+            ),
+            0.0,
+            "an empty reservation before a later source owner must not enlarge the scalar viewport"
+        );
+        assert_eq!(
+            trailing_reservation_after_final_source_owner(
+                7,
+                Some(empty_reservation),
+                [later_contentful_trailing_owner],
+            ),
+            0.0,
+            "a contentful trailing unit is still a later source owner"
+        );
+        assert_eq!(
+            trailing_reservation_after_final_source_owner(
+                7,
+                Some(empty_reservation),
+                std::iter::empty(),
+            ),
+            3.75,
+            "the final contentless reservation must preserve the last painted line"
+        );
     }
 
     fn non_inline_picture_para(vpos_start: i32) -> Paragraph {
