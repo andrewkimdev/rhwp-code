@@ -454,33 +454,43 @@ HWP5 6,582건에는 **작성 앱 버전이 기록되지 않는다.** 전수에�
   Win32 `ShowWindow(SW_HIDE)`로 이 창을 숨기려는 시도는 **자동화를 교착시킨다** — 워커 전원이 첫
   문서에서 정지했고 숨김을 중단하자 즉시 재개됐다. 창은 COM `XHwpWindows.Visible = false`로만 다룬다.
 - 측정 실패는 2022 0건 / 2024 1건으로, 개방 안정성은 두 버전이 사실상 같다.
+- **버전 전환을 무효로 만드는 것이 둘 있다.** 하니스를 저장소에 넣으면서 실측으로 확인했다.
+  ① 남아 있는 `Hwp.exe` — 이미 떠 있는 인스턴스가 있으면 COM은 오버라이드와 무관하게 그 인스턴스에
+  붙는다. ② **HKCU CLSID 키 삭제** — 지우면 그 로그인 세션 동안 COM이 HKCU를 아예 무시하고, 값을 다시
+  써도 소용없으며 로그오프 후 재로그인해야 복구된다. 그래서 정리 스크립트는 키를 지우지 않고 값을 기계
+  기본값으로 되돌린다. 두 경우 모두 `page_oracle_run.ps1`이 패스 시작 시 COM을 한 번 띄워 확인하고 즉시
+  중단한다. r1 측정 자체는 이 문제 발생 이전에 끝났고, 워커가 인스턴스마다 major를 검증해 최종 패스의
+  버전 불일치가 0건이므로 위 결과는 영향받지 않았다.
 
 ## 9. 산출물
 
-`output/poc/hangul_2022_vs_2024_20260807/` (gitignore)
+하니스는 저장소에 있다 — [`tools/hangul_version_oracle/`](../../tools/hangul_version_oracle/).
+재현 절차는 [한글 버전별 페이지네이션 대조 가이드](../manual/verification/hangul_version_oracle.md)를 따른다.
+코퍼스 공유본 링크도 그 가이드 3절에 있다.
+
+측정 원자료는 `output/poc/hangul_2022_vs_2024_20260807/` (gitignore)
 
 | 파일 | 내용 |
 | --- | --- |
 | `diff_confirmed.tsv` | 확정 차이 247건 — `kind / path / detail` |
 | `diff_unconfirmed.tsv` | 확정하지 못한 7건 |
 | `fingerprint_2022.tsv`, `fingerprint_2024.tsv` | 10,000건 전체 원시 지문 |
-| `page_oracle_worker.ps1` | 워커 — 문서 개방, 지문 추출, 버전 검증, 재개 |
-| `page_oracle_run.ps1` | 감시자 — 버전 전환, 샤딩, 정지 감시, 워커 재시작 |
-| `compare_passes.ps1` | 두 패스 비교와 분류 |
 | `appversion.tsv` | 10,000건 작성 앱·포맷 버전 — `path / kind / app / format` |
-| `scan_appversion.ps1` | 작성 앱 버전 추출 — HWPX `version.xml`, HWP5 FileHeader |
 | `corpus_10k.txt` | 표본 목록 |
 
-재현:
+재현(가이드 요약):
 
 ```powershell
-powershell -File page_oracle_run.ps1 -HwpVersion 2022 -ListPath corpus_10k.txt -OutDir pass2022 -Workers 1 -RecycleEvery 0
-powershell -File page_oracle_run.ps1 -HwpVersion 2024 -ListPath corpus_10k.txt -OutDir pass2024 -Workers 1 -RecycleEvery 0
-powershell -File compare_passes.ps1 -DirA pass2022 -DirB pass2024 -OutPath diff.tsv
+powershell -File tools\hangul_version_oracle\list_hangul_versions.ps1
+powershell -File tools\hangul_version_oracle\page_oracle_run.ps1 -HwpVersion 2022 -ListPath corpus_10k.txt -OutDir pass2022 -Root 'D:\hwpdocs_10k_share'
+powershell -File tools\hangul_version_oracle\page_oracle_run.ps1 -HwpVersion 2024 -ListPath corpus_10k.txt -OutDir pass2024 -Root 'D:\hwpdocs_10k_share'
+powershell -File tools\hangul_version_oracle\compare_passes.ps1 -DirA pass2022 -DirB pass2024 -LabelA 2022 -LabelB 2024 -OutPath diff.tsv
+powershell -File tools\hangul_version_oracle\restore_com_default.ps1
 ```
 
 ## 10. 관련
 
+- 재현 가이드: [한글 버전별 페이지네이션 대조](../manual/verification/hangul_version_oracle.md)
 - 10k 서베이 기준선: [project_survey_baseline_r23](../manual/memory/project_survey_baseline_r23.md)
 - 직전 서베이: [survey_10k_r31_20260805](survey_10k_r31_20260805.md)
 - 한글 페이지 오라클 도구 계약: [hangul_page_oracle](../manual/verification/hangul_page_oracle.md)
