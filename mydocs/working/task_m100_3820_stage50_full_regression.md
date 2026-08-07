@@ -1,6 +1,6 @@
 ---
 kind: investigation
-status: in_progress
+status: completed
 canonical: mydocs/working/task_m100_3820_stage1.md
 last_verified: 2026-08-08
 ---
@@ -194,3 +194,10 @@ SHA-256: 2a442d1ddba9fedfe5f47c30ab108f214b09532f49546402dcc243b186d666e4
 사용자 확인이 필요한 우선 대상은 `59043_regulatory_analysis.hwp` p35–p36의 nested table
 소유 경계와 `issue2007_nested_cell_pagination_42065.hwp`의 기존 문제 페이지다. 사용자가
 확인하기 전에는 시각 결함 해결 완료로 판정하지 않는다.
+
+## Stage 종료
+
+최초 전체 회귀의 #2308 충돌 누락과 후속 59043/#3637 상충 원인을 분리하는 데까지를
+이 Stage의 범위로 종료한다. 59043의 단일 저장 경계, 중복 scalar 보정, direct HWPX의
+PR #4122 투영 회귀 수정과 집중 검증 결과는
+[Stage 51](task_m100_3820_stage51_59043_hwpx_projection_repair.md)에 이어 기록했다.

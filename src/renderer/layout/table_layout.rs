@@ -6734,12 +6734,43 @@ impl LayoutEngine {
                 units.iter().filter(|unit| unit.hard_break_before).count();
             let has_authoritative_frame_boundary =
                 units.iter().any(|unit| unit.stored_frame_break_before);
+            // [#3820 Stage 50] 페이지 하단에서 시작한 1×1 자식 표는 첫 저장
+            // fragment가 짧아 문단 사이 vpos reset 직전 좌표가 body 절반에 못
+            // 미칠 수 있다(59043 p35: 7540HU→0). 하지만 표 자체의 물리 높이가
+            // 한 페이지를 넘고 저장 reset이 정확히 하나라면 이 경계는 로컬
+            // 재시작이 아니라 다음 쪽 source cursor다. legacy mixed fallback은
+            // 모든 hard break를 지우므로 이 경우에만 canonical CellUnit을 투영한다.
+            // 한 페이지 이하 단일 reset과 다중 reset의 기존 판정은 유지한다.
+            let body_height = self.current_body_area.get().3;
+            let page_height = if body_height > 0.0 {
+                body_height
+            } else {
+                900.0
+            };
+            let preserve_single_multi_page_boundary = stored_page_frame_boundaries == 1
+                // HWP5-origin HWPX는 변환 과정에서 단일 로컬 reset을 남길 수
+                // 있으므로 #3637의 31쪽 계약처럼 기존 HWPX 원장을 유지한다.
+                // 이 예외는 원본 HWP5 바이너리의 저장 좌표 계약에만 적용한다.
+                && self.profile.get().native_hwp5_layout()
+                && self.calc_nested_table_height(table, styles) > page_height + 0.5;
+            // canonical CellUnit의 hard-break 원장은 HWP5 저장 좌표 계약이다.
+            // direct HWPX의 셀 lineSeg reset은 중첩 셀 로컬 viewport 재시작일 수
+            // 있으므로, reset 수가 둘 이상이어도 이 경로로 승격하지 않는다.
+            // 그렇지 않으면 #3637 pi=197의 마지막 RowBreak 조각이 한 조각 늘어
+            // 후속 표 전체가 불필요한 32쪽으로 밀린다. HWP5-origin HWPX는 원본
+            // HWP5의 pagination marker를 보존하므로 canonical 경로를 유지한다.
+            let canonical_stored_frame_profile =
+                self.profile.get().native_hwp5_layout() || self.profile.get().hwp5_origin_hwpx();
             // [#4069 Stage 2/Task #3820 Stage 48] 저장 프레임 경계는 문단 내부인지
             // 문단 사이인지와 무관하게 하나라도 부모 원장에 보존한다. 작은 로컬 reset은
             // `is_hwp5_stored_frame_rewind`의 body-half 조건에서 이미 제외된다.
             // 42065 p10은 같은 문단 58620→0, p14는 item7→item8의 문단간
             // 32932→0 경계이며 둘 다 한컴 정본의 실제 쪽 경계다.
-            if stored_page_frame_boundaries >= 2 || has_authoritative_frame_boundary {
+            if canonical_stored_frame_profile
+                && (stored_page_frame_boundaries >= 2
+                    || has_authoritative_frame_boundary
+                    || preserve_single_multi_page_boundary)
+            {
                 return units
                     .iter()
                     .map(|unit| {
@@ -6747,7 +6778,13 @@ impl LayoutEngine {
                         NestedFlowFragment {
                             height: unit.height,
                             hard_break_before: unit.hard_break_before,
-                            stored_frame_break_before: unit.stored_frame_break_before,
+                            // 물리적으로 여러 쪽을 차지하는 1×1 자식 표의 유일한
+                            // 저장 reset은 부모 viewport에서 실제 쪽 경계다. 자식의
+                            // 일반 CellUnit 의미는 바꾸지 않고, 부모로 투영되는
+                            // fragment에만 authoritative 표식을 부여해 RowBreak의
+                            // 중간-reset 완화가 첫 source 줄을 앞쪽에 흡수하지 않게 한다.
+                            stored_frame_break_before: unit.stored_frame_break_before
+                                || (preserve_single_multi_page_boundary && unit.hard_break_before),
                             trailing: unit.mixed_nested_trailing || !visible,
                             content_height: if unit.mixed_nested_content_height > 0.0 {
                                 unit.mixed_nested_content_height
@@ -6759,6 +6796,37 @@ impl LayoutEngine {
                             recursive: true,
                             starts_after_table: unit.mixed_nested_starts_after_table,
                             recursive_block_prelude_role: unit.recursive_block_prelude_role,
+                        }
+                    })
+                    .collect();
+            }
+            if self.profile.get().hwpx_stored_layout() && !self.profile.get().hwp5_origin_hwpx() {
+                // PR #4122 이전 direct-HWPX fallback은 빈 host의 자식 표를
+                // 재귀적으로 평탄화하고, 같은 문단의 placeholder line과 표 높이를
+                // 한 번만 회계했다. 단순 legacy 재측정은 그 세 동작을 잃어
+                // #3637이 30쪽으로 과소 조판되거나 p26 source owner를 잃는다.
+                // 현재 canonical CellUnit은 그 재귀 원장을 이미 보유하므로, 높이와
+                // 가시 단위만 재사용하되 HWP5 전용 hard/stored cursor 의미를 제거해
+                // 검증된 HWPX scalar viewport 계약으로 투영한다.
+                return units
+                    .iter()
+                    .map(|unit| {
+                        let visible = Self::cell_unit_has_visible_content(cell, unit);
+                        NestedFlowFragment {
+                            height: unit.height,
+                            hard_break_before: false,
+                            stored_frame_break_before: false,
+                            trailing: unit.mixed_nested_trailing || !visible,
+                            content_height: if unit.mixed_nested_content_height > 0.0 {
+                                unit.mixed_nested_content_height
+                            } else if visible {
+                                unit.height
+                            } else {
+                                0.0
+                            },
+                            recursive: false,
+                            starts_after_table: unit.mixed_nested_starts_after_table,
+                            recursive_block_prelude_role: RecursiveBlockPreludeRole::None,
                         }
                     })
                     .collect();
@@ -10628,6 +10696,8 @@ impl LayoutEngine {
             let mut offset = 0.0;
             let mut total = 0.0;
             let mut visible_units: Vec<(f64, bool)> = Vec::new();
+            let mut has_recursive_fragment = false;
+            let mut has_non_recursive_fragment = false;
             let mut idx = u;
             while idx < units.len() {
                 issue4129_visited += 1;
@@ -10635,6 +10705,11 @@ impl LayoutEngine {
                 if unit.mixed_nested_fragment {
                     if unit.para_idx != para_idx {
                         break;
+                    }
+                    if unit.mixed_nested_recursive {
+                        has_recursive_fragment = true;
+                    } else {
+                        has_non_recursive_fragment = true;
                     }
                     total += unit.height;
                     if idx < lo {
@@ -10670,6 +10745,9 @@ impl LayoutEngine {
                 .unwrap_or(0.0);
             let offset_within_start = (offset - first_visible_content_height).max(0.0);
             let terminal = end_unit >= units.len();
+            let authoritative_recursive_run = self.profile.get().native_hwp5_layout()
+                && has_recursive_fragment
+                && !has_non_recursive_fragment;
             let single_cell_nested_continuation = table.row_count == 1
                 && table.col_count == 1
                 && cell.paragraphs.get(para_idx).is_some_and(|paragraph| {
@@ -10677,7 +10755,13 @@ impl LayoutEngine {
                         matches!(control, Control::Table(nested) if nested.row_count == 1 && nested.col_count == 1)
                     })
             });
-            if offset_within_start > 0.5 {
+            // 재귀 투영 run은 `mixed_nested_split_from_cut`의 child RowCut이
+            // source cursor와 viewport를 이미 함께 소유한다. 여기에 scalar
+            // continuation 보정을 다시 더하면 부모 행만 첫 가시 유닛만큼 커져
+            // 뒤 sibling을 다음 쪽으로 민다(59043 p36의 27.7px 중복). legacy
+            // mixed fallback의 42065 p17 terminal 보정과 HWPX 저장 viewport
+            // 보정은 유지한다.
+            if offset_within_start > 0.5 && !authoritative_recursive_run {
                 if terminal && single_cell_nested_continuation {
                     // Keep the parent RowBreak cell in lockstep with the
                     // terminal nested-cell viewport.  Reserving only one
@@ -11815,6 +11899,78 @@ mod row_cut_tests {
         let r = eng.advance_row_cut(&t, 0, &[], 80.0, &styles);
         assert_eq!(r.end_cut, vec![4], "하단 vpos 리셋은 저장 쪽 경계로 보존");
         assert!(!r.fully_consumed);
+    }
+
+    #[test]
+    fn test_multi_page_single_cell_nested_reset_is_authoritative_in_parent_projection() {
+        // [#3820 Stage 50] 페이지 하단에서 시작한 1×1 자식 표의 첫 fragment는
+        // body 절반보다 짧을 수 있다. 단일 3600HU→0 reset이더라도 표 전체가
+        // 물리 body보다 크면 부모 RowCut에 저장 쪽 경계로 투영해야 한다.
+        let eng = LayoutEngine::new(96.0);
+        eng.current_body_area.set((0.0, 0.0, 600.0, 120.0));
+        let styles = ResolvedStyleSet::default();
+        let nested = rowbreak_table(vec![cell(
+            0,
+            0,
+            vec![visible_text_para(3, 0), visible_text_para(6, 0)],
+        )]);
+
+        let child_units = eng.cell_units(&nested.cells[0], &nested, &styles);
+        let reset = child_units
+            .iter()
+            .position(|unit| unit.hard_break_before)
+            .expect("단일 저장 vpos reset");
+        assert!(
+            !child_units[reset].stored_frame_break_before,
+            "로컬 48px reset 자체는 body 절반(60px) 기준 authoritative가 아님"
+        );
+
+        let fragments = eng.nested_table_mixed_fragment_heights(&nested, &styles);
+        assert_eq!(fragments.len(), child_units.len());
+        assert!(fragments[reset].hard_break_before);
+        assert!(
+            fragments[reset].stored_frame_break_before,
+            "물리 multi-page 1×1의 유일 reset은 부모 투영에서 authoritative"
+        );
+        assert!(fragments.iter().all(|fragment| fragment.recursive));
+    }
+
+    #[test]
+    fn test_direct_hwpx_nested_resets_keep_legacy_parent_projection() {
+        // [#3820 Stage 50/#3637] direct HWPX의 반복 vpos reset은 자식 셀의
+        // 로컬 viewport 좌표다. reset 개수만으로 HWP5 canonical cursor를
+        // 적용하면 마지막 RowBreak fragment와 후속 표가 새 쪽으로 밀린다.
+        let eng = LayoutEngine::new(96.0);
+        eng.set_layout_profile(crate::model::provenance::LayoutCompatibilityProfile::new(
+            false, false, true, true, false, false,
+        ));
+        eng.current_body_area.set((0.0, 0.0, 600.0, 120.0));
+        let styles = ResolvedStyleSet::default();
+        let nested = rowbreak_table(vec![cell(
+            0,
+            0,
+            vec![
+                visible_text_para(3, 0),
+                visible_text_para(3, 0),
+                visible_text_para(3, 0),
+            ],
+        )]);
+
+        let child_units = eng.cell_units(&nested.cells[0], &nested, &styles);
+        assert_eq!(
+            child_units
+                .iter()
+                .filter(|unit| unit.hard_break_before)
+                .count(),
+            2,
+            "fixture는 direct HWPX 로컬 reset 두 개를 가져야 함"
+        );
+
+        let fragments = eng.nested_table_mixed_fragment_heights(&nested, &styles);
+        assert!(
+            fragments.iter().all(|fragment| !fragment.recursive),
+            "direct HWPX reset은 HWP5 canonical child cursor로 승격하지 않음"
+        );
     }
 
     #[test]
