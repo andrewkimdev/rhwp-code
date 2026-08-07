@@ -52,13 +52,28 @@ fragment를 후보로 잡았다. 반면 `visual_sweep`의 구조 heuristic은 �
 2. p12에는 trim한 정확한 TextRun `중앙선거관리위원회`가 있어야 한다.
 3. 기존 p12 선행 문장 비재도색 및 p16→p17 소유권 계약은 유지한다.
 
-## 구현 가설
+## 원인 분석
 
-현재 `RecursiveBlockPreludeRole`은 `빈 separator + 한 줄 제목 + 1×1 중첩 표`를 표시하고,
-바로 뒤 재귀 block이 남은 높이를 넘을 때 prelude를 함께 다음 조각으로 되감는다. p11의
-형상도 같은 의미 계약이므로, 먼저 역할 표식이 부모 mixed stream으로 투영됐는지와
-`rewind_rowbreak_orphan_heading_before_recursive_block`의 조건 중 어느 것이 실패했는지
-확인한다.
+source의 제목 앞 `cp88`은 단순 여백이 아니라 `ColumnBreakType::Page`인 명시적 쪽
+나누기 문단이다. 순서는 `cp87` 국세청 중첩 표, `cp88` 빈 쪽 나누기 문단, `cp89`
+중앙선거관리위원회 제목, `cp90` 공직선거법 중첩 표다.
+
+일반 body typesetter는 문단의 `ColumnBreakType::Page`를 강제 쪽 경계로 처리한다. 그러나
+`cell_units_uncached`는 셀 문단의 `column_type`을 확인하지 않고 저장 vpos reset만으로
+`hard_break_before`를 만든다. 게다가 Task #1488의 빈 overlay 보호 조건이 비가시 빈 문단의
+reset을 제거한다. 그 결과 명시적 쪽 나누기인 `cp88`도 장식용 빈 overlay처럼 접히며,
+`cp89`와 `cp90`의 3.76px sliver가 p11에서 소비된다.
+
+이 결함은 기존 `RecursiveBlockPreludeRole`의 fit 보정 이전에 지켜야 할 명시적 source
+경계를 잃은 문제다. 명시적 Page/Section break를 일반 vpos reset과 별도 strict metadata로
+CellUnit 및 재귀 mixed projection에 보존해야 한다.
+
+## 구현 계획
+
+1. 첫 CellUnit에 `ColumnBreakType::Page | Section`의 strict break metadata를 기록한다.
+2. 재귀 1×1 자식 흐름을 부모 RowCut으로 투영할 때도 같은 metadata를 전달한다.
+3. `advance_row_cut`의 relaxed/reset 흡수 규칙보다 먼저 strict break를 적용한다.
+4. 다음 조각의 시작 유닛인 빈 break 문단은 한 번 소비해 무한 빈 쪽을 만들지 않는다.
 
 수정은 파일명·페이지·문구 특례 없이 source 구조와 실제 fit만 사용한다. focused 회귀를
 먼저 실패시키고 최소 구현 보정 후 p11–p12 PDF 대조를 다시 수행한다.
@@ -69,4 +84,3 @@ fragment를 후보로 잡았다. 반면 `visual_sweep`의 구조 heuristic은 �
 - [p12 review before](../pr/assets/task_m100_3820_stage55_pr_readiness/review_p012_before.png)
 - [overlay metrics before](../pr/assets/task_m100_3820_stage55_pr_readiness/overlay_metrics_before.json)
 - [layout ledger before](../pr/assets/task_m100_3820_stage55_pr_readiness/layout_candidates_before.tsv)
-
