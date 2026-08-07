@@ -52,6 +52,16 @@ fragment를 후보로 잡았다. 반면 `visual_sweep`의 구조 heuristic은 �
 2. p12에는 trim한 정확한 TextRun `중앙선거관리위원회`가 있어야 한다.
 3. 기존 p12 선행 문장 비재도색 및 p16→p17 소유권 계약은 유지한다.
 
+exact helper와 p11 negative assertion을 먼저 추가한 뒤 focused test를 실행했다. 기존
+구현에서는 다음과 같이 의도대로 실패했다.
+
+```text
+test issue_2007_single_cell_continuation_does_not_repaint_boundary_fragments ... FAILED
+p11 must not paint the p12-owned heading after an explicit page break
+```
+
+따라서 새 회귀는 기존 substring 오탐을 제거하고 실제 결함을 재현한다.
+
 ## 원인 분석
 
 source의 제목 앞 `cp88`은 단순 여백이 아니라 `ColumnBreakType::Page`인 명시적 쪽
