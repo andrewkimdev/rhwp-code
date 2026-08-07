@@ -2,7 +2,7 @@
 kind: canonical
 status: active
 canonical: mydocs/manual/pr_review_workflow.md
-last_verified: 2026-07-25
+last_verified: 2026-08-07
 ---
 
 # PR 리뷰 · 통합 워크플로우 매뉴얼
@@ -28,6 +28,23 @@ rhwp의 PR 처리는 외부 contributor PR, collaborator self PR, collaborator�
 소스, 테스트, CI workflow, golden/baseline, 기존 샘플 변경은 maintainer라도 일반 PR과 최신 CI를
 기본으로 한다. GitHub review, comment, push, ready 전환, merge, close는 각각 작업지시자의 명시 승인을
 받은 뒤에만 수행한다.
+
+### 1.1 PR 번호 채번과 review 기록
+
+PR 번호는 PR을 생성할 때 채번된다. 따라서 collaborator self PR의 번호 기반 review 기록은
+다음 순서로 같은 PR에 포함한다.
+
+1. 구현과 로컬 검증이 끝난 후보 commit을 원격 작업 branch에 push한다.
+2. 작업지시자의 PR 생성 승인 후 Open PR을 생성해 번호 `N`을 받는다. 완료된 후보에
+   번호만 확보하려고 Draft를 생성하지 않는다.
+3. reviewer assign 승인과 역할별 접수 절차를 수행한 뒤 `pr_N_review.md`와 필요한 오늘할일을
+   작성해 같은 source branch에 review 기록 commit으로 push한다.
+4. review 기록이 포함된 최신 head의 required check를 확인하고, 작업지시자 승인 후 merge한다.
+
+외부 contributor PR처럼 PR이 이미 존재하는 경우에는 발급된 번호로 바로 review 접수를 시작한다.
+Draft는 WIP 공유나 조기 검토가 필요하고 그 상태 변경을 작업지시자가 명시적으로 승인한 경우에만
+사용한다. 정확한 생성 순서와 승인 게이트는 [문서와 Git 워크플로우](codex/docs_and_git_workflow.md#internal-task-pr-approval)를
+따른다.
 
 ## 2. 필수 라우팅
 
@@ -124,6 +141,23 @@ collaborator가 contributor PR head에 review-only 기록을 직접 push할 예�
 base 반영을 강제하지 않는 정책이면, 같은 PR·같은 source repository·같은 code candidate SHA의 녹색 aggregate를
 재사용해 trailing review-only commit을 fast-pass할 수 있다. contributor가 source·test를 새로 push한 경우에는
 그 새 code head의 CI를 먼저 통과시킨 뒤 review 기록을 한 번만 이어 붙인다.
+
+#### 3.2.1 최신 `devel` 오늘할일을 보존하는 trailing 기록
+
+contributor source branch의 `mydocs/orders/YYYYMMDD.md`가 최신 `upstream/devel`보다 오래될 수 있다.
+이 경우 review 기록을 추가하려고 최신 `devel`의 오늘할일 전체를 source에 복사하거나 `devel`을 merge/rebase하면,
+source에 없는 archive link를 도입하거나 today add/add 충돌과 불필요한 full CI를 만들 수 있다.
+
+1. `git fetch upstream devel` 뒤 `git diff HEAD..upstream/devel -- mydocs/orders/YYYYMMDD.md`로 최신 base의
+   변경 구간을 확인한다.
+2. contributor source에 이미 있는 오늘할일은 보존하고, 현재 PR의 항목만 위 diff에서 변경되지 않은 section
+   경계에 추가한다. 최신 `devel`의 다른 PR 기록을 source branch에 복사하지 않는다.
+3. trailing 문서 commit을 만든 뒤 최신 `upstream/devel`에서 merge simulation을 수행한다. merge tree의
+   `git diff --check`와 변경한 오늘할일·review 문서의 Markdown 링크 검사가 모두 통과해야 한다.
+
+이 방식은 source history를 선형으로 유지하면서, 실제 merge tree에는 최신 `devel`의 기존 오늘 기록과
+현재 PR 기록이 함께 남는지 확인한다. 변경되지 않은 경계를 찾을 수 없거나 simulation이 충돌하면 source에
+`devel`을 억지로 병합하지 말고 작업지시자에게 보고한다.
 
 ### 3.3 순차로 유지할 일
 
