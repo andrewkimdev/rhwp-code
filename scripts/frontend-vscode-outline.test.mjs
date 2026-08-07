@@ -76,30 +76,73 @@ test('접기/펼치기 toggle click 은 개요 항목으로 전파되지 않는�
   );
 });
 
+test('개요 항목 keydown 이 방향키 훑기를 처리한다', () => {
+  const handler = withoutLineComments(
+    sliceBlock(renderOutlineTree, 'item.addEventListener("keydown"'),
+  );
+
+  for (const key of ['ArrowDown', 'ArrowUp', 'Home', 'End', 'ArrowLeft', 'ArrowRight']) {
+    assert.match(handler, new RegExp(`case "${key}":`), `${key} 처리가 없다`);
+  }
+});
+
+test('방향키 훑기는 초점만 옮기고 본문을 움직이지 않는다', () => {
+  // 훑는 동안 본문이 따라오면 목록을 지나가는 사이 화면이 계속 튄다.
+  // 이동은 Enter/Space 로만 일으킨다.
+  for (const fn of ['function moveOutlineFocus', 'function focusOutlineParent']) {
+    const body = withoutLineComments(sliceBlock(viewerSource, fn));
+    assert.match(body, /\.focus\(\)/, `${fn} 이 초점을 옮기지 않는다`);
+    assert.doesNotMatch(body, /navigateToOutline\(/, `${fn} 이 본문까지 움직인다`);
+  }
+
+  const handler = withoutLineComments(
+    sliceBlock(renderOutlineTree, 'item.addEventListener("keydown"'),
+  );
+
+  /** `case "<key>":` 부터 그 갈래의 `return;` 까지. fallthrough 갈래도 함께 들어온다. */
+  const branch = (key) => {
+    const start = handler.indexOf(`case "${key}":`);
+    assert.notEqual(start, -1, `${key} 갈래가 없다`);
+    const end = handler.indexOf('return;', start);
+    return handler.slice(start, end === -1 ? undefined : end);
+  };
+
+  assert.match(branch('Enter'), /navigateToOutline\(/, 'Enter 로 이동하지 않는다');
+  assert.match(branch(' '), /navigateToOutline\(/, 'Space 로 이동하지 않는다');
+  for (const key of ['ArrowDown', 'ArrowUp', 'Home', 'End', 'ArrowLeft', 'ArrowRight']) {
+    assert.doesNotMatch(branch(key), /navigateToOutline\(/, `${key} 가 본문까지 움직인다`);
+  }
+});
+
 test('토글 뒤 초점을 같은 항목의 버튼으로 되돌린다', () => {
   // buildOutline() 이 패널을 다시 그리면서 초점 버튼이 사라진다. 되돌리지 않으면
   // activeElement 가 body 로 떨어져 두 번째 Enter/Space 부터 죽는다 (headless 재현).
   const handler = withoutLineComments(
     sliceBlock(renderOutlineTree, 'toggle.addEventListener("click"'),
   );
+  assert.match(
+    handler,
+    /document\.activeElement === toggle/,
+    '키보드로 눌렀는지(버튼이 초점을 쥐고 있었는지) 보지 않으면 마우스 조작에서 초점을 뺏는다',
+  );
+  assert.match(handler, /setOutlineCollapsed\(/, 'toggle click 이 접기/펼치기를 위임하지 않는다');
 
-  const rebuilt = handler.indexOf('buildOutline()');
-  const refocused = handler.indexOf('focusOutlineToggle(');
-  assert.notEqual(rebuilt, -1, 'toggle click 이 buildOutline() 을 부르지 않는다');
+  const collapse = withoutLineComments(sliceBlock(viewerSource, 'function setOutlineCollapsed'));
+  const rebuilt = collapse.indexOf('buildOutline()');
+  const refocused = collapse.search(/focusOutline(Toggle|Item)\(/);
+  assert.notEqual(rebuilt, -1, 'setOutlineCollapsed 가 buildOutline() 을 부르지 않는다');
   assert.notEqual(refocused, -1, '재렌더 뒤 초점을 되돌리는 호출이 없다');
   assert.ok(rebuilt < refocused, '초점 복원은 재렌더 뒤에 일어나야 한다');
 
   assert.match(
     renderOutlineTree,
     /item\.dataset\.outlineKey\s*=\s*key;/,
-    '초점 복원이 항목을 다시 찾을 수 있도록 data-outline-key 가 필요하다',
+    '초점 복원과 방향키 이동이 항목을 다시 찾을 수 있도록 data-outline-key 가 필요하다',
   );
 
-  const focusHelper = sliceBlock(viewerSource, 'function focusOutlineToggle');
-  assert.match(
-    focusHelper,
-    /data-outline-key=/,
-    'focusOutlineToggle 이 data-outline-key 로 같은 항목을 찾아야 한다',
-  );
-  assert.match(focusHelper, /\.focus\(\)/, 'focusOutlineToggle 이 초점을 주지 않는다');
+  const lookup = sliceBlock(viewerSource, 'function outlineElement');
+  assert.match(lookup, /data-outline-key=/, 'data-outline-key 로 같은 항목을 찾아야 한다');
+  for (const fn of ['function focusOutlineToggle', 'function focusOutlineItem']) {
+    assert.match(sliceBlock(viewerSource, fn), /\.focus\(\)/, `${fn} 이 초점을 주지 않는다`);
+  }
 });

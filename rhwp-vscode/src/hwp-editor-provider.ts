@@ -424,6 +424,13 @@ export class HwpEditorProvider implements vscode.CustomReadonlyEditorProvider {
       color: var(--vscode-sideBar-foreground, #ccc);
     }
     .nav-item:hover { background: rgba(255,255,255,0.06); }
+    /* 방향키로 훑을 때 지금 선택된 개요가 어디인지 보이게 한다. */
+    .nav-outline-item:focus {
+      background: var(--vscode-list-activeSelectionBackground, rgba(255,255,255,0.12));
+      color: var(--vscode-list-activeSelectionForeground, inherit);
+      outline: 1px solid var(--vscode-focusBorder, #007fd4);
+      outline-offset: -1px;
+    }
     .nav-outline-item {
       display: flex;
       align-items: center;

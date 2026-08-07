@@ -1040,6 +1040,14 @@ function outlineKey(entry: OutlineNavigationItem): string {
   return `${entry.section}:${entry.paragraph}`;
 }
 
+/**
+ * 지금 그려진 개요 항목의 `data-outline-key` → 항목 정보.
+ *
+ * 방향키 이동이 초점을 옮긴 요소에서 이동 대상을 되찾는 데 쓴다. 접혀서 그려지지
+ * 않은 하위 항목은 들어 있지 않다 — 목록을 다시 그릴 때마다 비운다.
+ */
+const outlineEntryByKey = new Map<string, OutlineNavigationItem>();
+
 /** 개요 수준을 이용해 평면 목록을 부모/자식 트리로 구성한다. */
 function buildOutlineTree(entries: OutlineNavigationItem[]): OutlineTreeNode[] {
   const roots: OutlineTreeNode[] = [];
@@ -1061,11 +1069,73 @@ function buildOutlineTree(entries: OutlineNavigationItem[]): OutlineTreeNode[] {
   return roots;
 }
 
+/** 지금 화면에 그려진 개요 항목(접혀서 숨은 하위는 제외)을 위에서 아래 순서로 준다. */
+function outlineItemElements(): HTMLElement[] {
+  const panel = navPanels.get("outline");
+  return panel ? Array.from(panel.querySelectorAll<HTMLElement>(".nav-outline-item")) : [];
+}
+
+function outlineElement(key: string, childSelector = ""): HTMLElement | null {
+  const panel = navPanels.get("outline");
+  const selector = `.nav-outline-item[data-outline-key="${CSS.escape(key)}"]${childSelector}`;
+  return panel?.querySelector<HTMLElement>(selector) ?? null;
+}
+
 /** 재렌더로 사라진 초점을 같은 개요 항목의 접기/펼치기 버튼으로 되돌린다. */
 function focusOutlineToggle(key: string): void {
-  const panel = navPanels.get("outline");
-  const selector = `.nav-outline-item[data-outline-key="${CSS.escape(key)}"] .nav-outline-toggle`;
-  panel?.querySelector<HTMLElement>(selector)?.focus();
+  outlineElement(key, " .nav-outline-toggle")?.focus();
+}
+
+/** 재렌더로 사라진 초점을 같은 개요 항목으로 되돌린다. */
+function focusOutlineItem(key: string): void {
+  outlineElement(key)?.focus();
+}
+
+/**
+ * 접기/펼치기 상태를 바꾸고 목록을 다시 그린다.
+ *
+ * `buildOutline()` 이 패널을 통째로 다시 그려 초점 요소가 DOM 에서 사라지므로,
+ * 키보드로 조작했으면 같은 항목의 어디로 초점을 돌려놓을지 함께 받는다.
+ */
+function setOutlineCollapsed(
+  key: string,
+  collapsed: boolean,
+  refocus: "item" | "toggle" | null,
+): void {
+  collapsedOutlineKeys[collapsed ? "add" : "delete"](key);
+  saveViewerState();
+  buildOutline();
+  if (refocus === "toggle") focusOutlineToggle(key);
+  else if (refocus === "item") focusOutlineItem(key);
+}
+
+/**
+ * 개요 목록에서 초점만 옮긴다.
+ *
+ * 방향키는 훑기 전용이다 — 본문을 따라 움직이면 목록을 지나가는 동안 화면이 계속
+ * 튄다. 이동은 `Enter`/`Space` 로만 일으킨다.
+ */
+function moveOutlineFocus(from: HTMLElement, to: number | "first" | "last"): void {
+  const items = outlineItemElements();
+  if (items.length === 0) return;
+
+  const current = items.indexOf(from);
+  const index = to === "first" ? 0 : to === "last" ? items.length - 1 : current + to;
+  if (index < 0 || index >= items.length || index === current) return;
+
+  items[index].focus();
+}
+
+/** 상위 수준 개요로 초점을 올린다. 위쪽에서 자기보다 수준이 낮은 첫 항목을 찾는다. */
+function focusOutlineParent(from: HTMLElement, level: number): void {
+  const items = outlineItemElements();
+  for (let index = items.indexOf(from) - 1; index >= 0; index -= 1) {
+    const entry = outlineEntryByKey.get(items[index].dataset.outlineKey ?? "");
+    if (entry && entry.level < level) {
+      items[index].focus();
+      return;
+    }
+  }
 }
 
 function renderOutlineTree(panel: HTMLElement, nodes: OutlineTreeNode[]): void {
@@ -1079,6 +1149,7 @@ function renderOutlineTree(panel: HTMLElement, nodes: OutlineTreeNode[]): void {
     item.style.paddingLeft = `${(Math.max(1, entry.level) - 1) * 12 + 2}px`;
     item.tabIndex = 0;
     item.dataset.outlineKey = key;
+    outlineEntryByKey.set(key, entry);
     const label = `${entry.number} ${entry.title}`.trim() || "(제목 없음)";
     item.title = label;
 
@@ -1092,14 +1163,10 @@ function renderOutlineTree(panel: HTMLElement, nodes: OutlineTreeNode[]): void {
       toggle.setAttribute("aria-expanded", String(expanded));
       toggle.addEventListener("click", (event) => {
         event.stopPropagation();
-        // buildOutline() 이 패널을 통째로 다시 그려 이 버튼이 DOM 에서 사라진다.
-        // 초점을 되돌리지 않으면 activeElement 가 body 로 떨어져 두 번째 Enter/Space
-        // 부터 아무 데도 가지 않는다 — 키보드만으로는 한 번밖에 접지 못한다.
-        const refocus = document.activeElement === toggle;
-        collapsedOutlineKeys[expanded ? "add" : "delete"](key);
-        saveViewerState();
-        buildOutline();
-        if (refocus) focusOutlineToggle(key);
+        // 초점을 되돌리지 않으면 재렌더로 activeElement 가 body 로 떨어져 두 번째
+        // Enter/Space 부터 아무 데도 가지 않는다 — 키보드로는 한 번밖에 접지 못한다.
+        const refocus = document.activeElement === toggle ? "toggle" : null;
+        setOutlineCollapsed(key, expanded, refocus);
       });
       item.appendChild(toggle);
     } else {
@@ -1119,9 +1186,42 @@ function renderOutlineTree(panel: HTMLElement, nodes: OutlineTreeNode[]): void {
       // 여기서 받아 preventDefault 하면 그 기본 동작이 취소되고 이동까지 겹쳐
       // 키보드만으로는 접기/펼치기가 동작하지 않는다.
       if (event.target !== item) return;
-      if (event.key === "Enter" || event.key === " ") {
-        event.preventDefault();
-        navigateToOutline(entry);
+
+      switch (event.key) {
+        case "Enter":
+        case " ":
+          event.preventDefault();
+          navigateToOutline(entry);
+          return;
+        // 방향키는 목록 훑기 전용 — 본문은 따라가지 않는다. 기본 스크롤은 막는다.
+        case "ArrowDown":
+          event.preventDefault();
+          moveOutlineFocus(item, 1);
+          return;
+        case "ArrowUp":
+          event.preventDefault();
+          moveOutlineFocus(item, -1);
+          return;
+        case "Home":
+          event.preventDefault();
+          moveOutlineFocus(item, "first");
+          return;
+        case "End":
+          event.preventDefault();
+          moveOutlineFocus(item, "last");
+          return;
+        // 오른쪽: 접혀 있으면 펼치고, 이미 펼쳐져 있으면 첫 하위로 내려간다.
+        case "ArrowRight":
+          event.preventDefault();
+          if (hasChildren && !expanded) setOutlineCollapsed(key, false, "item");
+          else if (hasChildren) moveOutlineFocus(item, 1);
+          return;
+        // 왼쪽: 펼쳐져 있으면 접고, 아니면 상위 개요로 올라간다.
+        case "ArrowLeft":
+          event.preventDefault();
+          if (hasChildren && expanded) setOutlineCollapsed(key, true, "item");
+          else focusOutlineParent(item, entry.level);
+          return;
       }
     });
     panel.appendChild(item);
@@ -1135,6 +1235,7 @@ function buildOutline(): void {
   const panel = navPanels.get("outline");
   if (!panel || !hwpDoc) return;
   panel.innerHTML = "";
+  outlineEntryByKey.clear();
 
   let outline: OutlineNavigationItem[] = [];
   try {
