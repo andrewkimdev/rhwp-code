@@ -10,7 +10,29 @@ from pathlib import Path
 
 WORKFLOW_PATH = Path(__file__).resolve().parents[2] / ".github/workflows/ci.yml"
 CLASSIFIER_PATH = Path(__file__).resolve().parents[1] / "ci-impact-classifier.cjs"
+TESTS_DIR = Path(__file__).resolve().parents[2] / "tests"
 WORKER_MARKER = "  # [#2393] 기본 테스트 병렬화"
+
+# [#4040] 파일 전체가 native-skia 로 게이트된 integration test.
+#
+# default-feature worker 는 이 파일을 통째로 cfg-out 하므로, Native Skia job 이
+# 명시적으로 실행하지 않으면 **어디에서도 돌지 않는다.**
+#
+# 게이트는 중첩될 수 있다 — `render_p37_direct_pdf_export.rs` 는
+# `#![cfg(all(not(target_arch = "wasm32"), feature = "native-skia"))]` 형태다.
+# 따라서 정확 일치가 아니라 inner attribute 안의 feature 언급을 본다.
+FILE_GATED_NATIVE_SKIA = re.compile(
+    r'#!\[cfg\((?:[^\[\]]|\[[^\]]*\])*feature\s*=\s*"native-skia"'
+)
+
+
+def file_gated_native_skia_tests() -> list[str]:
+    """`tests/*.rs` 중 파일 게이트된 native-skia test 의 stem 목록."""
+    return sorted(
+        path.stem
+        for path in TESTS_DIR.glob("*.rs")
+        if FILE_GATED_NATIVE_SKIA.search(path.read_text(encoding="utf-8"))
+    )
 
 
 class CiImpactWorkflowTests(unittest.TestCase):
@@ -209,6 +231,7 @@ class CiImpactWorkflowTests(unittest.TestCase):
         self.assertNotIn("startsWith(github.ref", script)
 
     def test_native_skia_integration_targets_are_classifier_inputs(self) -> None:
+        # 역방향 감시: job 이 실행하는 target 은 classifier 소유여야 한다.
         native_step = self._step("Native Skia tests")
         classifier = CLASSIFIER_PATH.read_text(encoding="utf-8")
         targets = set(re.findall(r"--test ([A-Za-z0-9_]+)", native_step))
@@ -216,6 +239,72 @@ class CiImpactWorkflowTests(unittest.TestCase):
         for target in targets:
             with self.subTest(target=target):
                 self.assertIn(f"'tests/{target}.rs'", classifier)
+
+    def test_discovery_finds_the_known_file_gated_native_skia_tests(self) -> None:
+        """발견 패턴이 망가지면 아래 테스트가 조용히 무의미해진다.
+
+        `render_p37_direct_pdf_export` 는 `all(...)` 중첩 게이트라, 정확 일치
+        패턴으로는 잡히지 않는다. 이 단언이 그 회귀를 막는다.
+        """
+        found = file_gated_native_skia_tests()
+        for expected in [
+            "issue_2083_hide_fill_page_background",
+            "issue_2292_chart_png_clip",
+            "issue_2293_chart_png_text",
+            "render_p37_direct_pdf_export",
+        ]:
+            self.assertIn(expected, found)
+        # 함수 게이트 파일은 이 부류가 아니다 — 별도 축(#4132)이다.
+        self.assertNotIn("issue_2225_missing_picture_placeholder", found)
+        self.assertNotIn("cli_exit_codes", found)
+
+    def test_every_file_gated_native_skia_test_is_wired(self) -> None:
+        """[#4040] 파일 게이트된 native-skia test 는 job·classifier 양쪽에 있어야 한다.
+
+        기존 `test_native_skia_integration_targets_are_classifier_inputs` 는
+        **job 이 실행하는 target** 만 순회하므로, 양쪽 어디에도 없는 파일은 대조
+        대상 자체가 아니라 조용히 빠진다. `issue_2083`·`issue_2292`·`issue_2293`
+        이 정확히 그 경로로 새어 나갔다 — 파일 전체가 cfg-out 되어 default worker
+        에서도 돌지 않고, Native job 도 실행하지 않는 상태였다.
+
+        저장소를 직접 훑어 부류 자체를 강제한다.
+        """
+        native_step = self._step("Native Skia tests")
+        classifier = CLASSIFIER_PATH.read_text(encoding="utf-8")
+        targets = set(re.findall(r"--test ([A-Za-z0-9_]+)", native_step))
+
+        missing_from_job = []
+        missing_from_classifier = []
+        for stem in file_gated_native_skia_tests():
+            if stem not in targets:
+                missing_from_job.append(stem)
+            if f"'tests/{stem}.rs'" not in classifier:
+                missing_from_classifier.append(stem)
+
+        self.assertEqual(
+            missing_from_job,
+            [],
+            "Native Skia job 이 실행하지 않는 파일 게이트 test 가 있다. "
+            "`--test <name>` 을 release-test·release 두 경로에 추가한다.",
+        )
+        self.assertEqual(
+            missing_from_classifier,
+            [],
+            "classifier 의 NATIVE_SKIA_RUST_FILES 에 없는 파일 게이트 test 가 있다. "
+            "빠지면 그 파일을 고치는 PR 에서 Native Skia job 이 skip 된다.",
+        )
+
+    def test_native_skia_targets_run_in_both_profiles(self) -> None:
+        """[#4040] release-test 와 release 두 경로가 같은 target 집합을 실행한다."""
+        native_step = self._step("Native Skia tests")
+        release_test = set(
+            re.findall(r"--profile release-test --features native-skia --test ([A-Za-z0-9_]+)", native_step)
+        )
+        release = set(
+            re.findall(r"--release --features native-skia --test ([A-Za-z0-9_]+)", native_step)
+        )
+        self.assertTrue(release_test)
+        self.assertEqual(release_test, release)
 
     def test_rust_workers_wait_only_for_their_test_archive(self) -> None:
         expected_archives = {

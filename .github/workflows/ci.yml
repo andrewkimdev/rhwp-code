@@ -872,11 +872,17 @@ jobs:
             cargo test --profile release-test --features native-skia skia --lib --verbose
             cargo test --profile release-test --features native-skia --test issue_2225_missing_picture_placeholder --verbose
             cargo test --profile release-test --features native-skia --test render_p37_direct_pdf_export --verbose
+            cargo test --profile release-test --features native-skia --test issue_2083_hide_fill_page_background --verbose
+            cargo test --profile release-test --features native-skia --test issue_2292_chart_png_clip --verbose
+            cargo test --profile release-test --features native-skia --test issue_2293_chart_png_text --verbose
           else
             echo "profile=release event=${GITHUB_EVENT_NAME} ref=${GITHUB_REF}"
             cargo test --release --features native-skia skia --lib --verbose
             cargo test --release --features native-skia --test issue_2225_missing_picture_placeholder --verbose
             cargo test --release --features native-skia --test render_p37_direct_pdf_export --verbose
+            cargo test --release --features native-skia --test issue_2083_hide_fill_page_background --verbose
+            cargo test --release --features native-skia --test issue_2292_chart_png_clip --verbose
+            cargo test --release --features native-skia --test issue_2293_chart_png_text --verbose
           fi
 
   frontend-unit-gates:
