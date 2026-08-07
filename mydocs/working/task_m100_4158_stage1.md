@@ -117,3 +117,28 @@ raw PUA와 `borderType=0`은 바꾸지 않았다. `composer.rs`의 텍스트 표
 드라이버도 정상 마커를 출력하므로 제품 회귀가 아니라 실행 격리의 pipe 캡처 현상으로 판정했다.
 
 원격 push·PR·이슈 comment는 아직 수행하지 않았다.
+
+## 7. 2026-08-08 최신 devel 병합·재검증
+
+- 최신 기준: `upstream/devel` `5a4f26d0d`
+- 병합 commit: `5356207db`
+- 수동 충돌 해소: `mydocs/orders/20260807.md`, `rhwp-studio/e2e/MANIFEST.md`
+- 해소 원칙: #4158 기록과 이미 병합된 #4159 기록·E2E 등록을 모두 보존
+
+현재 head에서 다음 집중 게이트를 재실행했다.
+
+| 검증 | 결과 |
+| --- | --- |
+| `cargo test --lib boxed_pua_char_overlap -- --nocapture` | PASS, 2 passed |
+| `cargo test --lib char_overlap_without_border_keeps_body_font_size -- --nocapture` | PASS, 1 passed |
+| `cargo test --profile release-test --features native-skia --lib boxed_pua_char_overlap` | PASS, 2 passed |
+| `CARGO_INCREMENTAL=0 wasm-pack build --target web --out-dir pkg` | PASS, release compile·wasm-bindgen·wasm-opt·packaging 완료 |
+| `npm run e2e:issue-4158` | PASS, 물리 10쪽 7개 계약 |
+| `npm run e2e:issue-536` | PASS, 물리 2쪽 6개 계약 |
+| `npm run e2e:issue-4159` | PASS, 물리 3쪽 2개 계약 |
+| `npm run e2e:manifest-check` | PASS, tracked 87개 / manifest 87행 |
+| `cargo fmt --check`, `git diff --check` | PASS |
+
+WASM 도구는 `wasm-pack 0.13.1`, `wasm-bindgen 0.2.125`, `wasm-opt 122`를 사용했다. 새
+Canvas2D crop에서 `공정거래위원회` 앞 표식이 tofu가 아닌 사각형 안 숫자 1로 출력되는 것을
+확인했다. 현재 head의 전체 PR 게이트는 이 집중 결과 보고 뒤 별도 승인받아 실행한다.

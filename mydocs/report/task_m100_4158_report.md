@@ -2,7 +2,8 @@
 
 - **Issue**: [#4158](https://github.com/edwardkim/rhwp/issues/4158)
 - **브랜치**: `task_m100_4158_char_overlap_boxed_pua`
-- **기준**: `upstream/devel` `5119ea498`
+- **최초 기준**: `upstream/devel` `5119ea498`
+- **현재 기준**: `upstream/devel` `5a4f26d0d`, merge commit `5356207db`
 - **계획서**: [`mydocs/plans/task_m100_4158.md`](../plans/task_m100_4158.md)
 - **단계 기록**: [`mydocs/working/task_m100_4158_stage1.md`](../working/task_m100_4158_stage1.md)
 - **작성 시각**: 2026-08-07 KST
@@ -50,6 +51,16 @@ IR text / CharOverlapInfo               → preserve
 Node 22 전체 명령을 샌드박스 밖에서 실행하면 765개가 모두 통과했다. 이는 제품 코드 실패와
 분리해 기록한다.
 
-## 4. 원격 상태
+## 4. 2026-08-08 current-head 재검증
+
+이미 병합된 #4159를 포함한 최신 `devel`을 작업 브랜치에 통합했다. #4158·#4159의 오늘할일과
+E2E manifest 항목을 모두 보존했고, 현재 head에서 focused Rust 3건, Native Skia 2건, release
+WASM build, #4158 7개·#536 6개·#4159 2개 브라우저 계약, manifest 87/87, fmt·diff 검사를
+통과했다. 새 crop에서도 물리 10쪽 표식은 사각형 안 숫자 1이다.
+
+2026-08-07의 전체 PR 게이트 결과는 당시 code head의 근거다. 최신 merge commit이 포함된 현재
+head의 전체 게이트는 집중 재검증 결과 보고 뒤 별도 승인을 받아 실행한다.
+
+## 5. 원격 상태
 
 로컬 단계 커밋까지만 수행한다. GitHub push, PR 생성, #4158 comment·close는 수행하지 않았다.
