@@ -70,6 +70,7 @@ EXPECTED = {
     ("ParameterArray", "method"): 4,
 }
 EXPECTED_PSET_COUNT = 50
+EXPECTED_PSET_ITEM_COUNT = 521
 EXPECTED_ACTION_COUNT = 312
 
 HEADER_RE = re.compile(r"^(\d+(?:\.\d+)+)\.\s+(\S[^\n]*?)\s*$")
@@ -320,6 +321,9 @@ def verify(api: list[dict], sets: list[dict], actions: list[dict]) -> list[str]:
             problems.append(f"{key[0]}.{key[1]}: 기대 {want} 실제 {got}")
     if len(sets) != EXPECTED_PSET_COUNT:
         problems.append(f"ParameterSet: 기대 {EXPECTED_PSET_COUNT} 실제 {len(sets)}")
+    item_count = sum(len(s["items"]) for s in sets)
+    if item_count != EXPECTED_PSET_ITEM_COUNT:
+        problems.append(f"ParameterSet Item: 기대 {EXPECTED_PSET_ITEM_COUNT} 실제 {item_count}")
     empty = [s["setId"] for s in sets if not s["items"]]
     if empty:
         problems.append(f"Item 이 비어 있는 Set: {', '.join(empty)}")

@@ -167,7 +167,10 @@ compare.py  → L2 반환값 diff · L3 IR/레코드 diff · L4 픽셀 diff → 
 
 과거 캠페인에서 실제로 오판을 만든 것들이다. 하니스 v1 에 전부 넣는다.
 
-1. **COM hang** — stall-watchdog 필수. 시간 제한 뒤 `Hwp.exe`/`HwpFrame.exe` 정리.
+1. **COM hang** — stall-watchdog 필수. 시작 시 기존 한글 프로세스가 있으면 종료하지 않고
+   `OCCUPIED`로 중단한다. clean start 뒤 시간 제한이 지나도 기본은 남은 PID를 `LEFTOVER`로
+   보고하고 자동 종료하지 않는다. 전용 Windows 계정에서만 `--cleanup-spawned`를 명시해 새 PID를
+   정리할 수 있다.
 2. **동시 실행 금지** — COM 판정은 직렬. 병렬은 서로의 인스턴스를 죽인다.
 3. **보안 다이얼로그** — `FilePathCheckerModule.dll` 을 `HKCU\Software\HNC\HwpAutomation\Modules`
    에 등록(`hwp_com_automation` 메모).
@@ -206,7 +209,7 @@ rhwp CLI 로 세 문서를 읽어 기계 판독 스펙을 만든다. 왕복 판�
 | `runner_ocx.py` | 설치된 한글 COM 에 시나리오 실행 → 정답지 |
 | `runner_rhwp.mjs` | 같은 시나리오를 rhwp WASM 위에서 실행 (`--impl legacy` = 자체 검증) |
 | `compare.py` | L2 반환값 + L3 문서 상태 대조 → `verdict.tsv`/`verdict.json` |
-| `run_gate.py` | 직렬 오케스트레이터 — 시간 제한·프로세스 정리 |
+| `run_gate.py` | 직렬 오케스트레이터 — 시간 제한·안전한 잔류 PID 보고·정답지 버전 재검증 |
 
 **P0 완료 판정("기존 층을 돌려 알려진 diff 를 재현")을 충족했다.** 한글2022 정답지 기준
 시나리오 3건 28호출 중 12 일치, 16 불일치가 잡혔고 그 내역이 전부 설명된다.
@@ -223,8 +226,10 @@ rhwp CLI 로 세 문서를 읽어 기계 판독 스펙을 만든다. 왕복 판�
 
 작업지시자가 관리자 권한으로 `Hwp.exe /regserver`(Office 2022)를 실행해 전환했다. 이후
 `gen_py` 캐시를 지우고 정답지를 **전량 재수집**했다 — 현재 `output/poc/hwpctrl/ocx/` 는 전부
-`12, 0, 0, 4547` 산이다. 게이트 기본값이 `--expect-version 12,` 이므로 다른 버전으로는
-**시나리오가 실행되지 않는다**(`<id>.rejected.json` 만 남는다).
+`12, 0, 0, 4547` 산이다. 게이트 기본값이 `--expect-version 12` 이므로 `12, 0, 0, 4547`과
+`12.0.0.4547`을 같은 2022 오라클로 판정하고, 다른 major로는 **시나리오가 실행되지 않는다**.
+재실행은 이전 `returns.json`과 저장본을 먼저 제거한 뒤 `<id>.rejected.json`만 남겨 stale 정답지가
+비교에 섞이지 않게 한다. `--skip-ocx`도 저장된 oracle version을 다시 검사한다.
 
 **2022 와 2024 의 답은 같았다.** 격리해 둔 2024 산출물과 대조한 결과 28호출 중 다른 것은
 `Version` 값 하나뿐이다(`12, 0, 0, 4547` ↔ `13, 0, 0, 564`). 즉 **API 축은 두 버전에 둔감**하다

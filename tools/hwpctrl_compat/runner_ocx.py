@@ -31,6 +31,8 @@ import sys
 import traceback
 from pathlib import Path
 
+from oracle_version import matches_expected_version
+
 REPO = Path(__file__).resolve().parents[2]
 
 
@@ -78,6 +80,41 @@ def call_one(com, name: str, args: list):
     return normalize(attr)
 
 
+def output_paths(scenario: dict, out_dir: Path) -> tuple[Path, Path, Path | None]:
+    """시나리오 산출물이 out_dir 밖을 지우거나 저장하지 않게 고정한다."""
+    root = out_dir.resolve()
+
+    def below_root(relative: str) -> Path:
+        candidate = (root / relative).resolve()
+        if candidate == root or root not in candidate.parents:
+            raise ValueError(f"산출물 경로가 --out 밖입니다: {relative}")
+        return candidate
+
+    scenario_id = scenario["id"]
+    saved = below_root(scenario["saveAs"]) if scenario.get("saveAs") else None
+    return (
+        below_root(f"{scenario_id}.returns.json"),
+        below_root(f"{scenario_id}.rejected.json"),
+        saved,
+    )
+
+
+def clear_previous_outputs(scenario: dict, out_dir: Path) -> tuple[Path, Path, Path | None]:
+    """재실행 전에 같은 시나리오의 정답지와 저장본을 제거한다.
+
+    버전 거부와 실패가 직전 `returns.json`을 재사용하는 일을 막는다. 파일만 삭제하며 예상 밖의
+    디렉터리나 특수 파일은 중단시켜 호출자가 명시적으로 정리하게 한다.
+    """
+    paths = output_paths(scenario, out_dir)
+    for path in paths:
+        if path is None or (not path.exists() and not path.is_symlink()):
+            continue
+        if not path.is_file() and not path.is_symlink():
+            raise ValueError(f"기존 산출물이 일반 파일이 아닙니다: {path}")
+        path.unlink()
+    return paths
+
+
 def run(scenario: dict, out_dir: Path, expect_version: str | None = None) -> dict:
     from pyhwpx import Hwp
 
@@ -102,8 +139,8 @@ def run(scenario: dict, out_dir: Path, expect_version: str | None = None) -> dic
     # 버전이 어긋나면 **시나리오를 아예 돌리지 않는다.** 돌린 뒤 거부하면 잘못된 버전의
     # 정답지가 이미 디스크에 남아, 다음 사람이 그것을 정답으로 쓴다.
     version = (result.get("oracle") or {}).get("version")
-    if expect_version and not str(version or "").startswith(expect_version):
-        result["rejected"] = f"기대 '{expect_version}…' 실제 '{version}'"
+    if not matches_expected_version(version, expect_version):
+        result["rejected"] = f"기대 major '{expect_version}' 실제 '{version}'"
         try:
             com.Quit()
         except Exception:  # noqa: BLE001
@@ -126,7 +163,8 @@ def run(scenario: dict, out_dir: Path, expect_version: str | None = None) -> dic
             result["calls"].append(record)
 
         if scenario.get("saveAs"):
-            dst = (out_dir / scenario["saveAs"]).resolve()
+            _, _, dst = output_paths(scenario, out_dir)
+            assert dst is not None
             dst.parent.mkdir(parents=True, exist_ok=True)
             ok = com.SaveAs(str(dst), "HWP", "")
             result["saved"] = {"path": str(dst.relative_to(REPO)) if REPO in dst.parents else str(dst), "ok": bool(ok)}
@@ -147,7 +185,7 @@ def main() -> int:
     ap.add_argument("--out", required=True, help="산출물 디렉터리")
     ap.add_argument(
         "--expect-version",
-        help="오라클 버전 접두사(예: '12,' = 한글2022). 어긋나면 실행하지 않고 exit 3.",
+        help="오라클 major 버전(예: '12' = 한글2022). 어긋나면 실행하지 않고 exit 3.",
     )
     args = ap.parse_args()
 
@@ -156,13 +194,13 @@ def main() -> int:
 
     out_dir = Path(args.out)
     out_dir.mkdir(parents=True, exist_ok=True)
+    returns_path, rejected_path, _ = clear_previous_outputs(scenario, out_dir)
     result = run(scenario, out_dir, args.expect_version)
 
     version = (result.get("oracle") or {}).get("version")
     if result.get("rejected"):
         # 정답지 자리에 쓰지 않는다. 증거는 남기되 이름으로 구분한다.
-        dst = out_dir / f"{scenario['id']}.rejected.json"
-        with io.open(dst, "w", encoding="utf-8", newline="\n") as fh:
+        with io.open(rejected_path, "w", encoding="utf-8", newline="\n") as fh:
             json.dump(result, fh, ensure_ascii=False, indent=2)
             fh.write("\n")
         print(
@@ -171,11 +209,10 @@ def main() -> int:
         )
         return 3
 
-    dst = out_dir / f"{scenario['id']}.returns.json"
-    with io.open(dst, "w", encoding="utf-8", newline="\n") as fh:
+    with io.open(returns_path, "w", encoding="utf-8", newline="\n") as fh:
         json.dump(result, fh, ensure_ascii=False, indent=2)
         fh.write("\n")
-    print(f"{scenario['id']}: 호출 {len(result['calls'])}건 · 오라클 {version} → {dst}")
+    print(f"{scenario['id']}: 호출 {len(result['calls'])}건 · 오라클 {version} → {returns_path}")
     return 1 if result["fatal"] else 0
 
 

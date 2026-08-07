@@ -40,6 +40,20 @@ def load(path: Path) -> dict:
         return json.load(fh)
 
 
+def selected_oracle_paths(ocx_dir: Path, scenarios: list[str] | None) -> list[Path]:
+    """명시한 시나리오만 비교해 이전 실행의 정답지가 섞이지 않게 한다."""
+    paths = sorted(ocx_dir.glob("*.returns.json"))
+    if scenarios is None:
+        return paths
+    allowed = set(scenarios)
+    return [path for path in paths if path.name.removesuffix(".returns.json") in allowed]
+
+
+def saved_path(value: str) -> Path:
+    path = Path(value)
+    return path if path.is_absolute() else REPO / path
+
+
 def classify(ocx_call: dict, rhwp_call: dict) -> tuple[str, str]:
     ocx_err = ocx_call.get("error")
     rhwp_err = rhwp_call.get("error")
@@ -91,8 +105,8 @@ def doc_state(exe: Path, path: Path) -> dict | None:
 def compare_saved(exe: Path, ocx: dict, rhwp: dict) -> dict | None:
     if not ocx.get("saved") or not rhwp.get("saved"):
         return None
-    ocx_state = doc_state(exe, Path(ocx["saved"]["path"]))
-    rhwp_state = doc_state(exe, Path(rhwp["saved"]["path"]))
+    ocx_state = doc_state(exe, saved_path(ocx["saved"]["path"]))
+    rhwp_state = doc_state(exe, saved_path(rhwp["saved"]["path"]))
     if ocx_state is None or rhwp_state is None:
         return {"verdict": "SAVED_MISSING", "ocx": ocx_state, "rhwp": rhwp_state}
     diffs = []
@@ -158,14 +172,20 @@ def main() -> int:
     ap.add_argument("--rhwp", required=True)
     ap.add_argument("--out", required=True)
     ap.add_argument("--exe", default=str(DEFAULT_EXE))
+    ap.add_argument("--scenario", action="append", dest="scenarios", help="비교할 시나리오 id (반복 가능)")
+    ap.add_argument("--empty", action="store_true", help="비교 대상 없이 빈 판정 파일만 생성")
     args = ap.parse_args()
+
+    if args.empty and args.scenarios:
+        ap.error("--empty와 --scenario는 함께 사용할 수 없습니다")
 
     ocx_dir, rhwp_dir, out_dir = Path(args.ocx), Path(args.rhwp), Path(args.out)
     out_dir.mkdir(parents=True, exist_ok=True)
     exe = Path(args.exe)
 
     reports = []
-    for ocx_path in sorted(ocx_dir.glob("*.returns.json")):
+    oracle_paths = [] if args.empty else selected_oracle_paths(ocx_dir, args.scenarios)
+    for ocx_path in oracle_paths:
         rhwp_path = rhwp_dir / ocx_path.name
         if not rhwp_path.exists():
             print(f"건너뜀 — rhwp 산출물 없음: {rhwp_path.name}")
