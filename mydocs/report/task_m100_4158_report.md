@@ -61,6 +61,9 @@ WASM build, #4158 7개·#536 6개·#4159 2개 브라우저 계약, manifest 87/8
 2026-08-07의 전체 PR 게이트 결과는 당시 code head의 근거다. 최신 merge commit이 포함된 현재
 head의 전체 게이트는 집중 재검증 결과 보고 뒤 별도 승인을 받아 실행한다.
 
+작업지시자의 rhwp-studio 시각 판정도 통과했다. 이어서 발견된 일반 `TextRun`의
+`U+F02FB` tofu는 #4158의 실제 `CharOverlap` 사각 숫자와 다른 결함이므로 별도 처리한다.
+
 ## 5. 원격 상태
 
 로컬 단계 커밋까지만 수행한다. GitHub push, PR 생성, #4158 comment·close는 수행하지 않았다.
