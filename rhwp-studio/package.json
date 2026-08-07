@@ -28,6 +28,7 @@
     "e2e:issue-4159": "node e2e/issue-4159-terminal-nested-bottom-border-canvas2d.test.mjs --mode=headless",
     "e2e:issue-536": "node e2e/issue-536-boxed-pua-canvas2d.test.mjs --mode=headless",
     "e2e:issue-4158": "node e2e/issue-4158-char-overlap-boxed-pua-canvas2d.test.mjs --mode=headless",
+    "e2e:pua-f02fb": "node e2e/pua-f02fb-small-right-triangle-canvas2d.test.mjs --mode=headless",
     "e2e:canvaskit-font-coverage": "node e2e/canvaskit-font-coverage.test.mjs",
     "e2e:embed": "node e2e/embed-transport.test.mjs --mode=headless",
     "e2e:baseline:headless": "node e2e/renderer-baseline.mjs --mode=headless --manifest=../scripts/renderer_baseline_manifest.json --output=../output/renderer-baseline/studio-headless",
