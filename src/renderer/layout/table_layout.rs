@@ -18,6 +18,35 @@ const ROWBREAK_OBJECT_BOTTOM_BLEED_TOLERANCE_PX: f64 = 64.0;
 /// 일반 그림 위치일 수 있으므로 절대 보정하지 않는다.
 const ROWBREAK_STALE_PAGE_SCALE_PICTURE_OFFSET_MIN_HU: i32 = -40_000;
 
+/// [#2424 프로파일] 분할 표 컷 프리미티브 실측 카운터 — `RHWP_2424_PROFILE` 전용, 동작 불변.
+/// 프로세스 누적이며 `RHWP_2424_STEP_PROFILE` 출력(typeset.rs)이 스냅샷을 읽는다.
+pub(crate) static ISSUE2424_ADVANCE_ROW_CUT_CALLS: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+pub(crate) static ISSUE2424_ADVANCE_ROW_CUT_NANOS: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+pub(crate) static ISSUE2424_CELL_UNITS_HITS: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+pub(crate) static ISSUE2424_CELL_UNITS_MISSES: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+pub(crate) static ISSUE2424_CELL_UNITS_MISS_NANOS: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+
+/// [#2424 프로파일] env 게이트 1회 판정. wasm 은 항상 false 라 `Instant::now` 가
+/// 호출되지 않는다 (`paginate_pass` 의 게이트 패턴과 동일 규약).
+pub(crate) fn issue2424_profile_enabled() -> bool {
+    #[cfg(target_arch = "wasm32")]
+    {
+        false
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        *ENABLED.get_or_init(|| {
+            std::env::var("RHWP_2424_PROFILE").is_ok_and(|value| !value.is_empty() && value != "0")
+        })
+    }
+}
+
 /// [Task #548] paragraph 의 line N 에 적용되는 effective margin_left.
 /// paragraph_layout.rs 의 line_indent 산식과 동일 (단일 룰).
 /// - positive indent: line 0 에만 +indent 적용 (첫줄 들여쓰기)
@@ -5612,13 +5641,70 @@ impl LayoutEngine {
     ) -> std::sync::Arc<Vec<CellUnit>> {
         let key = cell as *const crate::model::table::Cell as usize;
         if let Some(cached) = self.cell_units_cache.borrow().get(&key) {
+            if issue2424_profile_enabled() {
+                ISSUE2424_CELL_UNITS_HITS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            }
             return std::sync::Arc::clone(cached);
         }
+        let issue2424_started = issue2424_profile_enabled().then(std::time::Instant::now);
         let units = std::sync::Arc::new(self.cell_units_uncached(cell, table, styles));
+        if let Some(started) = issue2424_started {
+            use std::sync::atomic::Ordering::Relaxed;
+            ISSUE2424_CELL_UNITS_MISSES.fetch_add(1, Relaxed);
+            ISSUE2424_CELL_UNITS_MISS_NANOS.fetch_add(started.elapsed().as_nanos() as u64, Relaxed);
+        }
         self.cell_units_cache
             .borrow_mut()
             .insert(key, std::sync::Arc::clone(&units));
         units
+    }
+
+    /// [#4128] `(cell_para_idx, target_line)` 이 속한 `cell_units` 서수.
+    /// 텍스트 줄 유닛 `(li, li+1)` / atom 유닛 `(0, line_count.max(1))` 의
+    /// `vis_start..vis_end` 계약을 그대로 조회한다. 콘텐츠(비 spacer) 유닛을
+    /// 우선하되, 빈 문단처럼 spacer 유닛만 있는 문단은 spacer 서수로 폴백한다.
+    /// 없으면 None.
+    pub(super) fn cell_unit_ordinal_for(
+        &self,
+        cell: &crate::model::table::Cell,
+        table: &crate::model::table::Table,
+        styles: &ResolvedStyleSet,
+        cell_para_idx: usize,
+        target_line: usize,
+    ) -> Option<usize> {
+        let units = self.cell_units(cell, table, styles);
+        let hit = |u: &CellUnit| {
+            u.para_idx == cell_para_idx
+                && u.vis_start <= target_line
+                && target_line < u.vis_end.max(u.vis_start + 1)
+        };
+        units
+            .iter()
+            .position(|u| !u.empty_spacer && hit(u))
+            .or_else(|| units.iter().position(|u| hit(u)))
+    }
+
+    /// [#4128 테스트 전용] cell_units 요약: (para_idx, vis_start, vis_end,
+    /// empty_spacer, nested_row).
+    #[cfg(test)]
+    pub(crate) fn debug_cell_units(
+        &self,
+        cell: &crate::model::table::Cell,
+        table: &crate::model::table::Table,
+        styles: &ResolvedStyleSet,
+    ) -> Vec<(usize, usize, usize, bool, Option<usize>)> {
+        self.cell_units(cell, table, styles)
+            .iter()
+            .map(|u| {
+                (
+                    u.para_idx,
+                    u.vis_start,
+                    u.vis_end,
+                    u.empty_spacer,
+                    u.nested_row,
+                )
+            })
+            .collect()
     }
 
     fn cell_units_uncached(
@@ -7169,6 +7255,24 @@ impl LayoutEngine {
         avail_height: f64,
         styles: &ResolvedStyleSet,
     ) -> RowCutResult {
+        let issue2424_started = issue2424_profile_enabled().then(std::time::Instant::now);
+        let result = self.advance_row_cut_inner(table, row, start_cut, avail_height, styles);
+        if let Some(started) = issue2424_started {
+            use std::sync::atomic::Ordering::Relaxed;
+            ISSUE2424_ADVANCE_ROW_CUT_CALLS.fetch_add(1, Relaxed);
+            ISSUE2424_ADVANCE_ROW_CUT_NANOS.fetch_add(started.elapsed().as_nanos() as u64, Relaxed);
+        }
+        result
+    }
+
+    fn advance_row_cut_inner(
+        &self,
+        table: &crate::model::table::Table,
+        row: usize,
+        start_cut: &[usize],
+        avail_height: f64,
+        styles: &ResolvedStyleSet,
+    ) -> RowCutResult {
         let mut row_cells: Vec<&crate::model::table::Cell> = table
             .cells
             .iter()
@@ -8472,6 +8576,16 @@ impl LayoutEngine {
         !para.text.trim().is_empty() || !para.controls.is_empty()
     }
 
+    /// [Task #1809] 종전 is_hwpx_source 조기 0 반환 제거 — 컷 이월 조각의 flow
+    /// extra 는 소스 무관 기하다. 한글 편집기 대조(admrul_0072 서명 셀: 텍스트→
+    /// 하단 경계 한글 25.5pt = extra 적용 25.9pt, 미적용 13.9pt)로 적용이 정답.
+    ///
+    /// [#4129] per-para O(P×U) 재스캔을 units 1-pass run-walk 로 재작성 (O(U)).
+    /// mixed 유닛은 `cell_units_uncached` 의 단일 문단 루프(ascending `pi`)에서만
+    /// 생성되므로 `para_idx` 가 유닛 순서상 단조 비감소 — 문단별 mixed run 이
+    /// 연속 구간이다 (단조성은 아래 debug_assert 가 지킨다). 종전 구현과의 비트
+    /// 동일성은 corpus 355개 전수 RHWP_2424_SHADOW A/B 대조로 검증했고, 게이트와
+    /// reference 구현은 검증 완료 후 같은 PR 체인의 후속 레이어에서 제거했다.
     fn mixed_nested_flow_extra_from_cut(
         &self,
         cell: &crate::model::table::Cell,
@@ -8480,30 +8594,53 @@ impl LayoutEngine {
         start_unit: usize,
         end_unit: usize,
     ) -> f64 {
-        // [Task #1809] 종전 is_hwpx_source 조기 0 반환 제거 — 컷 이월 조각의 flow
-        // extra 는 소스 무관 기하다. 한글 편집기 대조(admrul_0072 서명 셀: 텍스트→
-        // 하단 경계 한글 25.5pt = extra 적용 25.9pt, 미적용 13.9pt)로 적용이 정답.
         let units = self.cell_units(cell, table, styles);
         let lo = start_unit.min(units.len());
         let hi = end_unit.min(units.len()).max(lo);
         let mut extra = 0.0;
+        // [#4129 회귀 가드] 실제 유닛 방문 횟수 집계 — run-walk 는 호출당 ≤2×U.
+        // per-para 재스캔(O(P×U))류가 되살아나면 통합 테스트의 스캔 총량 상한이
+        // 폭발한다. 반환 직전 한 번에 프로세스 카운터로 누적한다.
+        let mut issue4129_visited: u64 = 0;
 
-        for para_idx in 0..cell.paragraphs.len() {
+        let mut u = 0;
+        while u < units.len() {
+            // 종전 per-para 루프는 0..paragraphs.len() 이라 범위 밖 para_idx
+            // 유닛은 방문 자체가 없었다 — 동일하게 무시한다.
+            if !units[u].mixed_nested_fragment || units[u].para_idx >= cell.paragraphs.len() {
+                issue4129_visited += 1;
+                u += 1;
+                continue;
+            }
+            let para_idx = units[u].para_idx;
             let mut offset = 0.0;
             let mut total = 0.0;
             let mut visible_units: Vec<(f64, bool)> = Vec::new();
-            for (idx, unit) in units.iter().enumerate() {
-                if unit.para_idx != para_idx || !unit.mixed_nested_fragment {
-                    continue;
+            let mut idx = u;
+            while idx < units.len() {
+                issue4129_visited += 1;
+                let unit = &units[idx];
+                if unit.mixed_nested_fragment {
+                    if unit.para_idx != para_idx {
+                        break;
+                    }
+                    total += unit.height;
+                    if idx < lo {
+                        offset += unit.height;
+                    }
+                    if idx >= lo && idx < hi {
+                        visible_units.push((unit.height, unit.mixed_nested_trailing));
+                    }
                 }
-                total += unit.height;
-                if idx < lo {
-                    offset += unit.height;
-                }
-                if idx >= lo && idx < hi {
-                    visible_units.push((unit.height, unit.mixed_nested_trailing));
-                }
+                idx += 1;
             }
+            debug_assert!(
+                idx >= units.len() || units[idx].para_idx > para_idx,
+                "cell_units mixed para_idx 단조성 위반: {} 뒤에 {}",
+                para_idx,
+                units[idx].para_idx,
+            );
+            u = idx;
 
             if total <= 0.5 || offset <= 0.5 {
                 continue;
@@ -8525,6 +8662,8 @@ impl LayoutEngine {
             }
         }
 
+        crate::diagnostics::perf_counters::MIXED_NESTED_UNITS_SCANNED
+            .fetch_add(issue4129_visited, std::sync::atomic::Ordering::Relaxed);
         extra
     }
 
