@@ -1429,6 +1429,18 @@ pub(crate) struct RowCutResult {
     pub consumed_height: f64,
 }
 
+/// 재귀 1×1 block 앞의 source 문단 묶음 역할.
+///
+/// 부모 `RowCut`으로 투영한 뒤에는 자식 문단 인덱스가 사라지므로, 빈 구분 문단과
+/// 바로 뒤 한 줄 제목을 높이나 텍스트 휴리스틱 없이 함께 넘기기 위해 보존한다.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+enum RecursiveBlockPreludeRole {
+    #[default]
+    None,
+    EmptySeparator,
+    OneLineHeadingBeforeSingleCellTable,
+}
+
 /// [Task #993] 한 셀의 콘텐츠 유닛 — 합성 줄 1개 또는 중첩 표 atom 1개.
 pub(super) struct CellUnit {
     /// 유닛 높이 (px).
@@ -1463,6 +1475,8 @@ pub(super) struct CellUnit {
     /// 새 block은 이전 viewport의 예약 줄이 아니므로 continuation origin에서
     /// 건너뛰지 않는다(42065 p9).
     mixed_nested_starts_after_table: bool,
+    /// 자식 source 문단의 재귀 block prelude 역할. 재귀 투영 단계에서도 보존한다.
+    recursive_block_prelude_role: RecursiveBlockPreludeRole,
     top_and_bottom_flow: bool,
     empty_spacer: bool,
     /// Square/Tight/Through non-inline flow fragment가 걸친 원 문단 control index 범위
@@ -1484,6 +1498,7 @@ struct NestedFlowFragment {
     content_height: f64,
     recursive: bool,
     starts_after_table: bool,
+    recursive_block_prelude_role: RecursiveBlockPreludeRole,
 }
 
 #[derive(Debug, Clone)]
@@ -6650,14 +6665,14 @@ impl LayoutEngine {
             let units = self.cell_units(cell, table, styles);
             let stored_page_frame_boundaries =
                 units.iter().filter(|unit| unit.hard_break_before).count();
-            let has_intra_para_frame_boundary =
+            let has_authoritative_frame_boundary =
                 units.iter().any(|unit| unit.stored_frame_break_before);
-            // [#4069 Stage 2] 문단 내부 경계는 하나여도 부모 원장에서
-            // 소실하면 안 된다. 문단 사이의 단일 reset은 legacy orphan/sliver
-            // 완화를 유지하지만, 같은 문단 줄 좌표의 역행은 페이지 경계이다.
-            // 42065 p10의 내부 표는 문단 22의 두 줄 사이에서 vpos 58620→0이
-            // 되며 한컴 정본도 그 경계로 쪽을 나눈다.
-            if stored_page_frame_boundaries >= 2 || has_intra_para_frame_boundary {
+            // [#4069 Stage 2/Task #3820 Stage 48] 저장 프레임 경계는 문단 내부인지
+            // 문단 사이인지와 무관하게 하나라도 부모 원장에 보존한다. 작은 로컬 reset은
+            // `is_hwp5_stored_frame_rewind`의 body-half 조건에서 이미 제외된다.
+            // 42065 p10은 같은 문단 58620→0, p14는 item7→item8의 문단간
+            // 32932→0 경계이며 둘 다 한컴 정본의 실제 쪽 경계다.
+            if stored_page_frame_boundaries >= 2 || has_authoritative_frame_boundary {
                 return units
                     .iter()
                     .map(|unit| {
@@ -6676,6 +6691,7 @@ impl LayoutEngine {
                             },
                             recursive: true,
                             starts_after_table: unit.mixed_nested_starts_after_table,
+                            recursive_block_prelude_role: unit.recursive_block_prelude_role,
                         }
                     })
                     .collect();
@@ -6902,6 +6918,7 @@ impl LayoutEngine {
                     content_height,
                     recursive: false,
                     starts_after_table,
+                    recursive_block_prelude_role: RecursiveBlockPreludeRole::None,
                 },
             )
             .collect()
@@ -7240,6 +7257,7 @@ impl LayoutEngine {
                         mixed_nested_content_height: 0.0,
                         mixed_nested_recursive: false,
                         mixed_nested_starts_after_table: false,
+                        recursive_block_prelude_role: RecursiveBlockPreludeRole::None,
                         top_and_bottom_flow: false,
                         empty_spacer: false,
                         non_inline_control_range: None,
@@ -7266,6 +7284,7 @@ impl LayoutEngine {
                 mixed_nested_content_height: 0.0,
                 mixed_nested_recursive: false,
                 mixed_nested_starts_after_table: false,
+                recursive_block_prelude_role: RecursiveBlockPreludeRole::None,
                 top_and_bottom_flow: true,
                 empty_spacer: false,
                 non_inline_control_range: None,
@@ -7497,11 +7516,10 @@ impl LayoutEngine {
             };
             let stored_frame_break_before_para = if pi > 0 && cell_has_local_vpos_origin {
                 let prev_para = &cell.paragraphs[pi - 1];
-                Self::paragraph_hosts_single_cell_nested_table(prev_para)
-                    && match (prev_para.line_segs.last(), p.line_segs.first()) {
-                        (Some(prev), Some(cur)) => is_hwp5_stored_frame_rewind(prev, cur),
-                        _ => false,
-                    }
+                match (prev_para.line_segs.last(), p.line_segs.first()) {
+                    (Some(prev), Some(cur)) => is_hwp5_stored_frame_rewind(prev, cur),
+                    _ => false,
+                }
             } else {
                 false
             };
@@ -7672,6 +7690,29 @@ impl LayoutEngine {
             };
             let para_top_and_bottom_flow_unit =
                 para_has_top_and_bottom_non_inline_control && !para_has_visible_text;
+            let previous_single_empty_unit_idx = if pi > 0
+                && plain_empty_paragraph[pi - 1]
+                && units
+                    .last()
+                    .is_some_and(|unit| unit.para_idx == pi - 1 && unit.empty_spacer)
+                && (units.len() == 1 || units[units.len() - 2].para_idx != pi - 1)
+            {
+                Some(units.len() - 1)
+            } else {
+                None
+            };
+            let is_exact_recursive_prelude = line_count == 1
+                && para_has_visible_text
+                && !has_table_in_para
+                && previous_single_empty_unit_idx.is_some()
+                && cell
+                    .paragraphs
+                    .get(pi + 1)
+                    .is_some_and(Self::paragraph_hosts_single_cell_nested_table);
+            if is_exact_recursive_prelude {
+                units[previous_single_empty_unit_idx.expect("checked above")]
+                    .recursive_block_prelude_role = RecursiveBlockPreludeRole::EmptySeparator;
+            }
             let mut unit_cum = units.iter().map(|u| u.height).sum::<f64>();
             // [Task #1073] 텍스트 없는 문단(가시 텍스트 없음 — 합성 줄은 placeholder)에 단일
             // 중첩 표가 있고 그 표가 2행 이상이면 per-중첩행 유닛으로 분해 — advance_row_cut 가
@@ -7867,6 +7908,8 @@ impl LayoutEngine {
                                         mixed_nested_content_height: 0.0,
                                         mixed_nested_recursive: false,
                                         mixed_nested_starts_after_table: false,
+                                        recursive_block_prelude_role:
+                                            RecursiveBlockPreludeRole::None,
                                         top_and_bottom_flow: false,
                                         empty_spacer: false,
                                         non_inline_control_range: None,
@@ -7914,6 +7957,7 @@ impl LayoutEngine {
                             mixed_nested_content_height: 0.0,
                             mixed_nested_recursive: false,
                             mixed_nested_starts_after_table: false,
+                            recursive_block_prelude_role: RecursiveBlockPreludeRole::None,
                             top_and_bottom_flow: false,
                             empty_spacer: false,
                             non_inline_control_range: None,
@@ -8001,6 +8045,7 @@ impl LayoutEngine {
                                 mixed_nested_content_height: fragment.content_height,
                                 mixed_nested_recursive: fragment.recursive,
                                 mixed_nested_starts_after_table: fragment.starts_after_table,
+                                recursive_block_prelude_role: fragment.recursive_block_prelude_role,
                                 top_and_bottom_flow: false,
                                 empty_spacer: false,
                                 non_inline_control_range: None,
@@ -8100,6 +8145,7 @@ impl LayoutEngine {
                             mixed_nested_content_height: 0.0,
                             mixed_nested_recursive: false,
                             mixed_nested_starts_after_table: false,
+                            recursive_block_prelude_role: RecursiveBlockPreludeRole::None,
                             top_and_bottom_flow: false,
                             empty_spacer: false,
                             non_inline_control_range: None,
@@ -8142,6 +8188,7 @@ impl LayoutEngine {
                                     content_height: h,
                                     recursive: false,
                                     starts_after_table: false,
+                                    recursive_block_prelude_role: RecursiveBlockPreludeRole::None,
                                 });
                                 remaining -= h;
                             }
@@ -8204,6 +8251,7 @@ impl LayoutEngine {
                                 mixed_nested_content_height: fragment.content_height,
                                 mixed_nested_recursive: fragment.recursive,
                                 mixed_nested_starts_after_table: fragment.starts_after_table,
+                                recursive_block_prelude_role: fragment.recursive_block_prelude_role,
                                 top_and_bottom_flow: false,
                                 empty_spacer: false,
                                 non_inline_control_range: None,
@@ -8360,6 +8408,7 @@ impl LayoutEngine {
                     mixed_nested_content_height: 0.0,
                     mixed_nested_recursive: false,
                     mixed_nested_starts_after_table: false,
+                    recursive_block_prelude_role: RecursiveBlockPreludeRole::None,
                     top_and_bottom_flow: para_top_and_bottom_flow_unit,
                     empty_spacer: is_empty_spacer_para,
                     non_inline_control_range: None,
@@ -8452,6 +8501,11 @@ impl LayoutEngine {
                         mixed_nested_content_height: 0.0,
                         mixed_nested_recursive: false,
                         mixed_nested_starts_after_table: false,
+                        recursive_block_prelude_role: if is_exact_recursive_prelude {
+                            RecursiveBlockPreludeRole::OneLineHeadingBeforeSingleCellTable
+                        } else {
+                            RecursiveBlockPreludeRole::None
+                        },
                         top_and_bottom_flow: para_top_and_bottom_flow_unit,
                         empty_spacer: is_empty_spacer_para,
                         non_inline_control_range: None,
@@ -9035,6 +9089,19 @@ impl LayoutEngine {
                 j += 1;
             }
             if j < units.len()
+                && Self::rewind_rowbreak_orphan_heading_before_recursive_block(
+                    table,
+                    &units,
+                    start,
+                    avail_height,
+                    &mut j,
+                    &mut h,
+                )
+            {
+                // 짧은 제목만 현재 쪽에 남고 뒤의 page-scale 재귀 block이 다음 쪽으로
+                // 넘어가는 경우, 제목도 같은 source block의 첫 unit으로 넘긴다.
+            }
+            if j < units.len()
                 && Self::rewind_rowbreak_fragment_tail_before_topandbottom_flow(
                     table,
                     &units,
@@ -9466,6 +9533,56 @@ impl LayoutEngine {
                 *j = rewind_to;
             }
         }
+    }
+
+    /// 재귀 1×1 표를 부모 `RowCut` 원장으로 투영할 때, source에서 한 묶음으로 표시한
+    /// 빈 separator와 한 줄 제목만 현재 쪽에 들어가고 바로 다음 block이 넘치면 한컴은
+    /// prelude 전체를 그 block과 함께 다음 쪽에 둔다.
+    fn rewind_rowbreak_orphan_heading_before_recursive_block(
+        table: &crate::model::table::Table,
+        units: &[CellUnit],
+        start: usize,
+        avail_height: f64,
+        j: &mut usize,
+        h: &mut f64,
+    ) -> bool {
+        if !matches!(
+            table.page_break,
+            crate::model::table::TablePageBreak::RowBreak
+        ) || table.common.treat_as_char
+            || *j >= units.len()
+            || *j <= start + 1
+            || !avail_height.is_finite()
+            || avail_height <= 0.0
+        {
+            return false;
+        }
+
+        let next = &units[*j];
+        let heading_idx = *j - 1;
+        let heading = &units[heading_idx];
+        let separator = &units[heading_idx - 1];
+        if !next.mixed_nested_fragment
+            || !next.mixed_nested_recursive
+            || next.mixed_nested_trailing
+            || next.hard_break_before
+            || *h + next.height <= avail_height + 0.5
+            || !heading.mixed_nested_fragment
+            || !heading.mixed_nested_recursive
+            || heading.recursive_block_prelude_role
+                != RecursiveBlockPreludeRole::OneLineHeadingBeforeSingleCellTable
+            || separator.hard_break_before
+            || !separator.mixed_nested_fragment
+            || !separator.mixed_nested_recursive
+            || separator.recursive_block_prelude_role != RecursiveBlockPreludeRole::EmptySeparator
+        {
+            return false;
+        }
+
+        let rewind_height = separator.height + heading.height;
+        *h = (*h - rewind_height).max(0.0);
+        *j = heading_idx - 1;
+        true
     }
 
     fn rewind_rowbreak_tail_before_pending_hard_break(
@@ -10077,7 +10194,13 @@ impl LayoutEngine {
             && terminal
             && is_offset_continuation
             && single_cell_nested_continuation;
-        let visible_height = if terminal_single_cell_tail {
+        let visible_height = if recursive_cut.is_some() && is_offset_continuation && !terminal {
+            // 재귀 child cursor는 이전 viewport가 예약한 첫 가시 unit을 source offset에서
+            // 되감아 정확한 시작 owner를 복원한다. paint viewport도 같은 unit만큼
+            // 늘려야 end_cut 안의 마지막 줄이 셀 clip 밖으로 잘리지 않는다. child cut이
+            // source 끝을 제한하므로 다음 owner를 다시 그리지는 않는다(42065 p14/p15).
+            flow_visible + first_visible_content_height
+        } else if terminal_single_cell_tail {
             // The terminal 1×1 fragment has no successor to reserve space
             // for. Its final ordinary paragraphs are still laid out one
             // first-unit below the fragment origin, however, so both the
@@ -10144,7 +10267,7 @@ impl LayoutEngine {
             })
         });
         let (start_row, end_row, row_offset_within_start, visible_height) = match nested {
-            Some(_) if recursive_cut.is_some() => (0, 1, 0.0, flow_visible),
+            Some(_) if recursive_cut.is_some() => (0, 1, 0.0, visible_height),
             Some(nt) if nt.row_count > 1 => {
                 let ncol = nt.col_count as usize;
                 let nrow = nt.row_count as usize;

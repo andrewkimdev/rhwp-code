@@ -931,6 +931,51 @@ fn issue_2007_continuation_frame_restarts_and_drops_previous_page_residual() {
         !has_visible_full_width_horizontal_line_near(&p13.root, 84.23, 727.47, 119.68),
         "p13 paints the previous fragment's residual bottom border as a false top frame"
     );
+
+    // p12의 빈 separator + 국가인권위원회 제목은 뒤의 1×1 block과 함께 p13으로
+    // 넘어가야 한다. 그 결과 p13은 감사원 항목 1에서 끝나고 항목 2는 p14가 소유한다.
+    let p13_clip = Some(ClipRect::from_node(&p13.root));
+    let audit_item_2 = "증명서, 변명서, 그 밖의 관계 문서 및 장부, 물품 등의 제출 요구";
+    assert!(
+        !contains_painted_text(&p13.root, audit_item_2, p13_clip),
+        "p13 must not paint the p14-owned 감사원 item 2"
+    );
+
+    let p14 = doc
+        .build_page_render_tree(13)
+        .expect("issue2007 p14 render tree");
+    let p14_clip = Some(ClipRect::from_node(&p14.root));
+    assert!(
+        contains_painted_text(&p14.root, audit_item_2, p14_clip),
+        "p14 must begin with the carried 감사원 item 2"
+    );
+    let finance_heading = "자본시장과 금융투자업에 관한 법률";
+    let finance_item_8 = "금융위원회는 관계자에 대한 조사실적";
+    assert!(
+        contains_painted_text(&p14.root, finance_heading, p14_clip),
+        "p14 must own the 금융위원회 heading"
+    );
+    assert!(
+        !contains_painted_text(&p14.root, finance_item_8, p14_clip),
+        "p14 must stop at the stored frame break before 금융위원회 item 8"
+    );
+
+    let p15 = doc
+        .build_page_render_tree(14)
+        .expect("issue2007 p15 render tree");
+    let p15_clip = Some(ClipRect::from_node(&p15.root));
+    assert!(
+        contains_painted_text(&p15.root, finance_item_8, p15_clip),
+        "p15 must begin with the carried 금융위원회 item 8"
+    );
+    assert!(
+        !contains_painted_text(&p15.root, finance_heading, p15_clip),
+        "p15 must not repeat the p14-owned 금융위원회 heading"
+    );
+    assert!(
+        contains_painted_text(&p15.root, "제기할 수 있다.", p15_clip),
+        "p15 recursive viewport must retain the final 조달청 line inside the cell clip"
+    );
 }
 
 #[test]
