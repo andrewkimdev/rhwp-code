@@ -2,7 +2,7 @@
 kind: pr_review
 status: local-validation-passed
 canonical: mydocs/manual/pr_review_workflow.md
-last_verified: 2026-08-07
+last_verified: 2026-08-08
 ---
 
 # PR #4174 검토 — #4159 종료 재귀 중첩 표 bottom clip 정합
@@ -122,3 +122,39 @@ collaborator self PR이고, 구현 순서와 rollback 범위는 계획·Stage 1�
 
 로컬 구현·WASM·시각 게이트는 통과했다. 이 review 기록과 대표 asset을 push한 최신 head에서
 GitHub required checks가 성공하고 작업지시자가 별도로 승인한 뒤에만 merge한다.
+
+## 2026-08-08 메인터너 재검토
+
+### 기준과 범위
+
+- 재검토 code candidate는 `5ebeb5d8813c89d3d057be354bdd311e18e87656`이다. 이 SHA의 GitHub
+  Full CI(run `31186033675`), CodeQL(run `31186034468`), Render Diff(run `31186033605`)는 모두
+  성공했다.
+- 최신 `upstream/devel` `94fbcbedc97660078675532bbb2ee1d17b040f0c`을 source에 병합한
+  `99a6d832c948f8c04d0e8ecdb0eeb19c9460efcf`의 current-base merge tree를 확인했다. 수동 source
+  보정이나 conflict 해소는 없고, `git diff --check`도 통과했다.
+- `table_partial.rs`의 확장은 continuation이 없는 terminal TableCell에만 적용되고, SVG·Canvas2D가
+  실제로 사용하는 cell bbox clip을 재귀 Table 자손 하단까지 넓힌다. 비종료 fragment의 기존 clip을
+  보존하므로 검토 중 추가할 코드 보정은 없다.
+
+### 이번 재검토 검증
+
+| 검증 | 결과 |
+| --- | --- |
+| `CARGO_TARGET_DIR=target/review-pr4174-20260808 CARGO_INCREMENTAL=0 cargo test --profile release-test --test issue_2007_nested_cell_pagination` | 6 passed, 0 failed |
+| `wasm-pack build --target web --dev --out-dir pkg` | PASS. Docker가 설치되어 있지 않아 표준 Docker WASM 경로 대신 host fallback으로 실행 |
+| `VITE_URL=http://127.0.0.1:7700 npm run e2e:issue-4159` | PASS. 17쪽 유지, 물리 3쪽 종료선 잉크 1,196 / 1,203 픽셀 |
+| 물리 3쪽 Canvas2D 대표 PNG·crop 육안 확인 | PASS. 하단 수평선이 좌·중·우 세로선 사이에서 연속 |
+
+`cargo test --profile release-test --tests`는 재검토 초기에 시작했으나, exact code candidate의 GitHub
+Full CI가 이미 성공했고 이번 단계에 코드 보정이 없음을 확인한 뒤 중지했다. 이 명령은 완료 검증이
+아니며 `PASS`로 취급하지 않는다. 이는 [PR 검토 워크플로우의 녹색 code head 재사용 규칙](../../manual/pr_review_workflow.md#322-녹색-github-code-head의-중복-로컬-전체-회귀-생략)에 따른
+중복 회귀 생략이다.
+
+대표 원시 산출물은 로컬 `output/4159/`에 있고, 안정 증적은 이미
+`mydocs/pr/assets/pr_4174_4159_bottom_border_p003.png`에 보존돼 있다.
+
+### 재검토 결론
+
+새 결함은 발견하지 못했다. 이번 trailing 문서 head의 fast-pass 또는 fallback required checks가
+성공하고 mergeability를 재확인하면 병합을 권고한다.

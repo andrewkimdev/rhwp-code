@@ -2,7 +2,7 @@
 kind: canonical
 status: active
 canonical: mydocs/manual/pr_review_workflow.md
-last_verified: 2026-08-07
+last_verified: 2026-08-08
 ---
 
 # PR 리뷰 · 통합 워크플로우 매뉴얼
@@ -160,6 +160,29 @@ source에 없는 archive link를 도입하거나 today add/add 충돌과 불필�
 `devel`을 억지로 병합하지 말고 작업지시자에게 보고한다. 불가피하게 current base를 병합해 오늘할일 충돌을
 해소한 경우에는 [review-only fast-pass](pr_review/review_only_fast_pass.md)의 `mydocs/` 한정 bridge 검증을
 따르며, source·test·workflow·증적 파일 충돌 해소에는 이 예외를 적용하지 않는다.
+
+#### 3.2.2 녹색 GitHub code head의 중복 로컬 전체 회귀 생략
+
+외부 또는 collaborator PR을 **검토**하는 단계에서, 정확한 code head가 이미 GitHub의 Full CI와
+변경 범위에 맞는 별도 required check(CodeQL, Render Diff 등)를 모두 통과했고, 검토자가 그 뒤에
+source·test·fixture·workflow 보정을 추가하지 않았다면 같은 전체 Rust 회귀를 로컬에서 다시 실행하지
+않는다. 이 예외는 contributor의 PR 생성 전 사전 검증이나 maintainer 보정 뒤의 검증 의무를 줄이지 않는다.
+
+다음 조건을 모두 확인해야 한다.
+
+1. review 문서에 기록한 code candidate SHA와 GitHub 녹색 run의 head SHA가 정확히 같다.
+2. candidate 뒤의 변경은 review·오늘할일 등 review-only 문서이거나, 검증한 current-base merge tree의
+   `mydocs/` 한정 bridge다. 코드, test, fixture, baseline, workflow, PDF/asset 보정은 하나도 없다.
+3. 현재 `upstream/devel`과의 merge simulation이 충돌 없이 통과했거나, 허용된 `mydocs/` bridge 검증을
+   통과했다. 이때도 `git diff --check`와 변경 문서 링크 검사는 실행한다.
+4. renderer/layout 계열이면 focused Rust test와 실제 WASM/브라우저 또는 동등한 시각 검증을 별도로
+   실행해, GitHub 전체 회귀가 놓칠 수 있는 이번 검토의 핵심 경로를 확인한다.
+
+이 조건에서는 `cargo test --profile release-test --tests`와 Native Skia 전체 묶음처럼 이미 같은 code
+candidate에서 성공한 광범위 로컬 회귀를 중복 실행하지 않는다. 이미 시작한 명령을 중지했다면 결과를
+`PASS`로 기록하지 말고 중지 사실과 이유를 적는다. review 문서에는 candidate SHA, 재사용한 GitHub
+run URL 또는 run 번호, 실행한 focused 검증, 생략한 전체 검증과 사유를 모두 남긴다. 최신 head의
+fast-pass 또는 Full CI aggregate 성공은 여전히 merge 직전 다시 확인한다.
 
 ### 3.3 순차로 유지할 일
 
