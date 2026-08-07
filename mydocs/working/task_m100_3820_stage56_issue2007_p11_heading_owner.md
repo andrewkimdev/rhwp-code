@@ -1,6 +1,6 @@
 ---
 kind: investigation
-status: in_progress
+status: completed
 canonical: mydocs/working/task_m100_3820_stage1.md
 last_verified: 2026-08-08
 ---
@@ -74,9 +74,11 @@ source의 제목 앞 `cp88`은 단순 여백이 아니라 `ColumnBreakType::Page
 reset을 제거한다. 그 결과 명시적 쪽 나누기인 `cp88`도 장식용 빈 overlay처럼 접히며,
 `cp89`와 `cp90`의 3.76px sliver가 p11에서 소비된다.
 
-이 결함은 기존 `RecursiveBlockPreludeRole`의 fit 보정 이전에 지켜야 할 명시적 source
-경계를 잃은 문제다. 명시적 Page/Section break를 일반 vpos reset과 별도 strict metadata로
-CellUnit 및 재귀 mixed projection에 보존해야 한다.
+이 결함은 기존 `RecursiveBlockPreludeRole`의 fit 보정이 제목 바로 뒤의 block만 보는 탓에,
+제목 뒤 3.76px 재귀 prefix까지 이미 들어간 형상을 놓친 문제다. 다만 `Page/Section`을
+일반 hard break로 승격하면 저장 프레임 원장과 중복된다. 따라서 기존 prelude role에
+`ExplicitPageBreakSeparator`만 추가해, **이미 들어간 prefix까지 되감을 수 있는 source
+경계인지**만 구분한다.
 
 ## 기각한 가정
 
@@ -85,19 +87,70 @@ CellUnit 및 재귀 mixed projection에 보존해야 한다.
 소유권 계약이 깨졌다. 1×1 RowBreak로 범위를 좁혀도 결과는 같았다. 이 표식은 저장된
 물리 프레임 원장과 중복되어 새 물리 쪽을 추가하므로 채택하지 않는다.
 
-## 구현 계획
+## 실패한 중간 보정
+
+첫 번째 prelude 확장은 separator와 제목뿐 아니라 이미 들어간 재귀 prefix도 일반적으로
+되감았다. p11은 `[168,226) -> [168,223)`으로 바로잡았지만 p13의 일반 빈 separator에도
+같은 규칙이 적용되어 제목과 작은 prefix만 가진 sliver 쪽이 생겼다. 결과는 18쪽이었고,
+기존 p15-p17 source-owner 회귀 5개가 실패했다.
+
+두 번째 보정은 다음 prelude의 separator만 p12 끝에 소비되는 경우도 되감았다. p12는
+`[223,272) -> [223,271)`이 됐지만, p13에서 일반 prelude prefix rewind가 다시 발동해
+`[271,274)` sliver가 남았다. 따라서 prefix-aware rewind 자체를 명시적 source 쪽 나누기로
+한정해야 했다.
+
+## 최종 구현
 
 실제 p11 walk는 separator와 제목뿐 아니라 다음 재귀 block의 3.76px 첫 prefix까지 현재
-쪽에 넣은 뒤, 그 다음 재귀 unit에서 overflow한다. 기존 prelude rewind는 pending unit
-바로 앞이 제목일 때만 작동해 이 경우를 놓친다.
+쪽에 넣은 뒤, 그 다음 재귀 unit에서 overflow한다. 최종 규칙은 다음과 같다.
 
 1. pending unit에서 뒤로 연속된 `recursive + nontrailing + role=None` prefix를 건너뛴다.
-2. 가장 가까운 `OneLineHeadingBeforeSingleCellTable`과 바로 앞 `EmptySeparator`를 요구한다.
-3. separator부터 이미 들어간 재귀 prefix까지 함께 되감는다.
-4. hard break·trailing·비재귀 unit을 넘지 않아 일반 문단과 다른 표에는 적용하지 않는다.
+2. 가장 가까운 `OneLineHeadingBeforeSingleCellTable`과 바로 앞 separator를 요구한다.
+3. 이미 들어간 prefix까지 되감는 경우는 separator가 source의 `Page/Section`에서 온
+   `ExplicitPageBreakSeparator`일 때만 허용한다. 일반 `EmptySeparator`의 기존 direct-next
+   보정은 유지한다.
+4. 다음 제목 앞 separator 하나만 현재 조각에 들어간 경우에는 그 separator를 함께
+   되감아 다음 쪽의 고아 제목을 막는다.
+5. hard break, stored frame break, vpos gap, trailing, 비재귀 unit에서 탐색을 멈춘다.
+6. `separator_idx <= start`이면 되감지 않아 새 viewport의 무진행 cut을 금지한다.
 
 수정은 파일명·페이지·문구 특례 없이 source 구조와 실제 fit만 사용한다. focused 회귀를
-먼저 실패시키고 최소 구현 보정 후 p11–p12 PDF 대조를 다시 수행한다.
+먼저 실패시키고 최소 구현 보정 후 p11–p13 PDF 대조를 다시 수행했다.
+
+## 결과
+
+- 정확한 페이지 수: rhwp 17 / 기준 PDF 17
+- outer `PartialTable(pi=7, ci=1)` cut:
+  - p10 `[115,168)`
+  - p11 `[168,223)`
+  - p12 `[223,271)`
+  - p13 `[271,282)`
+  - p14 `[282,331)`, p15 `[331,381)`, p16 `[381,417)`, p17 `[417,end)`
+- p11: 정확한 제목 `중앙선거관리위원회`와 다음 표 상단선이 제거됨
+- p12: 정확한 제목이 첫 source owner로 복원됨
+- p13 이후: 기존 PDF 경계와 p15-p17 회귀 계약 유지
+- `layout-candidates`: p11-p13 모든 구조 후보 0
+- `text-owner-shift`, `text-owner-sequence`, `visible-text-excess`: 후보 0
+
+검증 결과:
+
+```text
+cargo test --profile release-test --lib \
+  recursive_block_prelude_rewinds_already_fit_prefix_before_overflow
+1 passed; 0 failed
+
+cargo test --profile release-test --test issue_2007_nested_cell_pagination
+15 passed; 0 failed
+
+cargo fmt --all -- --check
+git diff --check
+PASS
+```
+
+144dpi 페이지별 직접 대조에서 p11은 `국세기본법`으로 끝나고 p12는
+`3 중앙선거관리위원회`로 시작한다. overlay의 낮은 절대 ink 지표는 이 문서 전반의 기존
+글꼴/자간 차이를 함께 집계하므로, 이번 단계의 합격 판정은 exact TextRun owner, 17쪽 cut
+원장, p11-p13 육안 대조와 구조 원장을 함께 사용했다.
 
 ## 증적
 
@@ -105,3 +158,10 @@ CellUnit 및 재귀 mixed projection에 보존해야 한다.
 - [p12 review before](../pr/assets/task_m100_3820_stage55_pr_readiness/review_p012_before.png)
 - [overlay metrics before](../pr/assets/task_m100_3820_stage55_pr_readiness/overlay_metrics_before.json)
 - [layout ledger before](../pr/assets/task_m100_3820_stage55_pr_readiness/layout_candidates_before.tsv)
+- [p11 review after](../pr/assets/task_m100_3820_stage56_issue2007_p11_heading_owner/review_p011_after.png)
+- [p12 review after](../pr/assets/task_m100_3820_stage56_issue2007_p11_heading_owner/review_p012_after.png)
+- [p13 review after](../pr/assets/task_m100_3820_stage56_issue2007_p11_heading_owner/review_p013_after.png)
+- [p11-p13 contact sheet after](../pr/assets/task_m100_3820_stage56_issue2007_p11_heading_owner/review_p011_p013_after.png)
+- [page cut dump after](../pr/assets/task_m100_3820_stage56_issue2007_p11_heading_owner/page_cut_dump_after.json)
+- [overlay metrics after](../pr/assets/task_m100_3820_stage56_issue2007_p11_heading_owner/overlay_metrics_after.json)
+- [layout ledger after](../pr/assets/task_m100_3820_stage56_issue2007_p11_heading_owner/layout_candidates_after.tsv)

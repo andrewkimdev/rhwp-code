@@ -1454,6 +1454,7 @@ enum RecursiveBlockPreludeRole {
     #[default]
     None,
     EmptySeparator,
+    ExplicitPageBreakSeparator,
     OneLineHeadingBeforeSingleCellTable,
 }
 
@@ -7888,8 +7889,18 @@ impl LayoutEngine {
                     .get(pi + 1)
                     .is_some_and(Self::paragraph_hosts_single_cell_nested_table);
             if is_exact_recursive_prelude {
-                units[previous_single_empty_unit_idx.expect("checked above")]
-                    .recursive_block_prelude_role = RecursiveBlockPreludeRole::EmptySeparator;
+                let separator_idx = previous_single_empty_unit_idx.expect("checked above");
+                let separator_is_explicit_page_break = matches!(
+                    cell.paragraphs[pi - 1].column_type,
+                    crate::model::paragraph::ColumnBreakType::Page
+                        | crate::model::paragraph::ColumnBreakType::Section
+                );
+                units[separator_idx].recursive_block_prelude_role =
+                    if separator_is_explicit_page_break {
+                        RecursiveBlockPreludeRole::ExplicitPageBreakSeparator
+                    } else {
+                        RecursiveBlockPreludeRole::EmptySeparator
+                    };
             }
             let mut unit_cum = units.iter().map(|u| u.height).sum::<f64>();
             // [Task #1073] 텍스트 없는 문단(가시 텍스트 없음 — 합성 줄은 placeholder)에 단일
@@ -9725,7 +9736,8 @@ impl LayoutEngine {
 
     /// 재귀 1×1 표를 부모 `RowCut` 원장으로 투영할 때, source에서 한 묶음으로 표시한
     /// 빈 separator와 한 줄 제목만 현재 쪽에 들어가고 바로 다음 block이 넘치면 한컴은
-    /// prelude 전체를 그 block과 함께 다음 쪽에 둔다.
+    /// prelude 전체를 그 block과 함께 다음 쪽에 둔다. 제목 뒤 재귀 block의 작은
+    /// 선행 fragment가 이미 들어간 경우에도, 그 연속 prefix까지 같은 묶음으로 되감는다.
     fn rewind_rowbreak_orphan_heading_before_recursive_block(
         table: &crate::model::table::Table,
         units: &[CellUnit],
@@ -9747,29 +9759,104 @@ impl LayoutEngine {
         }
 
         let next = &units[*j];
-        let heading_idx = *j - 1;
-        let heading = &units[heading_idx];
-        let separator = &units[heading_idx - 1];
         if !next.mixed_nested_fragment
             || !next.mixed_nested_recursive
             || next.mixed_nested_trailing
             || next.hard_break_before
             || *h + next.height <= avail_height + 0.5
-            || !heading.mixed_nested_fragment
+        {
+            return false;
+        }
+
+        // 직전 block은 모두 들어갔지만 다음 prelude의 빈 separator만 현재 조각에
+        // 들어가고 제목이 예산을 넘는 형상도 같은 orphan이다. separator를 그대로
+        // 소비하면 다음 조각은 제목부터 시작해 아래의 separator+heading 탐색을
+        // 다시 수행할 수 없고, 제목과 작은 recursive prefix만 가진 sliver 쪽이
+        // 생긴다. role은 source에서 정확히 `빈 문단 + 한 줄 제목 + 1×1 표`일 때만
+        // 부여되므로 pending 제목 앞의 separator 하나만 되감는다.
+        if next.recursive_block_prelude_role
+            == RecursiveBlockPreludeRole::OneLineHeadingBeforeSingleCellTable
+        {
+            let separator_idx = *j - 1;
+            let separator = &units[separator_idx];
+            if !separator.hard_break_before
+                && separator.mixed_nested_fragment
+                && separator.mixed_nested_recursive
+                && matches!(
+                    separator.recursive_block_prelude_role,
+                    RecursiveBlockPreludeRole::EmptySeparator
+                        | RecursiveBlockPreludeRole::ExplicitPageBreakSeparator
+                )
+            {
+                *h = (*h - separator.height).max(0.0);
+                *j = separator_idx;
+                return true;
+            }
+        }
+
+        // `j-1`이 바로 제목인 기존 형상은 loop를 한 번도 돌지 않는다. 제목 뒤
+        // recursive block의 작은 조각이 먼저 fit한 형상에서는 role=None인 연속
+        // nontrailing prefix만 거슬러 올라가 가장 가까운 prelude 제목을 찾는다.
+        let mut block_prefix_start = *j;
+        while block_prefix_start > start {
+            let unit = &units[block_prefix_start - 1];
+            if unit.mixed_nested_fragment
+                && unit.mixed_nested_recursive
+                && !unit.mixed_nested_trailing
+                && !unit.hard_break_before
+                && !unit.stored_frame_break_before
+                && !unit.vpos_gap_before
+                && unit.recursive_block_prelude_role == RecursiveBlockPreludeRole::None
+            {
+                block_prefix_start -= 1;
+            } else {
+                break;
+            }
+        }
+        if block_prefix_start <= start + 1 {
+            return false;
+        }
+
+        let heading_idx = block_prefix_start - 1;
+        let separator_idx = heading_idx - 1;
+        // 현재 fragment가 separator부터 시작했다면 되감기는 `j == start`가 되어
+        // pagination progress를 잃는다. 새 viewport는 separator를 예약값으로
+        // 소비한 뒤 반드시 제목/자식 block 쪽으로 전진시킨다.
+        if separator_idx <= start {
+            return false;
+        }
+        let heading = &units[heading_idx];
+        let separator = &units[separator_idx];
+        let already_fit_recursive_prefix = block_prefix_start < *j;
+        if !heading.mixed_nested_fragment
             || !heading.mixed_nested_recursive
             || heading.recursive_block_prelude_role
                 != RecursiveBlockPreludeRole::OneLineHeadingBeforeSingleCellTable
             || separator.hard_break_before
             || !separator.mixed_nested_fragment
             || !separator.mixed_nested_recursive
-            || separator.recursive_block_prelude_role != RecursiveBlockPreludeRole::EmptySeparator
+            || !matches!(
+                separator.recursive_block_prelude_role,
+                RecursiveBlockPreludeRole::EmptySeparator
+                    | RecursiveBlockPreludeRole::ExplicitPageBreakSeparator
+            )
+            // 일반 prelude는 제목 바로 뒤 block이 아직 시작되지 않았을 때만 기존
+            // direct-next orphan 보정을 적용한다. 이미 recursive prefix가 들어간
+            // source block까지 되감는 것은 명시적 Page/Section separator에 한정해,
+            // 저장 프레임 경계에서 끝나야 할 정상 continuation을 앞당기지 않는다.
+            || (already_fit_recursive_prefix
+                && separator.recursive_block_prelude_role
+                    != RecursiveBlockPreludeRole::ExplicitPageBreakSeparator)
         {
             return false;
         }
 
-        let rewind_height = separator.height + heading.height;
+        let rewind_height: f64 = units[separator_idx..*j]
+            .iter()
+            .map(|unit| unit.height)
+            .sum();
         *h = (*h - rewind_height).max(0.0);
-        *j = heading_idx - 1;
+        *j = separator_idx;
         true
     }
 
@@ -11155,7 +11242,8 @@ impl LayoutEngine {
 mod row_cut_tests {
     use super::{
         stored_layout_relocated_empty_rowbreak_picture_resets_offset,
-        trailing_reservation_after_final_source_owner, LayoutEngine, MixedNestedOwnerMarker,
+        trailing_reservation_after_final_source_owner, CellUnit, LayoutEngine,
+        MixedNestedOwnerMarker, RecursiveBlockPreludeRole,
     };
     use crate::model::control::Control;
     use crate::model::image::Picture;
@@ -11248,6 +11336,145 @@ mod row_cut_tests {
             content_height,
             height,
         }
+    }
+
+    fn recursive_block_unit(height: f64, role: RecursiveBlockPreludeRole) -> CellUnit {
+        CellUnit {
+            height,
+            hard_break_before: false,
+            stored_frame_break_before: false,
+            vpos_gap_before: false,
+            para_idx: 0,
+            vis_start: 0,
+            vis_end: 1,
+            nested_row: None,
+            nested_table_fragment: None,
+            mixed_nested_fragment: true,
+            mixed_nested_trailing: false,
+            mixed_nested_content_height: height,
+            mixed_nested_recursive: true,
+            mixed_nested_starts_after_table: false,
+            recursive_block_prelude_role: role,
+            top_and_bottom_flow: false,
+            empty_spacer: false,
+            non_inline_control_range: None,
+        }
+    }
+
+    #[test]
+    fn recursive_block_prelude_rewinds_already_fit_prefix_before_overflow() {
+        let table = rowbreak_table(vec![]);
+        let mut prior = recursive_block_unit(20.0, RecursiveBlockPreludeRole::None);
+        prior.mixed_nested_fragment = false;
+        prior.mixed_nested_recursive = false;
+        let separator =
+            recursive_block_unit(8.0, RecursiveBlockPreludeRole::ExplicitPageBreakSeparator);
+        let heading = recursive_block_unit(
+            12.0,
+            RecursiveBlockPreludeRole::OneLineHeadingBeforeSingleCellTable,
+        );
+        let prefix = recursive_block_unit(55.0, RecursiveBlockPreludeRole::None);
+        let pending = recursive_block_unit(10.0, RecursiveBlockPreludeRole::None);
+        let units = vec![prior, separator, heading, prefix, pending];
+
+        // prior + separator + heading + 첫 recursive 조각은 95px로 fit했지만,
+        // 다음 10px 조각은 100px 예산을 넘는다. separator부터 fit한 prefix까지
+        // 함께 다음 fragment로 되감아야 제목만 이전 쪽에 고립되지 않는다.
+        let mut j = 4;
+        let mut h = 95.0;
+        assert!(
+            LayoutEngine::rewind_rowbreak_orphan_heading_before_recursive_block(
+                &table, &units, 0, 100.0, &mut j, &mut h,
+            )
+        );
+        assert_eq!(j, 1);
+        assert!((h - 20.0).abs() < 0.001);
+
+        // 명시적 쪽 나누기가 없는 일반 prelude는 이미 recursive prefix가 들어간
+        // 뒤까지 되감지 않는다. 저장 프레임 경계에 맞춘 정상 continuation을
+        // 앞당기면 뒤쪽 모든 physical page owner가 한 쪽씩 밀린다.
+        let units = vec![
+            recursive_block_unit(20.0, RecursiveBlockPreludeRole::None),
+            recursive_block_unit(8.0, RecursiveBlockPreludeRole::EmptySeparator),
+            recursive_block_unit(
+                12.0,
+                RecursiveBlockPreludeRole::OneLineHeadingBeforeSingleCellTable,
+            ),
+            recursive_block_unit(55.0, RecursiveBlockPreludeRole::None),
+            recursive_block_unit(10.0, RecursiveBlockPreludeRole::None),
+        ];
+        let mut j = 4;
+        let mut h = 95.0;
+        assert!(
+            !LayoutEngine::rewind_rowbreak_orphan_heading_before_recursive_block(
+                &table, &units, 0, 100.0, &mut j, &mut h,
+            )
+        );
+        assert_eq!(j, 4);
+        assert!((h - 95.0).abs() < 0.001);
+
+        // 새 viewport가 separator부터 시작했다면 prefix가 일부 fit했더라도
+        // separator까지 되감아 무진행 cut을 만들면 안 된다.
+        let units = vec![
+            recursive_block_unit(8.0, RecursiveBlockPreludeRole::ExplicitPageBreakSeparator),
+            recursive_block_unit(
+                12.0,
+                RecursiveBlockPreludeRole::OneLineHeadingBeforeSingleCellTable,
+            ),
+            recursive_block_unit(55.0, RecursiveBlockPreludeRole::None),
+            recursive_block_unit(40.0, RecursiveBlockPreludeRole::None),
+        ];
+        let mut j = 3;
+        let mut h = 75.0;
+        assert!(
+            !LayoutEngine::rewind_rowbreak_orphan_heading_before_recursive_block(
+                &table, &units, 0, 100.0, &mut j, &mut h,
+            )
+        );
+        assert_eq!(j, 3);
+        assert!((h - 75.0).abs() < 0.001);
+
+        // prefix가 없는 기존 direct-next 형상도 같은 계약을 유지한다.
+        let units = vec![
+            recursive_block_unit(20.0, RecursiveBlockPreludeRole::None),
+            recursive_block_unit(8.0, RecursiveBlockPreludeRole::EmptySeparator),
+            recursive_block_unit(
+                12.0,
+                RecursiveBlockPreludeRole::OneLineHeadingBeforeSingleCellTable,
+            ),
+            recursive_block_unit(70.0, RecursiveBlockPreludeRole::None),
+        ];
+        let mut j = 3;
+        let mut h = 40.0;
+        assert!(
+            LayoutEngine::rewind_rowbreak_orphan_heading_before_recursive_block(
+                &table, &units, 0, 100.0, &mut j, &mut h,
+            )
+        );
+        assert_eq!(j, 1);
+        assert!((h - 20.0).abs() < 0.001);
+
+        // 직전 recursive block 뒤에서 다음 prelude의 separator만 fit하고
+        // pending 제목이 예산을 넘는 경우에도 separator를 다음 조각으로
+        // 넘겨야 제목+재귀 block이 새 viewport에서 함께 시작한다.
+        let units = vec![
+            recursive_block_unit(20.0, RecursiveBlockPreludeRole::None),
+            recursive_block_unit(8.0, RecursiveBlockPreludeRole::EmptySeparator),
+            recursive_block_unit(
+                12.0,
+                RecursiveBlockPreludeRole::OneLineHeadingBeforeSingleCellTable,
+            ),
+            recursive_block_unit(70.0, RecursiveBlockPreludeRole::None),
+        ];
+        let mut j = 2;
+        let mut h = 28.0;
+        assert!(
+            LayoutEngine::rewind_rowbreak_orphan_heading_before_recursive_block(
+                &table, &units, 0, 30.0, &mut j, &mut h,
+            )
+        );
+        assert_eq!(j, 1);
+        assert!((h - 20.0).abs() < 0.001);
     }
 
     #[test]
