@@ -1,4 +1,4 @@
-﻿# Extract authoring-app / format version for every document in the corpus.
+# Extract authoring-app / format version for every document in the corpus.
 #   .hwpx -> version.xml carries the exact authoring app ("application", "appVersion")
 #   .hwp  -> only the HWP5 format version is recorded (FileHeader, signature + 32)
 # Output TSV: relpath, kind, appVersion, formatVersion
