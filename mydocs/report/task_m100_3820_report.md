@@ -2,38 +2,52 @@
 kind: report
 status: active
 canonical: mydocs/working/task_m100_3820_stage1.md
-last_verified: 2026-08-04
+last_verified: 2026-08-08
 ---
 
 # Task #3820·#3821 — HWP 215쪽 전수 결함 종합 보고서
 
 - **이슈**: #3820, #3821
-- **기준 브랜치**: `task/3820-3821-fidelity` (2026-08-04 Stage 9 검증)
+- **기준 브랜치**: `task/3820-3821-fidelity` (2026-08-08 Stage 57 검증)
 - **판정 대상**: `samples/정책연구용역사업 중간진도보고서(살아있는 간장 기증자의 의학적 선별기준 연구).hwp`
 - **정답지**: `pdf/pr3740/hwp/정책연구용역사업 중간진도보고서(살아있는 간장 기증자의 의학적 선별기준 연구)-2020.pdf` (한컴 2020 기준 PDF)
 
 ## 1. 결론
 
-215쪽 전수 raster·overlay 검증은 **완료**했다. 비교 대상 PDF는 215쪽이고, 요청한 215쪽은 모두
-SVG·PDF raster·compare·overlay·review PNG까지 생성됐다. 최초 inventory의 rhwp 전체 export는
-219쪽으로 기준 PDF보다 4쪽 많았고, 이후 p168 표 fragment와 p118 그림 앞 본문 owner를 보정해 현재는
-**218쪽(+3)** 이다. 이 차이는 전역 보정의 근거가 아니라, 뒤쪽의 페이지 경계/float/표 분할 원인을
-계속 조사해야 한다는 강한 신호다.
+215쪽 전수 raster·overlay 기준선은 Stage 7에서 **215/215쪽, 누락 0**으로 생성했다.
+당시 rhwp 전체 export는 219쪽이었고 Stage 9 시점에도 218쪽이었으나, 이후 표·그림·각주와
+reset 경계의 source owner를 순차적으로 보정했다. Stage 11 마감 재검사에서는 한컴 2020
+기준 PDF와 rhwp 전체 export가 모두 **215쪽**으로 회복됐고, p166-p215 text-owner 검사는
+50/50쪽을 완료했다. 남은 p176→p177·p178→p179 후보도 PDF raster와 RenderTree 직접 대조에서
+각주·URL 텍스트 추출 순서의 false positive로 확인했다.
 
-이번 전수 결과는 다음 세 가지를 분명히 한다.
+별도 실물 fixture인 `issue2007_nested_cell_pagination_42065.hwp`는 최초 24쪽 과분할에서
+17쪽으로 회복됐으며, Stage 56에서 p11에 조기 출력되던 `3 중앙선거관리위원회` 제목과 다음
+표 상단선을 제거하고 p12의 정확한 source owner로 복원했다. 현재 rhwp와 기준 PDF는
+**17/17쪽**이고 focused integration 15/15가 통과한다.
 
-1. p118→p119의 `TopAndBottom` 그림 앞 본문 owner 이동과 p127 그림 56의 page-top geometry는
-   Stage 8·9에서 해소했고 각각 focused PDF review와 회귀로 고정했다.
-2. p168 부근부터 페이지 경계가 달라지고, p170 이후에는 같은 쪽번호에서 서로 다른 논리 내용이
-   대조되는 **연쇄 pagination divergence**가 나타난다. p171~215의 대량 후보는 45개의 독립 결함이
-   아니라 이 상류 결함의 연쇄 신호로 우선 다뤄야 한다.
-3. p127의 이전 false negative 형상은 이제 `fidelity_compare`와 visual sweep의
-   `deferred_square_picture_top_drift` 후보로 잡는다. 다만 자동 판정은 후보를 넓히는 도구이며,
-   무결함 증명 도구는 아니다.
+현재 확정된 상태는 다음과 같다.
 
-이 보고서는 현 상태의 inventory다. 이 단계에서는 renderer 동작을 바꾸지 않았다.
+1. p118→p119 `TopAndBottom` 그림 앞 본문 owner와 p127 그림 56 page-top geometry는
+   Stage 8·9에서 해소됐다.
+2. p168 이후 연쇄 pagination divergence의 실제 owner drift는 Stage 11에서 해소됐고,
+   정책 문서의 전체 page count는 215/215다.
+3. issue2007의 24→17쪽 과분할, PUA 두부 문자, p11→p12 제목 owner는 Stage 11·56에서
+   해소됐다.
+4. page count와 자동 후보 0건은 전체 시각 fidelity의 무결함 증명이 아니다. #3820은
+   후속 실문서 후보가 남아 있으므로 active 상태를 유지하고, 각 페이지는 한컴 PDF와 직접
+   대조해 판정한다.
 
-## 2. 전수 검증 완결성 및 재현
+근거:
+
+- [Stage 11 정책 문서 215/215 및 p166-p215 마감](../working/task_m100_3820_stage11.md)
+- [Stage 56 issue2007 p11→p12 owner](../working/task_m100_3820_stage56_issue2007_p11_heading_owner.md)
+
+## 2. 전수 검증 기준선 및 최신 상태
+
+아래 실행은 최초 215쪽 전수 raster inventory인 Stage 7 기준선이다. 표의 219쪽과 `+4`는
+현재 상태가 아니라 수정 전 결과이며, compare·overlay·review 215/215가 실제 생성됐음을
+증명하는 재현 기록으로 보존한다.
 
 실행 명령:
 
@@ -61,6 +75,21 @@ python3 scripts/visual_sweep.py \
 
 Overlay의 평균 pixel match는 92.09%지만 평균 ink match는 16.50%다. 글꼴 rasterization,
 anti-aliasing, 링크색 차이도 ink score를 크게 바꾸므로 이 숫자만으로 결함을 확정하지 않는다.
+
+### 최신 page-owner 재검증
+
+| 대상 | 최신 결과 | 근거 |
+| --- | ---: | --- |
+| 정책 문서 PDF / rhwp 전체 export | **215 / 215** | Stage 11 |
+| 정책 문서 p166-p215 text-owner 검사 | **50 / 50, 누락 0** | Stage 11 postfix4 |
+| issue2007 PDF / rhwp 전체 export | **17 / 17** | Stage 56·57 |
+| issue2007 focused integration | **15 / 15** | Stage 56·57 |
+
+정책 문서 최신 원장은 `output/task-3820-3821-fidelity/stage11-postfix4-p166-end/`에 있고,
+p176-p179 직접 대조는
+`tmp/stage11-current-p176-p179-postfix4/p176-p179-reference-current.png`에 있다.
+issue2007 최신 page cut과 시각 증적은
+`mydocs/pr/assets/task_m100_3820_stage57_exact_head_pr_gate/`에 보관한다.
 
 ## 3. 확정·고우선순위 결함
 
@@ -100,22 +129,23 @@ fidelity 저하를 아직 충분히 검출하지 못한다.
 `deferred_square_picture_top_drift` detector가 후보화하고, 수정 후 p127/p156 직접 PDF review와
 focused Rust·Python 회귀는 [Stage 9 visual sweep](../working/task_m100_3820_stage9_visual_sweep.md)에 있다.
 
-### D-03 — p168 이후의 연쇄 pagination divergence
+### D-03 — p168 이후의 연쇄 pagination divergence — 해소
 
-**확정된 고우선순위 결함군.** p168→p169에는 227자의 reciprocal owner-shift가 있고,
-`text-owner-sequence-candidates.tsv`도 같은 경계의 47자 연속 문자열 이동을 기록한다. p170부터
-동일 쪽번호 비교에서 서로 다른 논리 내용이 나타나며, p171~215에는 본문 흐름 붕괴 후보가 연속된다.
-전수 overlay의 평균 visual proxy도 p1~167은 19.49%, p168~215는 6.11%로 급락했다.
+Stage 7 초기 inventory에서는 p168→p169 owner-shift 뒤로 논리 내용이 연쇄 이탈했고,
+rhwp가 기준 PDF보다 4쪽 많았다. p168 표 44 first fragment를 복원한 뒤에도 Stage 9
+시점에는 218/215쪽이었다.
 
-이는 p170 이후의 모든 페이지를 개별 수정할 사안이 아니다. p168~170의 표·그림·문단 owner와
-page-break 결정을 먼저 고쳐 같은 논리 흐름을 다시 정렬해야 한다.
+Stage 11은 뒤쪽 범위의 실제 잔존 원인을 두 계약으로 분리해 보정했다.
 
-**2026-08-04 Stage 7 상태:** 최초 p168 분기(표 44 `pi=1778`의 first fragment 누락)는
-`319ed3dd4`에서 해소했다. p168은 `PartialTable` first fragment, p169은 continuation+그림 65,
-p170은 `(라) 심혈관계 검사` 본문으로 다시 정렬됐고 rhwp 전체 쪽수는 219에서 218로 줄었다.
-다만 기준 PDF의 215쪽보다 아직 3쪽 많고, 이 전수 inventory 자체는 수정 전 기준선이므로 D-03 전체를
-해결로 재분류하지 않는다. focused 3-way 증적과 다음 조사 범위는
-[Stage 7 visual sweep](../working/task_m100_3820_stage7_visual_sweep.md)에 기록했다.
+- p182→p183: native HWP5 empty-host 그림 표 뒤 guide line을 다시 flow 높이로 소비하던
+  문제를 제거했다.
+- p199→p201: 각주 258)이 다음 문단의 명시적 `vpos=0` reset보다 먼저 배치되어 본문 tail을
+  잃던 문제를 수정했다.
+
+수정 후 PDF와 rhwp 전체 export는 **215/215쪽**이고, p166-p215 text-owner 원장은
+50/50쪽을 완료했다. 남은 p176→p177·p178→p179 후보는 직접 PDF 대조에서 실제 pagination
+차이가 아닌 추출 순서 false positive로 판정했다. 상세 원인과 focused 회귀는
+[Stage 11](../working/task_m100_3820_stage11.md)에 기록했다.
 
 증적:
 
@@ -124,7 +154,31 @@ p170은 `(라) 심혈관계 검사` 본문으로 다시 정렬됐고 rhwp 전체
 - `output/task-3820-3821-fidelity/stage6-full-ledger/text-owner-shift-candidates.tsv`의 p168→p169 행
 - `output/task-3820-3821-fidelity/stage6-full-ledger/text-owner-sequence-candidates.tsv`의 p168→p169, p172→p173 행
 
+### D-04 — issue2007 중첩 셀 pagination과 p11→p12 제목 owner — 해소
+
+Stage 11 최초 재현에서는 rhwp가 24쪽, 기준 PDF가 17쪽이었고 중첩 `RowBreak` continuation이
+frame 밖으로 누적됐다. 이후 physical continuation과 PUA glyph를 보정해 17/17쪽으로
+회복했다.
+
+PR 준비 재검사에서는 page count가 같아도 p12 소유 제목 `3 중앙선거관리위원회`와 다음 표
+상단선이 p11에 조기 출력되는 결함을 발견했다. Stage 56은 명시적 source 쪽 나누기 뒤의
+recursive prelude만 제한적으로 되감아 다음 결과를 고정했다.
+
+- p11은 `국세기본법` 마지막 문장으로 끝난다.
+- p12는 `3 중앙선거관리위원회`로 시작한다.
+- p13 이후와 p15-p17의 기존 PDF 경계가 유지된다.
+- rhwp/PDF 17/17, focused integration 15/15다.
+
+증적:
+
+- [Stage 56 분석·검증](../working/task_m100_3820_stage56_issue2007_p11_heading_owner.md)
+- [Stage 57 exact-head 검증](../working/task_m100_3820_stage57_exact_head_pr_gate.md)
+- [p11-p13 contact sheet](../pr/assets/task_m100_3820_stage57_exact_head_pr_gate/review_p011_p013_exact_head.png)
+- [visual sweep 원장](../pr/assets/task_m100_3820_stage57_exact_head_pr_gate/visual_sweep_summary_exact_head.json)
+
 ## 4. 자동 검출 inventory
+
+이 목록은 Stage 7 수정 전 역사적 inventory이며 현재 잔존 결함 수가 아니다.
 
 다음은 **결함 확정 목록이 아니라** PDF 대조를 우선해야 할 자동 후보 목록이다. 같은 원인으로
 연쇄된 페이지는 한 묶음으로 해석한다.
@@ -160,11 +214,10 @@ p170은 `(라) 심혈관계 검사` 본문으로 다시 정렬됐고 rhwp 전체
 
 ## 5. 자동 판정의 한계와 다음 수정 순서
 
-1. **D-03의 최초 잔존 divergence를 최신 218쪽 renderer에서 다시 분석한다.** p171 이후 flow flag를 개별
-   해결하지 않는다. 먼저 표/그림 float와 다음 본문 block의 owner·page-break 결정이 PDF와
-   갈라지는 최초 지점을 확정한다.
-2. 각 수정은 분석 문서 → 코드 → focused PDF review → 동일 215쪽 전수 재실행 순으로 분리한다.
-   page count +3을 전역 강제 break로 상쇄하지 않는다.
+1. 정책 문서 215/215와 issue2007 17/17은 page-owner 회귀 계약으로 유지하되, 전체 시각
+   fidelity 완료 판정으로 확대하지 않는다.
+2. 후속 #3820 후보는 자동 점수만으로 확정하지 않고 한컴 PDF raster와 페이지별로 직접 대조한다.
+3. 수정은 분석 문서 → 코드 → focused PDF review → 영향 범위 재검사 순으로 분리한다.
 
 ## 6. 해소로 재분류한 과거 항목
 
@@ -184,5 +237,6 @@ python3 -m unittest scripts/tests/test_fidelity_compare.py scripts/tests/test_vi
 # Ran 59 tests ... OK
 ```
 
-수정 전 p127 geometry의 재발은 후보화하지만, D-03의 잔존 페이지 경계 결함을 포함해 이 통과는
-검출기 구현 회귀 부재를 뜻할 뿐 이 215쪽 문서의 layout fidelity 보증은 뜻하지 않는다.
+수정 전 p127 geometry의 재발은 후보화한다. Stage 11에서 D-03의 실제 page-owner drift는
+해소됐지만, 검출기 회귀 통과와 page count 정합만으로 이 215쪽 문서의 모든 layout fidelity가
+보증되는 것은 아니다.
