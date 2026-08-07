@@ -109,7 +109,8 @@ validated code head: eb699faa2bd4b4d2427ed15b8eb3b17ea36737eb
 2026-08-07 정답지는 2쪽의 `U+F02B1`이 사각형 안 숫자 1로 정상 출력된 한컴 PDF로 교체했다.
 교체 전 PDF의 같은 표식에도 두부 글자 오류가 있어 Canvas2D의 기존 결함을 가렸지만, 이 결함은
 #4122 변경에서 발생한 회귀가 아니다. 원문 PUA를 보존하는 IR과 CanvasKit 합성 경로는 정상이고,
-기본 Canvas2D parity 보완은 #536 후속 stacked PR로 분리한다.
+기본 Canvas2D parity 보완은 #536 후속 stacked PR
+[#4139](https://github.com/edwardkim/rhwp/pull/4139)로 분리한다.
 
 대표 증거:
 

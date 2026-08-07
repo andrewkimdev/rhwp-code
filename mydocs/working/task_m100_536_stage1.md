@@ -9,6 +9,7 @@ last_verified: 2026-08-07
 
 - Issue: [#536](https://github.com/edwardkim/rhwp/issues/536) (`Refs`, 트래킹 이슈 유지)
 - 의존 PR: [#4122](https://github.com/edwardkim/rhwp/pull/4122)
+- 구현 PR: [#4139](https://github.com/edwardkim/rhwp/pull/4139) (stacked Draft)
 - stacked base/head: `task_m100_4069` / `task_m100_536_canvas2d_boxed_pua`
 - 기준 head: `41404b4e5b6ab5d1a43e7a2e38c5744a7f87a1e5`
 
@@ -62,6 +63,7 @@ SHA-256은 `1f9d2f5705a64899c2b081832d2e6548dfe7bc3b9d1fb1b92f41221d39c8b3e7`이
   `79fe6bc3c22741f7c6fd293a50e42e7f60d7ec27c874e7eb4af6ef2aafe54109`.
 - 최종 WASM 실제 E2E: 17쪽, 사각 잉크 33x34px(예상 30.7px), 내부 숫자 잉크 82px로 통과.
 
-임시 산출물은 `output/536/issue2007_p002_canvas2d.png`에 둔다. 수행자 확인에서는 사각형 안
+임시 산출물은 `output/536/issue2007_p002_canvas2d.png`, 저장소 대표 asset은
+`mydocs/pr/assets/pr_4139_536_boxed_pua_canvas2d_p002.png`에 둔다. 수행자 확인에서는 사각형 안
 숫자 1이 정상 표시된다. 작업지시자가 승인한 PR 직전 전체 검증은 완료했으며, 최종 시각 판정은
 Draft PR 검토 게이트로 남긴다.

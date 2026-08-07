@@ -20,8 +20,8 @@ Stage 1의 2·3쪽 재귀 cursor를 유지하면서 두 종류의 저장 프레�
 
 2026-08-07에 작업지시자가 2쪽의 `U+F02B1` 표식이 정상 출력된 한컴 PDF로 정답지를
 교체했다. 이 교체는 위 pagination 판정을 바꾸지 않는다. 다만 기본 Canvas2D가 이 원문 PUA를
-두부 글자로 그리던 별도 backend parity 결함이 드러났으며, #536 후속 stacked PR에서 분리해
-수정한다.
+두부 글자로 그리던 별도 backend parity 결함이 드러났으며, #536 후속 stacked PR
+[#4139](https://github.com/edwardkim/rhwp/pull/4139)에서 분리해 수정한다.
 
 ## 구현 계약
 
