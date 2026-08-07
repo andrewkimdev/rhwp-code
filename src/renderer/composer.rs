@@ -2590,7 +2590,7 @@ pub fn pua_to_display_text(ch: char) -> Option<String> {
     if let Some(replacement) = pua_plain_text_display(ch) {
         return Some(replacement.to_string());
     }
-    // U+F02B1~F02C4 는 map_pua_bullet_char 에서 ①~⑳ 으로 매핑 — 여기 도달 불가
+    // U+F02B1~F02C4 는 렌더러의 boxed_pua_char_overlap_semantics 가 먼저 처리한다 (#4158).
     // 반전 사각형 안의 숫자: U+F02CE(1) ~ U+F02E1(20)
     if (0xF02CE..=0xF02E1).contains(&cp) {
         let num = cp - 0xF02CD;
@@ -2601,10 +2601,9 @@ pub fn pua_to_display_text(ch: char) -> Option<String> {
 
 /// [#3385] **텍스트 추출 전용** PUA 표시 변환.
 ///
-/// 렌더 경로는 U+F02B1~F02C4(사각 안 숫자)를 **일부러 원문 그대로 흘린다** — 표준
-/// ①~⑳ 로 매핑하면 1순위 폰트의 *원 안* 글리프가 즉시 잡혀 한컴 정답지의 *사각 안*
-/// 글리프와 멀어지기 때문이다(Task #509 → 캡스톤 F-1 에서 표준 매핑을 되돌린 근거가
-/// `map_pua_bullet_char` 에 남아 있다).
+/// IR은 U+F02B1~F02C4(사각 안 숫자) 원문을 보존하고, 렌더러는 폰트 글리프 대신 결정적인
+/// 사각형+숫자를 합성한다(#4158). 표준 ①~⑳ 로 직접 렌더하면 1순위 폰트의 *원 안* 글리프가
+/// 잡혀 한컴 정답지의 *사각 안* 의미와 달라지므로 렌더 표시 문자열로는 사용하지 않는다.
 ///
 /// 그러나 **텍스트 표면은 사정이 다르다.** 추출 결과는 폰트가 없는 소비자(RAG·LLM·grep)
 /// 에게 가므로 원문 PUA 는 읽을 수 없는 코드포인트일 뿐이다. 그래서 렌더 결정은 그대로
@@ -2630,8 +2629,8 @@ pub fn pua_to_text_surface(text: &str) -> std::borrow::Cow<'_, str> {
 
 fn text_surface_replacement(ch: char) -> Option<String> {
     let cp = ch as u32;
-    // 사각 안 숫자 1~20 — 렌더는 사각 글리프를 위해 원문을 유지하지만, 텍스트에서는
-    // 둘러싸인 숫자라는 뜻이 전달되면 충분하다.
+    // 사각 안 숫자 1~20 — IR은 원문을 유지하고 렌더는 사각형+숫자를 합성하지만, 텍스트
+    // 표면에서는 둘러싸인 숫자라는 뜻이 전달되면 충분하다.
     if (0xF02B1..=0xF02C4).contains(&cp) {
         let n = cp - 0xF02B1; // 0-based
         return char::from_u32(0x2460 + n).map(|c| c.to_string());
@@ -2643,8 +2642,8 @@ fn text_surface_replacement(ch: char) -> Option<String> {
     // 렌더의 글리프 치환 표(`map_pua_bullet_char`)를 텍스트 표면에도 적용한다.
     //
     // 새 매핑을 지어내지 않고 **렌더가 이미 쓰는 표를 재사용**한다 — 근거(한컴 정답지
-    // 실측)가 그 표에 붙어 있고, 렌더 동작은 바뀌지 않는다. 사각 안 숫자(U+F02B1~F02C4)는
-    // 그 표에서 의도적으로 원문 유지라 위 분기가 계속 담당한다.
+    // 실측)가 그 표에 붙어 있다. 사각 안 숫자(U+F02B1~F02C4)는 그 표와 별도로 위 분기가
+    // 계속 담당한다.
     //
     // 규모: 저장소 샘플 346건 중 50건이 추출 텍스트에 PUA 를 흘렸고, 그중 U+F080F
     // (굵은 가로선 ━)만 155,709자다. hwp3-sample11.hwp 는 한 쪽 1,398자 중 181자가
