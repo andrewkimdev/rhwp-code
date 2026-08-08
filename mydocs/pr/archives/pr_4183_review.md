@@ -1,6 +1,6 @@
 ---
 kind: pr_review
-status: accepted-with-maintainer-correction
+status: merged-post-review
 canonical: mydocs/manual/pr_review_workflow.md
 last_verified: 2026-08-08
 ---
@@ -64,6 +64,17 @@ loaded documents: pr_review_workflow.md, pr_review/README.md,
 `pull_request` event에 귀속되어 성공했다. PR 전체가 `mydocs/` 범위여서 preflight와 Build & Test
 aggregate가 성공하고 heavy worker가 skip된 것은 review-only fast-pass B 경로의 정상 결과다.
 
-**메인터너 보정 포함 수용.** current-base merge, 보정, review 기록을 한 번에 push한 뒤 최신 head의
-preflight, Build & Test aggregate, mergeable 상태를 다시 확인하고 작업지시자 승인에 따라 병합한다.
-Rust·Skia·WASM broad CI는 중복 실행하지 않는다.
+**메인터너 보정 포함 수용.** current-base merge, 보정, review 기록을 포함한 head `d91ad8fae`의
+[CI 31241512361](https://github.com/edwardkim/rhwp/actions/runs/31241512361)과
+[CodeQL 31241512293](https://github.com/edwardkim/rhwp/actions/runs/31241512293)은 preflight와
+Build & Test aggregate를 성공했고 heavy worker를 skip했다. 최신 head가 `MERGEABLE`·`CLEAN`임을
+재확인하고 작업지시자 승인 뒤 admin merge했다. Rust·Skia·WASM broad CI는 중복 실행하지 않았다.
+
+## Merge와 후속 상태
+
+- merge commit: `01f4360acd719657e692284f3d38a25af654359b`
+- merge 시각: 2026-08-08 14:23 KST
+- `upstream/devel` 포함: merge commit을 fetch하고 로컬 `devel`을 fast-forward했다.
+- 관련 이슈 #4111: GitHub Actions가 closing keyword를 확인해 2026-08-08 14:23 KST에 자동 close했다.
+  운영 기록 반영 뒤 maintainer comment만 남긴다.
+- contributor fork의 `task/4111-recipe10-security-sweep` branch는 삭제하지 않는다.
