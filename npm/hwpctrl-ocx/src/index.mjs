@@ -725,6 +725,8 @@ export class HwpCtrl {
   /** 리스트 표 캐시 — 문서를 새로 열 때 버린다. */
   #listModel = null;
   #sections = null;
+  /** 열려 있는 글 훑기 — `InitScan` 이 만들고 `ReleaseScan` 이 지운다. */
+  #scan = null;
   #fieldViewOption = FIELD_VIEW_DEFAULT;
   #modified = false;
   #editMode = EDIT_MODE_NORMAL;
@@ -860,6 +862,43 @@ export class HwpCtrl {
     } catch (e) {
       console.warn('[hwpctrl] Clear 실패:', e);
     }
+  }
+
+  /**
+   * 규격 §8.3 — 글 훑기를 연다. 인자 없이도 열린다(실측).
+   *
+   * 인자를 준 꼴(`InitScan(0x0007, 0)`)은 **다른 범위**를 잡는다 — 블록이 없으면 곧바로
+   * 마른다. 그 갈래는 아직 안 재서 여기서는 문서 전체만 다룬다.
+   */
+  InitScan(option, range) {
+    const raw = parseJson(this.#doc?.getScanItems?.() ?? '', null);
+    this.#scan = { items: Array.isArray(raw) ? raw : [], at: 0, scoped: option != null };
+    return true;
+  }
+
+  /**
+   * 규격 §8.3 — 훑기의 다음 조각. `[상태, 글]` 두 칸을 준다.
+   *
+   * 상태는 **앞 조각과의 관계**다(§4.54 실측): 2 이어짐/리스트 바뀜 · 3 다음 문단 ·
+   * 4 개체로 들어감 · 5 개체에서 나옴. 스캔이 안 열려 있으면 `[101, ""]` 다.
+   */
+  GetText() {
+    if (!this.#scan) return [101, ''];
+    // 범위를 준 스캔은 아직 못 재서 한 조각만 주고 마른다(실측과 같은 꼴).
+    if (this.#scan.scoped) {
+      if (this.#scan.at > 0) return [0, ''];
+      this.#scan.at = 1;
+      return [2, '\r\n'];
+    }
+    const item = this.#scan.items[this.#scan.at];
+    if (!item) return [0, ''];
+    this.#scan.at += 1;
+    return [item.state, item.text];
+  }
+
+  /** 규격 §8.3 — 훑기를 닫는다. */
+  ReleaseScan() {
+    this.#scan = null;
   }
 
   /** 규격 §8.3.22 — 문서 끼워넣기. 아직 구현하지 않았다. */

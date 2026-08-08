@@ -4,10 +4,10 @@
   "oracleVersion": "한글2022 (설치본 COM)",
   "summary": {
     "total": 484,
-    "done": 197,
+    "done": 200,
     "byStatus": {
-      "verified": 195,
-      "unimplemented": 287,
+      "verified": 198,
+      "unimplemented": 284,
       "substituted": 2
     },
     "byUnit": {
@@ -17,8 +17,8 @@
         "substituted": 2
       },
       "method": {
-        "verified": 33,
-        "unimplemented": 55
+        "verified": 36,
+        "unimplemented": 52
       },
       "event": {
         "unimplemented": 3
@@ -1297,14 +1297,19 @@
       "name": "GetText",
       "arity": 0,
       "section": "8.3.17",
-      "status": "unimplemented",
+      "status": "verified",
       "notes": "",
       "legacyHwpctl": false,
       "specArityAmbiguous": false,
       "oracle": {
-        "scenarios": [],
+        "scenarios": [
+          "p2-scan-cellmulti",
+          "p2-scan-order",
+          "p2-scan-plain",
+          "p2-scan-small"
+        ],
         "lastRun": null,
-        "diff": null
+        "diff": 0
       }
     },
     {
@@ -1365,14 +1370,19 @@
       "name": "InitScan",
       "arity": 6,
       "section": "8.3.21",
-      "status": "unimplemented",
+      "status": "verified",
       "notes": "",
       "legacyHwpctl": false,
       "specArityAmbiguous": false,
       "oracle": {
-        "scenarios": [],
+        "scenarios": [
+          "p2-scan-cellmulti",
+          "p2-scan-order",
+          "p2-scan-plain",
+          "p2-scan-small"
+        ],
         "lastRun": null,
-        "diff": null
+        "diff": 0
       }
     },
     {
@@ -1623,14 +1633,19 @@
       "name": "ReleaseScan",
       "arity": 0,
       "section": "8.3.35",
-      "status": "unimplemented",
+      "status": "verified",
       "notes": "",
       "legacyHwpctl": false,
       "specArityAmbiguous": false,
       "oracle": {
-        "scenarios": [],
+        "scenarios": [
+          "p2-scan-cellmulti",
+          "p2-scan-order",
+          "p2-scan-plain",
+          "p2-scan-small"
+        ],
         "lastRun": null,
-        "diff": null
+        "diff": 0
       }
     },
     {

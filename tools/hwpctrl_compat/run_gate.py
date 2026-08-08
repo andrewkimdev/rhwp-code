@@ -104,6 +104,9 @@ def run_ocx(scenario: Path, out_dir: Path, timeout: int, expect_version: str | N
     # 읽기 전용으로 열렸다 — 편집 액션이 조용히 무시되므로 정답지로 쓸 수 없다(계획서 §4.24).
     if proc.returncode == 4:
         return "READONLY"
+    # 시나리오가 표본 파일을 고쳤다 — 그 정답지는 물론 **다음 실행 전부**를 못 믿는다.
+    if proc.returncode == 5:
+        return "SAMPLE_DIRTY"
     if proc.returncode != 0:
         sys.stderr.write(proc.stderr.decode("utf-8", "replace")[-2000:])
         return "ERR"

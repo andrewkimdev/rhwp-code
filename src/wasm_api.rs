@@ -5494,6 +5494,12 @@ impl HwpDocument {
             .map_err(|e| e.into())
     }
 
+    /// 문서 글을 한글 스캔 차례로 — `InitScan`·`GetText`·`ReleaseScan` 이 쓴다.
+    #[wasm_bindgen(js_name = getScanItems)]
+    pub fn get_scan_items(&self) -> String {
+        self.scan_items_json()
+    }
+
     /// 구역마다 첫 본문 문단 번호 — `MoveSectionUp`·`MoveSectionDown` 이 딛는다.
     #[wasm_bindgen(js_name = getSectionStarts)]
     pub fn get_section_starts(&self) -> String {

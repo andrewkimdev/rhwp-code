@@ -225,9 +225,17 @@ def run(scenario: dict, out_dir: Path, expect_version: str | None = None) -> dic
             pass
         return result
 
+    # 연 표본의 **원본 지문**을 떠 둔다. 시나리오가 표본을 고치면 그 다음 실행부터 정답지가
+    # 통째로 어긋나는데, 증상이 "갑자기 회귀"로 보여서 원인을 찾기 어렵다.
+    #
+    # 실제로 그랬다: `Clear(1)` 은 한글에게 **저장하고 닫으라**는 뜻이라 시나리오가 돌 때마다
+    # `samples/2026_oss_rst.hwp` 에 자동 번호가 쌓였다. 아래 가드가 그것을 즉시 잡는다.
+    src_path = (REPO / scenario["open"]).resolve() if scenario.get("open") else None
+    src_before = src_path.stat().st_mtime_ns if src_path and src_path.exists() else None
+
     try:
         if scenario.get("open"):
-            src = (REPO / scenario["open"]).resolve()
+            src = src_path
             opened = com.Open(str(src), "", "")
             result["calls"].append({"call": "Open", "args": [scenario["open"]], "value": normalize(opened)})
 
@@ -265,6 +273,13 @@ def run(scenario: dict, out_dir: Path, expect_version: str | None = None) -> dic
             com.Quit()
         except Exception:  # noqa: BLE001
             pass
+    # 표본이 바뀌었으면 이 실행의 정답지를 **믿을 수 없다** — 다음 실행은 다른 문서를 잰다.
+    if src_path is not None and src_path.exists():
+        if src_path.stat().st_mtime_ns != src_before:
+            result["rejected"] = (
+                f"표본이 실행 중에 바뀌었다({scenario['open']}) — 시나리오가 저장을 부른다. "
+                "`git checkout -- ` 로 되돌리고 그 호출을 고칠 것."
+            )
     return result
 
 
@@ -293,6 +308,13 @@ def main() -> int:
         with io.open(rejected_path, "w", encoding="utf-8", newline="\n") as fh:
             json.dump(result, fh, ensure_ascii=False, indent=2)
             fh.write("\n")
+        if "표본이 실행 중에 바뀌었다" in result["rejected"]:
+            print(
+                f"{scenario['id']}: **표본이 바뀌어 판정하지 않음** — {result['rejected']}\n"
+                "정답지가 다음 실행부터 통째로 어긋난다. `Clear(1)` 처럼 저장을 부르는 호출을 "
+                "찾아 고칠 것(0 이면 저장 안 한다).",
+            )
+            return 5
         if "EditMode" in result["rejected"]:
             print(
                 f"{scenario['id']}: **읽기 전용으로 열려 판정하지 않음** — {result['rejected']}\n"

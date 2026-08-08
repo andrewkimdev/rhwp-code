@@ -195,6 +195,112 @@ fn collect_controls(
     }
 }
 
+/// 스캔 항목 하나를 담는다. 상태는 **앞 항목과의 관계**라 넣는 자리에서 정한다.
+///
+/// - 문단이 바뀌면 3, 같은 문단 안에서 이어지면 2.
+/// - 개체 리스트로 들어가는 첫 항목은 4, 나온 뒤 첫 항목은 5.
+fn scan_push(items: &mut Vec<(u8, String)>, state: u8, text: String) {
+    items.push((state, text));
+}
+
+/// 문단 하나를 스캔 차례로 푼다 — 글은 개체에서 끊기고, 개체 속을 돈 뒤 이어진다.
+fn scan_paragraph(
+    para: &Paragraph,
+    at: (u32, usize),
+    lists: &[ListEntry],
+    items: &mut Vec<(u8, String)>,
+) {
+    let (list_id, para_in_list) = at;
+    // 그 리스트의 **첫 문단**이면 2, 아니면 3(같은 리스트의 다음 문단)이다. 셀은 저마다 다른
+    // 리스트라 첫 문단뿐이어서 2 로 나온다 — 실측과 맞는다.
+    let mut state: u8 = if para_in_list == 0 { 2 } else { 3 };
+
+    // 구역·단 정의는 빈 항목을 하나씩 낸다. 그 뒤로는 같은 문단이므로 2 다.
+    for ctrl in para.controls.iter() {
+        if matches!(ctrl, Control::SectionDef(_) | Control::ColumnDef(_)) {
+            scan_push(items, state, String::new());
+            state = 2;
+        }
+    }
+
+    let control_positions = para.control_text_positions();
+    let chars: Vec<char> = para.text.chars().collect();
+    let mut cut = 0usize;
+
+    for (ci, ctrl) in para.controls.iter().enumerate() {
+        let nested: Vec<(usize, &[Paragraph])> = match ctrl {
+            Control::Table(table) => (0..table.cells.len())
+                .filter_map(|cell| {
+                    table
+                        .cells
+                        .get(cell)
+                        .map(|c| (cell, c.paragraphs.as_slice()))
+                })
+                .collect(),
+            Control::Shape(shape) => shape_lists(shape),
+            _ => Vec::new(),
+        };
+        // 구역·단 정의는 위에서 이미 항목을 냈다.
+        if matches!(ctrl, Control::SectionDef(_) | Control::ColumnDef(_)) {
+            continue;
+        }
+        // **리스트가 없는 개체에서도 글은 끊긴다.** 수식이 그렇다(실측: 수식 앞 다섯 칸이
+        // 한 항목으로 따로 난다). 리스트 있는 것만 끊다가 항목이 하나씩 모자랐다.
+        //
+        // 개체 앞까지의 글은 **비어 있어도 낸다**(글 없는 문단에 표만 있어도 빈 항목이 하나
+        // 난다). 줄 끝은 아직 안 붙인다 — 문단이 안 끝났다.
+        let here = control_positions
+            .get(ci)
+            .copied()
+            .unwrap_or(chars.len())
+            .min(chars.len());
+        let run: String = chars[cut.min(here)..here].iter().collect();
+        scan_push(items, state, run);
+        state = 2;
+        cut = here;
+        // 개체 속으로 — 첫 항목이 4, 나온 뒤 첫 항목이 5 다. 속이 없으면 여기서 끝이다.
+        if nested.is_empty() {
+            continue;
+        }
+        let mut entered = false;
+        for (node, paragraphs) in nested {
+            let child = lists
+                .iter()
+                .find(|l| {
+                    l.host_list_id == list_id
+                        && l.host_para_index == para_in_list
+                        && l.control_index == ci
+                        && l.cell_index == node
+                })
+                .map(|l| l.list_id);
+            let Some(child_list) = child else { continue };
+            for (pi, child_para) in paragraphs.iter().enumerate() {
+                let before = items.len();
+                scan_paragraph(child_para, (child_list, pi), lists, items);
+                // **개체의 맨 첫 항목만** 진입 상태로 바꾼다. 그 뒤 문단들은 자기 자리대로
+                // (같은 리스트의 다음 문단이면 3) 두어야 한다 — 여기서 전부 2 로 덮었다가
+                // 글상자 안 문단들이 어긋났다.
+                //
+                // 진입 상태는 **어디서 들어가느냐**로 갈린다: 본문에서면 4, 이미 리스트 안이면
+                // 5 다(실측: 같은 표라도 본문에 있으면 4, 글상자 안에 있으면 5).
+                if !entered {
+                    if let Some(first) = items.get_mut(before) {
+                        first.0 = if list_id == ROOT_LIST_ID { 4 } else { 5 };
+                    }
+                    entered = true;
+                }
+            }
+        }
+        if entered {
+            state = 5;
+        }
+    }
+
+    // 남은 글 + 줄 끝.
+    let tail: String = chars[cut.min(chars.len())..].iter().collect();
+    scan_push(items, state, format!("{}\r\n", tail));
+}
+
 /// 컨트롤의 `Properties` 파라미터셋 — 채울 수 있는 항목만 낸다.
 ///
 /// `Lock` 이 특히 중요하다: **잠긴 개체는 `SelectCtrlFront` 가 건너뛴다**(실측 — 이 표본의
@@ -427,6 +533,37 @@ impl DocumentCore {
             }
         }
         format!("[{}]", items.join(","))
+    }
+
+    /// 문서 글을 **한글 스캔 차례**로 늘어놓는다 — `InitScan`·`GetText`·`ReleaseScan` 이 쓴다.
+    ///
+    /// 각 항목은 `{state, text}` 다. 실측으로 세운 규칙(§4.54, 표본 넷):
+    ///
+    /// | 상태 | 뜻 |
+    /// | --- | --- |
+    /// | 2 | 같은 문단이 이어지거나 리스트가 바뀜(셀 → 셀) |
+    /// | 3 | 같은 리스트에서 **다음 문단** |
+    /// | 4 | 개체 리스트로 **들어감** |
+    /// | 5 | 개체 리스트에서 **나옴** |
+    ///
+    /// 방출 규칙도 실측이다. **구역·단 정의는 빈 항목을 하나씩 낸다.** 표·그리기는 항목을
+    /// 안 내고 대신 그 속 리스트로 들어간다(진입 4, 탈출 5). 문단의 글은 개체를 만나면
+    /// **거기서 끊기고**, 개체를 다 돈 뒤 남은 글과 줄 끝이 이어진다.
+    pub fn scan_items_json(&self) -> String {
+        let (_, lists) = self.collect_fields_and_lists();
+        let mut items: Vec<(u8, String)> = Vec::new();
+        let mut para_in_body = 0usize;
+        for section in self.document.sections.iter() {
+            for para in section.paragraphs.iter() {
+                scan_paragraph(para, (ROOT_LIST_ID, para_in_body), &lists, &mut items);
+                para_in_body += 1;
+            }
+        }
+        let body: Vec<String> = items
+            .iter()
+            .map(|(state, text)| format!("{{\"state\":{},\"text\":{}}}", state, json_escape(text)))
+            .collect();
+        format!("[{}]", body.join(","))
     }
 
     /// 컨트롤 하나를 지운다 — 웹한글컨트롤 `DeleteCtrl`.
