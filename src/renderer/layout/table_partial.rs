@@ -905,17 +905,18 @@ impl LayoutEngine {
                     // `n>0`은 cell unit 원장이 이 control 문단을 현재 조각에 넣었다는
                     // 증거다. 이를 무시하면 바로 앞 텍스트 문단을 셀의 마지막 문단으로
                     // 오판해 trailing line_spacing을 버린다(issue2007 p14: 780HU).
-                    let selected_zero_width_block_table = s == e
+                    let selected_zero_width_table_fragment = s == e
                         && s > 0
                         && cell.paragraphs.get(i).is_some_and(|para| {
-                            para.controls.iter().any(|control| {
-                                matches!(
-                                    control,
-                                    Control::Table(table) if !table.common.treat_as_char
-                                )
-                            })
+                            // treat-as-char 표도 빈 host paragraph에서는 CellUnit의
+                            // mixed nested fragment로 페이지를 나눠 실제 block처럼
+                            // 배치된다(issue2007 p12/p15). source cut이 선택한 `(n,n)`
+                            // table owner라는 계약이 중요하며 TAC 속성은 제외 근거가 아니다.
+                            para.controls
+                                .iter()
+                                .any(|control| matches!(control, Control::Table(_)))
                         });
-                    if s < e || selected_zero_width_block_table {
+                    if s < e || selected_zero_width_table_fragment {
                         last_idx = i;
                     }
                 }

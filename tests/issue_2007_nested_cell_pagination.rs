@@ -137,6 +137,21 @@ fn first_text_run_top(node: &RenderNode, needle: &str) -> Option<f64> {
     })
 }
 
+fn first_text_run_vertical_bounds(node: &RenderNode, needle: &str) -> Option<(f64, f64)> {
+    let own = match &node.node_type {
+        RenderNodeType::TextRun(run) if run.text.contains(needle) => {
+            Some((node.bbox.y, node.bbox.y + node.bbox.height))
+        }
+        _ => None,
+    };
+    own.or_else(|| {
+        node.children
+            .iter()
+            .filter_map(|child| first_text_run_vertical_bounds(child, needle))
+            .min_by(|left, right| left.0.total_cmp(&right.0))
+    })
+}
+
 #[derive(Clone, Copy)]
 struct ClipRect {
     x: f64,
@@ -1022,6 +1037,22 @@ fn issue_2007_continuation_frame_restarts_and_drops_previous_page_residual() {
         "p10 continuation frame must paint a full-width bottom edge inside its physical clip"
     );
 
+    let p12 = doc
+        .build_page_render_tree(11)
+        .expect("issue2007 p12 render tree");
+    let (_, election_heading_bottom) =
+        first_text_run_vertical_bounds(&p12.root, " 중앙선거관리위원회")
+            .expect("p12 중앙선거관리위원회 section heading");
+    let election_table = find_innermost_table_containing_text(&p12.root, "공직선거법")
+        .expect("p12 중앙선거관리위원회 하위 표");
+    let election_heading_gap = election_table.bbox.y - election_heading_bottom;
+    assert!(
+        (10.2..=12.6).contains(&election_heading_gap),
+        "p12 중앙선거관리위원회 제목 뒤의 저장 줄간격 780 HWPUNIT이 소실됐다: \
+         heading_bottom={election_heading_bottom:.3}, table_top={:.3}, gap={election_heading_gap:.3}",
+        election_table.bbox.y,
+    );
+
     let p13 = doc
         .build_page_render_tree(12)
         .expect("issue2007 p13 render tree");
@@ -1100,6 +1131,17 @@ fn issue_2007_continuation_frame_restarts_and_drops_previous_page_residual() {
     assert!(
         contains_painted_text(&p15.root, finance_item_8, p15_clip),
         "p15 must begin with the carried 금융위원회 item 8"
+    );
+    let (_, procurement_heading_bottom) =
+        first_text_run_vertical_bounds(&p15.root, " 조달청").expect("p15 조달청 section heading");
+    let procurement_table = find_innermost_table_containing_text(&p15.root, "조달사업에 관한 법률")
+        .expect("p15 조달청 하위 표");
+    let procurement_heading_gap = procurement_table.bbox.y - procurement_heading_bottom;
+    assert!(
+        (10.2..=12.6).contains(&procurement_heading_gap),
+        "p15 조달청 제목 뒤의 저장 줄간격 780 HWPUNIT이 소실됐다: \
+         heading_bottom={procurement_heading_bottom:.3}, table_top={:.3}, gap={procurement_heading_gap:.3}",
+        procurement_table.bbox.y,
     );
     assert!(
         !contains_painted_text(&p15.root, finance_heading, p15_clip),
