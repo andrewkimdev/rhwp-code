@@ -14,8 +14,9 @@ last_verified: 2026-08-08
 Canvas2D·SVG·Native Skia가 기존 공통 PUA 표시 경로를 사용하므로 공개 글꼴에서도 tofu가 아닌 작은
 오른쪽 방향 삼각형을 결정적으로 출력한다.
 
-이 PR은 #4227 branch를 base로 한다. #4227을 먼저 merge한 뒤 #4228의 base를 `devel`로 변경하고,
-최신 head의 required checks와 review 승인, 작업지시자의 별도 merge 승인까지 확인해야 한다.
+#4227은 `devel` merge commit `a377027ce`로 병합됐고 이 PR의 base도 `devel`로 변경했다. retarget
+상태에서 mergeable과 독립 diff를 확인했다. 이 기록을 동기화한 최신 head의 required checks와 review,
+작업지시자의 별도 merge 승인까지 확인해야 한다.
 
 ## 검토 경로
 
@@ -33,29 +34,34 @@ full-gate candidate: 5f65690620fae86ad4429629cdb633e150619fac
 normalized code head: e2ea73d696e757a2ff646eb1d1bfc7246a611497
 parent review head: 7f9fde0ee579023f442728a7eec62a0c6078fc39
 review-only merge bridge: ce8e39019ee900f29dee9259127b109c5acce8da
+retarget devel base: a377027ced6d5a62b6722b8126da801a969d7dc6
+retarget snapshot head: a28f0cddc68e294f27b281d354e967293cf46741
 ```
 
 별도 `review_impl` 문서는 만들지 않았다. 구현과 rollback 범위는 계획서·Stage 1·완료 보고서에
-고정돼 있고, #4227 merge 뒤 #4228을 `devel`로 retarget하는 순서가 명확하다.
+고정돼 있고, #4227 merge와 #4228의 `devel` retarget 순서를 완료했다.
 
 ## 메타데이터와 stack
 
 | 항목 | 값 |
 | --- | --- |
 | PR / 이슈 | [#4228](https://github.com/edwardkim/rhwp/pull/4228) / [#4224](https://github.com/edwardkim/rhwp/issues/4224) |
-| 선행 PR | [#4227](https://github.com/edwardkim/rhwp/pull/4227), 먼저 merge |
+| 선행 PR | [#4227](https://github.com/edwardkim/rhwp/pull/4227), `a377027ce`로 merge 완료 |
 | 작성자 / assignee | `edwardkim` / `edwardkim` |
 | reviewer | `jangster77` 요청 |
 | milestone / labels | `v1.0.0` / `bug`, `rendering` |
-| 대상 / head | `task_m100_4158_char_overlap_boxed_pua` / `task_m100_4224_pua_f02fb_small_triangle` |
+| 대상 / head | `devel` / `task_m100_4224_pua_f02fb_small_triangle` |
 | 생성 상태 | open, non-draft |
 | 생성 시점 규모 | 11 files, +412 / -10, 7 commits |
 | 접수 시점 merge 상태 | mergeable, `CLEAN` |
+| retarget 시점 규모 | 13 files, +552 / -10, 9 commits |
+| retarget 시점 merge 상태 | mergeable |
 
 workflow가 stacked feature branch base에서는 `main`·`devel` 대상 PR job을 시작하지 않아 접수 시점
-status checks는 비어 있었다. 이는 성공 판정이 아니며, #4227 merge와 `devel` retarget 뒤 최신 CI로
-검증한다. #4227 review 기록을 전달하는 merge bridge는 정확히 두 부모를 가지며 첫 부모 대비
-`mydocs/` 세 파일만 추가한다.
+status checks는 비어 있었다. #4227 review 기록을 전달하는 merge bridge는 정확히 두 부모를 가지며 첫
+부모 대비 `mydocs/` 세 파일만 추가한다. #4227 merge 뒤 base를 `devel@a377027ce`로 retarget한 결과
+13개 파일의 #4224 독립 diff만 남고 `git diff --check`와 mergeability가 통과했다. 이 기록을 push하는
+`synchronize` 이벤트의 최신 CI를 최종 판정으로 사용한다.
 
 ## 변경 범위와 근인
 
@@ -123,15 +129,16 @@ sweep은 815개 샘플(3 skipped), 597 paths, 112,314건에서 기존 baseline�
 
 ## GitHub Actions와 남은 게이트
 
-- stacked base 상태에서는 GitHub Actions 결과가 없으므로 이를 녹색 CI로 간주하지 않는다.
-- #4227을 먼저 merge한 뒤 #4228 base를 `devel`로 retarget하고, 최신 head에서 CI·CodeQL·Render
-  Diff 등 required checks가 실제로 시작해 성공하는지 확인한다.
-- retarget 전에는 source/test 충돌이 없는지 재확인한다. update 과정에서 source 또는 test 충돌이
-  생기면 자동 해결하지 않고 중단한다.
+- stacked base 시점에는 GitHub Actions 결과가 없었으므로 녹색 CI로 간주하지 않는다.
+- #4227은 최신 CI·CodeQL·Render Diff 성공 뒤 `a377027ce`로 merge됐고 #4224 diff는 그 `devel` 위에서
+  충돌 없이 분리됐다.
+- retarget 자체는 `edited` 이벤트라 현재 workflow의 `opened|reopened|synchronize` trigger 대상이 아니다.
+  이 검토 상태를 담은 trailing 문서 commit을 push해 최신 head의 CI·CodeQL·Render Diff를 시작하고
+  실제 성공을 확인한다.
 - PR 본문의 `Closes #4224`는 merge 때 이슈를 닫는다. merge 전에는 이슈를 별도로 닫지 않는다.
 
 ## 최종 권고
 
-구현·로컬·WASM·시각 게이트는 통과했다. #4227을 먼저 merge하고 #4228을 `devel`로 retarget한 뒤
-최신 required checks, `jangster77` review와 mergeability를 확인한다. 작업지시자의 별도 merge 승인이
-있을 때만 #4228을 merge한다.
+구현·로컬·WASM·시각 게이트와 `devel` retarget mergeability는 통과했다. trailing review commit의 최신
+required checks와 `jangster77` review를 확인하고, 작업지시자의 별도 merge 승인이 있을 때만 #4228을
+merge한다.
