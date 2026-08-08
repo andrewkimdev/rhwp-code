@@ -2035,7 +2035,7 @@ checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
 [[package]]
 name = "svg2pdf"
 version = "0.13.0"
-source = "git+https://github.com/edwardkim/svg2pdf?branch=determinism-0.13#2caeb0a038f9128b79833d803b94c2667565c4da"
+source = "git+https://github.com/andrewkimdev/svg2pdf?branch=patch%2F0.13-font-data-cache#0f0d06738b383e19aabf6c285ef818a541ebacc7"
 dependencies = [
  "fontdb",
  "image",
