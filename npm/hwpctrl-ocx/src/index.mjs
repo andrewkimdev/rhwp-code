@@ -901,6 +901,27 @@ export class HwpCtrl {
     this.#scan = null;
   }
 
+  /**
+   * 규격 §8.3 — 문서 글 전체를 한 덩이로.
+   *
+   * 훑기(`GetText`)와 **같은 뿌리**다: 훑기가 주는 조각들에서 **표식 항목**(구역·단 정의)만
+   * 빼고, 각 조각이 줄 끝으로 끝나도록 보장해 이어 붙인다(실측: 표식 둘이 든 문서의 글이
+   * `\r\n` 둘로 시작하지 넷이 아니다).
+   *
+   * `option` 이 `saveblock` 이면 블록만 가져온다 — 블록이 없으면 한글은 아무것도 안 준다.
+   */
+  GetTextFile(format, option) {
+    if (String(option ?? '').includes('saveblock') && !this.#selection) return null;
+    const raw = parseJson(this.#doc?.getScanItems?.() ?? '', null);
+    if (!Array.isArray(raw)) return '';
+    const joined = raw
+      .filter((item) => !item.marker)
+      .map((item) => (item.text.endsWith('\r\n') ? item.text : `${item.text}\r\n`))
+      .join('');
+    // 마지막 문단 뒤에는 줄 끝을 안 붙인다(실측: 오라클이 정확히 두 글자 짧다).
+    return joined.endsWith('\r\n') ? joined.slice(0, -2) : joined;
+  }
+
   /** 규격 §8.3.22 — 문서 끼워넣기. 아직 구현하지 않았다. */
   Insert(path, format, arg, callback, callbackUserData) {
     console.warn('[hwpctrl] Insert: 미구현 (문서 끼워넣기)');

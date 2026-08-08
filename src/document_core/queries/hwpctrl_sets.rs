@@ -199,8 +199,8 @@ fn collect_controls(
 ///
 /// - 문단이 바뀌면 3, 같은 문단 안에서 이어지면 2.
 /// - 개체 리스트로 들어가는 첫 항목은 4, 나온 뒤 첫 항목은 5.
-fn scan_push(items: &mut Vec<(u8, String)>, state: u8, text: String) {
-    items.push((state, text));
+fn scan_push(items: &mut Vec<(u8, String, bool)>, state: u8, text: String) {
+    items.push((state, text, false));
 }
 
 /// 문단 하나를 스캔 차례로 푼다 — 글은 개체에서 끊기고, 개체 속을 돈 뒤 이어진다.
@@ -208,7 +208,7 @@ fn scan_paragraph(
     para: &Paragraph,
     at: (u32, usize),
     lists: &[ListEntry],
-    items: &mut Vec<(u8, String)>,
+    items: &mut Vec<(u8, String, bool)>,
 ) {
     let (list_id, para_in_list) = at;
     // 그 리스트의 **첫 문단**이면 2, 아니면 3(같은 리스트의 다음 문단)이다. 셀은 저마다 다른
@@ -216,9 +216,12 @@ fn scan_paragraph(
     let mut state: u8 = if para_in_list == 0 { 2 } else { 3 };
 
     // 구역·단 정의는 빈 항목을 하나씩 낸다. 그 뒤로는 같은 문단이므로 2 다.
+    //
+    // 이 항목들은 **표식**이라고 따로 적어 둔다 — `GetTextFile` 은 글을 이어 붙일 때 이것들만
+    // 뺀다(실측: 표식 둘이 든 문서의 글이 `\r\n` 둘로 시작하지 넷이 아니다).
     for ctrl in para.controls.iter() {
         if matches!(ctrl, Control::SectionDef(_) | Control::ColumnDef(_)) {
-            scan_push(items, state, String::new());
+            items.push((state, String::new(), true));
             state = 2;
         }
     }
@@ -551,7 +554,7 @@ impl DocumentCore {
     /// **거기서 끊기고**, 개체를 다 돈 뒤 남은 글과 줄 끝이 이어진다.
     pub fn scan_items_json(&self) -> String {
         let (_, lists) = self.collect_fields_and_lists();
-        let mut items: Vec<(u8, String)> = Vec::new();
+        let mut items: Vec<(u8, String, bool)> = Vec::new();
         let mut para_in_body = 0usize;
         for section in self.document.sections.iter() {
             for para in section.paragraphs.iter() {
@@ -561,7 +564,7 @@ impl DocumentCore {
         }
         let body: Vec<String> = items
             .iter()
-            .map(|(state, text)| format!("{{\"state\":{},\"text\":{}}}", state, json_escape(text)))
+            .map(|(state, text, marker)| format!("{{\"state\":{},\"marker\":{},\"text\":{}}}", state, marker, json_escape(text)))
             .collect();
         format!("[{}]", body.join(","))
     }
