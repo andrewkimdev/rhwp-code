@@ -172,6 +172,33 @@ fn expand_terminal_cell_clip_to_nested_table_descendants(
     }
 }
 
+/// 명시적 recursive RowCut으로 source-bounded 렌더를 끝낸 직계 child만 현재
+/// clipped cell viewport에 포섭한다.
+///
+/// 일반 nonterminal cell을 확장하면 다음 쪽 scalar tail이 노출된다. 반면
+/// `recursive_cut` 경로는 현재 쪽의 source start/end를 이미 제한하므로, 해당 호출이
+/// 새로 추가한 table root bbox는 안전하게 현재 조각 소유로 볼 수 있다. child 내부를
+/// 다시 순회하지 않는 이유는 그 안의 별도 clipped scalar tail을 섞지 않기 위해서다.
+fn expand_cell_clip_to_new_source_bounded_children(
+    cell_node: &mut RenderNode,
+    first_new_child: usize,
+) {
+    if !matches!(&cell_node.node_type, RenderNodeType::TableCell(cell) if cell.clip) {
+        return;
+    }
+
+    let current_bottom = cell_node.bbox.y + cell_node.bbox.height;
+    let content_bottom = cell_node.children[first_new_child.min(cell_node.children.len())..]
+        .iter()
+        .filter(|child| child.visible)
+        .map(|child| child.bbox.y + child.bbox.height)
+        .fold(current_bottom, f64::max);
+    let grown_height = content_bottom - cell_node.bbox.y;
+    if grown_height > cell_node.bbox.height {
+        cell_node.bbox.height = grown_height;
+    }
+}
+
 // 표 수평 정렬 보조 타입은 table_layout.rs에 통합됨
 
 /// [Task #1025] `row` 를 포함하는 rowspan 블록 범위 `[b_start, b_end)`.
@@ -873,7 +900,22 @@ impl LayoutEngine {
             let last_rendered_para_idx = if let Some(ref ranges) = line_ranges {
                 let mut last_idx = 0usize;
                 for (i, &(s, e)) in ranges.iter().enumerate() {
-                    if s < e {
+                    // block table 문단은 cut에 선택돼도 visible text line이 없으면
+                    // `(n,n)`으로 남는다. `(0,0)`은 미선택 문단과 구분할 수 없지만
+                    // `n>0`은 cell unit 원장이 이 control 문단을 현재 조각에 넣었다는
+                    // 증거다. 이를 무시하면 바로 앞 텍스트 문단을 셀의 마지막 문단으로
+                    // 오판해 trailing line_spacing을 버린다(issue2007 p14: 780HU).
+                    let selected_zero_width_block_table = s == e
+                        && s > 0
+                        && cell.paragraphs.get(i).is_some_and(|para| {
+                            para.controls.iter().any(|control| {
+                                matches!(
+                                    control,
+                                    Control::Table(table) if !table.common.treat_as_char
+                                )
+                            })
+                        });
+                    if s < e || selected_zero_width_block_table {
                         last_idx = i;
                     }
                 }
@@ -1886,6 +1928,7 @@ impl LayoutEngine {
                                         });
                                         new_ctx
                                     });
+                                    let first_new_child = cell_node.children.len();
                                     let table_h_rendered = if let Some(recursive_cut) = split_info
                                         .as_ref()
                                         .and_then(|split| split.recursive_cut.as_ref())
@@ -1900,7 +1943,7 @@ impl LayoutEngine {
                                         // `cell_units_cache`의 raw cell pointer가 allocator
                                         // 재사용으로 다른 clone을 가리킬 수 있다. 일반 wrapper가
                                         // 끝낸 table 해석 뒤의 구현을 원본 참조로 직접 호출한다.
-                                        self.layout_partial_table_resolved(
+                                        let rendered_bottom = self.layout_partial_table_resolved(
                                             tree,
                                             &mut cell_node,
                                             nested_table.as_ref(),
@@ -1929,7 +1972,17 @@ impl LayoutEngine {
                                             0.0,
                                             None,
                                             clamp_header_negative_para_offset,
-                                        ) - nested_y
+                                        );
+                                        // [#3820/issue2007 p14] recursive cut은 현재 호출의
+                                        // source 범위를 제한하지만 parent flow_height는 기존
+                                        // 조각 높이를 유지한다. 새 child root만 clip에 포섭해
+                                        // 현재 쪽 마지막 두 줄이 조상 clip에서 소실되지 않게
+                                        // 하고 pagination cursor에는 영향을 주지 않는다.
+                                        expand_cell_clip_to_new_source_bounded_children(
+                                            &mut cell_node,
+                                            first_new_child,
+                                        );
+                                        rendered_bottom - nested_y
                                     } else {
                                         self.layout_table(
                                             tree,
@@ -2926,8 +2979,8 @@ impl LayoutEngine {
 #[cfg(test)]
 mod tests {
     use super::{
-        cell_content_bottom, expand_terminal_cell_clip_to_nested_table_descendants,
-        fragment_vpos_origin,
+        cell_content_bottom, expand_cell_clip_to_new_source_bounded_children,
+        expand_terminal_cell_clip_to_nested_table_descendants, fragment_vpos_origin,
     };
     use crate::model::paragraph::{LineSeg, Paragraph};
     use crate::model::table::Cell;
@@ -3017,5 +3070,27 @@ mod tests {
         let mut cell = clipped_cell_with_overflowing_nested_table();
         expand_terminal_cell_clip_to_nested_table_descendants(&mut cell, false);
         assert_eq!(cell.bbox.height, 80.0);
+    }
+
+    #[test]
+    fn issue_2007_recursive_cut_clip_only_contains_new_source_bounded_child() {
+        let mut cell = clipped_cell_with_overflowing_nested_table();
+        let first_new_child = cell.children.len();
+        cell.children.push(RenderNode::new(
+            4,
+            RenderNodeType::Table(TableNode {
+                row_count: 1,
+                col_count: 1,
+                border_fill_id: 0,
+                section_index: None,
+                para_index: None,
+                control_index: None,
+            }),
+            BoundingBox::new(15.0, 25.0, 90.0, 78.0),
+        ));
+
+        expand_cell_clip_to_new_source_bounded_children(&mut cell, first_new_child);
+
+        assert_eq!(cell.bbox.height, 83.0);
     }
 }

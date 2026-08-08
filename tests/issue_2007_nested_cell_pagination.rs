@@ -168,6 +168,14 @@ impl ClipRect {
     fn intersects_node(self, node: &RenderNode) -> bool {
         self.intersect(Self::from_node(node)).is_some()
     }
+
+    fn fully_contains(self, other: Self) -> bool {
+        const EPSILON: f64 = 0.01;
+        other.x + EPSILON >= self.x
+            && other.y + EPSILON >= self.y
+            && other.right <= self.right + EPSILON
+            && other.bottom <= self.bottom + EPSILON
+    }
 }
 
 /// SVG와 Canvas가 공통으로 지키는 TableCell clip을 적용한 뒤의 가시 text만 센다.
@@ -219,6 +227,39 @@ fn contains_exact_painted_text(node: &RenderNode, expected: &str, clip: Option<C
     node.children
         .iter()
         .any(|child| contains_exact_painted_text(child, expected, clip))
+}
+
+/// `scope` 아래의 정확한 TextLine을 찾되, root부터 내려오며 적용되는 모든
+/// `clip=true TableCell` 교집합도 함께 보존한다. TextRun 단위 교차만 검사하면
+/// p14 하단처럼 render tree에는 있으나 paint 때 잘리는 줄을 놓친다.
+fn collect_exact_text_line_clips_in_subtree(
+    node: &RenderNode,
+    scope: &RenderNode,
+    expected: &str,
+    clip: Option<ClipRect>,
+    inside_scope: bool,
+    found: &mut Vec<(ClipRect, Option<ClipRect>)>,
+) {
+    if !node.visible || node.editor_only {
+        return;
+    }
+    let clip = match &node.node_type {
+        RenderNodeType::TableCell(cell) if cell.clip => {
+            clip.and_then(|active| active.intersect(ClipRect::from_node(node)))
+        }
+        _ => clip,
+    };
+    let inside_scope = inside_scope || std::ptr::eq(node, scope);
+    if inside_scope && matches!(node.node_type, RenderNodeType::TextLine(_)) {
+        let mut text = String::new();
+        page_text(node, &mut text);
+        if text.trim() == expected {
+            found.push((ClipRect::from_node(node), clip));
+        }
+    }
+    for child in &node.children {
+        collect_exact_text_line_clips_in_subtree(child, scope, expected, clip, inside_scope, found);
+    }
 }
 
 /// Return the painted right extent of a nested table's own outer vertical
@@ -1011,6 +1052,41 @@ fn issue_2007_continuation_frame_restarts_and_drops_previous_page_residual() {
     assert!(
         contains_painted_text(&p14.root, finance_heading, p14_clip),
         "p14 must own the 금융위원회 heading"
+    );
+    let finance_table = find_innermost_table_containing_text(&p14.root, finance_heading)
+        .expect("p14 금융위원회 하위 표");
+    let finance_section_heading_top =
+        first_text_run_top(&p14.root, " 금융위원회").expect("p14 금융위원회 section heading");
+    let heading_to_table = finance_table.bbox.y - finance_section_heading_top;
+    assert!(
+        (27.6..=27.9).contains(&heading_to_table),
+        "p14 금융위원회 제목 뒤의 저장 줄간격 780 HWPUNIT이 소실됐다: \
+         heading_top={finance_section_heading_top:.3}, table_top={:.3}, delta={heading_to_table:.3}",
+        finance_table.bbox.y,
+    );
+    let mut finance_item_7_tail = Vec::new();
+    collect_exact_text_line_clips_in_subtree(
+        &p14.root,
+        finance_table,
+        "한다.",
+        p14_clip,
+        false,
+        &mut finance_item_7_tail,
+    );
+    assert_eq!(
+        finance_item_7_tail.len(),
+        1,
+        "p14 금융위원회 항목 7의 마지막 TextLine `한다.`는 해당 하위 표 안에 정확히 하나여야 한다"
+    );
+    let (tail_line, effective_clip) = finance_item_7_tail[0];
+    let effective_clip =
+        effective_clip.expect("p14 금융위원회 항목 7에 유효한 조상 TableCell clip이 있어야 한다");
+    assert!(
+        effective_clip.fully_contains(tail_line),
+        "p14 금융위원회 항목 7 마지막 줄이 조상 TableCell clip에 잘린다: \
+         line_bottom={:.3}, clip_bottom={:.3}",
+        tail_line.bottom,
+        effective_clip.bottom,
     );
     assert!(
         !contains_painted_text(&p14.root, finance_item_8, p14_clip),
