@@ -1,6 +1,6 @@
 ---
 kind: pr_review
-status: local-validation-passed
+status: visual-validation-passed
 canonical: mydocs/manual/pr_review_workflow.md
 last_verified: 2026-08-08
 ---
@@ -14,9 +14,9 @@ last_verified: 2026-08-08
 제거됐고, 빈 `closes #`도 정리됐다. 표 셀 번호 문단은 렌더러와 같은 순서로 카운터에
 반영되며, 접기 버튼은 키보드 조작 뒤에도 초점을 보존한다.
 
-최신 head의 GitHub Full CI, CodeQL, Render Diff도 모두 성공했다. 다만 이 PR은 1,000줄이
-넘는 첫 기여자의 큰 변경이므로 작업지시자의 실제 VS Code 시각 판정과 명시적 review·push·merge
-승인 전에는 원격 상태를 변경하지 않는다.
+최신 head의 GitHub Full CI, CodeQL, Render Diff도 모두 성공했고, 2026-08-08 작업지시자의
+실제 VS Code 시각 판정도 통과했다. 다만 이 PR은 1,000줄이 넘는 첫 기여자의 큰 변경이므로
+명시적 review·push·merge 승인 전에는 원격 상태를 변경하지 않는다.
 
 ## 라우팅
 
@@ -131,14 +131,13 @@ GitHub Full CI 재사용 조건을 충족하므로 release-test 전체와 Native
 | `pr4093-outline-navigation-page2.png` | `2ec2592f790df4756eca0ec872c77ba8a25e6c22a8eaced7b803bc47d452383b` | 2쪽 이동·focus·문단 강조 확인 |
 | `pr4093-browser-validation.json` | `5cf913d83fb3f651c2580506db101602306154e13652603b9ebb08c3590d13d9` | 실제 브라우저 측정값과 오류 0건 기록 |
 
-에이전트 육안 검토에서는 겹침·잘림·tofu·사이드바 침범이 없었다. 최종 시각 판정은 작업지시자가
-위 PNG 또는 같은 fixture를 VS Code에서 확인한 뒤 기록한다.
+에이전트 육안 검토에서는 겹침·잘림·tofu·사이드바 침범이 없었다. 작업지시자는 2026-08-08
+같은 VS Code 결과를 확인하고 **시각 판정 통과**로 승인했다.
 
 ## 현재 판정과 다음 단계
 
-**수용 권고, 작업지시자 시각 판정 대기.** 기존 `CHANGES_REQUESTED`의 두 inline thread는 contributor
-응답과 로컬 재검증으로 해소되었지만 아직 GitHub에서 unresolved다. 다음 원격 작업은 각각 별도 승인
-후 수행한다.
+**수용 판정 완료.** 기존 `CHANGES_REQUESTED`의 두 inline thread는 contributor 응답과 로컬·시각
+재검증으로 해소되었지만 아직 GitHub에서 unresolved다. 다음 원격 작업은 각각 별도 승인 후 수행한다.
 
 1. review 문서 commit과 contributor source branch push
 2. 두 review thread resolve 및 이전 requested changes를 대체하는 approval review
