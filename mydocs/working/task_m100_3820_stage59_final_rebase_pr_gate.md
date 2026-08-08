@@ -1,6 +1,6 @@
 ---
 kind: investigation
-status: in_progress
+status: completed
 canonical: mydocs/working/task_m100_3820_stage1.md
 last_verified: 2026-08-08
 ---
@@ -47,3 +47,15 @@ target에서 병렬 실행하지 않는다.
 - Native Skia, fmt, diff-check, Clippy, rustdoc 통과
 - TypeScript, Studio, WASM, 브라우저 E2E 통과
 - 재현 가능한 시각 증적과 최종 SHA를 보관하고 PR 제목·본문 초안을 준비
+
+## 게이트 중단 판정
+
+새 HEAD `4f1c692d2`에서 release-test build, boxed-PUA, issue2007 15건,
+issue3637 3건 focused 회귀와 `cargo build --release`는 통과했다. 그러나
+작업지시자의 PDF 직접 감사에서 issue2007 물리 p14 하단 문장 소실이 추가로
+확인됐다. 따라서 이 단계는 PR 준비 완료로 판정하지 않고, 잘못된 출력 상태에서
+전체 회귀를 계속 소비하지 않았다.
+
+- 기준 PDF p14: 금융위원회 항목 ⑦의 `관계자에게 내보여야` / `한다.`를 모두 표시
+- rhwp p14: 동일 source owner는 render tree에 존재하나 조상 셀 clip이 두 줄을 일부·전부 잘라냄
+- 후속: [Stage 60](task_m100_3820_stage60_issue2007_p14_ancestor_clip.md)에서 원인·회귀·코드를 별도 처리
