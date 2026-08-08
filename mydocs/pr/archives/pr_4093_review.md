@@ -1,6 +1,6 @@
 ---
 kind: pr_review
-status: visual-validation-passed
+status: accepted
 canonical: mydocs/manual/pr_review_workflow.md
 last_verified: 2026-08-08
 ---
@@ -15,8 +15,8 @@ last_verified: 2026-08-08
 반영되며, 접기 버튼은 키보드 조작 뒤에도 초점을 보존한다.
 
 최신 head의 GitHub Full CI, CodeQL, Render Diff도 모두 성공했고, 2026-08-08 작업지시자의
-실제 VS Code 시각 판정도 통과했다. 다만 이 PR은 1,000줄이 넘는 첫 기여자의 큰 변경이므로
-명시적 review·push·merge 승인 전에는 원격 상태를 변경하지 않는다.
+실제 VS Code 시각 판정도 통과했다. 두 변경 요청 thread를 해소하고 최신 head를 승인한 뒤,
+작업지시자의 merge 승인에 따라 `devel`에 admin merge했다.
 
 ## 라우팅
 
@@ -30,18 +30,18 @@ base route는 `maintainer_general.md`다. 적용 보조 절차는 `intake_and_re
 | --- | --- |
 | PR / 작성자 | [#4093](https://github.com/edwardkim/rhwp/pull/4093) / @walnutkim |
 | 기여 이력 | 저장소 첫 PR, collaborator 아님 |
-| 최신 contributor head | `f2964508c0a0967fbab5669f1cc23d23091faf7e` |
+| contributor code head | `f2964508c0a0967fbab5669f1cc23d23091faf7e` |
+| 최종 review head | `179a5e69ca5f5ace6937dab79ba9d6846de99713` |
 | 최신 검토 기준 `devel` | `0fbfc24e6dd254a6df804f5282302885e8a2f837` |
 | devel과 거리 | `devel` 139커밋 / PR 6커밋 |
-| 규모 | 1,484+ / 34-, 14파일, 6커밋 |
+| 최종 규모 | 1,637+ / 34-, 15파일, review 문서 commit 포함 |
 | 로컬 review branch | `review/walnutkim-20260808` |
-| current-base 합성 merge | `3d062248ff38a51b0659f9aa80defc0930afa751` |
-| 합성 merge tree | `fca45be81455b3f2f4b9b303f656ebf91ff6ac40` |
-| GitHub 상태 | Open / Ready / MERGEABLE, 이전 `CHANGES_REQUESTED`로 BLOCKED |
-| reviewer | @jangster77 요청 상태 |
+| 최종 합성·실제 merge tree | `508d28d637518ad0e1119ce89995eed176813cfc` |
+| GitHub 상태 | Merged / merge commit `c119e5db5829df2e27850258500e5e2dd74a0015` |
+| reviewer | @edwardkim `APPROVED`, @jangster77 요청 철회 |
 
 이전 검토 branch `review/walnutkim-20260807`은 force-push 이전 기록 보존용으로 유지했다.
-최신 head와 현재 `devel`의 3-way merge tree는 충돌이 없고 `git diff --check`도 통과했다.
+최종 head와 검토 기준 `devel`의 3-way merge tree는 충돌이 없고 `git diff --check`도 통과했다.
 
 ## 이전 변경 요청의 처리 확인
 
@@ -93,8 +93,10 @@ base route는 `maintainer_general.md`다. 적용 보조 절차는 `intake_and_re
 
 ## 로컬 검증
 
-검증 대상은 contributor head를 현재 `devel`에 clean하게 합성한 tree
-`fca45be81455b3f2f4b9b303f656ebf91ff6ac40`다.
+코드 검증 대상은 contributor code head를 당시 `devel`에 clean하게 합성한 tree
+`fca45be81455b3f2f4b9b303f656ebf91ff6ac40`다. 이후 추가된 두 commit은 이 검토 문서만
+변경하며, 최종 head와 merge 직전 `devel`의 tree는
+`508d28d637518ad0e1119ce89995eed176813cfc`다.
 
 | 게이트 | 결과 |
 | --- | --- |
@@ -115,11 +117,15 @@ fresh `npm ci`는 성공했으나 현재 lockfile 기준 audit이 high 1건을 �
 실패는 아니며 자동 `npm audit fix`는 수행하지 않았다.
 
 GitHub Full CI 재사용 조건을 충족하므로 release-test 전체와 Native Skia 3종은 로컬에서 중복
-실행하지 않았다. 정확한 code head `f2964508`의 다음 run을 근거로 삼는다.
+실행하지 않았다. 정확한 code head `f2964508`의 broad run과 review 문서만 추가된 최종 head
+`179a5e69`의 review-only fast-pass를 근거로 삼는다.
 
 - [CI / Build & Test — success](https://github.com/edwardkim/rhwp/actions/runs/31152782217)
 - [CodeQL — success](https://github.com/edwardkim/rhwp/actions/runs/31152782861)
 - [Render Diff — success](https://github.com/edwardkim/rhwp/actions/runs/31152781488)
+- [최종 head CI / Build & Test — success](https://github.com/edwardkim/rhwp/actions/runs/31244205082)
+- [최종 head CodeQL — success](https://github.com/edwardkim/rhwp/actions/runs/31244205012)
+- [최종 head Render Diff — success](https://github.com/edwardkim/rhwp/actions/runs/31244205019)
 
 ## 시각·조작성 증적
 
@@ -134,15 +140,17 @@ GitHub Full CI 재사용 조건을 충족하므로 release-test 전체와 Native
 에이전트 육안 검토에서는 겹침·잘림·tofu·사이드바 침범이 없었다. 작업지시자는 2026-08-08
 같은 VS Code 결과를 확인하고 **시각 판정 통과**로 승인했다.
 
-## 현재 판정과 다음 단계
+## 수용 및 병합 결과
 
-**수용 판정 완료.** 기존 `CHANGES_REQUESTED`의 두 inline thread는 contributor 응답과 로컬·시각
-재검증으로 해소되었지만 아직 GitHub에서 unresolved다. 다음 원격 작업은 각각 별도 승인 후 수행한다.
+**수용·병합 완료.** 검토 기록 commit `be0b4b28c`와 시각 승인 기록 commit `179a5e69c`를
+contributor source branch에 반영했다. 기존 `CHANGES_REQUESTED`의 두 inline thread는 contributor
+응답과 로컬·시각 재검증을 근거로 해소했고, 최신 head에 @edwardkim의 `APPROVED` review를 게시했다.
+@jangster77 review 요청은 작업지시자가 수동으로 제외했다.
 
-1. review 문서 commit과 contributor source branch push
-2. 두 review thread resolve 및 이전 requested changes를 대체하는 approval review
-3. 최신 head의 fast-pass aggregate 재확인
-4. 작업지시자의 별도 merge 승인 뒤 merge와 후속 정리
+최종 head의 CI·CodeQL·Render Diff와 `mergeable=MERGEABLE`, `mergeStateStatus=CLEAN`을 재확인한
+뒤 2026-08-08 15:59:37 KST에 작업지시자의 승인에 따라 admin merge했다. merge commit은
+`c119e5db5829df2e27850258500e5e2dd74a0015`이며 원격 `devel`도 같은 SHA로 갱신됐다. PR 본문에
+종료할 유효한 관련 이슈는 없다.
 
 ## 기존 GitHub 리뷰
 
@@ -150,4 +158,5 @@ GitHub Full CI 재사용 조건을 충족하므로 release-test 전체와 Native
 - 대상 head: `97eb4ad8b2ae741e685510183b173a0563f574ad`
 - 판정: `CHANGES_REQUESTED`
 - 리뷰: <https://github.com/edwardkim/rhwp/pull/4093#pullrequestreview-4879550740>
-- inline thread 2건: contributor가 수정 commit으로 응답했고, 현재 unresolved / non-outdated
+- inline thread 2건: contributor 수정과 재검증을 확인한 뒤 2026-08-08에 모두 resolved
+- 최종 판정: 최신 head `179a5e69`에 @edwardkim `APPROVED`
