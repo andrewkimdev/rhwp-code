@@ -195,12 +195,31 @@ fn collect_controls(
     }
 }
 
+/// CP949 로 못 담는 글자를 `&#N;` 수치 참조로 바꾼다 — `GetTextFile("TEXT")` 의 규칙이다.
+///
+/// 판정은 **인코딩을 실제로 해 본다**. 표를 손으로 적으면 반드시 틀린다 — CP949 는 EUC-KR 에
+/// 마이크로소프트 확장이 붙은 것이라 `€`·`①` 처럼 "없을 것 같은데 있는" 글자가 많다.
+fn escape_outside_cp949(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut buf = [0u8; 4];
+    for ch in text.chars() {
+        let one = ch.encode_utf8(&mut buf);
+        let (_, _, had_errors) = encoding_rs::EUC_KR.encode(one);
+        if had_errors {
+            out.push_str(&format!("&#{};", ch as u32));
+        } else {
+            out.push(ch);
+        }
+    }
+    out
+}
+
 /// 스캔 항목 하나를 담는다. 상태는 **앞 항목과의 관계**라 넣는 자리에서 정한다.
 ///
 /// - 문단이 바뀌면 3, 같은 문단 안에서 이어지면 2.
 /// - 개체 리스트로 들어가는 첫 항목은 4, 나온 뒤 첫 항목은 5.
-fn scan_push(items: &mut Vec<(u8, String, bool)>, state: u8, text: String) {
-    items.push((state, text, false));
+fn scan_push(items: &mut Vec<(u8, String, u8)>, state: u8, text: String) {
+    items.push((state, text, 0));
 }
 
 /// 문단 하나를 스캔 차례로 푼다 — 글은 개체에서 끊기고, 개체 속을 돈 뒤 이어진다.
@@ -208,7 +227,7 @@ fn scan_paragraph(
     para: &Paragraph,
     at: (u32, usize),
     lists: &[ListEntry],
-    items: &mut Vec<(u8, String, bool)>,
+    items: &mut Vec<(u8, String, u8)>,
 ) {
     let (list_id, para_in_list) = at;
     // 그 리스트의 **첫 문단**이면 2, 아니면 3(같은 리스트의 다음 문단)이다. 셀은 저마다 다른
@@ -221,13 +240,58 @@ fn scan_paragraph(
     // 뺀다(실측: 표식 둘이 든 문서의 글이 `\r\n` 둘로 시작하지 넷이 아니다).
     for ctrl in para.controls.iter() {
         if matches!(ctrl, Control::SectionDef(_) | Control::ColumnDef(_)) {
-            items.push((state, String::new(), true));
+            items.push((state, String::new(), 1));
             state = 2;
         }
     }
 
     let control_positions = para.control_text_positions();
-    let chars: Vec<char> = para.text.chars().collect();
+
+    // **빈 누름틀은 안내문을 글로 낸다.** 한글은 파일을 열며 빈 필드에 안내문을 채우고, 그
+    // 글이 스트림에도 들어간다(좌표 셈의 `guide_units` 가 이미 그것을 센다). 안 넣으면 서식
+    // 문서의 글이 통째로 짧아진다.
+    let mut inserts: Vec<(usize, String)> = Vec::new();
+    for fr in para.field_ranges.iter() {
+        if fr.start_char_idx != fr.end_char_idx {
+            continue;
+        }
+        if let Some(Control::Field(field)) = para.controls.get(fr.control_idx) {
+            if let Some(guide) = field.guide_text() {
+                if !guide.is_empty() {
+                    inserts.push((fr.start_char_idx, guide.to_string()));
+                }
+            }
+        }
+    }
+    inserts.sort_by_key(|(at, _)| *at);
+
+    // 원래 글자 번호 → 안내문을 끼운 뒤의 번호. 컨트롤 자리를 옮길 때 쓴다.
+    let raw: Vec<char> = para.text.chars().collect();
+    let mut chars: Vec<char> = Vec::with_capacity(raw.len());
+    let mut shift_at: Vec<(usize, usize)> = Vec::new(); // (원래 번호, 그 앞까지 밀린 양)
+    let mut shift = 0usize;
+    let mut next_insert = 0usize;
+    for (i, ch) in raw.iter().enumerate() {
+        while next_insert < inserts.len() && inserts[next_insert].0 == i {
+            let text = &inserts[next_insert].1;
+            chars.extend(text.chars());
+            shift += text.chars().count();
+            next_insert += 1;
+        }
+        shift_at.push((i, shift));
+        chars.push(*ch);
+    }
+    while next_insert < inserts.len() {
+        chars.extend(inserts[next_insert].1.chars());
+        shift += inserts[next_insert].1.chars().count();
+        next_insert += 1;
+    }
+    let shift_for = |orig: usize| -> usize {
+        match shift_at.binary_search_by_key(&orig, |(i, _)| *i) {
+            Ok(k) => shift_at[k].1,
+            Err(_) => shift,
+        }
+    };
     let mut cut = 0usize;
 
     for (ci, ctrl) in para.controls.iter().enumerate() {
@@ -255,10 +319,13 @@ fn scan_paragraph(
         let here = control_positions
             .get(ci)
             .copied()
+            .map(|orig| orig + shift_for(orig))
             .unwrap_or(chars.len())
             .min(chars.len());
         let run: String = chars[cut.min(here)..here].iter().collect();
-        scan_push(items, state, run);
+        // 리스트를 여는 개체(표·글상자) 앞 조각은 줄이 되고, 인라인 개체(수식) 앞 조각은
+        // 안 된다 — `GetTextFile` 이 그 둘을 다르게 잇는다(실측).
+        items.push((state, run, if nested.is_empty() { 2 } else { 0 }));
         state = 2;
         cut = here;
         // 개체 속으로 — 첫 항목이 4, 나온 뒤 첫 항목이 5 다. 속이 없으면 여기서 끝이다.
@@ -554,7 +621,7 @@ impl DocumentCore {
     /// **거기서 끊기고**, 개체를 다 돈 뒤 남은 글과 줄 끝이 이어진다.
     pub fn scan_items_json(&self) -> String {
         let (_, lists) = self.collect_fields_and_lists();
-        let mut items: Vec<(u8, String, bool)> = Vec::new();
+        let mut items: Vec<(u8, String, u8)> = Vec::new();
         let mut para_in_body = 0usize;
         for section in self.document.sections.iter() {
             for para in section.paragraphs.iter() {
@@ -564,9 +631,53 @@ impl DocumentCore {
         }
         let body: Vec<String> = items
             .iter()
-            .map(|(state, text, marker)| format!("{{\"state\":{},\"marker\":{},\"text\":{}}}", state, marker, json_escape(text)))
+            .map(|(state, text, kind)| {
+                format!(
+                    "{{\"state\":{},\"kind\":{},\"text\":{}}}",
+                    state,
+                    kind,
+                    json_escape(text)
+                )
+            })
             .collect();
         format!("[{}]", body.join(","))
+    }
+
+    /// 문서 글 전체 — 웹한글컨트롤 `GetTextFile("TEXT")`.
+    ///
+    /// 훑기([`scan_items_json`](Self::scan_items_json))와 **같은 뿌리**다. 표식 항목(구역·단
+    /// 정의)만 빼고 각 조각이 줄 끝으로 끝나게 이어 붙이되, **마지막 문단 뒤에는 줄 끝을 안
+    /// 붙인다**(실측: 오라클이 정확히 두 글자 짧다).
+    ///
+    /// 이 형식만의 규칙이 하나 더 있다. **CP949 로 못 담는 글자는 `&#N;` 수치 참조가 된다** —
+    /// `◦`(U+25E6)는 바뀌고 `€`·`①`·`㈜` 는 그대로다(여덟 글자로 예측 전수 적중). 훑기는
+    /// escape 하지 않는다.
+    pub fn text_file_json(&self) -> String {
+        let (_, lists) = self.collect_fields_and_lists();
+        let mut items: Vec<(u8, String, u8)> = Vec::new();
+        let mut para_in_body = 0usize;
+        for section in self.document.sections.iter() {
+            for para in section.paragraphs.iter() {
+                scan_paragraph(para, (ROOT_LIST_ID, para_in_body), &lists, &mut items);
+                para_in_body += 1;
+            }
+        }
+        let mut out = String::new();
+        for (_, text, kind) in items.iter() {
+            if *kind == 1 {
+                continue; // 표식(구역·단 정의)은 글에 안 실린다
+            }
+            out.push_str(text);
+            // 인라인 개체(수식 따위) 앞 조각은 **줄을 만들지 않는다** — 그 개체는 줄 안에 있다.
+            // 표·글상자처럼 리스트를 여는 개체 앞 조각만 줄이 된다.
+            if *kind != 2 && !text.ends_with("\r\n") {
+                out.push_str("\r\n");
+            }
+        }
+        if out.ends_with("\r\n") {
+            out.truncate(out.len() - 2);
+        }
+        json_escape(&escape_outside_cp949(&out))
     }
 
     /// 컨트롤 하나를 지운다 — 웹한글컨트롤 `DeleteCtrl`.

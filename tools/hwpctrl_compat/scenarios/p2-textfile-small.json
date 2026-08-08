@@ -1,8 +1,10 @@
 {
-  "id": "p2-textfile-eq",
-  "title": "GetTextFile — eq-01.hwp",
-  "ledger": [],
-  "open": "samples/eq-01.hwp",
+  "id": "p2-textfile-small",
+  "title": "GetTextFile — table-001.hwp",
+  "ledger": [
+    "HwpCtrl.method.GetTextFile"
+  ],
+  "open": "samples/table-001.hwp",
   "calls": [
     [
       "GetTextFile",

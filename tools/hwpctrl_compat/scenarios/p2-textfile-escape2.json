@@ -1,0 +1,30 @@
+{
+  "id": "p2-textfile-escape2",
+  "title": "GetTextFile escape — CP949 밖 글자만 바뀌는가",
+  "ledger": [
+    "HwpCtrl.method.GetTextFile"
+  ],
+  "open": "samples/issue-986-receipt.hwp",
+  "calls": [
+    [
+      "PutFieldText",
+      [
+        "pt_nm",
+        "ḁǄↀ⿰◦€①가"
+      ]
+    ],
+    [
+      "GetFieldText",
+      [
+        "pt_nm"
+      ]
+    ],
+    [
+      "GetTextFile",
+      [
+        "TEXT",
+        ""
+      ]
+    ]
+  ]
+}

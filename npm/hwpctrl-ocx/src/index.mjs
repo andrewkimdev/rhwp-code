@@ -912,14 +912,9 @@ export class HwpCtrl {
    */
   GetTextFile(format, option) {
     if (String(option ?? '').includes('saveblock') && !this.#selection) return null;
-    const raw = parseJson(this.#doc?.getScanItems?.() ?? '', null);
-    if (!Array.isArray(raw)) return '';
-    const joined = raw
-      .filter((item) => !item.marker)
-      .map((item) => (item.text.endsWith('\r\n') ? item.text : `${item.text}\r\n`))
-      .join('');
-    // 마지막 문단 뒤에는 줄 끝을 안 붙인다(실측: 오라클이 정확히 두 글자 짧다).
-    return joined.endsWith('\r\n') ? joined.slice(0, -2) : joined;
+    // 이어 붙이기와 CP949 밖 글자 escape 는 코어가 한다 — 인코딩 판정을 여기서 흉내 내면
+    // 반드시 틀린다(CP949 는 EUC-KR + 마이크로소프트 확장이다).
+    return parseJson(this.#doc?.getTextFileText?.() ?? '""', '');
   }
 
   /** 규격 §8.3.22 — 문서 끼워넣기. 아직 구현하지 않았다. */

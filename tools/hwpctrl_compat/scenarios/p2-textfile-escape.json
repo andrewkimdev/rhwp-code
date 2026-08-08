@@ -1,0 +1,30 @@
+{
+  "id": "p2-textfile-escape",
+  "title": "GetTextFile escape 규칙 — 어떤 글자가 &#N; 이 되는가",
+  "ledger": [
+    "HwpCtrl.method.GetTextFile"
+  ],
+  "open": "samples/issue-986-receipt.hwp",
+  "calls": [
+    [
+      "PutFieldText",
+      [
+        "pt_nm",
+        "가A1 ◦○●※→↔㈜Ω℃†‡€①ⓐ"
+      ]
+    ],
+    [
+      "GetFieldText",
+      [
+        "pt_nm"
+      ]
+    ],
+    [
+      "GetTextFile",
+      [
+        "TEXT",
+        ""
+      ]
+    ]
+  ]
+}

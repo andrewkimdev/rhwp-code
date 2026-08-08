@@ -5494,6 +5494,12 @@ impl HwpDocument {
             .map_err(|e| e.into())
     }
 
+    /// 문서 글 전체 — `GetTextFile("TEXT")`. JSON 문자열 하나를 준다.
+    #[wasm_bindgen(js_name = getTextFileText)]
+    pub fn get_text_file_text(&self) -> String {
+        self.text_file_json()
+    }
+
     /// 문서 글을 한글 스캔 차례로 — `InitScan`·`GetText`·`ReleaseScan` 이 쓴다.
     #[wasm_bindgen(js_name = getScanItems)]
     pub fn get_scan_items(&self) -> String {

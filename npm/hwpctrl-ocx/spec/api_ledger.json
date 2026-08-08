@@ -4,10 +4,10 @@
   "oracleVersion": "한글2022 (설치본 COM)",
   "summary": {
     "total": 484,
-    "done": 200,
+    "done": 201,
     "byStatus": {
-      "verified": 198,
-      "unimplemented": 284,
+      "verified": 199,
+      "unimplemented": 283,
       "substituted": 2
     },
     "byUnit": {
@@ -17,8 +17,8 @@
         "substituted": 2
       },
       "method": {
-        "verified": 36,
-        "unimplemented": 52
+        "verified": 37,
+        "unimplemented": 51
       },
       "event": {
         "unimplemented": 3
@@ -1336,14 +1336,21 @@
       "name": "GetTextFile",
       "arity": 2,
       "section": "8.3.19",
-      "status": "unimplemented",
+      "status": "verified",
       "notes": "",
       "legacyHwpctl": false,
       "specArityAmbiguous": true,
       "oracle": {
-        "scenarios": [],
+        "scenarios": [
+          "p2-textfile-eq",
+          "p2-textfile-escape",
+          "p2-textfile-escape2",
+          "p2-textfile-order",
+          "p2-textfile-plain",
+          "p2-textfile-small"
+        ],
         "lastRun": null,
-        "diff": null
+        "diff": 0
       }
     },
     {
