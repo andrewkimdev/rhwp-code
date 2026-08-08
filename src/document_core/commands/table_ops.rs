@@ -3130,6 +3130,29 @@ impl DocumentCore {
         parent_para_idx: usize,
         control_idx: usize,
     ) -> Result<String, HwpError> {
+        self.delete_control_native_impl(section_idx, parent_para_idx, control_idx, true)
+    }
+
+    /// 문단이 담은 컨트롤 하나를 지운다 — 갈래를 가리지 않는다(웹한글컨트롤 `DeleteCtrl`).
+    ///
+    /// 표 전용 경로와 같은 몸을 쓴다. 확장 컨트롤이 차지하던 여덟 칸을 닫는 일(뒤따르는
+    /// `char_offsets` 를 8씩 당기고 `char_count` 를 줄이는 것)이 갈래와 무관하기 때문이다.
+    pub fn delete_control_native(
+        &mut self,
+        section_idx: usize,
+        parent_para_idx: usize,
+        control_idx: usize,
+    ) -> Result<String, HwpError> {
+        self.delete_control_native_impl(section_idx, parent_para_idx, control_idx, false)
+    }
+
+    fn delete_control_native_impl(
+        &mut self,
+        section_idx: usize,
+        parent_para_idx: usize,
+        control_idx: usize,
+        require_table: bool,
+    ) -> Result<String, HwpError> {
         if section_idx >= self.document.sections.len() {
             return Err(HwpError::RenderError(format!(
                 "구역 인덱스 {} 범위 초과",
@@ -3152,10 +3175,12 @@ impl DocumentCore {
                 )));
             }
             // 표 컨트롤인지 확인
-            if !matches!(
-                &para.controls[control_idx],
-                crate::model::control::Control::Table(_)
-            ) {
+            if require_table
+                && !matches!(
+                    &para.controls[control_idx],
+                    crate::model::control::Control::Table(_)
+                )
+            {
                 return Err(HwpError::RenderError(
                     "지정된 컨트롤이 표가 아닙니다".to_string(),
                 ));

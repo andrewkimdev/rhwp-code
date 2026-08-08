@@ -97,6 +97,9 @@ def run_ocx(scenario: Path, out_dir: Path, timeout: int, expect_version: str | N
     sys.stdout.write(proc.stdout.decode("utf-8", "replace"))
     if proc.returncode == 3:
         return "VERSION"
+    # 읽기 전용으로 열렸다 — 편집 액션이 조용히 무시되므로 정답지로 쓸 수 없다(계획서 §4.24).
+    if proc.returncode == 4:
+        return "READONLY"
     if proc.returncode != 0:
         sys.stderr.write(proc.stderr.decode("utf-8", "replace")[-2000:])
         return "ERR"
@@ -127,7 +130,13 @@ def run_rhwp(scenario: Path, out_dir: Path, impl: str, timeout: int) -> str:
 def main() -> int:
     sys.stdout.reconfigure(encoding="utf-8")
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--impl", default="legacy", help="rhwp 측 구현 (legacy | 패키지 엔트리 경로)")
+    # 기본값은 **새 호환 층**이다. 예전 기본값(`legacy`)은 구 studio `hwpctl` 층을 재서,
+    # `--impl` 을 빼먹으면 전량 실패가 나고도 원인이 안 보였다(로그 접두어만 `[hwpctl]` 로 다름).
+    ap.add_argument(
+        "--impl",
+        default="npm/hwpctrl-ocx/src/index.mjs",
+        help="rhwp 측 구현 (기본: 새 호환 층 | legacy | 패키지 엔트리 경로)",
+    )
     ap.add_argument("--only", help="시나리오 id 하나만")
     ap.add_argument("--timeout", type=int, default=300, help="시나리오당 초 (COM 무응답 대비)")
     ap.add_argument(

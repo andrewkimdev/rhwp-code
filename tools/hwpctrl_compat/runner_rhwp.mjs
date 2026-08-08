@@ -124,15 +124,75 @@ async function loadImpl(impl, wasm) {
   const mod = await import(pathToFileURL(resolve(REPO, impl)).href);
   return {
     name: impl,
-    make: (doc) => mod.createHwpCtrl({ wasmModule: doc }),
+    // 신규 패키지는 **자기 손으로** 문서를 연다(규격의 `Open`). 하니스가 문서를 만들어
+    // 넘겨 주면 그 API 가 대조에서 빠져 "구현했다"고 착각하게 된다.
+    ownsOpen: true,
+    make: ({ wasm, onSave }) => mod.createHwpCtrl({ wasm, onSave }),
   };
 }
 
-/** 메서드면 호출하고, 속성이면 읽는다 — 오라클 러너와 같은 규칙. */
-function callOne(ctrl, name, args) {
-  const value = ctrl[name];
-  if (typeof value === 'function') return normalize(value.apply(ctrl, args));
-  if (name in ctrl) return normalize(value);
+/**
+ * 메서드면 호출하고, 속성이면 읽는다 — 오라클 러너와 같은 규칙.
+ *
+ * 이름에 점을 찍으면 객체를 타고 들어간다(`CharShape.Item`). 서식은 ParameterSet 객체로
+ * 오므로 점 표기 없이는 `{__type: …}` 만 대조하게 된다.
+ */
+const CALL_WITH_ARGS = /^([A-Za-z_]\w*)\((.*)\)$/;
+
+/**
+ * 점 표기 한 마디를 `[이름, 인자들]` 로 가른다.
+ *
+ * 중간 마디가 인자를 받는 메서드일 때 쓴다 — `HeadCtrl.GetAnchorPos(0).Item` 처럼.
+ * 인자는 JSON 으로 읽는다. 파이썬 러너도 같은 규약이라 양쪽이 같은 호출을 한다.
+ */
+function splitCall(part) {
+  const m = CALL_WITH_ARGS.exec(part);
+  if (!m) return [part, []];
+  const inner = m[2].trim();
+  return [m[1], inner ? JSON.parse(`[${inner}]`) : []];
+}
+
+/** 점 표기 경로를 따라가 그 자리의 값을 준다 — `$obj` 인자를 푸는 데 쓴다. */
+function resolvePath(ctrl, path) {
+  let obj = ctrl;
+  for (const raw of path.split('.')) {
+    const [part, callArgs] = splitCall(raw);
+    const next = obj[part];
+    obj = typeof next === 'function' ? next.apply(obj, callArgs) : next;
+  }
+  return obj;
+}
+
+/**
+ * 인자 중 `{"$obj": "경로"}` 를 **그 자리의 객체**로 바꾼다.
+ *
+ * 파라미터셋이나 `Ctrl` 을 인자로 받는 API 를 시나리오가 부를 수 있게 하는 규약이다.
+ * 파이썬 러너도 같은 규약이라 양쪽이 같은 것을 넘긴다.
+ */
+function resolveArgs(ctrl, args) {
+  return args.map((a) =>
+    a && typeof a === 'object' && !Array.isArray(a) && '$obj' in a ? resolvePath(ctrl, a.$obj) : a,
+  );
+}
+
+function callOne(ctrl, name, rawArgs) {
+  const args = resolveArgs(ctrl, rawArgs);
+  const parts = name.split('.');
+  let owner = ctrl;
+  for (const raw of parts.slice(0, -1)) {
+    const [part, midArgs] = splitCall(raw);
+    if (owner == null || !(part in owner)) {
+      const err = new Error(`구현에 없는 API: ${name}`);
+      err.missing = true;
+      throw err;
+    }
+    const next = owner[part];
+    owner = typeof next === 'function' ? next.apply(owner, midArgs) : next;
+  }
+  const last = parts[parts.length - 1];
+  const value = owner == null ? undefined : owner[last];
+  if (typeof value === 'function') return normalize(value.apply(owner, args));
+  if (owner != null && last in owner) return normalize(value);
   // 대소문자만 다른 별칭(예: AddEventListener ↔ addEventListener)도 규격 위반이다.
   // 조용히 맞춰 주면 L1 차이가 가려진다 — 없는 것은 없는 것으로 기록한다.
   const err = new Error(`구현에 없는 API: ${name}`);
@@ -163,15 +223,29 @@ async function main() {
   };
 
   try {
-    let doc;
-    if (scenario.open) {
-      const bytes = readFileSync(join(REPO, scenario.open));
-      doc = new wasm.HwpDocument(bytes);
-      result.calls.push({ call: 'Open', args: [scenario.open], value: true });
+    let ctrl;
+    // 저장은 호스트가 받는다 — 규격상 브라우저에서는 다운로드다(v2.4 §2.2).
+    let savedBytes = null;
+    const onSave = (bytes) => {
+      savedBytes = bytes;
+    };
+
+    if (impl.ownsOpen) {
+      ctrl = impl.make({ wasm, onSave });
+      if (scenario.open) {
+        const bytes = readFileSync(join(REPO, scenario.open));
+        const opened = ctrl.Open(new Uint8Array(bytes), '', '');
+        result.calls.push({ call: 'Open', args: [scenario.open], value: normalize(opened) });
+      }
     } else {
-      doc = wasm.HwpDocument.createEmpty();
+      const doc = scenario.open
+        ? new wasm.HwpDocument(readFileSync(join(REPO, scenario.open)))
+        : wasm.HwpDocument.createEmpty();
+      ctrl = impl.make(doc);
+      if (scenario.open) {
+        result.calls.push({ call: 'Open', args: [scenario.open], value: true });
+      }
     }
-    const ctrl = impl.make(doc);
 
     for (const [name, callArgs = []] of scenario.calls ?? []) {
       const record = { call: name, args: callArgs };
@@ -184,10 +258,22 @@ async function main() {
     }
 
     if (scenario.saveAs) {
-      const bytes = ctrl.getWasmDoc ? ctrl.getWasmDoc().exportHwp() : doc.exportHwp();
-      const dst = join(outDir, scenario.saveAs);
-      writeFileSync(dst, bytes);
-      result.saved = { path: dst, ok: true };
+      // 규격의 `SaveAs` 를 실제로 태운다. 하니스가 문서를 직접 내보내면 그 API 가
+      // 대조에서 빠진다. 옛 경로(문서를 넘겨받는 impl)만 직접 내보내기로 남긴다.
+      let bytes = null;
+      if (impl.ownsOpen) {
+        ctrl.SaveAs(scenario.saveAs, '', '');
+        bytes = savedBytes;
+      } else {
+        bytes = ctrl.getWasmDoc().exportHwp();
+      }
+      if (bytes) {
+        const dst = join(outDir, scenario.saveAs);
+        writeFileSync(dst, bytes);
+        result.saved = { path: dst, ok: true };
+      } else {
+        result.saved = { path: null, ok: false };
+      }
     }
   } catch (e) {
     result.fatal = `${e.constructor.name}: ${e.message}`;

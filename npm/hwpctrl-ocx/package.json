@@ -17,6 +17,7 @@
     "spec": "python ../../tools/hwpctrl_compat/extract_spec.py",
     "ledger": "python ../../tools/hwpctrl_compat/build_ledger.py",
     "ledger:check": "python ../../tools/hwpctrl_compat/build_ledger.py --check",
-    "gate": "python ../../tools/hwpctrl_compat/run_gate.py --impl legacy"
+    "gate": "python ../../tools/hwpctrl_compat/run_gate.py",
+    "gate:legacy": "python ../../tools/hwpctrl_compat/run_gate.py --impl legacy"
   }
 }
