@@ -16,8 +16,9 @@ workflow를 변경하지 않으며, #4154에서 삭제한 POC 10개도 복원하
 
 후속 기록 전 candidate `ac8bdbf61c2b760c8560d59d2f4d6a733ed6b823`은 review-only B 경로의
 GitHub preflight와 최종 `Build & Test` aggregate를 통과했고, 최신 `upstream/devel`과의 merge
-simulation도 충돌 없이 통과했다. 이 review 기록을 포함한 최신 head의 required checks,
-`jangster77` review와 작업지시자의 별도 merge 승인을 확인한 뒤 merge할 것을 권고한다.
+simulation도 충돌 없이 통과했다. 작업지시자는 이 문서 전용 후속 PR을 maintainer self-review로
+처리하고 merge할 것을 명시적으로 승인했다. 이 결정 기록을 포함한 최신 head의 required checks를
+확인하고 self-review 결과를 GitHub에 남긴 뒤 merge할 것을 권고한다.
 
 ## 검토 경로
 
@@ -42,7 +43,7 @@ review-only 후속 PR이므로 이 문서의 남은 게이트로 처리 순서�
 | PR | [#4240](https://github.com/edwardkim/rhwp/pull/4240) |
 | 원 PR | [#4154](https://github.com/edwardkim/rhwp/pull/4154) |
 | 작성자 / assignee | `edwardkim` / `edwardkim` |
-| reviewer | `jangster77` 요청 |
+| reviewer | 최초 `jangster77` 요청, 이후 작업지시자 결정으로 maintainer self-review 전환 |
 | milestone / labels | `v1.0.0` / `documentation` |
 | base / head | `devel` / `docs/pr-4154-post-merge-20260808` |
 | 생성 상태 | open, non-draft |
@@ -89,10 +90,14 @@ PDF와 visual asset을 변경하지 않는 문서 전용 PR이므로 변경 범�
   정상적으로 skipped됐다.
 - 이 review 문서와 오늘할일 갱신을 push하면 새 head가 되므로 해당 head의 preflight, 최종
   aggregate와 mergeability를 다시 확인한다.
-- `jangster77` review와 작업지시자의 별도 merge 승인 전에는 merge하지 않는다.
+- 작업지시자가 maintainer self-review 경로와 merge를 명시적으로 승인했다. GitHub는 작성자의 자기
+  `APPROVE` review를 허용하지 않으므로 검토 결과는 `COMMENT` review로 게시한다.
+- 외부 reviewer 요청을 철회하고 이 결정 기록을 포함한 최신 head의 required checks가 성공한 뒤
+  merge한다.
 
 ## 최종 권고
 
-변경 내용과 검증 범위는 타당하며 **merge 권고**다. 최신 review-only head의 GitHub Actions 성공,
-review와 merge 승인이 모두 충족되면 #4240을 merge하고, 별도 issue·원 PR comment·오늘할일을 다시
-만들지 않은 채 `devel` sync와 이 작업에서 만든 branch 정리만 수행한다.
+변경 내용과 검증 범위는 타당하며 **merge 권고**다. 작업지시자의 self-review·merge 승인은 완료됐다.
+최신 review-only head의 GitHub Actions 성공과 self-review 게시를 확인한 뒤 #4240을 merge하고,
+별도 issue·원 PR comment·오늘할일을 다시 만들지 않은 채 `devel` sync와 이 작업에서 만든 branch의
+정리 대상을 확인한다.
