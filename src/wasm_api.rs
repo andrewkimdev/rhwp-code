@@ -7224,6 +7224,31 @@ impl HwpDocument {
         .map_err(|e| e.into())
     }
 
+    /// 전체 cellPath가 가리키는 중첩 셀의 선택 영역을 내부 클립보드에 복사한다(#4272).
+    #[wasm_bindgen(js_name = copySelectionInCellByPath)]
+    pub fn copy_selection_in_cell_by_path(
+        &mut self,
+        section_idx: u32,
+        parent_para_idx: u32,
+        path_json: &str,
+        start_cell_para_idx: u32,
+        start_char_offset: u32,
+        end_cell_para_idx: u32,
+        end_char_offset: u32,
+    ) -> Result<String, JsValue> {
+        let path = DocumentCore::parse_cell_path(path_json)?;
+        self.copy_selection_in_cell_by_path_native(
+            section_idx as usize,
+            parent_para_idx as usize,
+            &path,
+            start_cell_para_idx as usize,
+            start_char_offset as usize,
+            end_cell_para_idx as usize,
+            end_char_offset as usize,
+        )
+        .map_err(|e| e.into())
+    }
+
     /// 컨트롤 객체(표, 이미지, 도형)를 내부 클립보드에 복사한다.
     ///
     /// [Task #1161] `cell_path_json` 이 빈 문자열/`"[]"` 면 본문, 그 외에는 셀/글상자
@@ -7395,6 +7420,31 @@ impl HwpDocument {
             json_u32(options_json, "startCharOffset").unwrap_or(0) as usize,
             json_u32(options_json, "endCellParaIdx").unwrap_or(0) as usize,
             json_u32(options_json, "endCharOffset").unwrap_or(0) as usize,
+        )
+        .map_err(|e| e.into())
+    }
+
+    /// 전체 cellPath가 가리키는 중첩 셀 선택을 HTML로 변환한다(#4272).
+    #[wasm_bindgen(js_name = exportSelectionInCellHtmlByPath)]
+    pub fn export_selection_in_cell_html_by_path(
+        &self,
+        section_idx: u32,
+        parent_para_idx: u32,
+        path_json: &str,
+        start_cell_para_idx: u32,
+        start_char_offset: u32,
+        end_cell_para_idx: u32,
+        end_char_offset: u32,
+    ) -> Result<String, JsValue> {
+        let path = DocumentCore::parse_cell_path(path_json)?;
+        self.export_selection_in_cell_html_by_path_native(
+            section_idx as usize,
+            parent_para_idx as usize,
+            &path,
+            start_cell_para_idx as usize,
+            start_char_offset as usize,
+            end_cell_para_idx as usize,
+            end_char_offset as usize,
         )
         .map_err(|e| e.into())
     }

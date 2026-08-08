@@ -52,7 +52,11 @@ Stage 1 시각 검증에서 확인된 동일 사용자 여정을 별도 이슈�
 - `exportSelectionInCellHtmlByPath`를 같은 경로 계약으로 추가해 시스템 클립보드의 HTML도
   바깥 셀로 퇴행하지 않게 한다.
 - Studio `onCopy`는 중첩 셀에서 두 path API를 사용하고, 깊이 1은 기존 API를 유지한다.
+- path API의 시작·끝 문단 인덱스는 평면 호환 필드가 아니라 `cellParaIndexOf()`로 전체 path의
+  마지막 엔트리에서 읽는다.
 - 실제 샘플 Rust 래칫은 plain text `23,504`와 HTML fragment를 검증한다.
 - CDP E2E는 실제 mouse drag → Ctrl+C → Ctrl+V를 수행해 내부 클립보드와 최종 셀 텍스트가
   `23,504`로 보존되는지 확인한다.
+- 물리 11쪽 자식 표 문단 22의 offset `66 -> 89` 선택을 별도 CDP 래칫으로 두어 평면
+  `cellParaIndex=0` 퇴행을 차단한다.
 - 복사 이벤트는 드래그 hot path가 아니며 문서 전체 순회·페이지네이션을 추가하지 않는다.

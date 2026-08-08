@@ -11,6 +11,7 @@ const REPO_ROOT = path.resolve(E2E_DIR, '..', '..');
 const OUTPUT_DIR = path.join(REPO_ROOT, 'output', '4272');
 const OUTPUT_JSON = path.join(OUTPUT_DIR, 'nested-cell-text-selection.json');
 const OUTPUT_PNG = path.join(OUTPUT_DIR, 'nested-cell-text-selection.png');
+const COPY_PASTE_PNG = path.join(OUTPUT_DIR, 'nested-cell-copy-paste.png');
 const FIXTURE = 'basic/issue2007_nested_cell_pagination_42065.hwp';
 const PAGE_INDEX = 4;
 const TARGET_TEXT = '23,504';
@@ -154,6 +155,38 @@ runTest('#4272 중첩 표 안쪽 셀 텍스트 선택 하이라이트', async ({
     return result;
   });
 
+  await page.screenshot({ path: OUTPUT_PNG, fullPage: false });
+
+  await page.keyboard.down('Control');
+  await page.keyboard.press('c');
+  await page.keyboard.up('Control');
+  await page.evaluate(() => new Promise((resolve) => setTimeout(resolve, 150)));
+  const copied = await page.evaluate(() => ({
+    text: window.__wasm.getClipboardText(),
+    hasInternalClipboard: window.__wasm.hasInternalClipboard(),
+  }));
+
+  await page.keyboard.down('Control');
+  await page.keyboard.press('v');
+  await page.keyboard.up('Control');
+  await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => setTimeout(resolve, 350))));
+  const afterPaste = await page.evaluate(({ candidate, targetText }) => {
+    const input = window.__inputHandler;
+    const start = candidate.start.hit;
+    return {
+      text: window.__wasm.getTextInCellByPath(
+        start.sectionIndex,
+        start.parentParaIndex,
+        JSON.stringify(start.cellPath),
+        start.charOffset,
+        [...targetText].length,
+      ),
+      cursor: input.cursor.getPosition(),
+      hasSelection: input.hasSelection(),
+    };
+  }, { candidate: target, targetText: TARGET_TEXT });
+  await page.screenshot({ path: COPY_PASTE_PNG, fullPage: false });
+
   mkdirSync(OUTPUT_DIR, { recursive: true });
   writeFileSync(OUTPUT_JSON, `${JSON.stringify({
     fixture: FIXTURE,
@@ -162,9 +195,10 @@ runTest('#4272 중첩 표 안쪽 셀 텍스트 선택 하이라이트', async ({
     target,
     points,
     observed,
+    copied,
+    afterPaste,
     consoleMessages,
   }, null, 2)}\n`);
-  await page.screenshot({ path: OUTPUT_PNG, fullPage: false });
 
   assert.equal(target.text, TARGET_TEXT);
   assert.equal(target.depth, 3, '외부→래퍼→자식 표 깊이 3 경로');
@@ -177,7 +211,13 @@ runTest('#4272 중첩 표 안쪽 셀 텍스트 선택 하이라이트', async ({
   assert.ok(observed.pathApiCalls >= 1, `경로 기반 rect API 호출 (${observed.pathApiCalls})`);
   assert.ok(observed.pathApiCalls <= 20, `16-step drag에서 중복 폭증 없는 API 호출 (${observed.pathApiCalls})`);
   assert.ok(observed.highlightCount >= 1, `선택 하이라이트 표시 (${observed.highlightCount})`);
+  assert.equal(copied.hasInternalClipboard, true, '내부 클립보드 생성');
+  assert.equal(copied.text, TARGET_TEXT, '중첩 셀 선택 plain text 복사');
+  assert.equal(afterPaste.text, TARGET_TEXT, '선택 범위 Ctrl+V 뒤 텍스트 보존');
+  assert.equal(afterPaste.hasSelection, false, '붙여넣기 뒤 선택 해제');
+  assert.equal(afterPaste.cursor.charOffset, [...TARGET_TEXT].length, '붙여넣기 뒤 캐럿 offset');
   assert.deepEqual(consoleMessages, [], `브라우저 경고·오류 없음: ${JSON.stringify(consoleMessages)}`);
   console.log(`Evidence: ${OUTPUT_JSON}`);
   console.log(`Evidence: ${OUTPUT_PNG}`);
+  console.log(`Evidence: ${COPY_PASTE_PNG}`);
 });
