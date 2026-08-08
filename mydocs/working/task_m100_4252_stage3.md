@@ -56,10 +56,10 @@ WASM 재생성 전 TypeScript 검사는 최신 devel의 `setCaretPosition` API�
 
 증적은 `output/4252/`, `output/4159/`에 있으며 `output/`은 gitignore 대상이다.
 
-## 4. 남은 게이트
+## 4. 작업지시자 시각 판정과 게시 승인
 
 Stage 2의 작업지시자 시각 판정은 이전 WASM
 `23eeecee687a695427106415787a876ef88126f948519a0ca93f03d6ef0ff564`에 대한 결과다. 두 번째
 재배치로 최종 WASM 해시가 달라졌으므로 현재 dev 서버에서 #4252 자식 표 선택·부모 caret을 다시
-시각 확인한다. 통과하면 이미 받은 승인 범위에 따라 원격 branch push와 `devel` 대상 Open PR을
-생성한다.
+시각 확인했다. 작업지시자가 최종 바이너리의 판정을 통과시켰으며, 이미 받은 승인 범위에 따라 원격
+branch push와 `devel` 대상 Open PR을 생성한다.
