@@ -1,6 +1,6 @@
 ---
 kind: pr_review
-status: accepted-with-maintainer-correction
+status: merged-post-review
 canonical: mydocs/manual/pr_review_workflow.md
 last_verified: 2026-08-08
 ---
@@ -61,6 +61,17 @@ head branch `task/4110-recipe09-bulk`에 정확히 귀속되어 성공했다. PR
 CodeQL preflight 및 Build & Test aggregate가 성공하고 heavy worker가 skip된 것은 review-only fast-pass B
 경로의 정상 결과다.
 
-**메인터너 보정 포함 수용.** 보정과 review 기록을 push한 뒤 최신 head의 preflight, Build & Test
-aggregate, mergeable 상태를 다시 확인하고 작업지시자 승인에 따라 병합한다. 기존 성공 head에 broad CI를
-중복 실행하지 않는다.
+**메인터너 보정 포함 수용.** 보정과 review 기록을 포함한 head `8bb09b23c`의
+[CI 31240478000](https://github.com/edwardkim/rhwp/actions/runs/31240478000)과
+[CodeQL 31240477873](https://github.com/edwardkim/rhwp/actions/runs/31240477873)은 preflight와
+Build & Test aggregate를 성공했고 heavy worker를 skip했다. 최신 head가 `MERGEABLE`·`CLEAN`임을
+재확인하고 작업지시자 승인 뒤 admin merge했다. 기존 성공 head에 broad CI를 중복 실행하지 않았다.
+
+## Merge와 후속 상태
+
+- merge commit: `17ebc92d514f8103a09fce6aa91b5a19dd418d9f`
+- merge 시각: 2026-08-08 13:56 KST
+- `upstream/devel` 포함: merge commit을 fetch하고 로컬 `devel`을 fast-forward했다.
+- 관련 이슈 #4110: merge 직후 첫 조회에서는 open이었으나 GitHub Actions가 closing keyword를
+  확인해 2026-08-08 13:57 KST에 자동 close했다. 운영 기록 반영 뒤 maintainer comment만 남긴다.
+- contributor fork의 `task/4110-recipe09-bulk` branch는 삭제하지 않는다.
