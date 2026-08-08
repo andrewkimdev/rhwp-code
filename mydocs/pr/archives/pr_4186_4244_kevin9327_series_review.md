@@ -75,6 +75,7 @@
 | 새 도구 실실행 | agent bench, provenance chain, scale ladder, render gate, fork harvest 정상 |
 | GitHub Full CI | [CI 31248491466](https://github.com/edwardkim/rhwp/actions/runs/31248491466), [CodeQL 31248491386](https://github.com/edwardkim/rhwp/actions/runs/31248491386), [Render Diff 31248491377](https://github.com/edwardkim/rhwp/actions/runs/31248491377), Node/Python binding 모두 `cbfb07de3`에서 통과 |
 | #4254 workflow 보정 Full CI | [CI 31249497089](https://github.com/edwardkim/rhwp/actions/runs/31249497089), [CodeQL 31249496988](https://github.com/edwardkim/rhwp/actions/runs/31249496988), [Render Diff 31249496981](https://github.com/edwardkim/rhwp/actions/runs/31249496981), [Node binding 31249496995](https://github.com/edwardkim/rhwp/actions/runs/31249496995), [Python binding 31249497087](https://github.com/edwardkim/rhwp/actions/runs/31249497087)가 `374e14f72`에서 통과 |
+| #4254 trailing docs 재현 | [Node binding 31250118443](https://github.com/edwardkim/rhwp/actions/runs/31250118443), [Python binding 31250118444](https://github.com/edwardkim/rhwp/actions/runs/31250118444)가 `2fdf5c66d`에서 성공했고 unit·integration·package/wheel·generated-types job은 모두 skip |
 
 `npm ci`의 개발 의존성 감사에는 기존 low/high 항목 2건이 남았으나 lockfile을 이 연작이 변경하지 않았고,
 production 의존성 감사는 0건이었다.
@@ -83,6 +84,7 @@ production 의존성 감사는 0건이었다.
 
 **#4185를 제외한 27개 PR은 메인터너 보정 포함 수용 권고**다. 통합
 [PR #4253](https://github.com/edwardkim/rhwp/pull/4253)는 #4254 보정 후 `374e14f72`에서 Full CI를
-통과했고 `mergeStateStatus=CLEAN`을 확인했다. 이 뒤의 오늘할일·검토 기록 갱신은 코드 후보를
-바꾸지 않는 trailing 문서 commit으로 반영하며, 최신 head의 docs-only gate와 작업지시자 승인 뒤
-merge한다.
+통과했고 `mergeStateStatus=CLEAN`을 확인했다. 이어 `2fdf5c66d`의 trailing 문서 commit에서
+Node/Python binding까지 비용 큰 job을 재실행하지 않고 성공함을 확인했다. 이 최종 기록 갱신은
+코드 후보를 바꾸지 않는 trailing 문서 commit으로 반영하며, 최신 head의 docs-only gate와
+작업지시자 승인 뒤 merge한다.
