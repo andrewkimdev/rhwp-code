@@ -60,3 +60,17 @@ Stage 1 시각 검증에서 확인된 동일 사용자 여정을 별도 이슈�
 - 물리 11쪽 자식 표 문단 22의 offset `66 -> 89` 선택을 별도 CDP 래칫으로 두어 평면
   `cellParaIndex=0` 퇴행을 차단한다.
 - 복사 이벤트는 드래그 hot path가 아니며 문서 전체 순회·페이지네이션을 추가하지 않는다.
+
+## 6. Stage 3 — 중첩 표 객체 복사
+
+깊이 3 자식 표 객체 선택 참조의 `cellPath`는 표의 각 셀까지 내려가는 경로다. 선택된 표 control은
+마지막 엔트리의 `controlIndex`이고, 그 control을 소유한 문단은 마지막 엔트리를 제외한 prefix
+path가 가리킨다.
+
+- `tableObjectClipboardTarget()` 순수 헬퍼로 선택 참조를
+  `(ownerCellPathJson, selectedControlIndex)`로 변환한다.
+- 키보드 Ctrl+C와 컨텍스트 메뉴·도구 상자의 `performCopy()`가 같은 헬퍼를 사용한다.
+- 본문 표는 기존 빈 owner path와 `ref.ci` 계약을 유지한다.
+- 실제 fixture의 깊이 3 경로에서 owner path depth 2, selected control index 0으로
+  `copyControl`·`exportControlHtml`이 호출되는지 Rust·Studio·CDP 래칫으로 검증한다.
+- 객체 선택 렌더링과 페이지네이션은 변경하지 않는다.
