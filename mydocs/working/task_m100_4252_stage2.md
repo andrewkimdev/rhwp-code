@@ -7,6 +7,9 @@
 - **작업 시각**: 2026-08-08 KST
 - **원격 상태**: branch push·PR 생성·이슈 comment/close 미수행
 
+> 이 문서는 첫 번째 재배치 기준 `e919655a7`의 결과다. PR 게시 직전 발생한 두 번째 최신 devel
+> 재배치와 최종 후보 검증은 [Stage 3 보고서](task_m100_4252_stage3.md)를 따른다.
+
 ## 1. 재배치 결과
 
 Stage 1의 기준 `fcc3b2135` 이후 `upstream/devel`이 138개 commit 진행되어 PR 후보 전체 게이트 전에
