@@ -140,26 +140,20 @@ test('빈 셀 블록 문단 서식은 앵커 셀로 fallback 하지 않는다', 
     '빈 셀 블록을 빈 문단 서식 대상으로 유지하지 않는다');
 });
 
-test('글자 서식 대상 판정은 셀 블록 선택도 대상으로 인정한다', () => {
-  // hasSelection() 은 anchor/fnAnchor 만 본다. 서식 가드가 그것만 보면 셀 블록 선택에서
-  // 통째로 반환돼 굵게/기울임/글꼴 크기가 아무 일도 하지 않는다.
+test('글자 서식 진입점은 선택·셀 블록 유무로 조기 종료하지 않는다', () => {
+  // [#4162] hasFormatTargetSelection() 게이트는 캐럿만 있을 때(선택도 셀 블록도 없음)
+  // 이 네 진입점을 통째로 no-op 시켰다 — 한컴처럼 캐럿 대기 글자 모양으로 예약하려면
+  // 게이트 자체를 없애고 판정을 applyCharFormat 내부(셀 블록 → 실제 선택 → 예약)로
+  // 옮겨야 한다. 셀 블록 인정은 이제 그 내부 분기가 보장한다(아래 테스트).
   const ih = source('src/engine/input-handler.ts');
-  const start = ih.indexOf('private hasFormatTargetSelection()');
-  assert.notEqual(start, -1, 'hasFormatTargetSelection 이 없다');
-  const body = ih.slice(start, ih.indexOf('\n  }', start));
-  assert.match(body, /this\.cursor\.hasSelection\(\)\s*\|\|\s*this\.cursor\.isInCellSelectionMode\(\)/,
-    '셀 블록 선택을 서식 대상으로 보지 않는다');
-});
-
-test('글자 서식 가드가 모두 셀 블록을 인정하는 판정으로 바뀌어야 한다', () => {
-  // 한 곳만 바꾸면 Ctrl+B 는 되는데 글꼴 크기 증감은 안 되는 부분 수정이 된다.
-  const ih = source('src/engine/input-handler.ts');
+  assert.equal(ih.indexOf('hasFormatTargetSelection'), -1,
+    '더 이상 쓰이지 않는 게이트가 남아 있으면 안 된다');
   for (const fn of ['applyToggleFormat', 'adjustFontSize', 'adjustCharRatio', 'adjustCharSpacing']) {
     const start = ih.indexOf(fn + '(');
     assert.notEqual(start, -1, `${fn} 을 찾지 못했다`);
     const body = ih.slice(start, ih.indexOf('\n  }', start));
-    assert.match(body, /if \(!this\.hasFormatTargetSelection\(\)\) return;/,
-      `${fn} 이 셀 블록 선택을 대상으로 인정하지 않는다`);
+    assert.doesNotMatch(body, /if \(!this\.(hasFormatTargetSelection|cursor\.hasSelection)\(\)\) return;/,
+      `${fn} 이 선택 없음으로 조기 종료하면 캐럿 대기 서식 예약을 못 탄다`);
   }
 });
 
@@ -183,8 +177,9 @@ test('글자 서식 적용 진입점이 셀 블록 분기를 먼저 호출한다
   assert.notEqual(start, -1, 'applyCharFormat 을 찾지 못했다');
   const body = ih.slice(start, ih.indexOf('\n  }', start));
   const blockAt = body.indexOf('this.getSelectedCellBlock()');
-  const selAt = body.indexOf('this.cursor.getSelectionOrdered()');
+  const selAt = body.indexOf('this.getNonEmptySelection()');
   assert.notEqual(blockAt, -1, '셀 블록 분기가 없다');
+  assert.notEqual(selAt, -1, '선택 판정이 getNonEmptySelection 을 쓰지 않는다 — 빈 선택을 선택으로 오인한다');
   assert.ok(blockAt < selAt, '셀 블록 분기가 텍스트 선택 분기보다 뒤에 있다');
   assert.match(body, /this\.applyCharFormatToCellBlock\(block, props\)/,
     '셀 블록 적용 경로를 호출하지 않는다');

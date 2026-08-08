@@ -6,7 +6,7 @@ import { CaretRenderer } from './caret-renderer';
 import { FieldMarkerRenderer } from './field-marker-renderer';
 import { SelectionRenderer } from './selection-renderer';
 import { CommandHistory } from './history';
-import { DeleteSelectionCommand, ApplyCharFormatCommand, ApplyParaFormatCommand, SnapshotCommand, SubmodeSnapshotCommand, SetFormValueCommand, TextMutationEffectAccumulator, IMMEDIATE_TEXT_MUTATION_EFFECTS } from './command';
+import { DeleteSelectionCommand, ApplyCharFormatCommand, ApplyParaFormatCommand, SnapshotCommand, SubmodeSnapshotCommand, SetFormValueCommand, TextMutationEffectAccumulator, IMMEDIATE_TEXT_MUTATION_EFFECTS, applyCharShapeModsToRange } from './command';
 import type { OperationDescriptor, ParaFormatTarget, RefreshPolicy, TextMutationEffects, EditCommand, EditContext, FormValueTarget } from './command';
 import { selectCellIndicesInRange, paraFormatTargetsForCellBlock } from './cell-block-format';
 import type { SelectedCellBlock } from './cell-block-format';
@@ -281,6 +281,10 @@ export class InputHandler {
   private editMode: EditorEditMode = 'normal';
   /** 마지막 셀 키 (눈금자 셀 bbox 중복 조회 방지) */
   private lastCellKey: string | null = null;
+  /** [#4162] 선택 없이 지정한 글자 서식 — 다음 삽입 런에 적용 예약(캐럿 대기 글자 모양) */
+  private pendingCharShape: Partial<CharProperties> | null = null;
+  /** pendingCharShape 를 예약·연장한 캐럿 위치. 여기서 벗어나면(진짜 이동) 예약을 버린다. */
+  private pendingCharShapeAnchor: DocumentPosition | null = null;
   private dispatcher: CommandDispatcher | null = null;
   private contextMenu: ContextMenu | null = null;
   private commandPalette: CommandPalette | null = null;
@@ -677,9 +681,9 @@ export class InputHandler {
     eventBus.on('format-char', (props) => {
       if (!this.active) return;
       if (this.editMode === 'form') return;
-      if (this.cursor.hasSelection()) {
-        this.applyCharFormat(props as Partial<CharProperties>);
-      }
+      // [#4162] 선택이 없어도(캐럿만) applyCharFormat 이 캐럿 대기 서식으로 예약한다 —
+      // 여기서 선택 유무로 걸러내면 글꼴/크기/색 피커가 다시 무언 no-op 이 된다.
+      this.applyCharFormat(props as Partial<CharProperties>);
       // 서식바 조작으로 빠진 포커스를 항상 복원
       this.focusTextarea();
     });
@@ -1833,18 +1837,7 @@ export class InputHandler {
 
   // ─── 서식 적용 ─────────────────────────────────────────
 
-  /**
-   * 서식을 적용할 대상이 있는가 — 텍스트 선택 또는 F5 셀 블록 선택.
-   *
-   * hasSelection() 은 anchor/fnAnchor 만 보므로 셀 블록 선택에서 false 다. 서식 경로가
-   * 그것만 보면 여러 칸을 골라도 글자 서식이 통째로 반환돼 아무 일도 일어나지 않는다.
-   * 같은 판정을 이미 command/format-paste-availability.ts 가 쓰고 있다.
-   */
-  private hasFormatTargetSelection(): boolean {
-    return this.cursor.hasSelection() || this.cursor.isInCellSelectionMode();
-  }
-
-  /** 선택 범위에 글자 서식을 적용한다 */
+  /** 선택 범위에 글자 서식을 적용한다. 선택이 없으면 캐럿 대기 서식으로 예약한다. */
   private applyCharFormat(props: Partial<CharProperties>): void {
     const block = this.getSelectedCellBlock();
     if (block) {
@@ -1854,10 +1847,51 @@ export class InputHandler {
       this.applyCharFormatToCellBlock(block, props);
       return;
     }
-    const sel = this.cursor.getSelectionOrdered();
-    if (!sel) return;
+    // [#4162] getSelectionOrdered() 는 anchor 만 있어도(빈 range) non-null 을 돌려줘
+    // ApplyCharFormatCommand 가 to<=from 으로 조용히 no-op 됐다. 실제 범위가 있을 때만
+    // 즉시 적용하고, 그 외(선택 없음/빈 선택)는 한컴처럼 다음 삽입 런에 예약한다.
+    const sel = this.getNonEmptySelection();
+    if (!sel) {
+      this.stagePendingCharShape(props);
+      return;
+    }
     const cmd = new ApplyCharFormatCommand(sel.start, sel.end, props);
     this.executeOperation({ kind: 'command', command: cmd });
+  }
+
+  /** [#4162] 선택 없이 지정한 글자 서식을 다음 삽입 런에 적용하도록 예약한다. */
+  private stagePendingCharShape(props: Partial<CharProperties>): void {
+    this.pendingCharShape = { ...this.pendingCharShape, ...props };
+    this.pendingCharShapeAnchor = this.cursor.getPosition();
+  }
+
+  /**
+   * 예약된 캐럿 대기 서식을 반환한다. 캐럿이 예약 지점에서 실제로 벗어났으면(탐색·클릭 등
+   * 진짜 이동) 예약을 버리고 undefined 를 돌려준다 — 매 이동 지점을 일일이 후킹하는 대신
+   * 조회 시점에 위치를 대조하는 지연 검증이다.
+   */
+  getPendingCharShape(): Partial<CharProperties> | undefined {
+    if (!this.pendingCharShape || !this.pendingCharShapeAnchor) return undefined;
+    if (CursorState.comparePositions(this.cursor.getPosition(), this.pendingCharShapeAnchor) !== 0) {
+      this.pendingCharShape = null;
+      this.pendingCharShapeAnchor = null;
+      return undefined;
+    }
+    return this.pendingCharShape;
+  }
+
+  /** [#4162] Command 를 거치지 않는 삽입(IME 조합)에 예약 서식을 직접 적용한다. */
+  applyPendingCharShapeToRange(anchor: DocumentPosition, count: number): void {
+    const props = this.getPendingCharShape();
+    if (!props) return;
+    const to = anchor.charOffset + count;
+    applyCharShapeModsToRange(this.wasm, anchor, anchor.charOffset, to, props);
+    this.advancePendingCharShapeAnchor({ ...anchor, charOffset: to });
+  }
+
+  /** [#4162] 삽입으로 캐럿이 전진한 것은 "이동"이 아니므로 예약을 새 위치로 이어간다. */
+  private advancePendingCharShapeAnchor(newPos: DocumentPosition): void {
+    if (this.pendingCharShape) this.pendingCharShapeAnchor = { ...newPos };
   }
 
   /**
@@ -1906,7 +1940,8 @@ export class InputHandler {
 
   /** 토글 서식 적용 (상호 배타 처리 포함) */
   private applyToggleFormat(prop: 'bold' | 'italic' | 'underline' | 'strikethrough' | 'emboss' | 'engrave' | 'outline' | 'superscript' | 'subscript'): void {
-    if (!this.hasFormatTargetSelection()) return;
+    // [#4162] 선택·셀 블록이 없어도(캐럿만) applyCharFormat 이 캐럿 대기 서식으로 예약한다 —
+    // 여기서 조기 종료하면 Ctrl+B 등이 다시 무언 no-op 이 된다.
     // 셀 블록에서는 앵커 셀 텍스트의 현재 값이 토글 방향을 정한다. 칸마다 값이 다를 때
     // 블록 전체를 한 방향으로 맞추려면 기준이 하나여야 하고, 텍스트 선택도 같은 기준이다.
     // [#4151] 커서 위치 조회는 셀 블록 모드에서 블록 밖(호스트 문단 등)을 읽어 방금 적용한
@@ -1946,11 +1981,26 @@ export class InputHandler {
     }
   }
 
-  /** 커서 위치의 글자 서식을 조회한다 */
+  /**
+   * [#4162] 실제로 문자가 선택된 범위만 돌려준다. anchor 만 있고 focus 와 같은 위치
+   * (빈 선택, 드래그 없이 클릭만 한 상태)는 선택 없음으로 접는다 — getSelectionOrdered()
+   * 는 anchor 유무만 보고 non-null 을 돌려줘, 그대로 쓰면 서식 커맨드가 빈 range 로
+   * 조용히 no-op 된다.
+   */
+  private getNonEmptySelection(): { start: DocumentPosition; end: DocumentPosition } | null {
+    const sel = this.cursor.getSelectionOrdered();
+    if (!sel) return null;
+    if (CursorState.comparePositions(sel.start, sel.end) === 0) return null;
+    return sel;
+  }
+
+  /** 커서 위치의 글자 서식을 조회한다. 선택이 있으면 선택 첫 글자, 없으면 캐럿 앞 글자 기준. */
   private getCharPropertiesAtCursor(): CharProperties {
-    const pos = this.cursor.getPosition();
-    // offset이 0이면 해당 위치, 아니면 offset-1 위치의 서식 반환 (커서 앞 글자 기준)
-    const queryOffset = pos.charOffset > 0 ? pos.charOffset - 1 : 0;
+    const sel = this.getNonEmptySelection();
+    const pos = sel ? sel.start : this.cursor.getPosition();
+    // 선택 시작 offset 은 그 자리 글자가 곧 선택 첫 글자다(offset-1 이면 선택 밖을 읽는다).
+    // 선택이 없으면 offset이 0인 경우만 그 위치, 아니면 offset-1 위치(커서 앞 글자 기준).
+    const queryOffset = sel ? pos.charOffset : (pos.charOffset > 0 ? pos.charOffset - 1 : 0);
     if (pos.parentParaIndex !== undefined) {
       // [#2756] 중첩 표는 최내곽 셀 대상 ...ByPath 로 조회한다. flat controlIndex/cellIndex/
       // cellParaIndex 는 hit-test 가 cellPath[0](최외곽)에서 채우므로 그대로 넘기면 **바깥
@@ -2507,6 +2557,10 @@ export class InputHandler {
         if (desc.command.type !== 'applyCharFormat' && desc.command.type !== 'applyParaFormat') {
           this.cursor.moveTo(newPos);
           this.cursor.resetPreferredX();
+        }
+        // [#4162] 삽입으로 캐럿이 전진한 것은 "이동"이 아니므로 예약을 이어간다.
+        if (desc.command.type === 'insertText') {
+          this.advancePendingCharShapeAnchor(newPos);
         }
         if (keepFieldStartOutside) {
           this.markCurrentFieldStartOutside();
@@ -3829,7 +3883,7 @@ export class InputHandler {
   setTableResizeRenderer(r: TableResizeRenderer): void { this.tableResizeRenderer = r; }
 
   /** 선택 영역이 있는가? */
-  hasSelection(): boolean { return this.cursor.hasSelection(); }
+  hasSelection(): boolean { return this.getNonEmptySelection() !== null; }
 
   /** 모양 복사 상태가 있는가? */
   hasCopiedFormat(): boolean { return this.formatCopyState !== null; }
@@ -4667,7 +4721,7 @@ export class InputHandler {
 
   /** 글꼴 크기 증감 (커맨드 시스템용, delta: HWPUNIT, 1pt=100) */
   adjustFontSize(delta: number): void {
-    if (!this.hasFormatTargetSelection()) return;
+    // [#4162] 선택이 없어도(캐럿만) applyCharFormat 이 캐럿 대기 서식으로 예약한다.
     const current = this.getCharPropertiesAtCursor();
     const newSize = Math.max(100, (current.fontSize ?? 1000) + delta); // 최소 1pt
     this.applyCharFormat({ fontSize: newSize });
@@ -4675,7 +4729,6 @@ export class InputHandler {
 
   /** 장평 증감 (커맨드 시스템용, delta: percent point) */
   adjustCharRatio(delta: number): void {
-    if (!this.hasFormatTargetSelection()) return;
     const current = this.getCharPropertiesAtCursor();
     const currentRatio = current.ratios?.[0] ?? 100;
     const nextRatio = Math.max(50, Math.min(200, Math.round(currentRatio + delta)));
@@ -4684,7 +4737,6 @@ export class InputHandler {
 
   /** 자간 증감 (커맨드 시스템용, delta: percent point) */
   adjustCharSpacing(delta: number): void {
-    if (!this.hasFormatTargetSelection()) return;
     const current = this.getCharPropertiesAtCursor();
     const currentSpacing = current.spacings?.[0] ?? 0;
     const nextSpacing = Math.max(-50, Math.min(50, Math.round(currentSpacing + delta)));
