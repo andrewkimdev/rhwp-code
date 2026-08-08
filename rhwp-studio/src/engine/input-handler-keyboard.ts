@@ -1187,7 +1187,8 @@ export function onKeyDown(this: any, e: KeyboardEvent): void {
       if (entered) {
         this.caret.hide();
         this.selectionRenderer.clear();
-        this.renderTableObjectSelection();
+        // event subscriber가 선택 외곽선을 한 번 렌더링한다. 여기서 직접 호출하면
+        // 다중 페이지 bbox 조회가 키다운 한 번에 중복 실행된다 (#4252).
         this.eventBus.emit('table-object-selection-changed', true);
       }
     } else if (inTextBox) {
@@ -1211,7 +1212,7 @@ export function onKeyDown(this: any, e: KeyboardEvent): void {
       if (entered) {
         this.caret.hide();
         this.selectionRenderer.clear();
-        this.renderTableObjectSelection();
+        // event subscriber가 선택 외곽선을 한 번 렌더링한다 (#4252).
         this.eventBus.emit('table-object-selection-changed', true);
       }
     }

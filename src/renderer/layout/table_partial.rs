@@ -744,6 +744,7 @@ impl LayoutEngine {
         h_edges: &mut Vec<Vec<Option<BorderLine>>>,
         v_edges: &mut Vec<Vec<Option<BorderLine>>>,
         measured_table: Option<&MeasuredTable>,
+        enclosing_cell_ctx: Option<&CellContext>,
         clamp_header_negative_para_offset: bool,
         probe: Option<&PartialTableCellProbe>,
     ) {
@@ -1198,7 +1199,7 @@ impl LayoutEngine {
                     section_index,
                     Some((para_index, control_index)),
                     cell_idx,
-                    None,
+                    enclosing_cell_ctx.cloned(),
                 );
                 // 세로쓰기 셀도 테두리를 엣지 그리드에 수집
                 if let Some(bs) = border_style {
@@ -1405,14 +1406,24 @@ impl LayoutEngine {
                         cell_content_bottom(cell_y, cell_h, pad_bottom),
                     );
                 }
-                let cell_context = CellContext {
-                    parent_para_index: para_index,
-                    path: vec![CellPathEntry {
-                        control_index,
-                        cell_index: cell_idx,
-                        cell_para_index: cp_idx,
-                        text_direction: cell.text_direction,
-                    }],
+                let cell_context = if let Some(context) = enclosing_cell_ctx {
+                    let mut context = context.clone();
+                    if let Some(last) = context.path.last_mut() {
+                        last.cell_index = cell_idx;
+                        last.cell_para_index = cp_idx;
+                        last.text_direction = cell.text_direction;
+                    }
+                    context
+                } else {
+                    CellContext {
+                        parent_para_index: para_index,
+                        path: vec![CellPathEntry {
+                            control_index,
+                            cell_index: cell_idx,
+                            cell_para_index: cp_idx,
+                            text_direction: cell.text_direction,
+                        }],
+                    }
                 };
                 let cell_context_opt = Some(cell_context.clone());
 
@@ -2339,6 +2350,7 @@ impl LayoutEngine {
                                             0.0,
                                             0.0,
                                             None,
+                                            nested_ctx.as_ref(),
                                             clamp_header_negative_para_offset,
                                             // [#4149] 프로브는 최외곽 표에만 적용한다.
                                             None,
@@ -2505,6 +2517,7 @@ impl LayoutEngine {
         host_margin_left: f64,
         host_margin_right: f64,
         measured_table: Option<&MeasuredTable>,
+        enclosing_cell_ctx: Option<&CellContext>,
         clamp_header_negative_para_offset: bool,
         probe: Option<&PartialTableCellProbe>,
     ) -> f64 {
@@ -3068,6 +3081,17 @@ impl LayoutEngine {
         };
 
         // ── 5. 표 노드 생성 ──
+        // 재귀 부분 표는 합성 `(para=0, control=0)`으로 table 데이터를 조회하지만,
+        // RenderNode provenance에는 원본 부모 셀 문단과 현재 표 control을 기록한다.
+        // TextRun이 없는 빈 셀 hit-test는 Table/TableCell traversal context만 사용하므로
+        // 이 metadata까지 실제 IR 경로여야 한다 (#4252).
+        let (node_para_index, node_control_index) = enclosing_cell_ctx
+            .and_then(|context| {
+                let table_entry = context.path.last()?;
+                let parent_entry = context.path.get(context.path.len().checked_sub(2)?)?;
+                Some((parent_entry.cell_para_index, table_entry.control_index))
+            })
+            .unwrap_or((para_index, control_index));
         let table_id = tree.next_id();
         let mut table_node = RenderNode::new(
             table_id,
@@ -3076,8 +3100,8 @@ impl LayoutEngine {
                 col_count: table.col_count,
                 border_fill_id: table.border_fill_id,
                 section_index: Some(section_index),
-                para_index: Some(para_index),
-                control_index: Some(control_index),
+                para_index: Some(node_para_index),
+                control_index: Some(node_control_index),
             }),
             BoundingBox::new(table_x, table_y, table_width, partial_table_height),
         );
@@ -3130,6 +3154,7 @@ impl LayoutEngine {
             &mut h_edges,
             &mut v_edges,
             measured_table,
+            enclosing_cell_ctx,
             clamp_header_negative_para_offset,
             probe,
         );
@@ -3231,14 +3256,24 @@ impl LayoutEngine {
 
         // ── 캡션 렌더링 ──
         // cell_index = 65534: 캡션 식별 센티널 (셀 0과 구분)
-        let cap_cell_ctx = Some(CellContext {
-            parent_para_index: para_index,
-            path: vec![CellPathEntry {
-                control_index,
-                cell_index: 65534,
-                cell_para_index: 0,
-                text_direction: 0,
-            }],
+        let cap_cell_ctx = Some(if let Some(context) = enclosing_cell_ctx {
+            let mut context = context.clone();
+            if let Some(last) = context.path.last_mut() {
+                last.cell_index = 65534;
+                last.cell_para_index = 0;
+                last.text_direction = 0;
+            }
+            context
+        } else {
+            CellContext {
+                parent_para_index: para_index,
+                path: vec![CellPathEntry {
+                    control_index,
+                    cell_index: 65534,
+                    cell_para_index: 0,
+                    text_direction: 0,
+                }],
+            }
         });
         if render_top_caption {
             if let Some(ref caption) = table.caption {
