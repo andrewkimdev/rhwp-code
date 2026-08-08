@@ -15,6 +15,8 @@
 static VERIFIED_HANCOM_PUA_DISPLAY: &[(u32, &str)] = &[
     // `복학원서.hwp` 서명란. Hancom PDF: `(인)`.
     (0xF012B, "(인)"),
+    // `pau-004.hwp`와 한컴 문자표. HCR Dotum: small right-pointing triangle.
+    (0xF02FB, "▸"),
     // 2025 행정업무운영 편람 p15 callout bullet. Hancom PDF: right pointer.
     (0xF02FC, "►"),
     // 2025 행정업무운영 편람 p08 TOC bullet. Hancom PDF: filled square.
@@ -52,7 +54,7 @@ mod tests {
     #[test]
     fn verified_table_is_sorted_and_does_not_guess_unknown_pua() {
         for code_point in [
-            0xF012B, 0xF02FC, 0xF031C, 0xF03A0, 0xF03C5, 0xF03EF, 0xF03F4,
+            0xF012B, 0xF02FB, 0xF02FC, 0xF031C, 0xF03A0, 0xF03C5, 0xF03EF, 0xF03F4,
         ] {
             assert!(
                 verified_hancom_pua_display(char::from_u32(code_point).unwrap()).is_some(),
