@@ -2,7 +2,7 @@
 kind: pr_review
 status: local-validation-passed
 canonical: mydocs/manual/pr_review_workflow.md
-last_verified: 2026-08-07
+last_verified: 2026-08-08
 ---
 
 # PR #4170 검토 — #4040 파일 게이트 native-skia test 3건 CI 회복
@@ -14,18 +14,20 @@ last_verified: 2026-08-07
 테스트를 되살린 것이 아니라 **유효한 가드가 CI 에서 빠져 있던 것**이다.
 
 Stage 4([PR #4032](https://github.com/edwardkim/rhwp/pull/4032))의 Rust·Native Skia 조건화 의미는
-바꾸지 않는다. 기존 계약 테스트 전건 무회귀를 확인했다.
+바꾸지 않는다. `CHANGES_REQUESTED` 리뷰의 두 P2를 보정했고 관련 계약 테스트 전건 무회귀를 확인했다.
+최종 merge 판단은 보정 push 뒤 새 head의 전체 GitHub Actions와 재검토를 기다린다.
 
 ## 검토 경로
 
 ```text
 base route: collaborator_self_merge.md
-modifiers: intake_and_review.md, local_validation.md(4.3 CI workflow)
+modifiers: intake_and_review.md, local_validation.md(4.3 CI workflow),
+           multi_pr_update_branch.md(2.6 기준선 갱신)
 loaded documents: pr_review_workflow.md, pr_review/README.md,
                   collaborator_self_merge.md, intake_and_review.md,
-                  local_validation.md, post_merge.md,
+                  local_validation.md, multi_pr_update_branch.md, post_merge.md,
                   codex/docs_and_git_workflow.md
-base: d634e608be45d2fd072364a21952a8409d01d9ea
+current base: upstream/devel 1ede9c7acf08cd836f5c19d6283083b59229c7a5
 ```
 
 ## 메타데이터
@@ -35,7 +37,7 @@ base: d634e608be45d2fd072364a21952a8409d01d9ea
 | PR | [#4170](https://github.com/edwardkim/rhwp/pull/4170) |
 | 작성자 | `postmelee` (collaborator self-merge) |
 | 대상 / head | `devel` / `issue-4040-native-targets` (upstream branch) |
-| 규모 | 9 files, +790 / -0 — 본 문서 포함. 기능 변경은 workflow 6줄 + classifier 7줄 |
+| 규모 | 보정·최신 devel 병합 뒤 작성 시점 11 files, +1003 / -1 — 기능 변경은 workflow 6줄 + classifier 7줄 |
 | 관련 issue | [#4040](https://github.com/edwardkim/rhwp/issues/4040), [#4132](https://github.com/edwardkim/rhwp/issues/4132), [#2083](https://github.com/edwardkim/rhwp/issues/2083), [#2292](https://github.com/edwardkim/rhwp/issues/2292), [#2293](https://github.com/edwardkim/rhwp/issues/2293), [#3790](https://github.com/edwardkim/rhwp/issues/3790) |
 | metadata | label·milestone·review request 없음 |
 
@@ -88,7 +90,7 @@ base: d634e608be45d2fd072364a21952a8409d01d9ea
 `#4080` 의 `test_workflow_contract_wiring.py` 와 같은 방어를 적용했다 — 발견 패턴이 망가지면 부류
 강제가 조용히 무의미해지므로 패턴 자체를 단언한다.
 
-### 리뷰 지적 반영 — 발견 패턴의 넓은 쪽
+### 첫 보정 — 부정과 줄 주석
 
 최초 판별식은 정규식 한 줄이라 `feature = "native-skia"` 가 **어떤 문맥에 있든** 매치했다. 좁은 쪽
 오탐(중첩 게이트 놓침)은 RED 재현에서 잡혔지만 넓은 쪽은 남아 있었다.
@@ -102,8 +104,35 @@ base: d634e608be45d2fd072364a21952a8409d01d9ea
 target 이 생긴다. 인용은 애초에 게이트가 아니며, 이 저장소는 한국어 `//!` 문서에 cfg 속성을 자주
 인용한다. 둘 다 저장소에 해당 파일이 생기기 전에는 드러나지 않으므로 합성 입력으로 고정했다.
 
-판별식을 괄호 균형 파싱 + 부정 문맥 추적으로 바꾸고, 줄 주석을 먼저 지운다. 기존 RED 재현은
-그대로 성립한다 — 되돌린 상태에서 여전히 세 파일만 지목하며 1건 실패한다.
+첫 보정은 괄호 균형 파싱 + 부정 문맥 추적과 줄 주석 제거였다. 기존 RED 재현은 그대로 성립했지만,
+이 방식도 cfg의 `all`·`any` 의미와 문자열·블록 주석을 다루지 못했다.
+
+### 2026-08-08 `CHANGES_REQUESTED` 리뷰 보정
+
+[리뷰](https://github.com/edwardkim/rhwp/pull/4170#pullrequestreview-4888431770)는 다음 두 P2를 지적했다.
+
+1. `any(feature = "native-skia", target_os = "linux")`, raw string, 블록 주석을 실제 파일 게이트로
+   오인한다.
+2. #4040 classifier fixture가 세 경로를 한 입력에 묶어, 일부 경로가 목록에서 빠져도 한 경로만
+   일치하면 통과한다.
+
+판별기는 Rust 문자열·중첩 블록 주석·줄 주석을 같은 길이의 공백으로 가린 뒤 brace depth 0의 실제
+crate inner attribute만 찾는다. cfg meta-item은 작은 재귀 하강 parser로 `all`·`any`·`not`을 읽고,
+다른 atom을 미정으로 둔 3값 평가에서 **native-skia를 끄면 반드시 거짓이고 켜면 가능성이 생길 때만**
+파일 게이트로 판정한다. 리뷰의 세 입력과 중첩 부정·중첩 블록 주석·블록 내부 inner attribute를
+합성 회귀로 고정했다.
+
+classifier 쪽은 기존 `Native Skia integration test changes` 단위 테스트에 세 경로를 추가했다. 각
+경로를 단독 `files` 입력으로 실행해 `rust=true`, `native_skia=true`, `render=false`,
+`reason=classified:native-skia-rust` 전체 결과를 독립적으로 단언한다. 실제 #4040 세 파일 묶음 fixture는
+통합 시나리오로 유지한다.
+
+### 최신 devel 기준선 병합
+
+원 리뷰 head `1166e5946`을 확인한 뒤 최신 `upstream/devel` `1ede9c7ac`을 merge commit
+`cd427c37e`로 반영했다. 충돌은 `mydocs/orders/20260807.md` 하나였고, PR 쪽 `#4080`·`#4040`·`#4132`
+기록과 devel 쪽 `PR #4174` 기록을 모두 보존했다. 작업지시자는 보정 commit의 기존 PR branch push와
+보정 완료 코멘트 게시를 승인했다.
 
 ## 검증
 
@@ -121,11 +150,12 @@ target 이 생긴다. 인용은 애초에 게이트가 아니며, 이 저장소�
 
 | 검증 | 결과 |
 | --- | --- |
-| workflow 계약 테스트 5개 파일 | 58 passed / 0 failed |
-| `node --test ci-impact-classifier.test.cjs` | 28 passed (fixture 1건 추가) |
+| workflow 계약 테스트 5개 파일 | 63 passed / 0 failed (보정 후 최신 devel) |
+| `node --test scripts/tests/ci-impact-classifier.test.cjs` | 28 passed / 0 failed; 세 경로 단독 입력 포함 |
 | `actionlint .github/workflows/ci.yml` | 통과, 진단 없음 |
 | `node --check scripts/ci-impact-classifier.cjs` | 통과 |
 | `git diff --check` | 통과 |
+| `python3 -m unittest discover -s scripts/tests` | 관련 포함 102건 통과 후 `test_visual_sweep.py` 1건 import 오류 — 로컬 Python에 Pillow 미설치 |
 
 ### RED 재현과 뮤테이션
 
@@ -163,5 +193,6 @@ layout·paint·pagination·golden 출력을 바꾸지 않는다. 회복시킨 �
 
 ## 최종 권고
 
-최신 head 의 GitHub Actions 통과와 작업지시자 승인을 확인한 뒤 collaborator self-merge 한다. merge
-뒤에는 `post_merge.md` 에 따라 devel sync, branch·worktree 정리, Native Skia job 로그 확인을 수행한다.
+보정 commit을 기존 PR branch에 push하고 완료 코멘트를 게시한다. 그 새 head의 전체 GitHub Actions와
+재검토를 확인한 뒤 별도 merge 승인을 받아 collaborator self-merge 한다. merge 뒤에는 `post_merge.md`에
+따라 devel sync, branch·worktree 정리, Native Skia job 로그 확인을 수행한다.

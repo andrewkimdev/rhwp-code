@@ -131,8 +131,24 @@ issue_2083_hide_fill_page_background  hide_fill_page_renders_opaque_white_not_tr
 | `node --check scripts/ci-impact-classifier.cjs` | 통과 |
 | `git diff --check` | 통과 |
 
+### 4.5 PR #4170 변경 요청 보정 — 2026-08-08
+
+`edwardkim`의 `CHANGES_REQUESTED` 리뷰가 넓은 쪽 오탐 두 부류와 classifier 독립성 공백을 지적했다.
+
+- Rust 문자열·줄/중첩 블록 주석을 마스킹하고 brace depth 0의 crate inner attribute만 찾는다.
+- cfg `all`·`any`·`not`을 재귀 하강 parser와 3값 의미 평가로 처리한다. native-skia 비활성 상태에서
+  반드시 거짓이면서 활성 상태에서 가능성이 생길 때만 파일 게이트로 분류한다.
+- 리뷰의 `any(...)`, raw string, 블록 주석 입력과 중첩 부정·블록 내부 attribute를 회귀로 고정했다.
+- classifier 단위 테스트에 세 경로를 각각 단독 입력으로 추가하고 묶음 fixture는 통합 사례로 유지했다.
+- 최신 `upstream/devel` `1ede9c7ac`을 merge commit `cd427c37e`로 반영했다. 오늘할일 충돌은 PR의
+  `#4080`·`#4040`·`#4132`와 devel의 `PR #4174` 기록을 모두 보존했다.
+
+보정 뒤 workflow 계약 5개 파일 63건, classifier 28건, `actionlint`, `node --check`, `git diff --check`가
+통과했다. 전체 `scripts/tests` discovery는 102건 통과 뒤 로컬 Python의 Pillow 미설치 때문에
+`test_visual_sweep.py` import 1건만 실패했다. 시각 sweep은 이번 CI 계약 보정 범위가 아니다.
+
 ## 5. 다음 단계
 
-1. PR 생성 승인 요청 → 원격 CI 에서 Native Skia job 로그에 세 target 실행·통과 확인.
+1. 작업지시자가 승인한 보정 push와 완료 코멘트 게시 → 새 head 전체 CI와 재검토 확인.
 2. Native Skia job 소요시간 증가폭 실측. 현재 368~382초 기준으로 과다하면 계획서 3절 재검토.
 3. #4132 전제 정정 코멘트.

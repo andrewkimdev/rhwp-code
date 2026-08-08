@@ -24,34 +24,106 @@ WORKER_MARKER = "  # [#2393] 기본 테스트 병렬화"
 # - 게이트는 중첩된다 — `render_p37_direct_pdf_export.rs` 는
 #   `#![cfg(all(not(target_arch = "wasm32"), feature = "native-skia"))]` 형태라
 #   정확 일치로 좁히면 놓친다. 그래서 괄호 균형으로 술어를 잘라 본다.
-# - `not(feature = "native-skia")` 는 **정반대 조건**이다. 그 파일은 native-skia
-#   빌드에서 오히려 cfg-out 되므로 job 에 배선하면 0건짜리 target 이 된다.
-#   부정 문맥 안의 언급은 세지 않는다.
-# - 이 저장소는 한국어 `//!` 문서에 cfg 속성을 자주 인용한다. 인용은 게이트가
-#   아니므로 줄 주석을 먼저 지운다.
+# - `not(feature = "native-skia")` 는 **정반대 조건**이고 `any(feature =
+#   "native-skia", target_os = "linux")` 는 Linux 에서 feature 없이도 참이다.
+#   native-skia 를 끈 상태에서 술어가 반드시 거짓일 때만 이 부류로 본다.
+# - 문자열·줄/블록 주석 안의 cfg 인용과 블록 안의 inner attribute 는 crate
+#   게이트가 아니다. Rust 비코드 영역을 같은 길이의 공백으로 가린 뒤 최상위
+#   inner attribute 만 찾는다.
 _INNER_CFG_OPEN = re.compile(r"#!\[\s*cfg\s*\(")
-_FEATURE_NATIVE_SKIA = re.compile(r'feature\s*=\s*"native-skia"')
-_CALL_NAME_BEFORE_PAREN = re.compile(r"(\w+)\s*$")
+_RAW_STRING_OPEN = re.compile(r'(?:br|rb|r)(?P<hashes>#{0,255})"')
+_CFG_TOKEN = re.compile(
+    r'\s*(?:(?P<ident>[A-Za-z_][A-Za-z0-9_]*)|'
+    r'(?P<string>"(?:\\.|[^"\\])*")|(?P<punct>[(),=]))'
+)
 
 
-def _strip_line_comments(source: str) -> str:
-    """`//`·`///`·`//!` 로 시작하는 줄을 지운다."""
-    return "\n".join(
-        "" if line.lstrip().startswith("//") else line
-        for line in source.splitlines()
-    )
+def _mask_rust_non_code(source: str) -> str:
+    """문자열과 중첩 가능 주석을 같은 길이의 공백으로 가린다."""
+    masked = list(source)
+
+    def blank(start: int, end: int) -> None:
+        for offset in range(start, end):
+            if masked[offset] != "\n":
+                masked[offset] = " "
+
+    index = 0
+    while index < len(source):
+        if source.startswith("//", index):
+            end = source.find("\n", index + 2)
+            end = len(source) if end == -1 else end
+            blank(index, end)
+            index = end
+            continue
+
+        if source.startswith("/*", index):
+            depth = 1
+            end = index + 2
+            while end < len(source) and depth > 0:
+                if source.startswith("/*", end):
+                    depth += 1
+                    end += 2
+                elif source.startswith("*/", end):
+                    depth -= 1
+                    end += 2
+                else:
+                    end += 1
+            blank(index, end)
+            index = end
+            continue
+
+        raw = _RAW_STRING_OPEN.match(source, index)
+        if raw:
+            terminator = '"' + raw.group("hashes")
+            end = source.find(terminator, raw.end())
+            end = len(source) if end == -1 else end + len(terminator)
+            blank(index, end)
+            index = end
+            continue
+
+        if source[index] == '"':
+            end = index + 1
+            escaped = False
+            while end < len(source):
+                char = source[end]
+                end += 1
+                if escaped:
+                    escaped = False
+                elif char == "\\":
+                    escaped = True
+                elif char == '"':
+                    break
+            blank(index, end)
+            index = end
+            continue
+
+        index += 1
+
+    return "".join(masked)
 
 
 def _inner_cfg_predicates(source: str) -> list[str]:
-    """inner attribute `#![cfg(...)]` 의 술어를 괄호 균형으로 잘라낸다."""
+    """crate 최상위 `#![cfg(...)]` 술어를 괄호 균형으로 잘라낸다."""
+    code = _mask_rust_non_code(source)
+    brace_depth = []
+    depth = 0
+    for char in code:
+        brace_depth.append(depth)
+        if char == "{":
+            depth += 1
+        elif char == "}" and depth > 0:
+            depth -= 1
+
     predicates = []
-    for opened in _INNER_CFG_OPEN.finditer(source):
+    for opened in _INNER_CFG_OPEN.finditer(code):
+        if brace_depth[opened.start()] != 0:
+            continue
         depth = 1
         index = opened.end()
-        while index < len(source) and depth > 0:
-            if source[index] == "(":
+        while index < len(code) and depth > 0:
+            if code[index] == "(":
                 depth += 1
-            elif source[index] == ")":
+            elif code[index] == ")":
                 depth -= 1
             index += 1
         if depth == 0:
@@ -59,32 +131,108 @@ def _inner_cfg_predicates(source: str) -> list[str]:
     return predicates
 
 
+class _CfgParser:
+    """이 계약에 필요한 Rust cfg meta-item의 작은 재귀 하강 parser."""
+
+    def __init__(self, source: str) -> None:
+        self.tokens = []
+        index = 0
+        while index < len(source):
+            token = _CFG_TOKEN.match(source, index)
+            if not token:
+                if source[index:].strip():
+                    raise ValueError(f"unsupported cfg syntax: {source[index:]!r}")
+                break
+            self.tokens.append(token.group("ident") or token.group("string") or token.group("punct"))
+            index = token.end()
+        self.index = 0
+
+    def _take(self) -> str:
+        if self.index >= len(self.tokens):
+            raise ValueError("unexpected end of cfg predicate")
+        token = self.tokens[self.index]
+        self.index += 1
+        return token
+
+    def _accept(self, expected: str) -> bool:
+        if self.index < len(self.tokens) and self.tokens[self.index] == expected:
+            self.index += 1
+            return True
+        return False
+
+    def parse(self) -> tuple:
+        expression = self._expression()
+        if self.index != len(self.tokens):
+            raise ValueError(f"trailing cfg tokens: {self.tokens[self.index:]!r}")
+        return expression
+
+    def _expression(self) -> tuple:
+        name = self._take()
+        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name):
+            raise ValueError(f"expected cfg name, got {name!r}")
+
+        if self._accept("="):
+            value = self._take()
+            if not (value.startswith('"') and value.endswith('"')):
+                raise ValueError(f"expected cfg string, got {value!r}")
+            if name == "feature" and value[1:-1] == "native-skia":
+                return ("native-skia",)
+            return ("atom", name, value)
+
+        if not self._accept("("):
+            return ("atom", name)
+
+        arguments = []
+        if not self._accept(")"):
+            while True:
+                arguments.append(self._expression())
+                if self._accept(")"):
+                    break
+                if not self._accept(","):
+                    raise ValueError("expected ',' or ')' in cfg predicate")
+                if self._accept(")"):
+                    break
+        return (name, *arguments)
+
+
+def _evaluate_cfg(expression: tuple, native_skia: bool) -> bool | None:
+    """다른 cfg atom은 미정으로 둔 3값 평가 결과를 반환한다."""
+    operator, *arguments = expression
+    if operator == "native-skia":
+        return native_skia
+    if operator == "atom":
+        return None
+
+    values = [_evaluate_cfg(argument, native_skia) for argument in arguments]
+    if operator == "all":
+        if False in values:
+            return False
+        return True if all(value is True for value in values) else None
+    if operator == "any":
+        if True in values:
+            return True
+        return False if all(value is False for value in values) else None
+    if operator == "not" and len(values) == 1:
+        return None if values[0] is None else not values[0]
+    return None
+
+
 def _requires_native_skia_enabled(predicate: str) -> bool:
-    """술어가 native-skia 를 **켠** 상태로 요구하는가. `not(...)` 안이면 아니다."""
-    enclosing: list[str] = []
-    index = 0
-    while index < len(predicate):
-        found = _FEATURE_NATIVE_SKIA.match(predicate, index)
-        if found:
-            if "not" not in enclosing:
-                return True
-            index = found.end()
-            continue
-        char = predicate[index]
-        if char == "(":
-            name = _CALL_NAME_BEFORE_PAREN.search(predicate[:index])
-            enclosing.append(name.group(1) if name else "")
-        elif char == ")" and enclosing:
-            enclosing.pop()
-        index += 1
-    return False
+    """native-skia를 끄면 반드시 거짓이고 켜면 가능성이 생기는 술어인가."""
+    try:
+        expression = _CfgParser(predicate).parse()
+    except ValueError:
+        return False
+    disabled = _evaluate_cfg(expression, native_skia=False)
+    enabled = _evaluate_cfg(expression, native_skia=True)
+    return disabled is False and enabled is not False
 
 
 def source_is_file_gated_native_skia(source: str) -> bool:
     """소스 텍스트가 파일 전체를 native-skia **활성** 조건으로 게이트하는가."""
     return any(
         _requires_native_skia_enabled(predicate)
-        for predicate in _inner_cfg_predicates(_strip_line_comments(source))
+        for predicate in _inner_cfg_predicates(source)
     )
 
 
@@ -335,6 +483,8 @@ class CiImpactWorkflowTests(unittest.TestCase):
             '#![cfg(feature = "native-skia")]',
             '#![cfg(all(not(target_arch = "wasm32"), feature = "native-skia"))]',
             '#![cfg(all(\n    not(target_arch = "wasm32"),\n    feature = "native-skia"\n))]',
+            '#![cfg(not(not(feature = "native-skia")))]',
+            '#![cfg(any(feature = "native-skia", all(feature = "native-skia", unix)))]',
         ]:
             with self.subTest(gated=source):
                 self.assertTrue(source_is_file_gated_native_skia(source))
@@ -342,8 +492,14 @@ class CiImpactWorkflowTests(unittest.TestCase):
         for source in [
             '#![cfg(not(feature = "native-skia"))]',
             '#![cfg(all(not(target_arch = "wasm32"), not(feature = "native-skia")))]',
+            '#![cfg(any(feature = "native-skia", target_os = "linux"))]',
             '//! `#![cfg(feature = "native-skia")]` 로 파일을 게이트한다',
             '// #![cfg(feature = "native-skia")]',
+            '/* #![cfg(feature = "native-skia")] */',
+            '/* outer /* #![cfg(feature = "native-skia")] */ comment */',
+            'const S: &str = r##"#![cfg(feature = "native-skia")]"##;',
+            'const S: &str = "#![cfg(feature = \\"native-skia\\")]";',
+            'fn nested() { #![cfg(feature = "native-skia")] }',
             '#![cfg(not(target_arch = "wasm32"))]',
         ]:
             with self.subTest(not_gated=source):
