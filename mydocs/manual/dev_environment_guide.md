@@ -81,6 +81,13 @@ wasm-pack build --target web --out-dir pkg
 
 TypeScript와 CSS는 Vite가 다시 읽지만 Rust 변경은 위 빌드가 끝나야 브라우저에 반영된다.
 
+## 웹한글컨트롤 호환 층
+
+`@rhwp/hwpctrl` 개발은 일반 WASM 빌드 외에 패키지 공개 경로 검사와 OS별 시나리오 gate를 쓴다.
+macOS·Linux도 WASM 자체 시나리오 검증을 실행할 수 있으며, Hancom 2022 COM Oracle의 새 수집은
+Windows 전용이다. 소비자 연결 방법, 지원 범위, fixture 대조와 live Oracle의 검증 경계는
+[웹한글컨트롤 호환 개발 가이드](webhwpctrl_compat_development.md)를 따른다.
+
 ## rhwp-studio
 
 ```bash

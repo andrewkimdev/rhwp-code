@@ -2,7 +2,7 @@
 kind: plan
 status: draft
 canonical: mydocs/plans/hwpctrl_ocx_full_compat.md
-last_verified: 2026-08-07
+last_verified: 2026-08-09
 ---
 
 # 수행계획서 — HwpCtrl OCX 100% 호환 대체 층
@@ -13,6 +13,12 @@ last_verified: 2026-08-07
 - **절차 상태**: P0 완료(2026-08-07) — 하니스·스펙·원장 구축, §4.5 참조.
   P1~P3 진행 중 — **2026-08-09 현재 원장 193/484**, 하니스 44시나리오 전량 통과(§4.50)
 - **배포 형태**: 독립 npm 패키지 `@rhwp/hwpctrl` (작업지시자 결정, 2026-08-07)
+- **개발자 안내**: 소비자 연결은 `npm/hwpctrl-ocx/README.md`, Windows COM Oracle 절차는
+  `tools/hwpctrl_compat/README.md`, 두 흐름의 경계는
+  `mydocs/manual/webhwpctrl_compat_development.md`가 맡는다. 이 계획서는 사용 설명서가 아니다.
+- **플랫폼별 검증**: macOS·Linux는 WASM 시나리오 자체 검증을 기본으로 실행하고, 검토·고정된
+  Hancom 2022 fixture가 있으면 읽기 전용 차등 대조도 수행한다. 새 Oracle 수집·fixture 갱신은
+  Windows 한글 2022 COM에서만 한다.
 - **목표**: 웹에서 쓰는 한컴 `HwpCtrl` ActiveX 컨트롤을 rhwp WASM 으로 **호출 호환**
   대체한다. 기존 통합 페이지의 스크립트를 **한 줄도 고치지 않고** 동작시키는 것이 합격선이다.
 - **판정자**: 이 머신에 설치된 한글(오라클 = 한글2022, `hangul-oracle-version-2022`)의 OCX.

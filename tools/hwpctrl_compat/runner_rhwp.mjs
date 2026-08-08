@@ -14,7 +14,7 @@
  * - `legacy`  — 기존 `rhwp-studio/src/hwpctl/` 층. **P0 자체 검증 전용**이다.
  *               하니스가 "이미 아는 차이"를 실제로 잡아내는지 보는 데 쓴다.
  * - `<경로>`  — 신규 패키지의 엔트리(ESM). P1 부터 이쪽을 쓴다.
- *               `createHwpCtrl({ wasmModule })` 를 export 하면 된다.
+ *               `createHwpCtrl({ wasm, onSave })` 를 export 하면 된다.
  *
  * ## 대조가 성립하려면
  *

@@ -2,15 +2,17 @@
 
 한 번의 호출로 아래를 한다.
 
-1. 시나리오마다 **새 프로세스**로 오라클 러너를 돌린다(COM 규약: 문서당 프로세스 1개).
-2. 시간 제한을 걸고, 한글 프로세스가 남으면 기본적으로 중단한다. 정리는 명시적 opt-in이다.
-3. rhwp 러너를 돌린다(여기는 프로세스 격리가 필요 없다).
-4. `compare.py` 로 판정하고 요약을 찍는다.
+1. Windows live 모드에서 시나리오마다 **새 프로세스**로 오라클 러너를 돌린다
+   (COM 규약: 문서당 프로세스 1개).
+2. macOS/Linux 기본 모드에서는 COM을 호출하지 않고 rhwp WASM 시나리오의 호출·저장 결과를 검사한다.
+3. `--fixture` 또는 `--oracle-dir`는 어느 OS에서나 고정 Hancom 2022 결과와 차등 비교한다.
+4. live/fixture 모드는 `compare.py`로 판정하고, 불일치를 실패로 돌려준다.
 
 ## 쓰임
 
     python tools/hwpctrl_compat/run_gate.py --impl legacy
     python tools/hwpctrl_compat/run_gate.py --only field-read --timeout 300
+    python tools/hwpctrl_compat/run_gate.py --impl npm/hwpctrl-ocx/src/index.mjs --fixture
 
 ## 왜 직렬인가
 
@@ -23,6 +25,7 @@ import argparse
 import csv
 import io
 import json
+import platform
 import subprocess
 import sys
 import time
@@ -34,6 +37,7 @@ HERE = Path(__file__).resolve().parent
 REPO = HERE.parents[1]
 SCENARIO_DIR = HERE / "scenarios"
 OUT_ROOT = REPO / "output" / "poc" / "hwpctrl"
+FIXTURE_ROOT = HERE / "fixtures" / "hancom2022"
 
 # 오라클은 **한글2022(12.x)** 로 고정한다(계획서 §9-4). 이 머신에는 2024(13.x)도 깔려 있어서
 # 고정하지 않으면 두 버전의 정답지가 한 표에 섞인다. 전환 방법은 계획서 §4.5.1.
@@ -127,6 +131,59 @@ def run_rhwp(scenario: Path, out_dir: Path, impl: str, timeout: int) -> str:
     return "OK"
 
 
+def validate_rhwp_output(scenario: Path, out_dir: Path) -> str:
+    """WASM 단독 실행이 실제 시나리오를 끝까지 수행했는지 확인한다.
+
+    macOS/Linux에는 Hancom COM이 없으므로 새 Oracle 결과를 만들 수 없다. 그렇다고
+    반환 JSON만 생성되고 API 오류가 기록된 실행을 성공으로 취급하면 안 된다. 이 검사는
+    호출 개수, 호출 순서, 각 호출 오류, SaveAs 산출물을 확인하는 플랫폼 공통 하한선이다.
+    """
+    try:
+        definition = json.loads(scenario.read_text(encoding="utf-8"))
+        result_path = out_dir / f"{scenario.stem}.returns.json"
+        result = json.loads(result_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, AttributeError):
+        return "INVALID_OUTPUT"
+
+    if result.get("fatal"):
+        return "FATAL"
+    expected_calls = (["Open"] if definition.get("open") else []) + [call[0] for call in definition.get("calls", [])]
+    calls = result.get("calls")
+    if not isinstance(calls, list) or [call.get("call") for call in calls] != expected_calls:
+        return "CALL_SEQUENCE"
+    if any(call.get("error") for call in calls):
+        return "CALL_ERROR"
+
+    if definition.get("saveAs"):
+        saved = result.get("saved") or {}
+        saved_path = saved.get("path")
+        if not saved.get("ok") or not saved_path or not Path(saved_path).is_file():
+            return "SAVE_ERROR"
+    return "OK"
+
+
+def oracle_mode(
+    system_name: str,
+    skip_ocx: bool,
+    wasm_only: bool,
+    oracle_dir: Path | None,
+    fixture: bool = False,
+) -> str:
+    """실행 호스트와 옵션에서 Oracle 처리 방식을 결정한다.
+
+    Windows 이외의 호스트는 COM을 호출할 수 없다. fixture를 명시하면 읽기 전용 대조를
+    하고, 그렇지 않으면 WASM 단독 시나리오 검증으로 낮춘다. 어떤 경우에도 비Windows에서
+    Oracle을 새로 수집했다고 주장하지 않는다.
+    """
+    if wasm_only:
+        return "wasm-self-check"
+    if skip_ocx or oracle_dir is not None or fixture:
+        return "fixture"
+    if system_name.lower() == "windows":
+        return "live"
+    return "wasm-self-check"
+
+
 def main() -> int:
     sys.stdout.reconfigure(encoding="utf-8")
     ap = argparse.ArgumentParser(description=__doc__)
@@ -155,11 +212,35 @@ def main() -> int:
     )
     ap.add_argument("--skip-ocx", action="store_true", help="오라클 재실행 없이 기존 정답지 사용")
     ap.add_argument(
+        "--oracle-dir",
+        type=Path,
+        help=(
+            "읽기 전용 Hancom 2022 returns.json 디렉터리. --skip-ocx 없이 지정해도 "
+            "fixture 대조를 수행한다. --skip-ocx의 기존 output/ 정답지 재사용과는 별개다."
+        ),
+    )
+    ap.add_argument(
+        "--fixture",
+        action="store_true",
+        help="저장소의 tools/hwpctrl_compat/fixtures/hancom2022 정답지를 읽기 전용으로 대조",
+    )
+    ap.add_argument(
+        "--wasm-only",
+        action="store_true",
+        help="COM/fixture 대조 없이 WASM 시나리오 호출·저장 자체 검증만 수행",
+    )
+    ap.add_argument(
         "--cleanup-spawned",
         action="store_true",
         help="시간 초과 뒤 새 한글 PID를 종료 (전용 Windows 계정에서만 명시적으로 사용)",
     )
     args = ap.parse_args()
+    if args.wasm_only and (args.skip_ocx or args.oracle_dir is not None or args.fixture):
+        ap.error("--wasm-only는 --skip-ocx, --oracle-dir 또는 --fixture와 함께 쓸 수 없습니다")
+    if args.fixture and args.oracle_dir is not None:
+        ap.error("--fixture와 --oracle-dir는 함께 쓸 수 없습니다")
+    if args.cleanup_spawned and platform.system().lower() != "windows":
+        ap.error("--cleanup-spawned는 Windows COM 실행에서만 사용할 수 있습니다")
 
     scenarios = sorted(SCENARIO_DIR.glob("*.json"))
     if args.only:
@@ -168,19 +249,21 @@ def main() -> int:
         print("시나리오 없음")
         return 2
 
-    ocx_dir = OUT_ROOT / "ocx"
+    mode = oracle_mode(platform.system(), args.skip_ocx, args.wasm_only, args.oracle_dir, args.fixture)
+    ocx_dir = FIXTURE_ROOT if args.fixture else (args.oracle_dir or OUT_ROOT / "ocx")
     rhwp_dir = OUT_ROOT / "rhwp"
     verdict_dir = OUT_ROOT / "verdict"
-    for d in (ocx_dir, rhwp_dir, verdict_dir):
+    directories = (rhwp_dir, verdict_dir) if mode == "fixture" else (ocx_dir, rhwp_dir, verdict_dir)
+    for d in directories:
         d.mkdir(parents=True, exist_ok=True)
 
     status = {}
     comparable = []
     for path in scenarios:
         name = path.stem
-        if args.skip_ocx:
+        if mode == "fixture":
             status[name] = stored_oracle_status(ocx_dir / f"{name}.returns.json", args.expect_version)
-        else:
+        elif mode == "live":
             baseline = hwp_pids()
             if baseline:
                 status[name] = "OCCUPIED"
@@ -198,43 +281,65 @@ def main() -> int:
                     status[name] = f"{status.get(name, 'ERR')}/LEFTOVER"
                     print(f"  오라클 {name}: 남은 한글 PID {', '.join(sorted(leftovers))} — 자동 종료하지 않음")
             print(f"  오라클 {name}: {status[name]} ({time.monotonic() - started:.1f}s)")
-        if status[name] not in ("OK", "SKIPPED"):
+        else:
+            status[name] = "WASM"
+
+        if status[name] not in ("OK", "SKIPPED", "WASM"):
             continue
         rhwp_status = run_rhwp(path, rhwp_dir, args.impl, args.timeout)
+        if rhwp_status == "OK" and mode == "wasm-self-check":
+            rhwp_status = validate_rhwp_output(path, rhwp_dir)
         print(f"  rhwp {name}: {rhwp_status}")
         if rhwp_status != "OK":
             status[name] = f"{status[name]}/RHWP_{rhwp_status}"
-        else:
+        elif mode != "wasm-self-check":
             comparable.append(name)
 
-    compare_cmd = [
-        sys.executable,
-        str(HERE / "compare.py"),
-        "--ocx",
-        str(ocx_dir),
-        "--rhwp",
-        str(rhwp_dir),
-        "--out",
-        str(verdict_dir),
-    ]
-    if comparable:
-        for name in comparable:
-            compare_cmd += ["--scenario", name]
+    comparison_status = "NOT_RUN"
+    if mode != "wasm-self-check":
+        compare_cmd = [
+            sys.executable,
+            str(HERE / "compare.py"),
+            "--ocx",
+            str(ocx_dir),
+            "--rhwp",
+            str(rhwp_dir),
+            "--out",
+            str(verdict_dir),
+        ]
+        if comparable:
+            for name in comparable:
+                compare_cmd += ["--scenario", name]
+        else:
+            compare_cmd.append("--empty")
+        comparison_status = "OK" if subprocess.run(compare_cmd, check=False).returncode == 0 else "DIFF"
     else:
-        compare_cmd.append("--empty")
-    subprocess.run(compare_cmd, check=False)
+        with io.open(verdict_dir / "wasm_self_check.json", "w", encoding="utf-8", newline="\n") as fh:
+            json.dump({"schemaVersion": "1.0", "scenarios": [path.stem for path in scenarios]}, fh, ensure_ascii=False, indent=2)
+            fh.write("\n")
 
     with io.open(verdict_dir / "run_status.json", "w", encoding="utf-8", newline="\n") as fh:
         json.dump(
-            {"impl": args.impl, "status": status, "comparableScenarios": comparable},
+            {
+                "impl": args.impl,
+                "platform": platform.system(),
+                "oracleMode": mode,
+                "oracleDir": str(ocx_dir) if mode == "fixture" else None,
+                "comparisonStatus": comparison_status,
+                "status": status,
+                "comparableScenarios": comparable,
+            },
             fh,
             ensure_ascii=False,
             indent=2,
         )
         fh.write("\n")
-    bad = {k: v for k, v in status.items() if v not in ("OK", "SKIPPED")}
+    bad = {k: v for k, v in status.items() if v not in ("OK", "SKIPPED", "WASM")}
     if bad:
         print(f"실행 문제: {bad}")
+        return 1
+    if comparison_status == "DIFF":
+        print("차등 비교 불일치")
         return 1
     return 0
 

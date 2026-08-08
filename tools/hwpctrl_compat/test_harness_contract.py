@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -14,7 +15,14 @@ sys.path.insert(0, str(HERE))
 from compare import selected_oracle_paths
 from extract_spec import verify
 from oracle_version import matches_expected_version
-from run_gate import hwp_pids, new_hwp_pids, stored_oracle_status, wait_for_hwp_exit
+from run_gate import (
+    hwp_pids,
+    new_hwp_pids,
+    oracle_mode,
+    stored_oracle_status,
+    validate_rhwp_output,
+    wait_for_hwp_exit,
+)
 from runner_ocx import clear_previous_outputs
 
 
@@ -54,6 +62,46 @@ class HarnessContractTests(unittest.TestCase):
             path.write_text("not-json", encoding="utf-8")
             self.assertEqual(stored_oracle_status(path, "12"), "INVALID_ORACLE")
 
+    def test_non_windows_defaults_to_wasm_self_check(self) -> None:
+        self.assertEqual(oracle_mode("Linux", False, False, None), "wasm-self-check")
+        self.assertEqual(oracle_mode("Darwin", False, False, None), "wasm-self-check")
+        self.assertEqual(oracle_mode("Windows", False, False, None), "live")
+        self.assertEqual(oracle_mode("Linux", False, False, Path("fixture")), "fixture")
+        self.assertEqual(oracle_mode("Darwin", False, False, None, fixture=True), "fixture")
+
+    def test_wasm_output_requires_successful_calls_and_saved_file(self) -> None:
+        scenario = {"id": "sample", "open": "samples/input.hwp", "calls": [["GetPos", []]], "saveAs": "saved.hwp"}
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            scenario_path = root / "sample.json"
+            scenario_path.write_text(json.dumps(scenario), encoding="utf-8")
+            saved = root / "saved.hwp"
+            saved.write_bytes(b"HWP")
+            (root / "sample.returns.json").write_text(
+                json.dumps(
+                    {
+                        "calls": [{"call": "Open", "value": True}, {"call": "GetPos", "value": {}}],
+                        "saved": {"path": str(saved), "ok": True},
+                        "fatal": None,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            self.assertEqual(validate_rhwp_output(scenario_path, root), "OK")
+            (root / "sample.returns.json").write_text(
+                json.dumps(
+                    {
+                        "calls": [
+                            {"call": "Open", "value": True},
+                            {"call": "GetPos", "error": "MissingApi"},
+                        ],
+                        "fatal": None,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            self.assertEqual(validate_rhwp_output(scenario_path, root), "CALL_ERROR")
+
     def test_compare_only_reads_explicitly_eligible_oracles(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             out_dir = Path(directory)
@@ -63,6 +111,32 @@ class HarnessContractTests(unittest.TestCase):
                 [path.name for path in selected_oracle_paths(out_dir, ["fresh"])],
                 ["fresh.returns.json"],
             )
+
+    def test_compare_returns_failure_when_a_value_diff_exists(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            ocx_dir, rhwp_dir, verdict_dir = root / "ocx", root / "rhwp", root / "verdict"
+            ocx_dir.mkdir()
+            rhwp_dir.mkdir()
+            oracle = {"scenario": "doc-basic", "calls": [{"call": "PageCount", "value": 1}], "saved": None}
+            implementation = {"scenario": "doc-basic", "calls": [{"call": "PageCount", "value": 2}], "saved": None}
+            (ocx_dir / "doc-basic.returns.json").write_text(json.dumps(oracle), encoding="utf-8")
+            (rhwp_dir / "doc-basic.returns.json").write_text(json.dumps(implementation), encoding="utf-8")
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(HERE / "compare.py"),
+                    "--ocx",
+                    str(ocx_dir),
+                    "--rhwp",
+                    str(rhwp_dir),
+                    "--out",
+                    str(verdict_dir),
+                ],
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(proc.returncode, 1, proc.stdout.decode("utf-8", "replace"))
 
     def test_tasklist_parser_selects_only_hancom_processes(self) -> None:
         tasklist = 'Hwp.exe,101,Console,1,10 K\r\nHwpFrame.exe,202,Console,1,10 K\r\nnode.exe,303,Console,1,10 K\r\n'
