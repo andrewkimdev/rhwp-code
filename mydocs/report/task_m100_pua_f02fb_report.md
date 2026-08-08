@@ -18,6 +18,7 @@ Canvas2D·SVG·Native Skia와 텍스트 추출 표면이 공개 글꼴에서도 
 Clippy·fmt·diff, release WASM, Canvas2D 6개 계약과 Native Skia PNG 출력을 통과했다. #4158 head
 위로 재배치한 뒤 네이티브 `rhwp`와 WASM을 다시 만들었고, 동일 산출물에서 #4158 사각 번호 7개와
 삼각형 6개 Canvas2D 계약, E2E manifest 88/88을 통과했다. 시각 증적은 `output/4158/`과
-`output/pau-004/`에 있다.
+`output/pau-004/`에 있다. 작업지시자는 결합 WASM의 사각 번호와 작은 오른쪽 방향 삼각형에 대한
+rhwp-studio 시각 판정을 통과시켰다.
 
 전체 PR 게이트와 GitHub 이슈·push·PR 단계는 별도 승인 대기다.

@@ -62,7 +62,7 @@ Windows의 실제 `함초롬돋움(HCR Dotum)` cmap은 이 코드를 glyph `uF02
 - `u-f02fb-handotum.png` — 로컬 한컴 폰트의 원 PUA glyph 진단본(커밋 제외)
 
 Canvas2D와 Native Skia 모두 tofu 없이 작은 오른쪽 방향 삼각형을 출력한다. 최종 한컴 호환 시각
-판정 권위는 작업지시자에게 있다.
+판정 권위자인 작업지시자가 2026-08-08 KST에 rhwp-studio 시각 판정을 통과시켰다.
 
 ## 6. #4158 stack 통합 재검증
 
@@ -74,6 +74,7 @@ Canvas2D와 Native Skia 모두 tofu 없이 작은 오른쪽 방향 삼각형을 
 재배치된 동일 head에서 `cargo build --release --bin rhwp`와 release `wasm-pack build`를 완료했다.
 새 WASM으로 #4158 물리 10쪽 사각 번호 E2E 7개 계약과 `pau-004` 삼각형 E2E 6개 계약이 모두
 통과했다. 따라서 통합 산출물은 사각형 안 숫자 `1`과 작은 오른쪽 방향 삼각형 `▸`를 함께 렌더링한다.
+작업지시자는 이 결합 결과도 rhwp-studio에서 확인하고 시각 판정을 통과시켰다.
 
 ## 7. 원격 상태
 
