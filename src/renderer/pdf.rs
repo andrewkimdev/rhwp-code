@@ -858,11 +858,25 @@ struct PageData {
 
 /// 페이지 하나를 파싱 + PDF chunk로 변환한다. 페이지 간 상태 공유가 없어
 /// 병렬 호출이 안전하다 (`options`의 fontdb는 Arc로 읽기 전용 공유).
+///
+/// `font_data_cache`: 벤더 패치(font-data-cache). `render_one_page`는 페이지마다
+/// 독립된 `svg2pdf::Context`를 새로 만들기 때문에(=페이지 간 상태 공유 없음, 위
+/// 설명대로 병렬화의 전제), `svg2pdf::render::text::fill_fonts`가 폰트 파일 전체
+/// 바이트를 `Vec::from(data)`로 매 페이지마다 새로 복사한다 — 4페이지 문서면 같은
+/// 폰트를 4번 복사하는 셈(`docs/rhwp-convert-분석.md` 후속 조사에서 self-time의
+/// ~15%로 측정, `fontdb`의 mmap 공유 자체는 이미 font-mmap-cache 패치로 해결됐지만
+/// 이건 그 위에서 svg2pdf가 별도로 복사하는 다른 지점이다). 모든 페이지가 같은
+/// `fontdb::Database`를 읽기 전용으로 공유하므로, 복사된 바이트도 페이지 간에
+/// 안전하게 공유할 수 있다 — `Ref`/`glyph_set`/`glyph_remapper`처럼 페이지마다
+/// 달라야 하는 상태는 그대로 페이지 로컬로 유지된다(캐시는 원본 폰트 바이트 +
+/// `units_per_em` + `face_index`만 담는다). `svgs_to_pdf_with_options`가 문서당
+/// 하나만 만들어 모든 페이지(스레드)에 공유한다.
 #[cfg(not(target_arch = "wasm32"))]
 fn render_one_page(
     svg: &str,
     export_options: &PdfExportOptions,
     options: &usvg::Options,
+    font_data_cache: &Option<svg2pdf::FontDataCache>,
 ) -> Result<PageData, String> {
     let svg_with_fallback = apply_pdf_font_options(svg, export_options);
     let tree = usvg::Tree::from_str(&svg_with_fallback, options)
@@ -872,6 +886,7 @@ fn render_one_page(
     // `embed_text=false` 면 글리프를 path 로 변환해 서브셋 경로를 통째로 건너뛴다.
     let mut conversion = svg2pdf::ConversionOptions::default();
     conversion.embed_text = export_options.embed_text;
+    conversion.font_data_cache = font_data_cache.clone();
 
     let (chunk, svg_ref) = svg2pdf::to_chunk(&tree, conversion)
         .map_err(|e| format!("SVG→chunk 변환 실패: {:?}", e))?;
@@ -897,11 +912,12 @@ fn render_pages_to_page_data(
     svg_pages: &[String],
     export_options: &PdfExportOptions,
     options: &usvg::Options,
+    font_data_cache: &Option<svg2pdf::FontDataCache>,
 ) -> Result<Vec<PageData>, String> {
     if svg_pages.len() <= 1 {
         return svg_pages
             .iter()
-            .map(|svg| render_one_page(svg, export_options, options))
+            .map(|svg| render_one_page(svg, export_options, options, font_data_cache))
             .collect();
     }
 
@@ -918,7 +934,7 @@ fn render_pages_to_page_data(
                 scope.spawn(move || {
                     chunk
                         .iter()
-                        .map(|svg| render_one_page(svg, export_options, options))
+                        .map(|svg| render_one_page(svg, export_options, options, font_data_cache))
                         .collect::<Result<Vec<_>, _>>()
                 })
             })
@@ -974,6 +990,13 @@ pub fn svgs_to_pdf_with_options(
         };
     options.glyph_outline_cache = glyph_cache.clone();
 
+    // [벤더 패치: font-data-cache] render_one_page 문서 참고 — 모든 페이지가
+    // 공유하는 문서(요청) 스코프 캐시. `embed_text=false`면 svg2pdf가 fill_fonts를
+    // 아예 안 타므로 채워지지 않지만, 빈 HashMap 할당 자체는 무시할 수준이라
+    // 조건 분기 없이 항상 만든다.
+    let font_data_cache: Option<svg2pdf::FontDataCache> =
+        Some(std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())));
+
     let mut alloc = Ref::new(1);
     let catalog_ref = alloc.bump();
     let page_tree_ref = alloc.bump();
@@ -988,7 +1011,8 @@ pub fn svgs_to_pdf_with_options(
     // 코어 수를 크게 넘어도 스레드가 무한정 늘지 않도록 available_parallelism()
     // 기준으로 청크를 나눠 스레드 수를 상한한다. 0/1페이지는 스레드 생성 비용이
     // 이득보다 커 순차 경로를 그대로 둔다.
-    let page_datas: Vec<PageData> = render_pages_to_page_data(svg_pages, export_options, &options)?;
+    let page_datas: Vec<PageData> =
+        render_pages_to_page_data(svg_pages, export_options, &options, &font_data_cache)?;
 
     // 각 chunk를 재번호화하고 페이지 참조 수집
     let mut page_refs: Vec<Ref> = Vec::new();
