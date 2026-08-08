@@ -134,6 +134,7 @@ printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocol
 | 프롬프트 주입 신호 | `inspect injection --json` (`hwp_inspect_injection`) | `signalCount`·`highestConfidence` | [간접 프롬프트 인젝션](../tech/agent_security/indirect_prompt_injection.md) |
 | 누름틀 이름·메모까지 | `inspect injection --include-fields` | `scanScopes[]` 12축 | 같은 문서 |
 | 유니코드 기만 | `inspect unicode --json` (`hwp_inspect_unicode`) | `kindCounts`·`severityCounts` | [유니코드 기만](../tech/agent_security/unicode_deception.md) |
+| 평문 개인정보 검사만(파일 무변경) | `edit redact --dry-run --no-raw --json` (`hwp_redact`: `dryRun:true`, `noRaw:true`) | `findingCount`·`findings[].masked` | [레시피 3](recipes/03_redact_before_sharing.md)·[보안 소비자 가이드](../tech/agent_security/consumer_guide.md) |
 | 어느 값이 문서에서 왔나 | 봉투의 `untrustedFields[]` | 경로 목록 | [봉투 출처 표지](../tech/envelope_provenance.md) |
 | 호출 전 선검사 | `scripts/agent_preflight.py` | [선검사 가이드](agent_preflight_guide.md) | 같은 가이드 |
 
