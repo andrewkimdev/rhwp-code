@@ -24,8 +24,8 @@ use super::render_tree::{
     REAL_PICTURE_WATERMARK_PAGE_OPACITY, REAL_PICTURE_WATERMARK_SATURATION,
 };
 use super::{
-    clamp_tab_leader_end_x, GradientFillInfo, LineStyle, PathCommand, PatternFillInfo, Renderer,
-    ShapeStyle, StrokeDash, TextStyle,
+    boxed_pua_char_overlap_semantics, clamp_tab_leader_end_x, GradientFillInfo, LineStyle,
+    PathCommand, PatternFillInfo, Renderer, ShapeStyle, StrokeDash, TextStyle,
 };
 use crate::model::style::ImageFillMode;
 use crate::model::style::UnderlineType;
@@ -3112,13 +3112,17 @@ impl WebCanvasRenderer {
         // 같은 중심에 겹쳐 그린다. table-vpos-01의 10/11/12 마커는
         // U+F02BA + U+F02C3/C4/C5 조합으로 저장된다.
         let box_size = font_size;
+        let boxed_pua = boxed_pua_char_overlap_semantics(&chars, overlap.border_type);
+        let effective_border = boxed_pua
+            .map(|(_, border_type)| border_type)
+            .unwrap_or(overlap.border_type);
 
-        let is_reversed = overlap.border_type == 2 || overlap.border_type == 4;
-        let is_circle = overlap.border_type == 1 || overlap.border_type == 2;
-        let is_rect = overlap.border_type == 3 || overlap.border_type == 4;
+        let is_reversed = effective_border == 2 || effective_border == 4;
+        let is_circle = effective_border == 1 || effective_border == 2;
+        let is_rect = effective_border == 3 || effective_border == 4;
 
         // charSz 는 "테두리 내부" 글자 비율이므로 테두리를 안 그리면 적용하지 않는다 (#4085).
-        let size_ratio = char_overlap_size_ratio(overlap.border_type, overlap.inner_char_size);
+        let size_ratio = char_overlap_size_ratio(effective_border, overlap.inner_char_size);
         let inner_font_size = font_size * size_ratio;
 
         // 동그라미 테두리 색 = 글자색 (한컴 정합). reversed는 기존대로 검정 채움.
@@ -3193,7 +3197,9 @@ impl WebCanvasRenderer {
         }
 
         for (i, ch) in chars.iter().enumerate() {
-            let display_str = {
+            let display_str = if let Some((number, _)) = boxed_pua {
+                number.to_string()
+            } else {
                 let cp = *ch as u32;
                 if (0x2460..=0x2473).contains(&cp) {
                     format!("{}", cp - 0x2460 + 1)

@@ -936,7 +936,7 @@ fn test_compute_image_crop_src_last_resort_hu_rule() {
 /// [#4085] 테두리 없는 글자겹침(`border_type=0`)은 `charSz` 축소를 받지 않고
 /// 본문과 같은 글자 크기로 나가야 한다.
 ///
-/// 관세청 월간 수출입 현황 p1 의 절 제목 번호 상자(U+F02B1, `charSz=-4`)가
+/// 관세청 월간 수출입 현황 p1 의 절 제목 번호(`charSz=-4`)가
 /// 한컴 PDF 에서 본문과 같은 `101 Tf`, 같은 baseline 으로 나온다. 축소를 걸면
 /// 본문 대비 60% 로 렌더돼 다른 폰트처럼 보인다.
 #[test]
@@ -952,7 +952,7 @@ fn char_overlap_without_border_keeps_body_font_size() {
 
     let mut renderer = SvgRenderer::new();
     renderer.begin_page(800.0, 600.0);
-    renderer.draw_char_overlap("\u{F02B1}", &style, &overlap, 10.0, 20.0, 22.67, 22.67);
+    renderer.draw_char_overlap("1", &style, &overlap, 10.0, 20.0, 22.67, 22.67);
     let output = renderer.output();
 
     assert!(
@@ -962,6 +962,32 @@ fn char_overlap_without_border_keeps_body_font_size() {
     assert!(
         !output.contains("<ellipse"),
         "border_type=0 은 테두리를 그리지 않는다: {output}"
+    );
+}
+
+/// [#4158] 실제 CharOverlap의 U+F02B1은 raw border가 0이어도 문자 자체의 의미에 따라
+/// 사각형과 숫자 1로 합성해야 한다. raw PUA를 폰트에 맡기면 backend별 tofu가 생긴다.
+#[test]
+fn boxed_pua_char_overlap_draws_square_and_number() {
+    let style = TextStyle {
+        font_size: 22.67,
+        ..Default::default()
+    };
+    let overlap = CharOverlapInfo {
+        border_type: 0,
+        inner_char_size: 0,
+    };
+
+    let mut renderer = SvgRenderer::new();
+    renderer.begin_page(800.0, 600.0);
+    renderer.draw_char_overlap("\u{F02B1}", &style, &overlap, 10.0, 20.0, 22.67, 22.67);
+    let output = renderer.output();
+
+    assert!(output.contains("<rect"), "사각 테두리 필요: {output}");
+    assert!(output.contains(">1</text>"), "숫자 1 합성 필요: {output}");
+    assert!(
+        !output.contains('\u{F02B1}'),
+        "raw PUA를 렌더 출력에 남기지 않음: {output}"
     );
 }
 

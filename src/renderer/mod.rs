@@ -1297,13 +1297,34 @@ pub(crate) fn contains_old_hangul_jamo(text: &str) -> bool {
 
 /// 한컴 Supplementary PUA-A의 사각 안 숫자 값을 반환한다.
 ///
-/// IR과 SVG는 원문 PUA를 보존한다. Canvas2D는 글리프 ID를 조회할 수 없으므로 이 값을
-/// 사용해 브라우저 글꼴과 무관한 bounded vector fallback을 그린다.
+/// IR은 원문 PUA를 보존하고, 렌더러는 이 값을 사용해 backend/font와 무관한 사각형+숫자를
+/// 합성한다.
 pub(crate) fn boxed_pua_number(ch: char) -> Option<u32> {
     let code_point = ch as u32;
     (0xF02B1..=0xF02C4)
         .contains(&code_point)
         .then(|| code_point - 0xF02B0)
+}
+
+/// 실제 `CharOverlap`에 저장된 한컴 사각 안 숫자의 렌더 의미를 반환한다 (#4158).
+///
+/// 이 PUA 범위는 문자 자체가 사각형 의미를 포함하므로 raw `border_type=0`이어도 사각형을
+/// 그린다. 작성된 명시적 테두리는 보존한다. 다중 문자 겹침은 별도의 자리별 PUA 디코더가
+/// 담당하므로 여기서는 의도적으로 제외한다.
+pub(crate) fn boxed_pua_char_overlap_semantics(
+    chars: &[char],
+    raw_border_type: u8,
+) -> Option<(u32, u8)> {
+    let [ch] = chars else {
+        return None;
+    };
+    let number = boxed_pua_number(*ch)?;
+    let effective_border = if raw_border_type == 0 {
+        3
+    } else {
+        raw_border_type
+    };
+    Some((number, effective_border))
 }
 
 // ============================================================
@@ -2136,6 +2157,27 @@ mod tests {
         assert_eq!(boxed_pua_number('\u{F02B0}'), None);
         assert_eq!(boxed_pua_number('\u{F02C5}'), None);
         assert_eq!(boxed_pua_number('1'), None);
+    }
+
+    #[test]
+    fn boxed_pua_char_overlap_promotes_only_implicit_square_border() {
+        assert_eq!(
+            boxed_pua_char_overlap_semantics(&['\u{F02B1}'], 0),
+            Some((1, 3))
+        );
+        assert_eq!(
+            boxed_pua_char_overlap_semantics(&['\u{F02C4}'], 0),
+            Some((20, 3))
+        );
+        assert_eq!(
+            boxed_pua_char_overlap_semantics(&['\u{F02B1}'], 1),
+            Some((1, 1))
+        );
+        assert_eq!(
+            boxed_pua_char_overlap_semantics(&['\u{F02B1}', '\u{F02B2}'], 0),
+            None
+        );
+        assert_eq!(boxed_pua_char_overlap_semantics(&['1'], 0), None);
     }
 
     #[test]
