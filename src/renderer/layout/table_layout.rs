@@ -10412,6 +10412,10 @@ impl LayoutEngine {
             .iter()
             .find_map(|(height, trailing, _, _)| (!*trailing).then_some(*height))
             .unwrap_or(0.0);
+        let first_visible_paint_height = visible_units
+            .iter()
+            .find_map(|(_, trailing, _, content_height)| (!*trailing).then_some(*content_height))
+            .unwrap_or(0.0);
         let last_visible_content_height = visible_units
             .iter()
             .rev()
@@ -10473,11 +10477,63 @@ impl LayoutEngine {
             offset
         };
         let is_offset_continuation = offset_within_start > 0.5;
+        let has_later_host_source_owner = units
+            .iter()
+            .skip(hi)
+            .any(|unit| Self::cell_unit_has_visible_content(cell, unit));
+        let terminal_table_before_host_successor = recursive_cut.is_none()
+            && terminal
+            && is_offset_continuation
+            && self.profile.get().native_hwp5_layout()
+            && single_cell_nested_continuation
+            && has_later_host_source_owner
+            && cell
+                .paragraphs
+                .get(para_idx)
+                .is_some_and(|paragraph| paragraph.text.trim().is_empty());
+        let terminal_host_line_spacing = terminal_table_before_host_successor
+            .then(|| {
+                cell.paragraphs
+                    .get(para_idx)
+                    .and_then(|paragraph| paragraph.line_segs.first())
+                    .map(|segment| hwpunit_to_px(segment.line_spacing, self.dpi))
+                    .unwrap_or(0.0)
+            })
+            .unwrap_or(0.0);
+        let terminal_continuation_inset = terminal_table_before_host_successor
+            .then(|| {
+                let nested_top_padding = cell
+                    .paragraphs
+                    .get(para_idx)
+                    .and_then(|paragraph| {
+                        paragraph.controls.iter().find_map(|control| match control {
+                            Control::Table(table) => Some(table),
+                            _ => None,
+                        })
+                    })
+                    .and_then(|table| {
+                        table
+                            .cells
+                            .first()
+                            .map(|nested_cell| self.resolve_cell_padding(nested_cell, table).2)
+                    })
+                    .unwrap_or(0.0);
+                (first_visible_content_height - first_visible_paint_height).max(0.0)
+                    + nested_top_padding
+            })
+            .unwrap_or(0.0);
         let terminal_single_cell_tail = recursive_cut.is_none()
             && terminal
             && is_offset_continuation
-            && single_cell_nested_continuation;
-        let visible_height = if recursive_cut.is_some() && is_offset_continuation && !terminal {
+            && single_cell_nested_continuation
+            && !has_later_host_source_owner;
+        let visible_height = if terminal_table_before_host_successor {
+            // 이 mixed stream은 끝났지만 같은 host cell에는 다음 source 문단이 있다.
+            // 자식 표의 실제 마지막 unit까지만 frame을 닫고, host 문단의 후행
+            // line-spacing은 아래 flow에만 더한다. terminal tail 보정까지 frame에
+            // 넣으면 다음 separator 앞에 빈 표 영역이 생긴다(issue2007 p14).
+            flow_visible + terminal_continuation_inset
+        } else if recursive_cut.is_some() && is_offset_continuation && !terminal {
             // 재귀 child cursor는 이전 viewport가 예약한 첫 가시 unit을 source offset에서
             // 되감아 정확한 시작 owner를 복원한다. paint viewport도 같은 unit만큼
             // 늘려야 end_cut 안의 마지막 줄이 셀 clip 밖으로 잘리지 않는다. child cut이
@@ -10539,7 +10595,9 @@ impl LayoutEngine {
             return None;
         }
         let remaining = (total - offset).max(0.0);
-        let flow_height = if recursive_cut.is_some() {
+        let flow_height = if terminal_table_before_host_successor {
+            flow_visible + terminal_host_line_spacing
+        } else if recursive_cut.is_some() {
             flow_visible
         } else if terminal_single_cell_tail {
             visible_height
@@ -10563,7 +10621,7 @@ impl LayoutEngine {
                 _ => None,
             })
         });
-        let (start_row, end_row, row_offset_within_start, visible_height) = match nested {
+        let (start_row, end_row, mut row_offset_within_start, visible_height) = match nested {
             Some(_) if recursive_cut.is_some() => (0, 1, 0.0, visible_height),
             Some(nt) if nt.row_count > 1 => {
                 let ncol = nt.col_count as usize;
@@ -10606,6 +10664,13 @@ impl LayoutEngine {
             // 1행 표는 종전 규약 유지 — 행 경계가 없어 오프셋만으로 이어진다.
             _ => (0, 1, offset_within_start, visible_height),
         };
+        if terminal_table_before_host_successor {
+            // continuation 첫 line box의 leading과 셀 top padding을 source offset에서
+            // 되돌려 현재 fragment 안에 다시 보인다. paint만 아래로 옮기며 위에서
+            // 계산한 flow_height에는 더하지 않아 다음 host 문단 위치는 유지한다.
+            row_offset_within_start =
+                (row_offset_within_start - terminal_continuation_inset).max(0.0);
+        }
         Some(NestedTableSplit {
             start_row,
             end_row,

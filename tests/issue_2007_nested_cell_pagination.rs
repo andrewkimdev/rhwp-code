@@ -1064,6 +1064,16 @@ fn issue_2007_continuation_frame_restarts_and_drops_previous_page_residual() {
     // p12의 빈 separator + 국가인권위원회 제목은 뒤의 1×1 block과 함께 p13으로
     // 넘어가야 한다. 그 결과 p13은 감사원 항목 1에서 끝나고 항목 2는 p14가 소유한다.
     let p13_clip = Some(ClipRect::from_node(&p13.root));
+    let human_rights_table = find_innermost_table_containing_text(&p13.root, "국가인권위원회법")
+        .expect("p13 국가인권위원회 하위 표");
+    let human_rights_first_top =
+        first_text_run_top(&p13.root, "국가인권위원회법").expect("p13 국가인권위원회 표 첫 줄");
+    assert!(
+        (7.0..=8.1).contains(&(human_rights_first_top - human_rights_table.bbox.y)),
+        "p13 정상 신규 표의 top inset이 p14 보정에 영향받았다: \
+         table_top={:.3}, line_top={human_rights_first_top:.3}",
+        human_rights_table.bbox.y,
+    );
     let audit_item_2 = "증명서, 변명서, 그 밖의 관계 문서 및 장부, 물품 등의 제출 요구";
     assert!(
         !contains_painted_text(&p13.root, audit_item_2, p13_clip),
@@ -1084,10 +1094,40 @@ fn issue_2007_continuation_frame_restarts_and_drops_previous_page_residual() {
         contains_painted_text(&p14.root, finance_heading, p14_clip),
         "p14 must own the 금융위원회 heading"
     );
+    let audit_table =
+        find_innermost_table_containing_text(&p14.root, "감사원법").expect("p14 감사원법 하위 표");
+    let audit_first_top =
+        first_text_run_top(&p14.root, "증명서, 변명서").expect("p14 감사원법 continuation 첫 줄");
+    let (_, audit_last_bottom) = first_text_run_vertical_bounds(&p14.root, "위반한 자는")
+        .expect("p14 감사원법 마지막 벌칙 줄");
+    let audit_table_bottom = audit_table.bbox.y + audit_table.bbox.height;
     let finance_table = find_innermost_table_containing_text(&p14.root, finance_heading)
         .expect("p14 금융위원회 하위 표");
     let finance_section_heading_top =
         first_text_run_top(&p14.root, " 금융위원회").expect("p14 금융위원회 section heading");
+    assert!(
+        (3.8..=6.2).contains(&(audit_first_top - audit_table.bbox.y)),
+        "p14 감사원법 continuation 첫 줄이 PDF의 top inset과 다르다: \
+         table_top={:.3}, line_top={audit_first_top:.3}",
+        audit_table.bbox.y,
+    );
+    assert!(
+        (4.5..=6.8).contains(&(audit_table_bottom - audit_last_bottom)),
+        "p14 감사원법 마지막 줄 뒤에 빈 terminal tail이 남았다: \
+         line_bottom={audit_last_bottom:.3}, table_bottom={audit_table_bottom:.3}"
+    );
+    assert!(
+        (22.5..=26.0).contains(&(finance_section_heading_top - audit_table_bottom)),
+        "p14 감사원법 표와 금융위원회 제목 사이 간격이 PDF와 다르다: \
+         table_bottom={audit_table_bottom:.3}, heading_top={finance_section_heading_top:.3}"
+    );
+    assert!(
+        (496.0..=499.0).contains(&finance_section_heading_top)
+            && (523.5..=527.0).contains(&finance_table.bbox.y),
+        "p14 중간 block 절대 좌표가 PDF와 다르다: \
+         heading_top={finance_section_heading_top:.3}, table_top={:.3}",
+        finance_table.bbox.y,
+    );
     let heading_to_table = finance_table.bbox.y - finance_section_heading_top;
     assert!(
         (27.6..=27.9).contains(&heading_to_table),
@@ -1131,6 +1171,17 @@ fn issue_2007_continuation_frame_restarts_and_drops_previous_page_residual() {
     assert!(
         contains_painted_text(&p15.root, finance_item_8, p15_clip),
         "p15 must begin with the carried 금융위원회 item 8"
+    );
+    let finance_continuation_table =
+        find_innermost_table_containing_text(&p15.root, finance_item_8)
+            .expect("p15 금융위원회 continuation 표");
+    let finance_item_8_top =
+        first_text_run_top(&p15.root, finance_item_8).expect("p15 금융위원회 continuation 첫 줄");
+    assert!(
+        (1.5..=2.3).contains(&(finance_item_8_top - finance_continuation_table.bbox.y)),
+        "p15 정상 recursive continuation top inset이 p14 보정에 영향받았다: \
+         table_top={:.3}, line_top={finance_item_8_top:.3}",
+        finance_continuation_table.bbox.y,
     );
     let (_, procurement_heading_bottom) =
         first_text_run_vertical_bounds(&p15.root, " 조달청").expect("p15 조달청 section heading");
