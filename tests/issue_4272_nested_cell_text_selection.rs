@@ -13,6 +13,7 @@ const TARGET_TEXT: &str = "23,504";
 const TARGET_PATH: &str = r#"[{"controlIndex":1,"cellIndex":0,"cellParaIndex":0},{"controlIndex":2,"cellIndex":0,"cellParaIndex":12},{"controlIndex":0,"cellIndex":50,"cellParaIndex":0}]"#;
 const PAGE11_PATH: &str = r#"[{"controlIndex":1,"cellIndex":0,"cellParaIndex":0},{"controlIndex":2,"cellIndex":0,"cellParaIndex":84},{"controlIndex":0,"cellIndex":0,"cellParaIndex":22}]"#;
 const PAGE11_SELECTED_TEXT: &str = " 다른 목적 등을 위하여 조사권을 남용하여";
+const PAGE5_SELECTED_TABLE_OWNER_PATH: &[(usize, usize, usize)] = &[(1, 0, 0), (2, 0, 12)];
 
 fn fixture_bytes() -> Vec<u8> {
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(FIXTURE);
@@ -110,4 +111,18 @@ fn issue_4272_path_api_returns_rects_for_page5_innermost_cell_text() {
         page11_html.contains(PAGE11_SELECTED_TEXT),
         "물리 11쪽 중첩 셀 선택 HTML: {page11_html}"
     );
+}
+
+#[test]
+fn issue_4272_page5_nested_table_control_copies_from_owner_path() {
+    let bytes = fixture_bytes();
+    let mut document = rhwp::wasm_api::HwpDocument::from_bytes(&bytes).expect("parse HwpDocument");
+
+    let copied = document
+        .copy_control_native(0, 7, PAGE5_SELECTED_TABLE_OWNER_PATH, 0)
+        .expect("copy physical page 5 nested table control");
+
+    assert!(copied.contains("[표]"), "중첩 표 복사 결과: {copied}");
+    assert!(document.has_internal_clipboard_native());
+    assert!(document.clipboard_has_control_native());
 }

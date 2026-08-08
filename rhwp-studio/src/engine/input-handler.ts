@@ -43,6 +43,7 @@ import { isPageLocalTextEditCommand, type PageLocalTextEditOptions } from './inp
 import type { NavigationKeyInput } from './navigation-keymap';
 import { isPointNearBoxBorder } from './table-border-hit';
 import { DeferredPaginationRunner } from './deferred-pagination-runner';
+import { tableObjectClipboardTarget } from './table-object-clipboard-target';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 const DRAG_SCROLL_EDGE_PX = 48;
@@ -4465,10 +4466,17 @@ export class InputHandler {
       const ref = this.cursor.getSelectedTableRef();
       if (ref) {
         try {
-          this.wasm.copyControl(ref.sec, ref.ppi, ref.ci);
+          const target = tableObjectClipboardTarget(ref);
+          this.wasm.copyControl(
+            ref.sec, ref.ppi, target.controlIndex, target.ownerCellPathJson,
+          );
           const text = this.wasm.getClipboardText() || '[표]';
           let html = '';
-          try { html = this.wasm.exportControlHtml(ref.sec, ref.ppi, ref.ci) || ''; } catch { /* 무시 */ }
+          try {
+            html = this.wasm.exportControlHtml(
+              ref.sec, ref.ppi, target.controlIndex, target.ownerCellPathJson,
+            ) || '';
+          } catch { /* 무시 */ }
           const markedHtml = _keyboard.prepareRhwpInternalClipboardHtml(this, html, text);
           _keyboard.writeTextHtmlToClipboard(text, markedHtml)
             .catch(() => navigator.clipboard.writeText(text).catch(() => {}));
