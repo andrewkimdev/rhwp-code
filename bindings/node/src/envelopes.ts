@@ -616,6 +616,21 @@ export interface RunEnvelope {
 }
 
 /**
+ * `rhwp scan --json` 봉투.
+ *
+ * 디렉터리 재귀 발견·분류 — 확장자↔매직 대조(extMismatch), --probe 파싱 시도(암호·쪽수), batch
+ * stdin 목록의 원천
+ */
+export interface ScanEnvelope {
+  readonly files?: unknown;
+  readonly roots?: unknown;
+  readonly schemaVersion?: string;
+  readonly summary?: unknown;
+
+  readonly [key: string]: unknown;
+}
+
+/**
  * `rhwp search --json` 봉투.
  *
  * 문서 검색 결과를 구역·문단·페이지·문자 오프셋 주소와 함께 출력
@@ -724,6 +739,7 @@ export interface EnvelopeByCommand {
   "ir-diff": IrDiffEnvelope;
   "render-diff": RenderDiffEnvelope;
   run: RunEnvelope;
+  scan: ScanEnvelope;
   search: SearchEnvelope;
   "table-to-csv": TableToCsvEnvelope;
   thumbnail: ThumbnailEnvelope;

@@ -79,6 +79,7 @@ from .commands import (
     inspect,
     ir_diff,
     replace_text,
+    scan,
     search,
     set_cell,
     table_to_csv,
@@ -159,6 +160,7 @@ __all__ = [
     "set_cell",
     "csv_to_table",
     # 1층 — 대량
+    "scan",
     "batch",
     # 2층 — 세션
     "open",
