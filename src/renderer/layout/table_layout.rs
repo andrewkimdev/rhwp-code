@@ -10491,37 +10491,37 @@ impl LayoutEngine {
                 .paragraphs
                 .get(para_idx)
                 .is_some_and(|paragraph| paragraph.text.trim().is_empty());
-        let terminal_host_line_spacing = terminal_table_before_host_successor
-            .then(|| {
-                cell.paragraphs
-                    .get(para_idx)
-                    .and_then(|paragraph| paragraph.line_segs.first())
-                    .map(|segment| hwpunit_to_px(segment.line_spacing, self.dpi))
-                    .unwrap_or(0.0)
-            })
-            .unwrap_or(0.0);
-        let terminal_continuation_inset = terminal_table_before_host_successor
-            .then(|| {
-                let nested_top_padding = cell
-                    .paragraphs
-                    .get(para_idx)
-                    .and_then(|paragraph| {
-                        paragraph.controls.iter().find_map(|control| match control {
-                            Control::Table(table) => Some(table),
-                            _ => None,
-                        })
+        let terminal_host_line_spacing = if terminal_table_before_host_successor {
+            cell.paragraphs
+                .get(para_idx)
+                .and_then(|paragraph| paragraph.line_segs.first())
+                .map(|segment| hwpunit_to_px(segment.line_spacing, self.dpi))
+                .unwrap_or(0.0)
+        } else {
+            0.0
+        };
+        let terminal_continuation_inset = if terminal_table_before_host_successor {
+            let nested_top_padding = cell
+                .paragraphs
+                .get(para_idx)
+                .and_then(|paragraph| {
+                    paragraph.controls.iter().find_map(|control| match control {
+                        Control::Table(table) => Some(table),
+                        _ => None,
                     })
-                    .and_then(|table| {
-                        table
-                            .cells
-                            .first()
-                            .map(|nested_cell| self.resolve_cell_padding(nested_cell, table).2)
-                    })
-                    .unwrap_or(0.0);
-                (first_visible_content_height - first_visible_paint_height).max(0.0)
-                    + nested_top_padding
-            })
-            .unwrap_or(0.0);
+                })
+                .and_then(|table| {
+                    table
+                        .cells
+                        .first()
+                        .map(|nested_cell| self.resolve_cell_padding(nested_cell, table).2)
+                })
+                .unwrap_or(0.0);
+            (first_visible_content_height - first_visible_paint_height).max(0.0)
+                + nested_top_padding
+        } else {
+            0.0
+        };
         let terminal_single_cell_tail = recursive_cut.is_none()
             && terminal
             && is_offset_continuation
