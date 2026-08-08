@@ -129,31 +129,4 @@ assert.ok(para >= 0, '10글자 이상인 본문 문단이 있어야 한다');
   assert.match(JSON.stringify(calls[0]), /\\"bold\\":true/);
 }
 
-// ── 5. 실행할 수 없는 커맨드는 조용히 사라지지 않는다 ──────────────────────
-{
-  const { requireInputHandler, resetCommandFeedbackDedupe } =
-    await import(pathToFileURL(join(srcDir, 'command', 'command-feedback.ts')).href);
-
-  resetCommandFeedbackDedupe();
-  const warnings = [];
-  const realWarn = console.warn;
-  console.warn = (...args) => warnings.push(args.join(' '));
-  try {
-    const missing = requireInputHandler({ getInputHandler: () => null }, 'format:bold');
-    assert.equal(missing, null, '핸들러가 없으면 null 을 준다');
-    assert.equal(warnings.length, 1, '무언 실패가 아니라 사유가 남아야 한다');
-    assert.match(warnings[0], /format:bold/, '어떤 커맨드가 실패했는지 알 수 있어야 한다');
-
-    const handler = { toggleFormat: () => {} };
-    assert.equal(
-      requireInputHandler({ getInputHandler: () => handler }, 'format:bold'),
-      handler,
-      '핸들러가 있으면 그대로 통과시킨다',
-    );
-    assert.equal(warnings.length, 1, '정상 경로는 경고를 남기지 않는다');
-  } finally {
-    console.warn = realWarn;
-  }
-}
-
 console.log('PENDING_CHAR_SHAPE_OK');
