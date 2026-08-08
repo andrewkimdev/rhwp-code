@@ -1,4 +1,4 @@
-//! `samples/basic/pau-004.hwp`의 한컴 Supplementary PUA-A 표시 계약.
+//! #4224 `samples/basic/pau-004.hwp`의 한컴 Supplementary PUA-A 표시 계약.
 //!
 //! 원문 `U+F02FB`는 IR에 보존하되, 한컴 문자표와 같은 작은 오른쪽 방향
 //! 삼각형 `U+25B8`로 paint-time 투영해 공개 글꼴 환경의 tofu를 막는다.

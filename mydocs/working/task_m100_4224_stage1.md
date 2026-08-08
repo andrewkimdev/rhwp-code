@@ -1,8 +1,9 @@
-# Stage 1 — task_m100_pua_f02fb 구현·집중 검증
+# Stage 1 — #4224 U+F02FB 구현·집중 검증
 
+- **Issue**: #4224
 - **대상 샘플**: `samples/basic/pau-004.hwp`
-- **계획서**: [`mydocs/plans/task_m100_pua_f02fb.md`](../plans/task_m100_pua_f02fb.md)
-- **브랜치**: `task_m100_pua_f02fb_small_triangle`
+- **계획서**: [`mydocs/plans/task_m100_4224.md`](../plans/task_m100_4224.md)
+- **브랜치**: `task_m100_4224_pua_f02fb_small_triangle`
 - **stack 기준**: `task_m100_4158_char_overlap_boxed_pua` `27932685b`
 - **devel 기준**: `upstream/devel` `5a4f26d0d`
 - **구현 커밋**: `3f0974dc8` (`fix(renderer): map U+F02FB to small right triangle`)
@@ -40,14 +41,14 @@ Windows의 실제 `함초롬돋움(HCR Dotum)` cmap은 이 코드를 glyph `uF02
 | 검증 | 결과 |
 | --- | --- |
 | 실제 샘플 RED | 예상 실패, Rust·SVG 2 failed |
-| `cargo test --test pua_f02fb_small_right_triangle` | PASS, 2 passed |
+| `cargo test --test issue_4224_pua_f02fb_small_right_triangle` | PASS, 2 passed |
 | 검증 PUA 표 단위 테스트 | PASS, 1 passed |
 | Native Skia feature release-test | PASS, 실제 샘플 2 passed |
 | 인접 PUA·텍스트 표면 통합 테스트 | PASS, 13 passed |
 | `cargo clippy --lib -- -D warnings` | PASS |
 | `cargo fmt --check`, `git diff --check` | PASS |
 | release WASM build | PASS, wasm-bindgen·wasm-opt·`pkg` packaging 완료 |
-| `npm run e2e:pua-f02fb` | PASS, 6개 Canvas2D 계약 |
+| `npm run e2e:issue-4224` | PASS, 6개 Canvas2D 계약 |
 | `npm run e2e:manifest-check` | PASS, stacked head tracked 88개 / manifest 88행 |
 | Native Skia `export-png --font-path ttfs/opensource` | PASS, 1쪽 PNG 출력 |
 
@@ -113,6 +114,10 @@ OVR 증적은 `output/pau-004/ovr/ovr_diff.md`에 있으며 KTX 27쪽/3개체, e
 
 ## 8. 원격 상태
 
-GitHub 이슈 생성, push, PR 생성은 수행하지 않았다. 전체 로컬 PR 게이트까지 완료했으며 원격 단계는
-별도 승인받아 실행한다. 이 브랜치는 #4158 head를 base로 하는 PR stack이며, 통합 WASM에서는
-#4158 사각 번호와 `U+F02FB` 삼각형을 함께 검증한다.
+중복 검색 뒤 GitHub 이슈 #4224를 `bug`·`rendering`, assignee `edwardkim`, milestone `v1.0.0`으로
+등록했다. 채번 뒤 branch·task 문서·Rust test·E2E 파일과 명령을 #4224 기준으로 정규화했다. 새 이름의
+focused Rust 2건, E2E manifest 88/88, Canvas2D 6개 계약과 변경 Markdown 523개 링크 검사가
+통과했다.
+
+branch push와 PR 생성은 아직 수행하지 않았다. 이 브랜치는 #4158 head를 base로 하는 PR stack이며,
+통합 WASM에서는 #4158 사각 번호와 `U+F02FB` 삼각형을 함께 검증한다.

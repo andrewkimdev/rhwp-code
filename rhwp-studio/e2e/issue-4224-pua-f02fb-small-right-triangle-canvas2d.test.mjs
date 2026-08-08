@@ -14,7 +14,7 @@ const OUTPUT_CROP = path.join(OUTPUT_DIR, 'pau004_p001_f02fb_crop.png');
 const OUTPUT_TREE = path.join(OUTPUT_DIR, 'render_tree_001.json');
 
 runTest('U+F02FB 작은 오른쪽 방향 삼각형 Canvas2D 투영', async ({ page }) => {
-  setTestCase('pau-004 일반 TextRun U+F02FB');
+  setTestCase('#4224 pau-004 일반 TextRun U+F02FB');
   const input = await page.$('#file-input');
   if (!input) throw new Error('file-input not found');
   await input.uploadFile(FIXTURE);
