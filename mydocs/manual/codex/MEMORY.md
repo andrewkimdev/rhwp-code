@@ -2,7 +2,7 @@
 kind: memory
 status: active
 canonical: mydocs/manual/codex/MEMORY.md
-last_verified: 2026-08-07
+last_verified: 2026-08-08
 ---
 
 # Codex 프로젝트 메모리 덤프
@@ -24,3 +24,17 @@ last_verified: 2026-08-07
 
 적용 후 열린 PR 전체를 다시 조회해 세 필드의 누락 여부를 확인한다. PR 댓글, 리뷰, 브랜치 갱신,
 merge, close는 별도 작업지시가 필요한 후속 단계이며 1차 트리야지에 포함하지 않는다.
+
+## Node 자식 프로세스 테스트의 샌드박스 가드레일
+
+`rhwp-studio`의 일부 Node 테스트는 `spawnSync()`로 별도 Node 드라이버를 실행한다. Codex
+샌드박스에서는 이 자식 프로세스 생성이 `EPERM`으로 차단될 수 있으므로, 이런 테스트가 포함된
+`npm test`는 처음부터 샌드박스 밖에서 실행한다.
+
+차단 시 자식의 `status`가 정상처럼 보이면서 `stdout`·`stderr`가 비고, 부모 테스트에는 "결과 JSON
+없음" 또는 "성공 마커 없음"만 나타날 수 있다. 이 패턴을 코드 결함으로 분류하거나 같은 sandbox
+명령을 반복하지 않는다. 필요하면 작은 `spawnSync` 진단으로 `error: EPERM`을 한 번 확인한 뒤 전체
+테스트를 escalation으로 재실행하고, 그 결과를 공식 판정으로 기록한다.
+
+2026-08-08 WSL2 Node v24.15.0 환경에서 sandbox 실행은 해당 드라이버 테스트 5건이 위 패턴으로
+실패했고, 동일 `npm test`를 sandbox 밖에서 실행하자 802/802건이 통과했다.

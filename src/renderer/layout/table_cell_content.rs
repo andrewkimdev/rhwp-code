@@ -274,6 +274,7 @@ impl LayoutEngine {
                             if let Some(last) = new_ctx.path.last_mut() {
                                 last.cell_index = cell_idx;
                                 last.cell_para_index = ci.cell_para_index;
+                                last.text_direction = text_direction;
                             }
                             Some(new_ctx)
                         } else {

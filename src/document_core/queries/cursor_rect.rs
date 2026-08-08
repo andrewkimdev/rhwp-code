@@ -1635,7 +1635,7 @@ impl DocumentCore {
         ) -> Option<CellContext> {
             match (text_ctx, traversal_ctx) {
                 (Some(text_ctx), Some(traversal_ctx))
-                    if traversal_ctx.path.len() >= text_ctx.path.len() =>
+                    if traversal_ctx.path.len() > text_ctx.path.len() =>
                 {
                     let mut ctx = traversal_ctx.clone();
                     if let (Some(dst), Some(src)) = (ctx.path.last_mut(), text_ctx.path.last()) {
@@ -3294,6 +3294,7 @@ impl DocumentCore {
             pt_margin_left,
             pt_margin_right,
             pt_mt,
+            None,
             false,
             Some(&probe),
         );
@@ -3520,7 +3521,7 @@ impl DocumentCore {
         ) -> Option<CellContext> {
             match (text_ctx, traversal_ctx) {
                 (Some(text_ctx), Some(traversal_ctx))
-                    if traversal_ctx.path.len() >= text_ctx.path.len() =>
+                    if traversal_ctx.path.len() > text_ctx.path.len() =>
                 {
                     let mut ctx = traversal_ctx.clone();
                     if let (Some(dst), Some(src)) = (ctx.path.last_mut(), text_ctx.path.last()) {
@@ -3542,6 +3543,20 @@ impl DocumentCore {
             ctx.as_ref().map_or(false, |ctx| {
                 ctx.parent_para_index == parent_para
                     && ctx.path.len() == path.len()
+                    && ctx.path.iter().zip(path.iter()).all(|(a, b)| {
+                        a.control_index == b.0 && a.cell_index == b.1 && a.cell_para_index == b.2
+                    })
+            })
+        }
+
+        fn cell_context_descends_from(
+            ctx: &Option<CellContext>,
+            parent_para: usize,
+            path: &[(usize, usize, usize)],
+        ) -> bool {
+            ctx.as_ref().is_some_and(|ctx| {
+                ctx.parent_para_index == parent_para
+                    && ctx.path.len() > path.len()
                     && ctx.path.iter().zip(path.iter()).all(|(a, b)| {
                         a.control_index == b.0 && a.cell_index == b.1 && a.cell_para_index == b.2
                     })
@@ -3664,6 +3679,22 @@ impl DocumentCore {
                 current_cell_ctx: Option<CellContext>,
                 current_cell_bounds: Option<CellCursorBounds>,
             ) -> Option<(u32, f64, f64, f64, Option<CellCursorBounds>)> {
+                // TextRun이 하나도 없는 table-only 셀 문단은 Esc로 중첩 표 선택을
+                // 해제한 뒤에도 유효한 caret anchor가 필요하다. 현재 Table이 놓인
+                // 부모 셀 문단 context가 요청 경로와 같으면 표 좌상단을 반환한다.
+                // 기존 fallback traversal 안에서 판정하므로 페이지 순회는 늘지 않는다.
+                if let (RenderNodeType::Table(tn), Some(mut parent_ctx)) =
+                    (&node.node_type, current_cell_ctx.clone())
+                {
+                    if let Some(pi) = tn.para_index {
+                        if let Some(last) = parent_ctx.path.last_mut() {
+                            last.cell_para_index = pi;
+                        }
+                    }
+                    if cell_context_matches(&Some(parent_ctx), parent_para, path) {
+                        return Some((page, node.bbox.x, node.bbox.y, 12.0, current_cell_bounds));
+                    }
+                }
                 let table_ctx = table_ctx_from_node(
                     node,
                     current_table_ctx.as_ref(),
@@ -3699,6 +3730,15 @@ impl DocumentCore {
                             node.bbox.x,
                             node.bbox.y,
                             node.bbox.height,
+                            child_cell_bounds,
+                        ));
+                    }
+                    if cell_context_descends_from(&cell_context, parent_para, path) {
+                        return Some((
+                            page,
+                            node.bbox.x,
+                            node.bbox.y,
+                            node.bbox.height.max(1.0),
                             child_cell_bounds,
                         ));
                     }
@@ -3863,7 +3903,10 @@ impl DocumentCore {
         let total_pages = self.page_count() as usize;
         let mut found = false;
         for page_num in 0..total_pages {
-            let tree = self.build_page_tree(page_num as u32)?;
+            // Studio에서 보이거나 prefetch된 페이지는 이미 cache에 있다. 객체 선택
+            // 때마다 같은 페이지를 다시 조판하면 keydown을 수백 ms 막으므로, 문서
+            // mutation 시 함께 무효화되는 표준 page-tree cache를 재사용한다 (#4252).
+            let tree = self.build_page_tree_cached(page_num as u32)?;
             if find_nested_table_cells(&tree.root, parent_para_idx, &path, page_num, &mut cells) {
                 found = true;
             } else if found {
