@@ -25,8 +25,8 @@ modifiers: intake_and_review.md, local_validation.md
 loaded documents: pr_review_workflow.md, pr_review/README.md,
                   collaborator_self_merge.md, intake_and_review.md,
                   local_validation.md
-devel base: e919655a7 (upstream/devel HEAD at PR 생성 시점)
-validated code head: c03ee47a0142154c737c3a7c7a6da857fb4de764
+devel base: e919655a7 (upstream/devel HEAD at PR 생성 시점) → 59b31e5ce (rebase 뒤 최신)
+validated code head: c03ee47a0142154c737c3a7c7a6da857fb4de764 (rebase 전) → a68667af4/241d2f91e/0d1e95ea0 (rebase 후, 아래 참고)
 ```
 
 원 후보는 `integration/all-works`(로컬, #4180/#4179 등 다른 이슈 커밋과 커밋되지 않은 무관한 변경이
@@ -37,6 +37,24 @@ conflict 없이 적용됐다(`input-handler.ts` auto-merge).
 
 별도 `review_impl` 문서는 만들지 않았다. 단일 이슈의 2-커밋 fix이고 실행 순서·rollback 경계가 이 문서
 하나로 충분히 명확하다.
+
+## rebase — #4245와의 conflict 해소
+
+PR 생성 뒤 `mergeable: CONFLICTING`이 됐다. 원인은 같은 날 별도 세션이 처리한
+[이슈 #4245](https://github.com/edwardkim/rhwp/issues/4245)(`studio: IME 조합 replace가 wasm
+범위 가드에 거부되면 uncaught로 조합 추적이 wedge된다`, "관련: #4150 조합 계열"로 명시)가
+[PR #4265](https://github.com/edwardkim/rhwp/pull/4265) 통합에 실려 이미 `upstream/devel`에
+merge된 것이었다. `#4245`의 커밋(`abb5a1485`)은 `onInput`의 같은 catch 블록을 고치지만
+**이 PR에서 발견해 고친 HF/FN `charOffset` override가 없는 이전 버전**이었고, `compositionAnchorRect`
+캐시 제거(#4150의 핵심 시각 결함 수정)는 포함하지 않았다.
+
+`git rebase upstream/devel`을 실행한 결과 수동 conflict 마커 없이 자동 3-way merge로 정리됐다 —
+devel의 `#4245` 커밋과 이 PR의 1차 커밋이 텍스트상 동일한 초기 patch였기 때문에, git이 이를 이미
+적용된 변경으로 인식하고 2차 커밋(HF/FN override)만 그 위에 얹었다. rebase 뒤
+`input-handler-text.ts`의 catch 블록을 직접 읽어 HF/FN override가 살아있는지 확인했다(아래
+로컬 검증 재실행 결과도 새 head 기준으로 갱신). 이 PR은 `#4245`와 중복이 아니라 `#4245`가
+놓친 시각 결함(#4150 본 증상)과 `#4245`가 devel에 남긴 HF/FN offset 버그를 함께 고치는
+상위 집합이다.
 
 ## 메타데이터
 
@@ -61,16 +79,17 @@ golden/fixture, HWP/HWPX sample을 전혀 건드리지 않는다.
 
 ## 로컬 검증
 
-cherry-pick한 code head(`c03ee47a0`)를 최신 `upstream/devel` 기준 별도 worktree에서 검증했다.
+최초 cherry-pick code head(`c03ee47a0`)를 검증한 뒤, `upstream/devel` rebase(위 절)로 head가
+`0d1e95ea0`(code 변경은 `a68667af4`/`241d2f91e`)로 바뀌어 새 head 기준으로 전부 재실행했다.
 Rust/wasm 변경이 없는 rhwp-studio 전용 PR이라 [4.3 표](../../manual/pr_review/local_validation.md#43-변경-범위별-기본-검증)의
 "rhwp-studio만 변경" 행을 따랐다.
 
-| 검증 | 결과 |
-| --- | --- |
-| `npx tsc --noEmit` | PASS |
-| `node --test tests/*.test.ts ../npm/editor/tests/*.test.mjs` | 805/805 pass |
-| `git diff --check` (devel..HEAD) | PASS |
-| 새 행위 테스트 회귀 확인 | `composition-hf-fn-reanchor.runner.mjs`를 수정 전 소스로 되돌려 재실행 → HF 케이스에서 의도대로 fail(`expected 0, actual 1`), 원복 후 재실행 → pass. `git diff`로 원복 무결성 확인 |
+| 검증 | rebase 전 (`c03ee47a0`) | rebase 후 (`0d1e95ea0`) |
+| --- | --- | --- |
+| `npx tsc --noEmit` | PASS | PASS |
+| `node --test tests/*.test.ts ../npm/editor/tests/*.test.mjs` | 805/805 pass | 814/814 pass (devel에 병합된 다른 PR 테스트 포함) |
+| `git diff --check` (devel..HEAD) | PASS | PASS |
+| 새 행위 테스트 회귀 확인 | `composition-hf-fn-reanchor.runner.mjs`를 수정 전 소스로 되돌려 재실행 → HF 케이스에서 의도대로 fail(`expected 0, actual 1`), 원복 후 재실행 → pass. `git diff`로 원복 무결성 확인 | rebase 후 파일을 직접 읽어 HF/FN override가 살아있음을 확인(위 절) — 소스 되돌리기 재실행은 rebase 전 결과를 재사용 |
 
 wasm 타입 선언은 이 worktree에 fresh `wasm-pack build`를 새로 돌리지 않고, 이 PR과 무관한 Rust 소스로
 만든 기존 `pkg/`(원 checkout, 오늘자 빌드)를 복사해 재사용했다 — 이 PR이 `.rs` 파일을 전혀 바꾸지 않아
