@@ -254,6 +254,20 @@ def export_agent_manifest(
     return Envelope(run_json(args, timeout=timeout))
 
 
+def export_ontology(
+    *,
+    bare: bool = False,
+    out: Optional[PathLike] = None,
+    timeout: Optional[float] = DEFAULT_TIMEOUT,
+) -> Envelope:
+    """자기서술에서 기계 유도한 JSON-LD 온톨로지를 내보낸다."""
+    args: List[Any] = ["export-ontology"]
+    _switch(args, "--bare", bare)
+    _flag(args, "-o", out)
+    args.append("--json")
+    return Envelope(run_json(args, timeout=timeout))
+
+
 # ── 산출 ────────────────────────────────────────────────────────────────
 
 

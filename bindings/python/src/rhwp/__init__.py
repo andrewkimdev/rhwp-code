@@ -66,6 +66,7 @@ from .commands import (
     export_hml,
     export_hwpx,
     export_markdown,
+    export_ontology,
     export_pdf,
     export_structure,
     export_svg,
@@ -140,6 +141,7 @@ __all__ = [
     "export_provenance_map",
     "export_plan_schema",
     "export_agent_manifest",
+    "export_ontology",
     "capabilities",
     # 1층 — 산출
     "export_svg",

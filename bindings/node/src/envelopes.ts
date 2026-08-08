@@ -338,6 +338,22 @@ export interface ExportMarkdownEnvelope {
 }
 
 /**
+ * `rhwp export-ontology --json` 봉투.
+ *
+ * 자기서술에서 기계 유도한 JSON-LD 온톨로지 산출 — IR 클래스·속성, 명령/MCP 행위, 신뢰 술어
+ * (#3907 O1)
+ */
+export interface ExportOntologyEnvelope {
+  readonly actionCount?: unknown;
+  readonly classCount?: unknown;
+  readonly ontology?: unknown;
+  readonly propertyCount?: unknown;
+  readonly schemaVersion?: string;
+
+  readonly [key: string]: unknown;
+}
+
+/**
  * `rhwp export-pdf --json` 봉투.
  *
  * 문서를 PDF로 렌더 (svg|direct backend, --json 매니페스트)
@@ -724,6 +740,7 @@ export interface EnvelopeByCommand {
   "export-hwpx": ExportHwpxEnvelope;
   "export-ir-schema": ExportIrSchemaEnvelope;
   "export-markdown": ExportMarkdownEnvelope;
+  "export-ontology": ExportOntologyEnvelope;
   "export-pdf": ExportPdfEnvelope;
   "export-plan-schema": ExportPlanSchemaEnvelope;
   "export-provenance-map": ExportProvenanceMapEnvelope;
