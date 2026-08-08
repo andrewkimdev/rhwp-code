@@ -41,3 +41,18 @@
    `docker compose --env-file .env.docker run --rm wasm`
 5. #4272 실제 browser E2E와 인접 #4252 E2E
 6. 결과를 `mydocs/working/task_m100_4272_stage1.md`에 기록
+
+## 5. Stage 2 — 선택 텍스트 복사·붙여넣기 완결
+
+Stage 1 시각 검증에서 확인된 동일 사용자 여정을 별도 이슈로 분리하지 않고 #4272 안에서
+완결한다.
+
+- `copySelectionInCellByPath` native/WASM API를 추가해 선택 문단마다 마지막
+  `cellParaIndex`만 바꿔 실제 안쪽 셀 문단을 복사한다.
+- `exportSelectionInCellHtmlByPath`를 같은 경로 계약으로 추가해 시스템 클립보드의 HTML도
+  바깥 셀로 퇴행하지 않게 한다.
+- Studio `onCopy`는 중첩 셀에서 두 path API를 사용하고, 깊이 1은 기존 API를 유지한다.
+- 실제 샘플 Rust 래칫은 plain text `23,504`와 HTML fragment를 검증한다.
+- CDP E2E는 실제 mouse drag → Ctrl+C → Ctrl+V를 수행해 내부 클립보드와 최종 셀 텍스트가
+  `23,504`로 보존되는지 확인한다.
+- 복사 이벤트는 드래그 hot path가 아니며 문서 전체 순회·페이지네이션을 추가하지 않는다.
