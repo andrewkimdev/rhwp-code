@@ -63,3 +63,13 @@ aggregate가 성공하고 heavy worker가 skip된 것은 review-only fast-pass B
 **메인터너 보정 포함 수용.** 한 줄 보정과 review 기록을 한 번에 push한 뒤 최신 head의 preflight,
 Build & Test aggregate, mergeable 상태를 다시 확인하고 작업지시자 승인에 따라 병합한다. current-base
 Update branch와 broad CI는 수행하지 않는다.
+
+## 병합 결과
+
+메인터너 보정과 검토 기록을 포함한 최종 head
+`5d7c5ea9ce1da42a650a4e86cd12af4faeefcb9a`에서
+[CI 31242060882](https://github.com/edwardkim/rhwp/actions/runs/31242060882)와
+[CodeQL 31242060805](https://github.com/edwardkim/rhwp/actions/runs/31242060805)가 성공했다.
+PR은 `mergeable=true`, `mergeable_state=clean`을 재확인한 뒤 작업지시자 승인에 따라 admin merge했다.
+merge commit은 `9831159eeba63ff2d0661ef9ebf6ca23e07aabc6`이며, 이슈 #4112는 closing keyword
+처리로 자동 종료됐다.
