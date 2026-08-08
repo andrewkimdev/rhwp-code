@@ -2,7 +2,7 @@
 kind: guide
 status: active
 canonical: mydocs/manual/pr_review_workflow.md
-last_verified: 2026-08-08
+last_verified: 2026-08-09
 ---
 
 # 로컬 사전 검증
@@ -12,17 +12,78 @@ PR별 review 문서에 남긴다. 같은 checkout·target·Cargo cache를 공유
 **반드시 하나가 끝난 뒤 다음 명령을 실행**한다.
 
 모든 PR review Cargo 실행에는 CARGO_INCREMENTAL=0을 사용한다. 이전 review의 debug incremental 비대화가
-검증 시간과 디스크 상태를 왜곡하지 않게 하기 위함이다.
+검증 시간과 디스크 상태를 왜곡하지 않게 하기 위함이다. 다만 Cargo의 일반 컴파일 산출물까지 매번 버릴
+이유는 없으므로, 전체 회귀는 host마다 고정한 `target/pr-review`를 재사용한다. Cargo가 소스·feature·compiler
+변경을 판별해 필요한 unit만 다시 빌드한다.
 
-Cargo 검증을 시작하기 전에는 target 하위 directory와 실행 중인 Cargo/Rust 작업을 확인한다. 이전 review의
-정확한 전용 target만 [merge 후속 처리](post_merge.md#771-검토-전용-target)의 정리 기준에 따라 처리하며,
-shared target/debug, target/release, target/release-test, target/wasm32-unknown-unknown와 다른 작업의
-산출물은 삭제 대상으로 가정하지 않는다.
+`target/pr-review`는 **이동하거나 이름을 바꾸지 않는다**. 일부 통합 테스트의 `CARGO_BIN_EXE_*` fallback은
+컴파일 당시 절대 target 경로를 가질 수 있어, 빌드 뒤 directory를 옮기면 실행 파일을 찾지 못한다. 최초
+생성부터 최종 경로를 지정하고, 다음 review도 같은 경로를 사용한다.
+
+Cargo 검증을 시작하기 전에는 target 하위 directory와 실행 중인 Cargo/Rust 작업을 확인한다.
+`target/pr-review`와 shared target/debug, target/release, target/release-test,
+target/wasm32-unknown-unknown, 다른 작업의 산출물은 삭제 대상으로 가정하지 않는다.
 
 ~~~bash
 find target -mindepth 1 -maxdepth 1 -type d -exec du -sh {} \;
 pgrep -alf '(^|/)(cargo|rustc|wasm-pack)( |$)' || true
 ~~~
+
+### 고정 review target과 실행 환경
+
+전체 Rust 회귀의 기본 명령은 다음과 같다. 같은 `target/pr-review`를 사용하는 Cargo 계열 명령은 반드시
+앞 명령의 종료를 확인한 뒤 실행한다.
+
+~~~bash
+CARGO_INCREMENTAL=0 cargo nextest run \
+  --cargo-profile release-test \
+  --target-dir target/pr-review \
+  --tests --test-threads 12 --no-fail-fast
+~~~
+
+2026-08-09 Linux 검증 호스트(`ubuntu-ted`, Intel Xeon E5640 16 vCPU, RAM 15 GiB)에서 이 명령의 fixed
+target cold run은 build 포함 17분 42초였다. 같은 target을 그대로 쓴 warm run은 compile 0.96초·전체 8분
+27초였고, 최신 priority 설정을 포함한 재검증은 compile 0.75초·5,470/5,470 통과·전체 7분 56초였다.
+test 자체의 실행 시간은 host 부하에 따라 달라지므로, 이 수치는 재컴파일 제거 효과와 해당 시점의 측정값을
+분리해 읽는다.
+
+macOS도 POSIX 명령은 동일하다. 다만 `--test-threads 12`는 12 이상 논리 CPU와 충분한 RAM이 있는 host의
+측정값이다. CPU·RAM이 더 작은 host에서는 `sysctl -n hw.ncpu`와 `sysctl -n hw.memsize`를 확인하고 thread
+수를 논리 CPU 이하로 낮춘다.
+
+Windows는 cargo-nextest가 설치되어 있고 PowerShell 또는 cmd에서 Windows 경로만 일관되게 사용하면 같은
+방식으로 가능하다. 2026-08-09 `win10-ted`의 cmd 환경(4 logical CPU, RAM 8 GiB)에서
+`cargo-nextest 0.9.140`과 `target\\pr-review`를 실제로 검증했다. 긴
+`overflow_cell_baseline` 선택 실행은 cold build 포함 18분 55초(build 12분 27초, test 363.036초), 같은
+target을 재사용한 warm 실행은 6분 11초(build 2.74초, test 359.563초)로 통과했다. Windows 전체 `--tests`
+실행 명령도 아래와 같지만, 이 확인에서는 target 재사용을 직접 검증할 수 있는 장시간 baseline만 실행했다.
+이 host에서는 4 thread를 상한으로 쓴다.
+
+~~~powershell
+Set-Location 'C:\\Users\\admin\\Desktop\\rhwp\\rhwp'
+$env:CARGO_INCREMENTAL = '0'
+cargo nextest run `
+  --cargo-profile release-test `
+  --target-dir target/pr-review `
+  --tests --test-threads 4 --no-fail-fast
+~~~
+
+PowerShell의 `target/pr-review`는 Windows에서 정상 경로로 해석된다. WSL 경로와 Windows 경로, 또는 서로
+다른 shell의 환경 변수 문법을 같은 명령에 섞지 않는다.
+
+### 장시간 baseline의 조기 실행
+
+`overflow_cell_baseline::overflow_cell_lines_do_not_grow`는 samples 전수를 자체 worker로 검사해 60초를
+넘길 수 있다. `.config/nextest.toml`은 이 binary에 `priority = 100`을 적용한다. nextest는 개별 테스트를
+별도 프로세스로 스케줄하므로, 동일한 nextest run의 시작 시점에 이 long-running baseline을 먼저 배치하면서도
+별도 Cargo 프로세스·별도 target을 병렬로 열지 않는다. `SLOW` 행은 시작 로그가 아니라 60초 경과 알림이므로
+출력 순서만으로 시작 순서를 판단하지 않는다. 2026-08-09 전체 run에서 이 baseline은 시작 뒤 다른 3,923개
+테스트 완료와 겹쳐 실행됐고, 최종 472.343초에 통과했다.
+
+이 설정은 OS thread를 추가하는 방식이 아니라 nextest의 test-process 우선순위 lane이다. 해당 baseline은
+내부 worker를 이미 사용하므로, host마다 고정 `threads-required`를 강제하면 작은 Windows host나 CI runner의
+전체 병렬도를 오히려 낮출 수 있다. 새로 60초 이상으로 반복 확인된 baseline은 실행 시간 근거와 함께 같은
+override에 추가한다. 임의의 모든 느린 테스트를 정적 목록으로 넣지 않는다.
 
 ## 4.1 PR branch fetch
 

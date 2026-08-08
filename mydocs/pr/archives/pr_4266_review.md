@@ -1,15 +1,15 @@
 ---
 kind: pr_review
-status: ci-pending
+status: maintainer-review
 canonical: mydocs/manual/pr_review_workflow.md
-last_verified: 2026-08-08
+last_verified: 2026-08-09
 ---
 
 # PR #4266 검토 — #4150 IME 조합 오버레이 stale 좌표 + HF/FN 재정박 offset
 
 ## 결론
 
-**Open PR 생성, 로컬 TypeScript·전체 studio 테스트·`git diff --check` 통과.** 커밋 1(`e6a20f92d`)은
+**수용 권고.** 커밋 1(`e6a20f92d`)은
 IME 조합 중 같은 페이지 안 reflow가 일어나면 조합 오버레이가 옛 좌표에 그려져 실제 캔버스 텍스트와
 겹치던 결함(#4150)을 `compositionAnchorRect` 캐시 제거로 고치고, 조합 replace가 wasm deferred replace
 범위 가드에 거부될 때 `onInput` 밖으로 예외가 던져져 조합 추적이 wedge되던 경로를 try/catch로 방어한다.
@@ -17,17 +17,25 @@ IME 조합 중 같은 페이지 안 reflow가 일어나면 조합 오버레이�
 `cursor.getPosition()`의 stale 본문 offset을 그대로 썼던 것 — 을 `onCompositionStart`와 동일한
 `hfCharOffset`/`fnCharOffset` override로 고쳤다.
 
+2026-08-09 메인터너 재검토에서 최신 `upstream/devel`과의 merge simulation, TypeScript·Studio 전체 test,
+그리고 고정 `target/pr-review` 전체 Rust 회귀를 다시 확인했다. contributor 코드 head의 CI는 모두 성공했고,
+후속 메인터너 보정은 review target 재사용과 장시간 baseline 우선 실행을 위한 nextest config·검토 문서뿐이다.
+
 ## 검토 경로
 
 ```text
-base route: collaborator_self_merge.md
+base route: collaborator_external_pr.md
 modifiers: intake_and_review.md, local_validation.md
 loaded documents: pr_review_workflow.md, pr_review/README.md,
-                  collaborator_self_merge.md, intake_and_review.md,
+                  collaborator_external_pr.md, intake_and_review.md,
                   local_validation.md
 devel base: e919655a7 (upstream/devel HEAD at PR 생성 시점) → 59b31e5ce (rebase 뒤 최신)
 validated code head: c03ee47a0142154c737c3a7c7a6da857fb4de764 (rebase 전) → a68667af4/241d2f91e/0d1e95ea0 (rebase 후, 아래 참고)
 ```
+
+메인터너 재검토 기준: `upstream/devel` `c391dbbdc`, contributor code head
+`f2a95a6693212b19b9ac210b4424a356daf4b6a9`, merge simulation
+`e771871c0`. simulation은 local 검토 전용이며 contributor source branch에 push하지 않는다.
 
 원 후보는 `integration/all-works`(로컬, #4180/#4179 등 다른 이슈 커밋과 커밋되지 않은 무관한 변경이
 섞인 통합 branch)에서 나왔다. 그 branch를 그대로 push하면 base가 크게 뒤처지고(분기 이후 devel
@@ -112,7 +120,22 @@ compositionstart/update/end 이벤트로 골든 패스 무오류를 확인했다
 - reviewer 지정은 권한 부족으로 실패했다 — 작업지시자가 GitHub에서 직접 `jangster77`(또는 다른
   reviewer)을 지정해야 한다.
 
+### 2026-08-09 메인터너 재검토 결과
+
+| 검증 | 결과 |
+| --- | --- |
+| 최신 `upstream/devel` merge simulation | clean, `git diff --check` 통과 |
+| `rhwp-studio` TypeScript | `npx tsc --noEmit` PASS (2.682초) |
+| Studio 전체 test | `node --test tests/*.test.ts ../npm/editor/tests/*.test.mjs` 814/814 PASS (5.999초) |
+| Linux 고정 review target | `cargo nextest run --cargo-profile release-test --target-dir target/pr-review --tests --test-threads 12 --no-fail-fast`: 5,470/5,470 PASS, 35 skipped, 7분 56초 |
+| Windows 고정 review target | cmd에서 `overflow_cell_baseline` cold 18분 55초, warm 6분 11초, 모두 PASS |
+
+원 code head `f2a95a669`의 CI preflight, Frontend package gates, CodeQL(JavaScript/TypeScript·Python·Rust),
+Canvas visual diff와 Build & Test aggregate는 성공했다. Rust-heavy job은 studio 전용 변경이라 preflight가
+의도적으로 skip했다. nextest config 보정이 추가된 새 head에서는 해당 config 변경을 포함한 최신 CI를 다시
+확인한다.
+
 ## 최종 권고
 
-로컬 TypeScript·전체 테스트·diff 검사는 통과했다. 최신 head의 required CI 성공과 reviewer 지정·승인
-확인 후 merge를 권고한다.
+contributor의 IME 재정박 수정은 수용한다. 메인터너 nextest config·검토 기록을 source branch에 trailing
+commit으로 반영한 뒤, 그 최신 head의 required CI 성공과 reviewer 지정·승인을 확인해 merge를 권고한다.
