@@ -15,13 +15,15 @@
 //! (`tests/security_corpus_regression.rs` 와 같은 방침).
 #![cfg(not(target_arch = "wasm32"))]
 
-use std::io::Write;
+use std::io::{Cursor, Read, Write};
 use std::path::{Path, PathBuf};
 
 use rhwp::model::bin_data::MAX_BIN_DATA_BYTES;
 use rhwp::parser::cfb_reader::CfbReader;
-use rhwp::serializer::mini_cfb;
+use rhwp::serializer::{mini_cfb, serialize_hwpx};
 use rhwp::{parse_document, serialize_document, DocumentCore};
+use zip::write::SimpleFileOptions;
+use zip::{CompressionMethod, ZipArchive, ZipWriter};
 
 /// BinData 를 가진 실문서 — 폭탄을 심을 숙주다.
 const HOST_SAMPLE: &str = "samples/143E433F503322BD33.hwp";
@@ -37,16 +39,35 @@ fn repo(rel: &str) -> PathBuf {
 ///
 /// HWP5 BinData 스트림의 압축 형식과 같은 raw deflate(wbits=-15)다. 입력이 전부
 /// 0 이라 산출물은 수 KB 이며, 해제하면 [`BOMB_PLAIN_BYTES`] 가 된다.
-fn deflate_bomb() -> Vec<u8> {
+fn deflate_bomb_with_plain_bytes(plain_bytes: usize) -> Vec<u8> {
     let mut encoder = flate2::write::DeflateEncoder::new(Vec::new(), flate2::Compression::best());
     let chunk = vec![0_u8; 1024 * 1024];
     let mut written = 0;
-    while written < BOMB_PLAIN_BYTES {
-        let n = chunk.len().min(BOMB_PLAIN_BYTES - written);
+    while written < plain_bytes {
+        let n = chunk.len().min(plain_bytes - written);
         encoder.write_all(&chunk[..n]).expect("deflate write");
         written += n;
     }
     encoder.finish().expect("deflate finish")
+}
+
+fn deflate_bomb() -> Vec<u8> {
+    deflate_bomb_with_plain_bytes(BOMB_PLAIN_BYTES)
+}
+
+/// ZIP writer에 0 바이트를 스트리밍해 실제 ZIP deflate bomb 엔트리를 만든다.
+///
+/// HWP5 CFB의 raw-deflate 스트림과 달리 HWPX는 `ZipWriter`가 압축을 담당한다.
+/// 이미 압축한 raw deflate를 다시 쓰면 260KB짜리 정상 엔트리가 되므로, 평문을
+/// 직접 흘려보내 central directory의 비압축 크기도 공격 조건과 일치시킨다.
+fn write_zeroes(writer: &mut impl Write, plain_bytes: usize) {
+    let chunk = [0_u8; 1024 * 1024];
+    let mut written = 0;
+    while written < plain_bytes {
+        let len = chunk.len().min(plain_bytes - written);
+        writer.write_all(&chunk[..len]).expect("0 바이트 쓰기");
+        written += len;
+    }
 }
 
 /// 숙주 문서의 첫 `/BinData/*` 스트림을 폭탄으로 갈아끼운 CFB 를 만든다.
@@ -82,6 +103,57 @@ fn synthesize_bomb_document() -> (Vec<u8>, String, Vec<u8>) {
         .collect();
     let bytes = mini_cfb::build_cfb(&named).expect("공격 문서 CFB 조립");
     (bytes, bomb_path, bomb)
+}
+
+/// HWP 숙주를 HWPX로 직렬화한 뒤 첫 BinData ZIP 엔트리만 폭탄으로 갈아낀다.
+///
+/// HWPX parser는 BinData를 lazy resolver로 등록하므로, 공격 파일을 만드는 과정에서
+/// 폭탄 payload를 다시 읽지 않는다. ZIP central directory에 기록된 비압축 크기는
+/// `MAX_BIN_DATA_BYTES + 1`로 실제 상한 초과를 재현한다.
+fn synthesize_hwpx_bomb_document() -> (Vec<u8>, String) {
+    let host = std::fs::read(repo(HOST_SAMPLE)).expect("숙주 표본 읽기");
+    let document = parse_document(&host).expect("숙주 파싱");
+    let hwpx = serialize_hwpx(&document).expect("HWPX 숙주 직렬화");
+    let mut archive = ZipArchive::new(Cursor::new(hwpx)).expect("HWPX 숙주 ZIP 열기");
+    let bomb_path = (0..archive.len())
+        .find_map(|index| {
+            let entry = archive.by_index(index).ok()?;
+            entry
+                .name()
+                .starts_with("BinData/")
+                .then(|| entry.name().to_string())
+        })
+        .expect("HWPX 숙주에 BinData ZIP 엔트리가 있어야 함");
+    let mut writer = ZipWriter::new(Cursor::new(Vec::new()));
+    for index in 0..archive.len() {
+        let mut entry = archive.by_index(index).expect("숙주 ZIP 엔트리 읽기");
+        let path = entry.name().to_string();
+        let compression = if path == "mimetype" {
+            CompressionMethod::Stored
+        } else {
+            entry.compression()
+        };
+        let options = SimpleFileOptions::default().compression_method(compression);
+        writer
+            .start_file(&path, options)
+            .expect("공격 ZIP 엔트리 시작");
+        if path == bomb_path {
+            write_zeroes(&mut writer, MAX_BIN_DATA_BYTES + 1);
+        } else {
+            std::io::copy(&mut entry, &mut writer).expect("숙주 ZIP 엔트리 복사");
+        }
+    }
+    let attack = writer.finish().expect("공격 HWPX ZIP 마감").into_inner();
+    let mut verify = ZipArchive::new(Cursor::new(attack.as_slice())).expect("공격 ZIP 재확인");
+    assert_eq!(
+        verify
+            .by_name(&bomb_path)
+            .expect("폭탄 ZIP 엔트리 재확인")
+            .size(),
+        (MAX_BIN_DATA_BYTES + 1) as u64,
+        "합성 ZIP은 중앙 디렉터리에 상한 초과 비압축 크기를 기록해야 한다"
+    );
+    (attack, bomb_path)
 }
 
 /// 파싱은 폭탄을 해제하지 않는다 (지연 등록) — 공격 전제의 확인.
@@ -184,5 +256,75 @@ fn normal_documents_round_trip_unchanged_under_the_limit() {
     assert_eq!(
         after, before,
         "상한 이내 정상 BinData 는 왕복에서 바이트가 보존되어야 한다"
+    );
+}
+
+/// HWPX ZIP BinData도 같은 상한 아래에서 HWP/HWPX 저장과 질의를 모두 안전하게
+/// placeholder로 접는다.
+///
+/// 수정 전에는 HWP5 저장기의 `load_raw() == None` fallback이 `load()`를 호출했고,
+/// HWPX resolver의 `len()`/`is_empty()`도 무제한 `resolve()`로 ZIP bomb를 풀었다.
+#[test]
+fn hwpx_bomb_is_bounded_for_query_and_both_save_targets() {
+    let (attack, bomb_path) = synthesize_hwpx_bomb_document();
+    let document = parse_document(&attack).expect("공격 HWPX 파싱");
+    let bomb_index = document
+        .bin_data_content
+        .iter()
+        .position(|content| {
+            matches!(
+                &content.data,
+                rhwp::model::bin_data::BinDataBytes::Lazy { key, .. } if key == &bomb_path
+            )
+        })
+        .expect("폭탄 BinData가 lazy 항목으로 등록되어야 함");
+    let bomb_content = &document.bin_data_content[bomb_index];
+
+    assert_eq!(
+        bomb_content.data.len(),
+        0,
+        "HWPX ZIP 상한 초과 항목의 길이는 materialize 없이 0이어야 한다: {bomb_path}"
+    );
+    assert!(
+        bomb_content.data.is_empty(),
+        "HWPX ZIP 상한 초과 항목은 존재 질의에서도 placeholder여야 한다"
+    );
+    assert!(
+        bomb_content.data.load_limited(MAX_BIN_DATA_BYTES).is_none(),
+        "HWPX ZIP 상한 초과 항목은 bounded load를 통과하면 안 된다"
+    );
+
+    let core = DocumentCore::from_bytes(&attack).expect("공격 HWPX DocumentCore 적재");
+    assert_eq!(
+        core.get_bin_data(bomb_index),
+        None,
+        "HWPX ZIP 상한 초과 항목의 공개 질의는 None이어야 한다"
+    );
+
+    let hwp = serialize_document(&document).expect("HWPX→HWP 저장");
+    let mut hwp_reader = CfbReader::open(&hwp).expect("HWP 저장 결과 CFB 열기");
+    assert!(
+        hwp_reader
+            .list_bin_data()
+            .into_iter()
+            .map(|name| format!("/BinData/{name}"))
+            .any(|path| hwp_reader
+                .read_stream_raw(&path)
+                .expect("HWP BinData 읽기")
+                .is_empty()),
+        "HWPX 폭탄은 HWP 저장에서 raw passthrough 없이 빈 placeholder가 되어야 한다"
+    );
+
+    let saved_hwpx = serialize_hwpx(&document).expect("HWPX→HWPX 저장");
+    let mut saved_archive = ZipArchive::new(Cursor::new(saved_hwpx)).expect("저장 HWPX ZIP 열기");
+    let mut written = Vec::new();
+    saved_archive
+        .by_name(&bomb_path)
+        .expect("폭탄 BinData 엔트리 보존")
+        .read_to_end(&mut written)
+        .expect("저장 HWPX BinData 읽기");
+    assert!(
+        written.is_empty(),
+        "HWPX 폭탄은 HWPX 저장에서 빈 placeholder가 되어야 한다"
     );
 }

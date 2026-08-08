@@ -256,9 +256,21 @@ fn write_hwp_cfb(
                     streams.push((path, encrypt_if_password(Vec::new(), password)));
                     continue;
                 }
-                // 원본 저장 형태가 없는 컨테이너(인메모리 등)는 폭탄 위험도 없다
-                // — 기존 무제한 경로를 유지한다.
-                None => content.data.load(),
+                // HWPX ZIP·인메모리 항목처럼 원본 HWP5 저장 형태가 없는 경우에는
+                // 안전한 raw passthrough가 불가능하다. 여기서 `load()`로 되돌아가면
+                // HWPX deflate bomb가 다시 무제한 materialize되므로 placeholder로
+                // 접는다. 이미 메모리에 있는 `Loaded` 값도 `load_limited()`에서
+                // 길이를 확인했으므로 같은 경로를 탄다.
+                None => {
+                    eprintln!(
+                        "경고: BinData {} 압축 해제 상한 {}MB 초과이고 원본 저장 형태가 없어 \
+                         빈 스트림으로 대체합니다 (#2550)",
+                        storage_name,
+                        MAX_BIN_DATA_BYTES / (1024 * 1024)
+                    );
+                    streams.push((path, encrypt_if_password(Vec::new(), password)));
+                    continue;
+                }
             },
         };
 
