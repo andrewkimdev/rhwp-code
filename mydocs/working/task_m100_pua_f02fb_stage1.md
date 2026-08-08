@@ -47,7 +47,7 @@ Windows의 실제 `함초롬돋움(HCR Dotum)` cmap은 이 코드를 glyph `uF02
 | `cargo fmt --check`, `git diff --check` | PASS |
 | release WASM build | PASS, wasm-bindgen·wasm-opt·`pkg` packaging 완료 |
 | `npm run e2e:pua-f02fb` | PASS, 6개 Canvas2D 계약 |
-| `npm run e2e:manifest-check` | PASS, tracked 87개 / manifest 87행 |
+| `npm run e2e:manifest-check` | PASS, stacked head tracked 88개 / manifest 88행 |
 | Native Skia `export-png --font-path ttfs/opensource` | PASS, 1쪽 PNG 출력 |
 
 ## 5. 시각 증적
@@ -64,7 +64,18 @@ Windows의 실제 `함초롬돋움(HCR Dotum)` cmap은 이 코드를 glyph `uF02
 Canvas2D와 Native Skia 모두 tofu 없이 작은 오른쪽 방향 삼각형을 출력한다. 최종 한컴 호환 시각
 판정 권위는 작업지시자에게 있다.
 
-## 6. 원격 상태
+## 6. #4158 stack 통합 재검증
+
+최초 삼각형 branch가 `upstream/devel`에서 독립 분기되어, 그 상태로 만든 WASM에는 아직 원격에 없는
+#4158 사각 번호 구현이 포함되지 않았다. 이는 두 렌더 구현의 회귀나 충돌이 아니라 branch 구성 누락이다.
+삼각형 커밋을 #4158 시각 승인 head `27932685b` 위로 재배치하고 충돌한 E2E 스크립트 항목을 모두
+보존했다.
+
+재배치된 동일 head에서 `cargo build --release --bin rhwp`와 release `wasm-pack build`를 완료했다.
+새 WASM으로 #4158 물리 10쪽 사각 번호 E2E 7개 계약과 `pau-004` 삼각형 E2E 6개 계약이 모두
+통과했다. 따라서 통합 산출물은 사각형 안 숫자 `1`과 작은 오른쪽 방향 삼각형 `▸`를 함께 렌더링한다.
+
+## 7. 원격 상태
 
 GitHub 이슈 생성, push, PR 생성은 수행하지 않았다. 현재 head의 전체 PR 게이트도 집중 결과 보고 뒤
 별도 승인받아 실행한다. 이 브랜치는 #4158 head를 base로 하는 PR stack이며, 통합 WASM에서는
