@@ -6,7 +6,7 @@
 - **devel 기준**: `upstream/devel` `5a4f26d0d`
 - **기록 시각**: 2026-08-08 KST
 - **원격 상태**: 이슈·push·PR 미수행
-- **절차 상태**: 구현·집중 검증·#4158 stack 통합 WASM·작업지시자 시각 판정 완료 — 전체 PR 게이트 별도 승인 대기
+- **절차 상태**: 구현·집중 검증·#4158 stack 통합 WASM·작업지시자 시각 판정·전체 PR 게이트 완료 — 원격 단계 별도 승인 대기
 
 ## 1. 문제
 
@@ -27,4 +27,5 @@ rhwp-studio의 공개 글꼴에는 해당 Supplementary PUA-A 글리프가 없�
 3. Native Skia feature focused test
 4. release WASM build와 실제 Canvas2D 호출·스크린샷 E2E
 5. `output/pau-004/`에 render tree와 시각 증적 보존
-6. 집중 결과 보고 뒤 전체 PR 게이트와 원격 단계는 별도 승인
+6. 승인된 전체 PR 게이트에서 fixture baseline, release/Skia/Studio/WASM/E2E/OVR 검증
+7. 원격 이슈·push·PR 단계는 별도 승인

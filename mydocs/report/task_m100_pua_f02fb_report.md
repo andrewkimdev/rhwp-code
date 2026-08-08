@@ -5,6 +5,7 @@
 - **stack 기준**: `task_m100_4158_char_overlap_boxed_pua` `27932685b`
 - **devel 기준**: `upstream/devel` `5a4f26d0d`
 - **구현 커밋**: `3f0974dc8`
+- **전체 게이트 후보**: `5f6569062`
 - **계획서**: [`mydocs/plans/task_m100_pua_f02fb.md`](../plans/task_m100_pua_f02fb.md)
 - **작업 기록**: [`mydocs/working/task_m100_pua_f02fb_stage1.md`](../working/task_m100_pua_f02fb_stage1.md)
 
@@ -21,4 +22,11 @@ Clippy·fmt·diff, release WASM, Canvas2D 6개 계약과 Native Skia PNG 출력�
 `output/pau-004/`에 있다. 작업지시자는 결합 WASM의 사각 번호와 작은 오른쪽 방향 삼각형에 대한
 rhwp-studio 시각 판정을 통과시켰다.
 
-전체 PR 게이트와 GitHub 이슈·push·PR 단계는 별도 승인 대기다.
+승인된 전체 PR 게이트도 완료했다. IR sweep은 815개 샘플·112,314건에서 기존 baseline과 동일했고,
+overflow-cell sweep은 감소한 값만 현재 결과로 엄격하게 낮춘 뒤 676개 샘플·1,849줄과 일치했다.
+release library 3,307건, 전체 release-test integration suite, Native Skia 58+2+4건,
+Clippy·fmt·diff·rustdoc, Studio 타입 검사와 단위 테스트 802건, release WASM을 모두 통과했다.
+
+새 WASM에서 E2E manifest 88/88, #4158 7개 계약, 삼각형 6개 계약을 재확인했다. OVR5는
+`devel@5a4f26d0d` 대비 5문서·142쪽·11개체에서 geometry 회귀 0건이다. GitHub 이슈·push·PR은
+아직 수행하지 않았으며 원격 단계는 별도 승인 대기다.

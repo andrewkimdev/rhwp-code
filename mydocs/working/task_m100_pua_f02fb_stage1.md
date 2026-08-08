@@ -6,6 +6,7 @@
 - **stack 기준**: `task_m100_4158_char_overlap_boxed_pua` `27932685b`
 - **devel 기준**: `upstream/devel` `5a4f26d0d`
 - **구현 커밋**: `3f0974dc8` (`fix(renderer): map U+F02FB to small right triangle`)
+- **전체 게이트 후보**: `5f6569062` (`test(renderer): tighten overflow-cell baseline` 포함)
 - **작업 시각**: 2026-08-08 KST
 
 ## 1. 진단
@@ -76,8 +77,42 @@ Canvas2D와 Native Skia 모두 tofu 없이 작은 오른쪽 방향 삼각형을 
 통과했다. 따라서 통합 산출물은 사각형 안 숫자 `1`과 작은 오른쪽 방향 삼각형 `▸`를 함께 렌더링한다.
 작업지시자는 이 결합 결과도 rhwp-studio에서 확인하고 시각 판정을 통과시켰다.
 
-## 7. 원격 상태
+## 7. 전체 PR 게이트
 
-GitHub 이슈 생성, push, PR 생성은 수행하지 않았다. 현재 head의 전체 PR 게이트도 집중 결과 보고 뒤
+작업지시자 승인 뒤 stacked head `5f6569062`에서 대형 renderer 변경 게이트를 순차 실행했다.
+
+| 검증 | 결과 |
+| --- | --- |
+| IR field sweep | PASS, 815 samples(3 skipped), 597 paths, 112,314 total; 기존 TSV와 동일 |
+| overflow-cell sweep | PASS, 676 samples(3 skipped), 20 docs, 1,849 lines |
+| `cargo build --release` | PASS |
+| `cargo test --release --lib` | PASS, 3,307 passed / 10 ignored |
+| `cargo test --profile release-test --tests` | PASS, 전체 integration·fixture suite |
+| Native Skia library gate | PASS, 58 passed |
+| Native Skia missing-picture / direct-PDF | PASS, 2 passed / 4 passed |
+| `cargo fmt --check`, 양쪽 `git diff --check` | PASS |
+| `cargo clippy --all-targets -- -D warnings` | PASS |
+| `cargo test --doc` | PASS, 4 passed / 2 ignored |
+| `npx tsc --noEmit` | PASS |
+| `npm --prefix rhwp-studio test` | PASS, 802 passed |
+| release `wasm-pack build` | PASS, wasm-opt 및 `pkg` packaging 완료 |
+| E2E manifest / #4158 / `pau-004` | PASS, 88/88 / 7 contracts / 6 contracts |
+| OVR5 `devel@5a4f26d0d` 비교 | PASS, 5문서·142쪽·11개체, geometry 회귀 0건 |
+
+overflow baseline은 현재 sweep에서 감소·제거된 값만 남아 있어 실제 결과로 엄격하게 낮췄다. 현재
+stack의 고유 source 변경은 renderer 표시 계층뿐이며 typeset/layout 경로를 바꾸지 않는다. 변경은
+`5f6569062`에 별도 커밋했고 갱신 뒤 TSV가 현재 sweep과 정확히 일치함을 확인했다.
+
+Studio 테스트의 첫 sandbox 실행에서는 자식 Node `spawnSync`가 `EPERM`이면서 status 0을 돌려 5개
+driver 결과가 비었다. 권한 제한 밖에서 같은 전체 명령을 재실행해 802/802 통과했으므로 제품 실패가
+아닌 실행 격리 제약으로 판정했다. PAU E2E도 첫 재실행에서 assertion 전 Chrome 기동이 한 번 실패했지만,
+잔류 Chrome이 없는 상태의 동일 명령에서 6개 계약이 모두 통과했다.
+
+OVR 증적은 `output/pau-004/ovr/ovr_diff.md`에 있으며 KTX 27쪽/3개체, exam_math
+20쪽/0개체, 21_언어 15쪽/2개체, aift 74쪽/6개체, biz_plan 6쪽/0개체가 기준과 모두 동일하다.
+
+## 8. 원격 상태
+
+GitHub 이슈 생성, push, PR 생성은 수행하지 않았다. 전체 로컬 PR 게이트까지 완료했으며 원격 단계는
 별도 승인받아 실행한다. 이 브랜치는 #4158 head를 base로 하는 PR stack이며, 통합 WASM에서는
 #4158 사각 번호와 `U+F02FB` 삼각형을 함께 검증한다.
