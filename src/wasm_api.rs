@@ -534,6 +534,11 @@ impl HwpDocument {
     /// 기본 A4 구역 1개 + 빈 문단 1개를 포함한다. 구역 0개 문서는 모든
     /// 편집/조회 API가 "구역 인덱스 0 범위 초과"로 실패해 사용 불가하므로
     /// 생성 직후 바로 편집 가능한 최소 구조를 보장한다 (#1386).
+    ///
+    /// 여기서 만든 문단은 **구역 정의·단 정의를 안 진다** — 실제 HWP 문서는 예외 없이 그
+    /// 둘을 첫 문단에 지므로 이 문서는 그 점에서 실물과 다르다. 한글 호환이 필요한 자리
+    /// (`Clear`)는 번들 템플릿을 쓰는 [`create_blank_document`](Self::create_blank_document)
+    /// 를 쓴다. 여기에 그 둘을 넣으면 `char_shapes` 자리가 16칸씩 밀려 기존 호출부가 깨진다.
     #[wasm_bindgen(js_name = createEmpty)]
     pub fn create_empty() -> HwpDocument {
         let mut core = DocumentCore::new_empty();

@@ -840,10 +840,22 @@ export class HwpCtrl {
     return this.SaveAs(fileName, format, '', callback);
   }
 
-  /** 규격 §8.3.1 — 문서를 닫고 빈 문서로 만든다. */
+  /**
+   * 규격 §8.3.1 — 문서를 닫고 빈 문서로 만든다.
+   *
+   * 빈 문서는 **번들 템플릿**으로 만든다. `createEmpty` 가 주는 문서는 첫 문단에 구역·단
+   * 정의가 없어 실물 HWP 와 다르고, 그러면 캐럿이 0 에 서서 한글(16)과 어긋난다.
+   */
   Clear(option) {
     try {
-      this.#doc = this.#wasm.HwpDocument.createEmpty();
+      const fresh = this.#wasm.HwpDocument.createEmpty();
+      // 템플릿이 있으면 그것으로 채운다 — 실패하면 빈 문서라도 남긴다.
+      try {
+        fresh.createBlankDocument();
+      } catch (e) {
+        console.warn('[hwpctrl] Clear: 템플릿 빈 문서 실패, 최소 문서로 간다:', e);
+      }
+      this.#doc = fresh;
       this.#resetForNewDocument();
     } catch (e) {
       console.warn('[hwpctrl] Clear 실패:', e);
@@ -1178,6 +1190,39 @@ export class HwpCtrl {
       chain.find((c) => c.CtrlID === CTRL_ID_BY_KIND[obj.kind]) ??
       null
     );
+  }
+
+  /**
+   * 규격 §8.4 — 캐럿이 든 리스트를 **담고 있는** 컨트롤. 본문이면 `null`.
+   *
+   * 실측: 셀 안에서는 그 표(`tbl`·"표"), 본문에서는 `null`. 개체를 골랐다고 달라지지 않는다 —
+   * 이건 고르기가 아니라 **캐럿이 어디 리스트에 있느냐**를 묻는 것이다.
+   */
+  get ParentCtrl() {
+    const list = this.#cursor.list;
+    if (list === 0) return null;
+    const entry = this.#cursorModel().byId.get(list);
+    if (!entry) return null;
+    return (
+      this.#ctrlChain().find(
+        (c) =>
+          c.location.list === entry.hostListId &&
+          c.location.para === entry.hostPara &&
+          c.location.controlIndex === entry.controlIndex,
+      ) ?? null
+    );
+  }
+
+  /**
+   * 규격 §8.2 — 캐럿이 든 셀의 모양.
+   *
+   * `Width` 는 **셀 폭이 아니라 표 폭 계열**이다(§4.33 실측: 폭 다른 두 칸이 같은 값을 주고,
+   * 칸을 갈라도 안 바뀐다). 이름만 보고 셀 폭으로 쓰면 안 된다.
+   */
+  get CellShape() {
+    const { list, para, pos } = this.#cursor;
+    const raw = this.#doc?.getCellShapeSet?.(list, para, pos);
+    return new ParameterSet('CellShape', parseJson(raw, {}));
   }
 
   /** 어느 리스트든 그것을 담은 **본문 문단** 번호로 올라간다. 본문이면 그대로다. */
@@ -1675,10 +1720,14 @@ export class HwpCtrl {
     this.#modified = false;
     this.#clearSelection();
     const stored = parseJson(this.#doc?.getStoredCaret?.() ?? '', null);
-    this.#cursor =
+    const at =
       stored && typeof stored.list === 'number'
         ? { list: storedListToRuntime(stored.list), para: stored.para, pos: stored.pos }
         : { list: 0, para: 0, pos: 0 };
+    // 캐럿은 문단 시작보다 앞에 설 수 없다 — `SetPos` 와 같은 규칙이다. `Clear` 로 만든 빈
+    // 문서가 이 갈래인데, 그 문서에도 구역·단 정의가 있어 시작이 0 이 아니라 **16** 이다.
+    const bounds = this.#paraBounds(at.list, at.para);
+    this.#cursor = { ...at, pos: Math.min(Math.max(at.pos, bounds.start), bounds.end) };
   }
 
   /** 리스트 표는 문서가 바뀌지 않는 한 그대로다 — 호출마다 다시 만들지 않는다. */

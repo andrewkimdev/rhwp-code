@@ -4,21 +4,21 @@
   "oracleVersion": "한글2022 (설치본 COM)",
   "summary": {
     "total": 484,
-    "done": 193,
+    "done": 197,
     "byStatus": {
-      "verified": 191,
-      "unimplemented": 291,
+      "verified": 195,
+      "unimplemented": 287,
       "substituted": 2
     },
     "byUnit": {
       "property": {
-        "verified": 18,
-        "unimplemented": 11,
+        "verified": 21,
+        "unimplemented": 8,
         "substituted": 2
       },
       "method": {
-        "verified": 32,
-        "unimplemented": 56
+        "verified": 33,
+        "unimplemented": 55
       },
       "event": {
         "unimplemented": 3
@@ -177,7 +177,8 @@
       "specArityAmbiguous": false,
       "oracle": {
         "scenarios": [
-          "p2-ctrl-chain"
+          "p2-ctrl-chain",
+          "p2-group-chain"
         ],
         "lastRun": null,
         "diff": 0
@@ -196,7 +197,8 @@
       "specArityAmbiguous": false,
       "oracle": {
         "scenarios": [
-          "p2-ctrl-chain"
+          "p2-ctrl-chain",
+          "p2-group-chain"
         ],
         "lastRun": null,
         "diff": 0
@@ -215,7 +217,8 @@
       "specArityAmbiguous": false,
       "oracle": {
         "scenarios": [
-          "p2-ctrl-chain"
+          "p2-ctrl-chain",
+          "p2-group-chain"
         ],
         "lastRun": null,
         "diff": 0
@@ -272,7 +275,8 @@
       "specArityAmbiguous": false,
       "oracle": {
         "scenarios": [
-          "p2-ctrl-chain"
+          "p2-ctrl-chain",
+          "p2-group-chain"
         ],
         "lastRun": null,
         "diff": 0
@@ -650,14 +654,16 @@
       "name": "CellShape",
       "arity": 0,
       "section": "8.2.1",
-      "status": "unimplemented",
+      "status": "verified",
       "notes": "",
       "legacyHwpctl": false,
       "specArityAmbiguous": false,
       "oracle": {
-        "scenarios": [],
+        "scenarios": [
+          "p2-ctrl-props"
+        ],
         "lastRun": null,
-        "diff": null
+        "diff": 0
       }
     },
     {
@@ -748,7 +754,8 @@
       "specArityAmbiguous": false,
       "oracle": {
         "scenarios": [
-          "p2-ctrl-chain"
+          "p2-ctrl-chain",
+          "p2-group-chain"
         ],
         "lastRun": null,
         "diff": 0
@@ -806,7 +813,8 @@
       "specArityAmbiguous": false,
       "oracle": {
         "scenarios": [
-          "p2-ctrl-chain"
+          "p2-ctrl-chain",
+          "p2-group-chain"
         ],
         "lastRun": null,
         "diff": 0
@@ -858,14 +866,16 @@
       "name": "ParentCtrl",
       "arity": 0,
       "section": "8.2.12",
-      "status": "unimplemented",
+      "status": "verified",
       "notes": "",
       "legacyHwpctl": false,
       "specArityAmbiguous": false,
       "oracle": {
-        "scenarios": [],
+        "scenarios": [
+          "p2-ctrl-props"
+        ],
         "lastRun": null,
-        "diff": null
+        "diff": 0
       }
     },
     {
@@ -965,14 +975,16 @@
       "name": "CurSelectedCtrl",
       "arity": 0,
       "section": "8.2.18",
-      "status": "unimplemented",
+      "status": "verified",
       "notes": "",
       "legacyHwpctl": false,
       "specArityAmbiguous": false,
       "oracle": {
-        "scenarios": [],
+        "scenarios": [
+          "p2-ctrl-props"
+        ],
         "lastRun": null,
-        "diff": null
+        "diff": 0
       }
     },
     {
@@ -982,14 +994,16 @@
       "name": "Clear",
       "arity": 1,
       "section": "8.3.1",
-      "status": "unimplemented",
+      "status": "verified",
       "notes": "",
       "legacyHwpctl": true,
       "specArityAmbiguous": false,
       "oracle": {
-        "scenarios": [],
+        "scenarios": [
+          "p2-ctrl-props"
+        ],
         "lastRun": null,
-        "diff": null
+        "diff": 0
       }
     },
     {
@@ -1196,6 +1210,7 @@
         "scenarios": [
           "doc-basic",
           "p2-cursor-lists",
+          "p2-multi-section",
           "p3-field-pos"
         ],
         "lastRun": null,
@@ -1234,6 +1249,7 @@
       "specArityAmbiguous": false,
       "oracle": {
         "scenarios": [
+          "p3-field-pos",
           "p3-shape-apply"
         ],
         "lastRun": null,
@@ -1763,7 +1779,8 @@
       "oracle": {
         "scenarios": [
           "doc-basic",
-          "p2-cursor-lists"
+          "p2-cursor-lists",
+          "p2-multi-section"
         ],
         "lastRun": null,
         "diff": 0
@@ -3836,6 +3853,7 @@
       "legacyHwpctl": false,
       "oracle": {
         "scenarios": [
+          "p2-multi-section",
           "p3-action-move"
         ],
         "lastRun": null,
@@ -3854,6 +3872,7 @@
       "legacyHwpctl": false,
       "oracle": {
         "scenarios": [
+          "p2-multi-section",
           "p3-action-move"
         ],
         "lastRun": null,
@@ -4194,6 +4213,7 @@
       "legacyHwpctl": false,
       "oracle": {
         "scenarios": [
+          "p2-multi-section",
           "p3-action-move"
         ],
         "lastRun": null,
