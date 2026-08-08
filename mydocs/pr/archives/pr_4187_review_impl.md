@@ -41,9 +41,9 @@ last_verified: 2026-08-09
 3. 작업지시자의 push 승인 뒤 `planet6897/pr/devel-hwpctrl-p1p3`에 code 보정과 review 기록을 push한다.
 4. 원격 head가 local HEAD와 일치하는지 확인하고, code/test 보정이 포함됐으므로 fast-pass 없이 최신 Full CI,
    CodeQL, Render Diff 및 mergeable 상태를 확인한다.
-5. 작업지시자의 merge 승인 뒤 merge SHA를 확인하고, PR 본문의 [#4162](https://github.com/edwardkim/rhwp/issues/4162),
-   [#4270](https://github.com/edwardkim/rhwp/issues/4270) 해결 여부를 실제 diff와 함께 재판정한다. 해결된 issue만
-   close 및 후속 comment 대상으로 한다.
+5. 작업지시자의 merge 승인 뒤 merge SHA를 확인한다. PR 본문의 관련 참조는
+   [#4178](https://github.com/edwardkim/rhwp/pull/4178)뿐이고 close 키워드는 없으므로, 이 PR을 근거로
+   issue close를 수행하지 않는다.
 6. merge 후 `upstream/devel` 동기화, source branch/visibility worktree와 review 전용 target 정리를 수행한다.
 
 ## rollback

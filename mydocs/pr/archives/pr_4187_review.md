@@ -40,7 +40,7 @@ loaded documents: pr_review_workflow.md, pr_review/README.md,
 | 문서 작성 시점 기준 devel | `828eabc19a4953a684e05d523a614256dae28b26` |
 | 원 PR 규모 | 65 files, +22,585 / -742 |
 | 문서 작성 시점 원격 상태 | `MERGEABLE`, `CLEAN`, `maintainerCanModify=true` |
-| 관련 issue | [#4162](https://github.com/edwardkim/rhwp/issues/4162), [#4270](https://github.com/edwardkim/rhwp/issues/4270) |
+| 관련 참조 | [#4178](https://github.com/edwardkim/rhwp/pull/4178) P0 차등 하니스 |
 
 head SHA, CI, mergeability는 작성 시점 참고값이다. merge 직전 원격 head와 required check를 다시 확인한다.
 
@@ -85,6 +85,7 @@ code/test 변경이 있으므로 그 성공 결과를 보정 head에 재사용�
 - Linux/macOS self-check는 wasm 호환 계층의 호출·순서·오류·저장 계약을 검증한다. Hancom 2022 COM과의
   새 Oracle 수집은 Windows에서만 수행한다.
 - P1~P3 범위 밖 API와 오라클 데이터의 품질 판정은 이 보정에서 확장하지 않는다.
+- PR 본문에는 issue close 키워드가 없다. 따라서 #4187 병합 뒤 이 PR을 근거로 별도 issue를 close하지 않는다.
 - 원 PR이 대형 변경이므로 보정 push 뒤의 최신 Full CI가 최종 안전망이다.
 
 ## 최종 권고
