@@ -316,6 +316,95 @@ const DOC_RESOURCES: &[DocResource] = &[
         mime_type: "text/markdown",
         text: include_str!("../mydocs/manual/agent_troubleshooting_guide.md"),
     },
+    // [#3627 잔여 / R7·R34] 레시피 6편 — 목표에서 시작하는 완주 서사. 지식 지도가
+    // "무엇을 부르나"라면 레시피는 "어떤 순서로 목표까지 가나"다. MCP 클라이언트가
+    // 프로토콜 표준 경로로 읽을 수 있어야 CLI·저장소 없이도 서사가 닿는다.
+    DocResource {
+        uri: "rhwp://recipes/01_fill_form_and_submit.md",
+        name: "recipe-01-fill-form",
+        title: "레시피 1 — 서식 문서를 채워서 제출용으로 만들기",
+        description: "필드 조회→채움→검증→산출 완주 서사 (실측 출력 인용).",
+        mime_type: "text/markdown",
+        text: include_str!("../mydocs/manual/recipes/01_fill_form_and_submit.md"),
+    },
+    DocResource {
+        uri: "rhwp://recipes/02_table_csv_roundtrip.md",
+        name: "recipe-02-table-csv",
+        title: "레시피 2 — 표 데이터를 CSV 로 뽑아 고치고 되돌리기",
+        description: "export-tables→스프레드시트 편집→csv-to-table 왕복 서사.",
+        mime_type: "text/markdown",
+        text: include_str!("../mydocs/manual/recipes/02_table_csv_roundtrip.md"),
+    },
+    DocResource {
+        uri: "rhwp://recipes/03_redact_before_sharing.md",
+        name: "recipe-03-redact",
+        title: "레시피 3 — 배포 전 개인정보 마스킹",
+        description: "redact --dry-run 검토→실행→재검사 서사 (--no-raw 기본).",
+        mime_type: "text/markdown",
+        text: include_str!("../mydocs/manual/recipes/03_redact_before_sharing.md"),
+    },
+    DocResource {
+        uri: "rhwp://recipes/04_safety_check_untrusted_doc.md",
+        name: "recipe-04-safety-check",
+        title: "레시피 4 — 출처를 모르는 문서를 처음 열 때",
+        description: "inspect 3축(은닉·주입·유니코드) 선검사 서사.",
+        mime_type: "text/markdown",
+        text: include_str!("../mydocs/manual/recipes/04_safety_check_untrusted_doc.md"),
+    },
+    DocResource {
+        uri: "rhwp://recipes/05_mail_merge_batch_fill.md",
+        name: "recipe-05-mail-merge",
+        title: "레시피 5 — 서식 하나에 여러 사람 데이터를 한 번에 채우기",
+        description: "batch fill 메일머지 서사 (행 파일→산출물 N).",
+        mime_type: "text/markdown",
+        text: include_str!("../mydocs/manual/recipes/05_mail_merge_batch_fill.md"),
+    },
+    DocResource {
+        uri: "rhwp://recipes/06_visual_regression_before_after.md",
+        name: "recipe-06-visual-regression",
+        title: "레시피 6 — 편집 전후를 눈이 아니라 숫자로 비교하기",
+        description: "render-diff 픽셀 판정 서사 (bbox 불변 증명).",
+        mime_type: "text/markdown",
+        text: include_str!("../mydocs/manual/recipes/06_visual_regression_before_after.md"),
+    },
+];
+
+/// [#3627 잔여] 스키마 리소스 — 본문이 파일이 아니라 **생성기**다.
+///
+/// export-ir-schema · export-plan-schema · export-capabilities-schema 가 내는 것과
+/// 같은 lib 함수를 부른다 — CLI 봉투와 이 리소스가 한 원천에서 같은 값을 낸다.
+/// 파일로 얼리지 않는 이유: 스키마는 코드에서 파생되므로 얼린 사본은 첫 변경부터
+/// 낡는다(DOC_RESOURCES 가 원본 문서를 직접 안는 것과 같은 원리의 생성기 판).
+struct SchemaResource {
+    uri: &'static str,
+    name: &'static str,
+    title: &'static str,
+    description: &'static str,
+    generate: fn() -> serde_json::Value,
+}
+
+const SCHEMA_RESOURCES: &[SchemaResource] = &[
+    SchemaResource {
+        uri: "rhwp://schemas/ir",
+        name: "ir-schema",
+        title: "공개 IR JSON Schema",
+        description: "Document IR 의 JSON Schema 2020-12 — 바인딩·외부 검증기의 단일 출처 (export-ir-schema 동일).",
+        generate: rhwp::ir_schema::ir_schema,
+    },
+    SchemaResource {
+        uri: "rhwp://schemas/plan",
+        name: "plan-schema",
+        title: "편집 계획서(run) JSON Schema",
+        description: "run 계획서 문법의 JSON Schema — 계획 생성의 단일 출처 (export-plan-schema 동일).",
+        generate: rhwp::plan_schema::plan_schema,
+    },
+    SchemaResource {
+        uri: "rhwp://schemas/capabilities",
+        name: "capabilities-schema",
+        title: "capabilities 봉투 JSON Schema",
+        description: "capabilities 자기서술 봉투의 JSON Schema (export-capabilities-schema 동일).",
+        generate: rhwp::capabilities_schema::capabilities_schema,
+    },
 ];
 
 /// resources/list 응답 본문.
@@ -334,6 +423,16 @@ fn served_resources() -> Vec<serde_json::Value> {
                         --profile 로 띄운 서버는 tools/list 와 같은 필터된 목록을 낸다.",
         "mimeType": "application/json",
     })];
+    resources.extend(SCHEMA_RESOURCES.iter().map(|r| {
+        serde_json::json!({
+            "uri": r.uri,
+            "name": r.name,
+            "title": r.title,
+            "description": r.description,
+            "mimeType": "application/json",
+            // size 없음 — 본문이 생성기라 목록 시점에 길이를 약속하지 않는다.
+        })
+    }));
     resources.extend(DOC_RESOURCES.iter().map(|r| {
         serde_json::json!({
             "uri": r.uri,
@@ -362,6 +461,8 @@ fn read_resource(
             "application/json",
             crate::mcp_manifest_value(profile).to_string(),
         )
+    } else if let Some(r) = SCHEMA_RESOURCES.iter().find(|r| r.uri == uri) {
+        ("application/json", (r.generate)().to_string())
     } else {
         match DOC_RESOURCES.iter().find(|r| r.uri == uri) {
             Some(r) => (r.mime_type, r.text.to_string()),
@@ -394,7 +495,32 @@ fn resource_error_response(
     response
 }
 
-/// tools/list 응답: 선언 도구(MCP 필수 3종만 노출) + 세션 도구 3종.
+/// [#4220 T3] 세션 도구의 annotations — 읽기/편집 경계는 프로필 경계의 단일 출처인
+/// `agent_profiles::SESSION_READ_TOOLS` 에서 유도하고, 그 표가 말하지 않는 축만
+/// 여기서 판정한다:
+///
+/// - 파일 쓰기 축(`writes_file`): inputSchema 에 `output` 경로 속성이 있는 도구
+///   (`hwp_doc_render_page`/`hwp_doc_save`)는 read 표에 있어도 readOnlyHint=false —
+///   디스크에 산출물을 쓰는 것은 환경 변경이다.
+/// - `destructiveHint`: `hwp_doc_save` 만 true. `output` 이 hwp_open 으로 연 **원본
+///   경로일 수 있고** 같은 경로 거부가 없다(session_save 는 그대로 fs::write 한다) —
+///   무상태 표면의 `--in-place` 축에 해당하는 세션의 덮어쓰기 축이다.
+///   `hwp_doc_render_page` 는 새 SVG 산출물을 만드는 추가형이라 false.
+/// - `idempotentHint`: `hwp_open` 은 호출마다 새 docId 를 발급하므로 false.
+///   `hwp_doc_replace_text` 는 **이미 치환된 IR 위에** 다시 적용돼 겹칠 수 있으므로
+///   false (find 가 replace 의 부분열이면 재실행이 결과를 또 바꾼다 — 매번 원본에서
+///   다시 계산하는 무상태 `hwp_replace_text` 가 true 인 것과 대비된다). 그 밖은
+///   같은 인자 재실행이 같은 상태로 수렴한다(fill/set 계열은 값 대입, save 는 같은
+///   스냅숏 재기록, close 재호출은 상태 무변경 오류).
+fn session_tool_annotations(name: &str, writes_file: bool) -> serde_json::Value {
+    let read_axis = crate::agent_profiles::SESSION_READ_TOOLS.contains(&name);
+    let read_only = read_axis && !writes_file;
+    let destructive = name == "hwp_doc_save";
+    let idempotent = !matches!(name, "hwp_open" | "hwp_doc_replace_text");
+    crate::mcp_annotations(read_only, destructive, idempotent)
+}
+
+/// tools/list 응답: 선언 도구(MCP 필수 3종 + annotations 노출) + 세션 도구.
 fn served_tools(
     tool_defs: &[serde_json::Value],
     session_allows: &dyn Fn(&str) -> bool,
@@ -406,6 +532,9 @@ fn served_tools(
                 "name": t["name"],
                 "description": t["description"],
                 "inputSchema": t["inputSchema"],
+                // [#4220 T3] 매니페스트(capabilities --mcp)가 유도해 둔 값을 그대로
+                // 되비춘다 — 서버가 따로 판정하면 두 표면이 어긋난다(단일 출처).
+                "annotations": t["annotations"],
             })
         })
         .collect();
@@ -541,6 +670,15 @@ fn served_tools(
             "required": ["docId"]
         }
     }));
+    // [#4220 T3] 세션 도구 annotations — 정의 리터럴에 값을 복제하지 않고 이름·
+    // 스키마에서 한 자리에서 유도한다(무상태 도구의 outputFields 유도와 같은 원칙).
+    for t in &mut session {
+        let name = t["name"].as_str().unwrap_or_default().to_string();
+        let writes_file = t["inputSchema"]["properties"]
+            .as_object()
+            .is_some_and(|props| props.contains_key("output"));
+        t["annotations"] = session_tool_annotations(&name, writes_file);
+    }
     tools.extend(
         session
             .into_iter()

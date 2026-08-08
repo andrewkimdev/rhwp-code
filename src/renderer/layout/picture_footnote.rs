@@ -484,7 +484,24 @@ impl LayoutEngine {
             (0.0, 0.0)
         };
 
-        let adjusted_pic_x = pic_x + caption_left_offset;
+        // HWP5 Square 그림의 horizontal offset은 outer frame의 시작점이다. 따라서
+        // left outer margin은 그림 ink/caption의 paint origin에 더해야 한다. 지금까지
+        // frame origin에 곧바로 paint하여 LINE_SEG가 끝나는 x와 그림 테두리가 겹쳤다
+        // (#3821 p156 그림 64). Right/Center/Paper/Para anchor에 전면 적용하면 저장된
+        // offset의 기준이 다른 기존 문서를 이동시키므로, native Column-left Square로
+        // 좁힌다. wrap exclusion은 이미 source LINE_SEG가 frame 기준으로 보유한다.
+        let square_left_paint_margin = if !picture.common.treat_as_char
+            && matches!(picture.common.text_wrap, TextWrap::Square)
+            && matches!(picture.common.horz_rel_to, HorzRelTo::Column)
+            && matches!(
+                picture.common.horz_align,
+                HorzAlign::Left | HorzAlign::Inside
+            ) {
+            hwpunit_to_px(picture.common.margin.left as i32, self.dpi)
+        } else {
+            0.0
+        };
+        let adjusted_pic_x = pic_x + caption_left_offset + square_left_paint_margin;
         // [Task #1079] already_accounted: 그림을 gap 안에 그림(바닥이 base_y=그림 para 줄에
         // 정렬되도록 total_height 만큼 위로). flow 진행은 아래 return 에서 생략.
         let vpos_shift = if vpos_accounts_for_height {

@@ -2243,8 +2243,11 @@ fn parse_border_line_type(attr: &quick_xml::events::attributes::Attribute) -> Bo
     match attr_str(attr).as_str() {
         "NONE" => BorderLineType::None,
         "SOLID" => BorderLineType::Solid,
-        "DASH" => BorderLineType::Dash,
-        "DOT" => BorderLineType::Dot,
+        // HWPX LineType2의 DASH/DOT 이름은 HWP5 BORDER_FILL 선 코드와 반대다.
+        // Hancom 2020이 저장한 HWP의 실제 레코드도 `DASH`를 code 3(점선)으로
+        // 기록한다. 이름만 보고 2(파선)로 저장하면 점선 표 테두리가 파선으로 바뀐다.
+        "DASH" => BorderLineType::Dot,
+        "DOT" => BorderLineType::Dash,
         "DASH_DOT" => BorderLineType::DashDot,
         "DASH_DOT_DOT" => BorderLineType::DashDotDot,
         "LONG_DASH" => BorderLineType::LongDash,
@@ -2865,6 +2868,32 @@ mod tests {
     }
 
     #[test]
+    fn parse_border_fill_line_type_uses_hwp5_dash_dot_contract() {
+        use crate::model::style::BorderLineType;
+
+        let xml = r##"<hh:head xmlns:hh="http://www.hancom.co.kr/hwpml/2011/head">
+  <hh:refList>
+    <hh:borderFills itemCnt="1">
+      <hh:borderFill id="1" threeD="0" shadow="0" centerLine="NONE" breakCellSeparateLine="0">
+        <hh:leftBorder type="DASH" width="0.12 mm" color="#000000"/>
+        <hh:rightBorder type="DOT" width="0.12 mm" color="#000000"/>
+      </hh:borderFill>
+    </hh:borderFills>
+  </hh:refList>
+</hh:head>"##;
+
+        let (doc_info, _) = parse_hwpx_header(xml).expect("HWPX borderFill parse");
+        assert_eq!(
+            doc_info.border_fills[0].borders[0].line_type,
+            BorderLineType::Dot
+        );
+        assert_eq!(
+            doc_info.border_fills[0].borders[1].line_type,
+            BorderLineType::Dash
+        );
+    }
+
+    #[test]
     fn issue3551_odd_tab_position_prefers_exact_default() {
         // [#3551] 홀수 저장값은 case(=저장값/2)로 정확히 표현되지 않는다(101 → 50).
         // 원값이 default 에 그대로 있으므로 어긋난 항목만 default 로 되살려야
@@ -3175,6 +3204,72 @@ mod tests {
         assert_eq!(cs.shadow_color, 0x00C0C0C0);
         assert_eq!(cs.shadow_offset_x, 10);
         assert_eq!(cs.shadow_offset_y, 10);
+    }
+
+    /// [#4141] `<hh:relSz>` 자식이 없는 `charPr` 은 OWPML 기본값 100 으로 남아야 한다.
+    ///
+    /// 종전엔 `CharShape::default()` 의 파생값 0 이 남아, 그 IR 을 그대로 방출하는 라이터
+    /// (`serializer/hwpx/header.rs:638`, `serializer/char_shape.rs:21`)를 통해 유효범위
+    /// 10~250 밖의 `relSz="0"` 이 저장됐다. 한컴은 `크기 × 상대크기%` 로 해석한다.
+    #[test]
+    fn char_pr_without_rel_sz_child_defaults_to_100_percent() {
+        let xml = r##"<?xml version="1.0" encoding="UTF-8"?>
+<hh:head xmlns:hh="http://www.hancom.co.kr/hwpml/2011/head">
+  <hh:refList>
+    <hh:charProperties itemCnt="1">
+      <hh:charPr id="0" height="1000" textColor="#000000" shadeColor="none" useFontSpace="0" useKerning="0" symMark="NONE">
+        <hh:fontRef hangul="0" latin="0" hanja="0" japanese="0" other="0" symbol="0" user="0"/>
+        <hh:ratio hangul="95" latin="95" hanja="95" japanese="95" other="95" symbol="95" user="95"/>
+      </hh:charPr>
+    </hh:charProperties>
+  </hh:refList>
+</hh:head>"##;
+
+        let (doc_info, _) = parse_hwpx_header(xml).unwrap();
+
+        assert_eq!(
+            doc_info.char_shapes[0].relative_sizes, [100; 7],
+            "relSz 자식이 없으면 OWPML 기본값 100 이어야 한다 (Header XML schema.xml:716-728)"
+        );
+        // 명시된 장평은 그대로 살아야 한다 — 기본값 채움이 실제 값을 덮으면 안 된다.
+        assert_eq!(doc_info.char_shapes[0].ratios, [95; 7]);
+    }
+
+    /// [#4141] `charPr` id 갭을 메우는 자리도 유효한 상대크기를 가져야 한다.
+    ///
+    /// `parse_char_properties` 는 `id` 를 배열 인덱스로 쓰고 빈 자리를
+    /// `resize_with(idx + 1, CharShape::default)` 로 메운다. 그 자리가 참조되면
+    /// 저장 바이트에 relSz=0 이 그대로 나간다.
+    #[test]
+    fn char_pr_id_gap_filler_gets_valid_relative_size() {
+        let xml = r##"<?xml version="1.0" encoding="UTF-8"?>
+<hh:head xmlns:hh="http://www.hancom.co.kr/hwpml/2011/head">
+  <hh:refList>
+    <hh:charProperties itemCnt="2">
+      <hh:charPr id="0" height="1000" textColor="#000000" shadeColor="none" useFontSpace="0" useKerning="0" symMark="NONE">
+        <hh:relSz hangul="100" latin="100" hanja="100" japanese="100" other="100" symbol="100" user="100"/>
+      </hh:charPr>
+      <hh:charPr id="3" height="1000" textColor="#000000" shadeColor="none" useFontSpace="0" useKerning="0" symMark="NONE">
+        <hh:relSz hangul="100" latin="100" hanja="100" japanese="100" other="100" symbol="100" user="100"/>
+      </hh:charPr>
+    </hh:charProperties>
+  </hh:refList>
+</hh:head>"##;
+
+        let (doc_info, _) = parse_hwpx_header(xml).unwrap();
+
+        assert!(
+            doc_info.char_shapes.len() >= 4,
+            "id 3 까지 자리가 잡혀야 한다: {}",
+            doc_info.char_shapes.len()
+        );
+        for (id, cs) in doc_info.char_shapes.iter().enumerate() {
+            assert!(
+                cs.relative_sizes.iter().all(|&v| (10..=250).contains(&v)),
+                "charPr id={id} (갭 채움 자리 포함)의 상대크기가 유효범위 10~250 밖이다: {:?}",
+                cs.relative_sizes
+            );
+        }
     }
 
     #[test]

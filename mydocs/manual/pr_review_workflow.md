@@ -2,7 +2,7 @@
 kind: canonical
 status: active
 canonical: mydocs/manual/pr_review_workflow.md
-last_verified: 2026-07-25
+last_verified: 2026-08-08
 ---
 
 # PR 리뷰 · 통합 워크플로우 매뉴얼
@@ -28,6 +28,23 @@ rhwp의 PR 처리는 외부 contributor PR, collaborator self PR, collaborator�
 소스, 테스트, CI workflow, golden/baseline, 기존 샘플 변경은 maintainer라도 일반 PR과 최신 CI를
 기본으로 한다. GitHub review, comment, push, ready 전환, merge, close는 각각 작업지시자의 명시 승인을
 받은 뒤에만 수행한다.
+
+### 1.1 PR 번호 채번과 review 기록
+
+PR 번호는 PR을 생성할 때 채번된다. 따라서 collaborator self PR의 번호 기반 review 기록은
+다음 순서로 같은 PR에 포함한다.
+
+1. 구현과 로컬 검증이 끝난 후보 commit을 원격 작업 branch에 push한다.
+2. 작업지시자의 PR 생성 승인 후 Open PR을 생성해 번호 `N`을 받는다. 완료된 후보에
+   번호만 확보하려고 Draft를 생성하지 않는다.
+3. reviewer assign 승인과 역할별 접수 절차를 수행한 뒤 `pr_N_review.md`와 필요한 오늘할일을
+   작성해 같은 source branch에 review 기록 commit으로 push한다.
+4. review 기록이 포함된 최신 head의 required check를 확인하고, 작업지시자 승인 후 merge한다.
+
+외부 contributor PR처럼 PR이 이미 존재하는 경우에는 발급된 번호로 바로 review 접수를 시작한다.
+Draft는 WIP 공유나 조기 검토가 필요하고 그 상태 변경을 작업지시자가 명시적으로 승인한 경우에만
+사용한다. 정확한 생성 순서와 승인 게이트는 [문서와 Git 워크플로우](codex/docs_and_git_workflow.md#internal-task-pr-approval)를
+따른다.
 
 ## 2. 필수 라우팅
 
@@ -76,26 +93,27 @@ current head: <작성 시점 참고 SHA 또는 재확인 필요>
 
 ~~~text
 CI preflight
-    ├─ Lint (fmt, clippy, WASM check) ─┐
-    └─ Frontend package gates ─────────┴─ gate 충족
-       (영향 있음: success, 영향 없음: skipped) │
-                         ┌────────────────────┴───────────────────┐
-                         │                                        │
-        Build slow+2 archive / regular 1 / regular 3             Native Skia tests
-                         └───────────────────────────────┬───────────────────────────────┘
-                                                         │
-          Default-feature tests: slow + 일반 shard 1/3, 2/3, 3/3 (조건 충족 즉시 병렬)
-                                              │
-                                      Build & Test 집계
+    ├─ Frontend unit/package gate (해당 mode만 실행)
+    ├─ Lint (rust=true일 때만)
+    ├─ Native Skia tests (native=true, lint 결과를 조건부 확인)
+    └─ Rust builders (rust=true, lint success, frontend 예상 결과)
+                         │
+          Default-feature tests: slow + 일반 shard 1/3, 2/3, 3/3
+          (자기 builder success, Native는 required→success / 미해당→skipped)
+                         │
+                 Build & Test 영향축 집계
 ~~~
 
-- Lint와 Frontend package gates는 preflight 뒤 병렬이다.
-- slow+`2` builder, regular `1` builder, regular `3` builder, Native Skia tests는 Lint가 성공하고,
-  Frontend가 필요한 경우 success이거나 영향이 없어 skipped인 뒤 병렬이다. 각 builder는 자기 Cargo test
+- Frontend unit/package gate는 `frontend_mode`에 맞는 job 하나만 실행하고, Rust lint는
+  `rust_required=true`일 때만 실행한다. 둘은 preflight 뒤 서로 독립적으로 시작할 수 있다.
+- slow+`2` builder, regular `1` builder, regular `3` builder는 Rust가 필요하고 lint가 성공했으며,
+  frontend job이 mode에 맞게 success 또는 skipped인 뒤 실행한다. 각 builder는 자기 Cargo test
   target만 빌드해 `slow`, `1`, `2`, `3` archive 중 맡은 항목만 upload한다.
-- `slow shard`와 일반 `2/3`은 slow+`2` builder와 Native Skia, 일반 `1/3`은 regular `1` builder와 Native
-  Skia, 일반 `3/3`은 regular `3` builder와 Native Skia 성공 뒤 시작한다. 총 worker 수는 4개이고, worker는
-  각자 archive 하나만 download한다. 네 worker는 독립 job이며 집계 job이 성공 여부를 각각 확인한다.
+- Native Skia job은 `native_skia_required=true`일 때만 실행한다. Rust lane이 같이 필요하면 lint success,
+  Rust가 불필요하면 lint skipped를 요구하고 frontend mode의 예상 결과도 확인한다.
+- `slow shard`와 일반 `2/3`은 slow+`2` builder, 일반 `1/3`은 regular `1` builder, 일반 `3/3`은
+  regular `3` builder 성공 뒤 시작한다. Native가 필요하면 Native success, 필요하지 않으면
+  skipped를 요구한다. 네 worker는 독립 job이며 집계 job이 각 영향축의 `success|skipped` 조합을 확인한다.
 - review-only fast-pass는 heavy job이 skipped일 수 있다. 이때도 preflight와 branch protection이
   요구하는 집계 상태를 최신 PR head 기준으로 확인한다.
 
@@ -119,8 +137,52 @@ CI가 끝난 뒤 또는 contributor가 새 commit을 push한 뒤에는 head SHA,
 [다수 PR과 update branch](pr_review/multi_pr_update_branch.md)의 "2.6 검토 중 기준선 갱신"을 따른다.
 collaborator가 contributor PR head에 review-only 기록을 직접 push할 예정이면, 최종 archive review·오늘할일·
 증적 commit은 새 head를 fetch하고 reviewer 기록을 그 위의 단순 trailing commit으로 정렬한 뒤에만 만든다.
-기존 reviewer 기록 위로 새 contributor head를 일반 merge하면 fast-pass의 안전한 current-base merge 조건을
-충족하지 못해 full CI로 분기한다.
+문서 기록만 만들기 위해 최신 `devel`을 contributor branch에 merge하거나 rebase하지 않는다. branch가 최신
+base 반영을 강제하지 않는 정책이면, 같은 PR·같은 source repository·같은 code candidate SHA의 녹색 aggregate를
+재사용해 trailing review-only commit을 fast-pass할 수 있다. contributor가 source·test를 새로 push한 경우에는
+그 새 code head의 CI를 먼저 통과시킨 뒤 review 기록을 한 번만 이어 붙인다.
+
+#### 3.2.1 최신 `devel` 오늘할일을 보존하는 trailing 기록
+
+contributor source branch의 `mydocs/orders/YYYYMMDD.md`가 최신 `upstream/devel`보다 오래될 수 있다.
+이 경우 review 기록을 추가하려고 최신 `devel`의 오늘할일 전체를 source에 복사하거나 `devel`을 merge/rebase하면,
+source에 없는 archive link를 도입하거나 today add/add 충돌과 불필요한 full CI를 만들 수 있다.
+
+1. `git fetch upstream devel` 뒤 `git diff HEAD..upstream/devel -- mydocs/orders/YYYYMMDD.md`로 최신 base의
+   변경 구간을 확인한다.
+2. contributor source에 이미 있는 오늘할일은 보존하고, 현재 PR의 항목만 위 diff에서 변경되지 않은 section
+   경계에 추가한다. 최신 `devel`의 다른 PR 기록을 source branch에 복사하지 않는다.
+3. trailing 문서 commit을 만든 뒤 최신 `upstream/devel`에서 merge simulation을 수행한다. merge tree의
+   `git diff --check`와 변경한 오늘할일·review 문서의 Markdown 링크 검사가 모두 통과해야 한다.
+
+이 방식은 source history를 선형으로 유지하면서, 실제 merge tree에는 최신 `devel`의 기존 오늘 기록과
+현재 PR 기록이 함께 남는지 확인한다. 변경되지 않은 경계를 찾을 수 없거나 simulation이 충돌하면 source에
+`devel`을 억지로 병합하지 말고 작업지시자에게 보고한다. 불가피하게 current base를 병합해 오늘할일 충돌을
+해소한 경우에는 [review-only fast-pass](pr_review/review_only_fast_pass.md)의 `mydocs/` 한정 bridge 검증을
+따르며, source·test·workflow·증적 파일 충돌 해소에는 이 예외를 적용하지 않는다.
+
+#### 3.2.2 녹색 GitHub code head의 중복 로컬 전체 회귀 생략
+
+외부 또는 collaborator PR을 **검토**하는 단계에서, 정확한 code head가 이미 GitHub의 Full CI와
+변경 범위에 맞는 별도 required check(CodeQL, Render Diff 등)를 모두 통과했고, 검토자가 그 뒤에
+source·test·fixture·workflow 보정을 추가하지 않았다면 같은 전체 Rust 회귀를 로컬에서 다시 실행하지
+않는다. 이 예외는 contributor의 PR 생성 전 사전 검증이나 maintainer 보정 뒤의 검증 의무를 줄이지 않는다.
+
+다음 조건을 모두 확인해야 한다.
+
+1. review 문서에 기록한 code candidate SHA와 GitHub 녹색 run의 head SHA가 정확히 같다.
+2. candidate 뒤의 변경은 review·오늘할일 등 review-only 문서이거나, 검증한 current-base merge tree의
+   `mydocs/` 한정 bridge다. 코드, test, fixture, baseline, workflow, PDF/asset 보정은 하나도 없다.
+3. 현재 `upstream/devel`과의 merge simulation이 충돌 없이 통과했거나, 허용된 `mydocs/` bridge 검증을
+   통과했다. 이때도 `git diff --check`와 변경 문서 링크 검사는 실행한다.
+4. renderer/layout 계열이면 focused Rust test와 실제 WASM/브라우저 또는 동등한 시각 검증을 별도로
+   실행해, GitHub 전체 회귀가 놓칠 수 있는 이번 검토의 핵심 경로를 확인한다.
+
+이 조건에서는 `cargo test --profile release-test --tests`와 Native Skia 전체 묶음처럼 이미 같은 code
+candidate에서 성공한 광범위 로컬 회귀를 중복 실행하지 않는다. 이미 시작한 명령을 중지했다면 결과를
+`PASS`로 기록하지 말고 중지 사실과 이유를 적는다. review 문서에는 candidate SHA, 재사용한 GitHub
+run URL 또는 run 번호, 실행한 focused 검증, 생략한 전체 검증과 사유를 모두 남긴다. 최신 head의
+fast-pass 또는 Full CI aggregate 성공은 여전히 merge 직전 다시 확인한다.
 
 ### 3.3 순차로 유지할 일
 

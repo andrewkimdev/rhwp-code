@@ -21,7 +21,9 @@
 #![cfg(not(target_arch = "wasm32"))]
 
 use rhwp::parser::FileFormat;
-use rhwp::serializer::hwpx::roundtrip::{diff_documents, strip_cross_format_noise};
+use rhwp::serializer::hwpx::roundtrip::{
+    diff_documents, strip_cross_format_noise, strip_hwpx_to_hwp_noise,
+};
 
 /// 현재 저장 손실이 남아 있는 문서 — 각 항목은 **왜 아직 열려 있는지**를 밝힌다.
 ///
@@ -66,10 +68,10 @@ fn verify_roundtrip(data: &[u8]) -> Option<usize> {
     let reloaded = rhwp::wasm_api::HwpDocument::from_bytes(&bytes).ok()?;
 
     let diff = diff_documents(doc.document(), reloaded.document());
-    let diff = if source_format == FileFormat::Hwp {
-        diff
-    } else {
-        strip_cross_format_noise(diff)
+    let diff = match source_format {
+        FileFormat::Hwp => diff,
+        FileFormat::Hwpx => strip_hwpx_to_hwp_noise(diff),
+        _ => strip_cross_format_noise(diff),
     };
     Some(diff.differences.len())
 }

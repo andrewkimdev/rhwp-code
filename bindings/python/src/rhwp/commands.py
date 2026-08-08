@@ -34,7 +34,10 @@ __all__ = [
     "digest",
     "extract_data",
     "inspect",
+    "explain",
     "export_provenance_map",
+    "export_plan_schema",
+    "export_agent_manifest",
     "ir_diff",
     "thumbnail",
     "extract_pages",
@@ -43,6 +46,7 @@ __all__ = [
     "replace_text",
     "set_cell",
     "csv_to_table",
+    "scan",
     "batch",
     "capabilities",
 ]
@@ -219,6 +223,49 @@ def export_provenance_map(
 ) -> Envelope:
     """봉투 필드의 문서 출처·신뢰 표지를 내보낸다."""
     return Envelope(run_json(["export-provenance-map", "--json"], timeout=timeout))
+
+
+def explain(path: PathLike, *, timeout: Optional[float] = DEFAULT_TIMEOUT) -> Envelope:
+    """문서의 형식·쪽수·표·누름틀·각주를 한 번에 요약한다."""
+    return Envelope(run_json(["explain", path, "--json"], timeout=timeout))
+
+
+def export_plan_schema(
+    *,
+    bare: bool = False,
+    out: Optional[PathLike] = None,
+    timeout: Optional[float] = DEFAULT_TIMEOUT,
+) -> Envelope:
+    """``run`` 계획서 문법의 JSON Schema."""
+    args: List[Any] = ["export-plan-schema"]
+    _switch(args, "--bare", bare)
+    _flag(args, "-o", out)
+    args.append("--json")
+    return Envelope(run_json(args, timeout=timeout))
+
+
+def export_agent_manifest(
+    *, bare: bool = False, timeout: Optional[float] = DEFAULT_TIMEOUT
+) -> Envelope:
+    """capabilities·IR·provenance·plan schema 를 한 봉투로 조립한 에이전트 매니페스트."""
+    args: List[Any] = ["export-agent-manifest"]
+    _switch(args, "--bare", bare)
+    args.append("--json")
+    return Envelope(run_json(args, timeout=timeout))
+
+
+def export_ontology(
+    *,
+    bare: bool = False,
+    out: Optional[PathLike] = None,
+    timeout: Optional[float] = DEFAULT_TIMEOUT,
+) -> Envelope:
+    """자기서술에서 기계 유도한 JSON-LD 온톨로지를 내보낸다."""
+    args: List[Any] = ["export-ontology"]
+    _switch(args, "--bare", bare)
+    _flag(args, "-o", out)
+    args.append("--json")
+    return Envelope(run_json(args, timeout=timeout))
 
 
 # ── 산출 ────────────────────────────────────────────────────────────────
@@ -479,6 +526,36 @@ def csv_to_table(
 
 
 # ── 대량 ────────────────────────────────────────────────────────────────
+
+
+def scan(
+    *paths: PathLike,
+    probe: bool = False,
+    max_depth: Optional[int] = None,
+    limit: Optional[int] = None,
+    timeout: Optional[float] = DEFAULT_TIMEOUT,
+) -> Envelope:
+    """디렉터리 재귀 발견·분류 — ``batch`` 의 앞 단계.
+
+    ``batch`` 는 경로 목록을 이미 갖고 있다는 전제에서 시작한다. 이 명령이 그
+    목록을 만든다: HWP 계열 파일을 찾아 확장자 주장과 매직 감지를 대조하고
+    (``extMismatch``), ``probe=True`` 면 실제로 열어 파싱 가능/암호 필요를
+    기록한다. 발견은 판정이 아니므로 게이트 종료 코드(3)가 없다.
+
+    Args:
+        paths: 검색할 폴더(재귀) 또는 파일 경로 — 최소 1개.
+        probe: 각 파일을 실제로 열어 파싱 가능·암호 필요·쪽수를 기록.
+        max_depth: 재귀 최대 깊이 (1 = 지정 폴더만).
+        limit: 최대 파일 수 — 넘으면 봉투에 ``truncated: true``.
+    """
+    if not paths:
+        raise ValueError("검색할 경로가 없습니다 — scan 은 최소 1개가 필요합니다")
+    args: List[Any] = ["scan", *paths]
+    _switch(args, "--probe", probe)
+    _flag(args, "--max-depth", max_depth)
+    _flag(args, "--limit", limit)
+    args.append("--json")
+    return Envelope(run_json(args, timeout=timeout))
 
 
 def batch(

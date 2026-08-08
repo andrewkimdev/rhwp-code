@@ -470,7 +470,7 @@ fn uses_hwp3_origin_page_tolerance(document: &Document) -> bool {
     para_shape_ratio < 0.05 && char_shape_ratio < 0.15
 }
 
-fn uses_hwp3_origin_flow_spacing_before(document: &Document) -> bool {
+pub(crate) fn uses_hwp3_origin_flow_spacing_before(document: &Document) -> bool {
     // HWP3-origin HWP5 변환본은 parser 단계에서 ParaShape spacing 계열을 절반으로
     // 정규화하므로, 본문 흐름 계산에서는 원래 spacing_before를 복원한다.
     // 원본 HWP3는 HWP3 parser가 만든 spacing 값을 기준으로 삼아 여기서 재확대하지 않는다.
@@ -2037,6 +2037,16 @@ impl DocumentCore {
                     } else if detected == "image/bmp" {
                         match crate::renderer::svg::bmp_bytes_to_png_bytes(data) {
                             Some(png) => ("image/png", std::borrow::Cow::Owned(png)),
+                            None => (detected, std::borrow::Cow::Borrowed(&data[..])),
+                        }
+                    } else if detected == "image/tiff" {
+                        match crate::renderer::svg::tiff_bytes_to_png_bytes(data) {
+                            Some(png) => ("image/png", std::borrow::Cow::Owned(png)),
+                            None => (detected, std::borrow::Cow::Borrowed(&data[..])),
+                        }
+                    } else if detected == "application/postscript" {
+                        match crate::renderer::image_resolver::dos_eps_preview_bytes(data) {
+                            Some((m, bytes)) => (m, std::borrow::Cow::Owned(bytes)),
                             None => (detected, std::borrow::Cow::Borrowed(&data[..])),
                         }
                     } else {
@@ -6068,6 +6078,10 @@ impl DocumentCore {
         use crate::model::style::HeadType;
         use crate::renderer::layout::resolve_numbering_id;
         use crate::renderer::pagination::PageItem;
+
+        // [#4126/#4128 회귀 가드] 콜드 캐럿 질의의 O(pages) 빌드 폭증 판별용 작업량 카운터.
+        crate::diagnostics::perf_counters::PAGE_TREE_BUILDS
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
         self.layout_engine
             .set_show_transparent_borders(self.show_transparent_borders);
