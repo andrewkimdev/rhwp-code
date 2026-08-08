@@ -220,6 +220,7 @@ printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocol
 | [4 — 출처를 모르는 문서를 처음 열 때](recipes/04_safety_check_untrusted_doc.md) | 본문 전체를 노출하지 않고 점진적으로 신뢰도 판정 | `info`·`digest`·`fields`(`textSecurity`)·`search`·`batch` |
 | [5 — 서식 하나에 여러 사람 데이터를 한 번에 채우기](recipes/05_mail_merge_batch_fill.md) | 메일머지형 대량 서식 채움 | `batch fill` |
 | [6 — 편집 전후를 눈이 아니라 숫자로 비교하기](recipes/06_visual_regression_before_after.md) | 편집이 렌더링 레이아웃에 준 영향을 정량 판정 | `render-diff` |
+| [9 — 폴더 문서 대량 추출·변환](recipes/09_bulk_extract_convert.md) | 폴더 단위 메타·본문·표 데이터 추출과 일괄 변환 | `batch info`·`batch export-text`·`batch extract-data`·`batch convert` |
 
 ### 1-4. 다른 언어에서 쓰려는가 — 바인딩 가이드
 
