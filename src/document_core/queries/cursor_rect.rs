@@ -3093,6 +3093,19 @@ impl DocumentCore {
         if cell.paragraphs.get(cell_para_idx).is_none() {
             return Ok(Unsupported);
         }
+        // 프로브는 보통 캐럿 문단까지만 셀을 방출한다. 그러나 뒤 문단의 중첩 표는
+        // 모든 셀 렌더 후 수행되는 border clip 확장으로 바깥 셀 bbox를 넓힐 수 있다.
+        // `cellBounds`도 공개 JSON 계약이므로, 이 형상에서는 대상 셀만 끝까지
+        // 렌더해 같은 후처리를 재현한다. 다른 셀과 페이지 트리는 여전히 생략한다.
+        let needs_full_cell_for_bounds = cell
+            .paragraphs
+            .iter()
+            .skip(cell_para_idx.saturating_add(1))
+            .any(|para| {
+                para.controls
+                    .iter()
+                    .any(|control| matches!(control, Control::Table(_)))
+            });
         // 반복 제목행 사본으로 그려질 수 있는 셀은 컷 창 모델 밖
         let cell_row = cell.row as usize;
         let cell_end_row = cell_row + (cell.row_span as usize).max(1);
@@ -3247,7 +3260,16 @@ impl DocumentCore {
         );
         let probe = PartialTableCellProbe {
             cell_idx,
-            stop_after_para: cell_para_idx,
+            stop_after_para: if needs_full_cell_for_bounds {
+                n_paras - 1
+            } else {
+                cell_para_idx
+            },
+            // 큰 분할 셀의 현재 쪽은 `window_paras` 밖 문단을 원래부터 그리지
+            // 않는다. 창을 전량으로 넓히면 cellBounds는 맞지만 모든 문단을
+            // compose해 fast path의 지연 시간 계약을 잃는다. 종료 문단까지만
+            // 순회를 열되 기존 창을 유지하면, 이 조각의 중첩 표 border만
+            // 후처리에 참여해 legacy와 같은 clip을 만든다.
             windowed,
             window_paras,
         };
