@@ -41,13 +41,14 @@ last_verified: 2026-08-08
 | Studio | focused 27건, `npm test` 813 passed, production build 통과 |
 | WASM | `wasm-pack build --target web --out-dir pkg` 통과 |
 | 실제 브라우저 | HWP/HWPX 셀 Enter E2E 각각 115쪽, Enter flush 0, split 1, ArrowDown barrier flush 1 |
+| GitHub Full CI | [CI 31256100624](https://github.com/edwardkim/rhwp/actions/runs/31256100624), [CodeQL 31256100547](https://github.com/edwardkim/rhwp/actions/runs/31256100547), [Render Diff 31256100556](https://github.com/edwardkim/rhwp/actions/runs/31256100556)가 `557bb8526`에서 성공. Native Skia, slow shard, regular shard 1/3·2/3·3/3, Build & Test를 포함한다. |
 
-Native Skia 3종은 시작했지만 작업지시자 지시로 통합 PR 준비를 우선해 중단했다. 따라서 로컬 통과로
-기록하지 않으며, #4265 최신 code head의 Full CI 결과를 merge 전 필수 조건으로 둔다.
+Native Skia 3종은 로컬에서는 작업지시자 지시로 중단했으므로 로컬 통과로 기록하지 않았다. 대신
+`557bb8526`의 GitHub Full CI Native Skia job이 성공해 원격 필수 게이트를 충족했다.
 
 ## 최종 권고
 
-**메인터너 보정 포함 통합 수용 권고.** 최신 #4265 code head의 Full CI·CodeQL·Render Diff가 모두
-성공하고 `mergeable=MERGEABLE`, `mergeStateStatus=CLEAN`을 다시 확인한 뒤, 이 review·오늘할일
-trailing commit의 최신 gate와 작업지시자 merge 승인을 확인한다. merge 뒤 원 PR 11개는 통합 PR 링크와
-기여 credit을 남긴 뒤 close하고, closing keyword 대상 이슈의 실제 종료 상태를 확인한다.
+**메인터너 보정 포함 통합 수용 권고.** `557bb8526`의 Full CI·CodeQL·Render Diff는 성공했다.
+이 결과 기록 commit의 최신 docs-only gate, `mergeable=MERGEABLE`, `mergeStateStatus=CLEAN`, 그리고
+작업지시자 merge 승인을 확인한다. merge 뒤 원 PR 11개는 통합 PR 링크와 기여 credit을 남긴 뒤 close하고,
+closing keyword 대상 이슈의 실제 종료 상태를 확인한다.

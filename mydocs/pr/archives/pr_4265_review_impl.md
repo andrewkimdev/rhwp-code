@@ -46,6 +46,7 @@ fast path가 전량 compose로 퇴행하지 않게 했다.
 
 ## 원격 처리 전 조건
 
-1. PR #4265 최신 code head의 Full CI, CodeQL, Render Diff와 mergeable 상태를 확인한다.
-2. 이 review·오늘할일 trailing 문서 commit을 push한 뒤 최신 head의 docs-only gate를 다시 확인한다.
+1. code head `da2d9ae75`와 첫 trailing review head `557bb8526`의 Full CI, CodeQL, Render Diff가
+   모두 성공했음을 확인했다. Native Skia, slow shard, regular shard 1/3·2/3·3/3도 포함한다.
+2. 이 CI 결과 기록을 반영한 마지막 문서 commit을 push한 뒤 최신 head의 docs-only gate를 다시 확인한다.
 3. 작업지시자 승인 뒤에만 #4265를 merge하고, 원 PR·연결 이슈를 통합 반영 사실과 함께 후속 처리한다.
