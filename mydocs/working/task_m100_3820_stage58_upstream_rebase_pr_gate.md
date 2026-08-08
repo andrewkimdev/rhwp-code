@@ -1,6 +1,6 @@
 ---
 kind: investigation
-status: in_progress
+status: completed
 canonical: mydocs/working/task_m100_3820_stage1.md
 last_verified: 2026-08-08
 ---
@@ -60,3 +60,16 @@ baseline은 신규·증가를 막는 상한 래칫이므로 과거의 더 큰 �
 - Native Skia, fmt, diff-check, Clippy, rustdoc 통과
 - TypeScript, Studio, WASM, boxed-PUA 브라우저 회귀 통과
 - 최종 코드 SHA와 명령별 결과를 이 문서에 기록
+
+## 단계 전환
+
+위 게이트는 당시 정확한 HEAD
+`d5fd69d72c621df291d0da22dca48b75e82a59fd`에서 Rust 전체 integration, Native Skia,
+Clippy, Studio, WASM과 브라우저 E2E까지 실패 0으로 완료했다. 그러나 최종
+증적을 작성하기 직전 `upstream/devel`이 9커밋 전진했으므로, 이 결과를 새 PR
+후보 HEAD의 통과로 간주하지 않는다.
+
+- 새 upstream 기준: `e64c853124a74109e44d5e42499a2825d05c85a2`
+- 재리베이스 직후 HEAD: `2558786d746cdc115f6c8a9817949b327e37bce2`
+- 결과: 충돌 없음, ahead 80 / behind 0 / clean
+- 후속: Stage 59에서 모든 PR 게이트를 새 HEAD 기준으로 처음부터 순차 재실행
