@@ -3312,6 +3312,12 @@ impl LayoutEngine {
                         page_h,
                         text_y - page_h,
                     );
+                    if std::env::var("RHWP_DIAG_OVERFLOW_CELL").is_ok() {
+                        eprintln!(
+                            "DIAG_OVERFLOW_CELL_CTX: section={} pi={} line={} ctx={cell_ctx:?}",
+                            section_index, para_index, line_idx,
+                        );
+                    }
                 }
             }
             // [Task #604 R3] wrap_anchor 가 있으면 본 문단은 anchor 그림/표 옆 wrap text.

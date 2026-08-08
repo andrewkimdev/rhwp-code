@@ -1187,13 +1187,41 @@ pub fn base_family_without_weight_suffix(font_family: &str) -> Option<String> {
     (tokens.len() < original_len).then(|| tokens.join(" "))
 }
 
-/// [#3314] 렌더용 폴백 체인 문자열: `요청 face → (base family) → generic 체인`.
+/// 현재 설치된 글꼴로 보완 가능한 legacy face 의 대체명.
+///
+/// HWPX 는 `한양중고딕`(또는 `HY중고딕`)을 계속 요청하지만, macOS 개발 환경에
+/// 원본 `HYGothic-Medium`은 없다. 함께 설치된 `HY견고딕`은 유니코드는 그리지만
+/// 기준 PDF보다 지나치게 굵고 넓다. 반면 `MALGUN.TTF`의 `Malgun Gothic`은 유니코드
+/// 한글과 중간 굵기/폭을 안정적으로 제공해 HWP 2024 PDF와 가장 가깝다.
+/// 원 face 는 첫 번째로 보존하므로 원본이 설치된 환경의 출력은 바뀌지 않는다.
+fn installed_render_font_alias(font_family: &str) -> Option<&'static str> {
+    match font_family {
+        "한양중고딕" | "HY중고딕" => Some("Malgun Gothic"),
+        _ => None,
+    }
+}
+
+/// SVG/CSS `font-family`에서 쓸 단일 인용 family 이름.
+///
+/// font name 자체에 작은따옴표나 역슬래시가 들어갈 수 있으므로 단순히 `'{}'`로
+/// 감싸면 `Tom's Handwriting` 같은 이름이 중간에서 끝나 잘못된 CSS가 된다.
+fn css_single_quoted_font_family(font_family: &str) -> String {
+    let escaped = font_family.replace('\\', "\\\\").replace('\'', "\\'");
+    format!("'{escaped}'")
+}
+
+/// [#3314] 렌더용 폴백 체인 문자열: `요청 face → (한컴 대체 face) → (base family) → generic 체인`.
 pub fn render_font_family_chain(font_family: &str) -> String {
     let fb = generic_fallback(font_family);
-    match base_family_without_weight_suffix(font_family) {
-        Some(base) => format!("{},'{}',{}", font_family, base, fb),
-        None => format!("{},{}", font_family, fb),
+    let mut families = vec![css_single_quoted_font_family(font_family)];
+    if let Some(alias) = installed_render_font_alias(font_family) {
+        families.push(css_single_quoted_font_family(alias));
     }
+    if let Some(base) = base_family_without_weight_suffix(font_family) {
+        families.push(css_single_quoted_font_family(&base));
+    }
+    families.push(fb.to_string());
+    families.join(",")
 }
 
 /// Canvas 2D 렌더용 인용 font-family 체인.
@@ -1207,10 +1235,15 @@ pub fn canvas_font_family_chain(font_family: &str) -> String {
     }
 
     let fallback = generic_fallback(font_family);
-    match base_family_without_weight_suffix(font_family) {
-        Some(base) => format!("\"{}\", \"{}\", {}", font_family, base, fallback),
-        None => format!("\"{}\", {}", font_family, fallback),
+    let mut families = vec![format!("\"{}\"", font_family)];
+    if let Some(alias) = installed_render_font_alias(font_family) {
+        families.push(format!("\"{}\"", alias));
     }
+    if let Some(base) = base_family_without_weight_suffix(font_family) {
+        families.push(format!("\"{}\"", base));
+    }
+    families.push(fallback.to_string());
+    families.join(", ")
 }
 
 /// CSS generic fallback 반환 (serif 또는 sans-serif)
@@ -2086,15 +2119,35 @@ mod tests {
         assert_eq!(base_family_without_weight_suffix("Light"), None);
         // 렌더 체인: 요청 face → base → generic
         let chain = render_font_family_chain("Noto Serif KR Black");
-        assert!(chain.starts_with("Noto Serif KR Black,'Noto Serif KR',"));
+        assert!(chain.starts_with("'Noto Serif KR Black','Noto Serif KR',"));
         let plain = render_font_family_chain("맑은 고딕");
-        assert!(plain.starts_with("맑은 고딕,'Malgun Gothic'"));
+        assert!(plain.starts_with("'맑은 고딕','Malgun Gothic'"));
+        assert!(render_font_family_chain("Tom's Handwriting")
+            .starts_with("'Tom\\'s Handwriting','Malgun Gothic'"));
+        assert!(
+            render_font_family_chain(r"Legacy\Face").starts_with(r"'Legacy\\Face','Malgun Gothic'")
+        );
+
+        assert_eq!(
+            render_font_family_chain("한양중고딕"),
+            format!(
+                "'한양중고딕','Malgun Gothic',{}",
+                generic_fallback("한양중고딕")
+            )
+        );
 
         assert_eq!(
             canvas_font_family_chain("Noto Serif KR Black"),
             format!(
                 "\"Noto Serif KR Black\", \"Noto Serif KR\", {}",
                 generic_fallback("Noto Serif KR Black")
+            )
+        );
+        assert_eq!(
+            canvas_font_family_chain("HY중고딕"),
+            format!(
+                "\"HY중고딕\", \"Malgun Gothic\", {}",
+                generic_fallback("HY중고딕")
             )
         );
         assert_eq!(

@@ -9,7 +9,10 @@ use super::super::{hwpunit_to_px, ShapeStyle};
 use super::border_rendering::{
     build_row_col_x, collect_cell_borders, render_edge_borders, render_transparent_borders,
 };
-use super::table_layout::{calc_nested_split_rows, NestedTableSplit};
+use super::table_layout::{
+    calc_nested_split_rows, effective_margin_left_line, extend_completed_nested_table_border_clips,
+    NestedTableSplit,
+};
 use super::text_measurement::{estimate_text_width, resolved_to_text_style};
 use super::utils::find_bin_data;
 use super::{
@@ -20,6 +23,70 @@ use crate::model::control::Control;
 use crate::model::paragraph::Paragraph;
 use crate::model::shape::CaptionDirection;
 use crate::model::style::{Alignment, BorderLine};
+
+/// `layout_partial_table_resolved`가 표 자체와 분리해 사용하는 host 문맥.
+///
+/// 일반 페이지 item은 원본 문단/control에서 이 값을 만들고, 재귀 child cursor는
+/// 임시 `Table::clone()` 없이 원본 중첩 표와 synthetic-equivalent 기본값을 넘긴다.
+#[derive(Clone, Copy)]
+struct PartialTableHostContext<'a> {
+    paragraphs: &'a [Paragraph],
+    para_index: usize,
+    control_index: usize,
+    repeat_fragment_outer_margin: bool,
+    pre_emitted_host_height: f64,
+    host_line_spacing: f64,
+}
+
+/// Returns the content table inside transparent, empty 1×1 wrapper tables.
+///
+/// HWPX can retain a shell table solely as the host for a nested table.  The
+/// shell's one empty paragraph carries no independently visible content; its
+/// row geometry is therefore the nested table's geometry.  Keep this narrow:
+/// any text, an additional paragraph, or a non-1×1 grid makes the outer table
+/// semantically observable and stops unwrapping.
+fn transparent_nested_table(table: &crate::model::table::Table) -> &crate::model::table::Table {
+    if table.row_count != 1 || table.col_count != 1 || table.cells.len() != 1 {
+        return table;
+    }
+
+    let cell = &table.cells[0];
+    if cell.paragraphs.len() != 1 {
+        return table;
+    }
+    let para = &cell.paragraphs[0];
+    if para
+        .text
+        .chars()
+        .any(|ch| !ch.is_whitespace() && ch != '\r' && ch != '\n')
+    {
+        return table;
+    }
+    let Some(nested) = para.controls.iter().find_map(|control| match control {
+        Control::Table(table) => Some(table.as_ref()),
+        _ => None,
+    }) else {
+        return table;
+    };
+
+    transparent_nested_table(nested)
+}
+
+/// Resolves the table that owns a `PartialTable` row cursor.
+///
+/// Pagination only names an inner table's rows when a cursor lies outside the
+/// outer wrapper's one-row domain.  Keep a genuine 1×1 outer table intact until
+/// that proof exists; it may own a deliberate visible frame.
+fn fragment_row_geometry_table(
+    table: &crate::model::table::Table,
+    end_row: usize,
+) -> &crate::model::table::Table {
+    if end_row <= table.row_count as usize {
+        table
+    } else {
+        transparent_nested_table(table)
+    }
+}
 
 /// 분할 셀 조각에서 실제로 보이는 첫 줄의 저장 vpos를 찾는다.
 ///
@@ -99,6 +166,33 @@ fn expand_terminal_cell_clip_to_nested_table_descendants(
     let Some(content_bottom) = nested_table_bottom(cell_node) else {
         return;
     };
+    let grown_height = content_bottom - cell_node.bbox.y;
+    if grown_height > cell_node.bbox.height {
+        cell_node.bbox.height = grown_height;
+    }
+}
+
+/// 명시적 recursive RowCut으로 source-bounded 렌더를 끝낸 직계 child만 현재
+/// clipped cell viewport에 포섭한다.
+///
+/// 일반 nonterminal cell을 확장하면 다음 쪽 scalar tail이 노출된다. 반면
+/// `recursive_cut` 경로는 현재 쪽의 source start/end를 이미 제한하므로, 해당 호출이
+/// 새로 추가한 table root bbox는 안전하게 현재 조각 소유로 볼 수 있다. child 내부를
+/// 다시 순회하지 않는 이유는 그 안의 별도 clipped scalar tail을 섞지 않기 위해서다.
+fn expand_cell_clip_to_new_source_bounded_children(
+    cell_node: &mut RenderNode,
+    first_new_child: usize,
+) {
+    if !matches!(&cell_node.node_type, RenderNodeType::TableCell(cell) if cell.clip) {
+        return;
+    }
+
+    let current_bottom = cell_node.bbox.y + cell_node.bbox.height;
+    let content_bottom = cell_node.children[first_new_child.min(cell_node.children.len())..]
+        .iter()
+        .filter(|child| child.visible)
+        .map(|child| child.bbox.y + child.bbox.height)
+        .fold(current_bottom, f64::max);
     let grown_height = content_bottom - cell_node.bbox.y;
     if grown_height > cell_node.bbox.height {
         cell_node.bbox.height = grown_height;
@@ -321,7 +415,6 @@ impl LayoutEngine {
         tree: &mut PageRenderTree,
         table_node: &mut RenderNode,
         table: &crate::model::table::Table,
-        paragraphs: &[Paragraph],
         para_index: usize,
         control_index: usize,
         section_index: usize,
@@ -698,14 +791,15 @@ impl LayoutEngine {
             // 그대로 visible 처리한다면 (= 실제 split 적용 안 받은 cell, 예: inner-table-01.hwp
             // cell[10] '사업개요' 라벨) 원본 cell.vertical_align 을 사용한다. split 적용으로
             // line 일부가 잘린 cell 만 Top 강제.
-            let cell_was_split = if let Some(ref ranges) = line_ranges {
+            let cell_was_split = cut_units.is_some_and(|(start_unit, end_unit)| {
+                let unit_len = self.cell_units(cell, table, styles).len();
+                start_unit > 0 || end_unit < unit_len
+            }) || line_ranges.as_ref().is_some_and(|ranges| {
                 ranges.iter().enumerate().any(|(i, &(s, e))| {
                     let total = composed_paras.get(i).map(|c| c.lines.len()).unwrap_or(0);
                     s != 0 || e != total
                 })
-            } else {
-                false
-            };
+            });
             // [#4042] 쪽 경계로 실제 잘리는 셀은 세로 가운데/아래 정렬이 성립하지 않는다.
             // 한컴 조판 규칙: 용지 시작 y 에서 아래로 흐르며 쪽 경계에 닿으면 자른다 —
             // 가시 슬라이스(inner_height)보다 콘텐츠가 큰 셀은 위에서부터 흘러야 하며,
@@ -806,7 +900,23 @@ impl LayoutEngine {
             let last_rendered_para_idx = if let Some(ref ranges) = line_ranges {
                 let mut last_idx = 0usize;
                 for (i, &(s, e)) in ranges.iter().enumerate() {
-                    if s < e {
+                    // block table 문단은 cut에 선택돼도 visible text line이 없으면
+                    // `(n,n)`으로 남는다. `(0,0)`은 미선택 문단과 구분할 수 없지만
+                    // `n>0`은 cell unit 원장이 이 control 문단을 현재 조각에 넣었다는
+                    // 증거다. 이를 무시하면 바로 앞 텍스트 문단을 셀의 마지막 문단으로
+                    // 오판해 trailing line_spacing을 버린다(issue2007 p14: 780HU).
+                    let selected_zero_width_table_fragment = s == e
+                        && s > 0
+                        && cell.paragraphs.get(i).is_some_and(|para| {
+                            // treat-as-char 표도 빈 host paragraph에서는 CellUnit의
+                            // mixed nested fragment로 페이지를 나눠 실제 block처럼
+                            // 배치된다(issue2007 p12/p15). source cut이 선택한 `(n,n)`
+                            // table owner라는 계약이 중요하며 TAC 속성은 제외 근거가 아니다.
+                            para.controls
+                                .iter()
+                                .any(|control| matches!(control, Control::Table(_)))
+                        });
+                    if s < e || selected_zero_width_table_fragment {
                         last_idx = i;
                     }
                 }
@@ -960,6 +1070,50 @@ impl LayoutEngine {
                         _ => 0.0,
                     })
                     .sum();
+                // `layout_table`의 empty-TAC 경로와 같은 줄별 폭 계약을 partial
+                // RowBreak fragment에도 쓴다. 빈 paragraph의 image controls는 source
+                // char position이 같아도 HWP LINE_SEG가 각각의 flow slot을 보존한다.
+                let tac_line_widths: Vec<f64> = {
+                    let mut line_widths = vec![0.0f64; composed.lines.len().max(1)];
+                    for ctrl in &para.controls {
+                        let (is_tac, width) = match ctrl {
+                            Control::Picture(pic) if pic.common.treat_as_char => {
+                                (true, hwpunit_to_px(pic.common.width as i32, self.dpi))
+                            }
+                            Control::Shape(shape) if shape.common().treat_as_char => {
+                                (true, hwpunit_to_px(shape.common().width as i32, self.dpi))
+                            }
+                            Control::Equation(eq) => {
+                                (true, hwpunit_to_px(eq.common.width as i32, self.dpi))
+                            }
+                            Control::Table(table) if table.common.treat_as_char => (
+                                true,
+                                hwpunit_to_px(
+                                    table.common.width as i32
+                                        + table.outer_margin_left as i32
+                                        + table.outer_margin_right as i32,
+                                    self.dpi,
+                                ),
+                            ),
+                            _ => (false, 0.0),
+                        };
+                        if !is_tac {
+                            continue;
+                        }
+                        if composed.lines.len() <= 1 {
+                            line_widths[0] += width;
+                            continue;
+                        }
+                        if let Some(line_width) = line_widths.iter_mut().find(|line_width| {
+                            **line_width == 0.0 || **line_width + width <= inner_width + 0.5
+                        }) {
+                            *line_width += width;
+                        } else if let Some(last) = line_widths.last_mut() {
+                            *last += width;
+                        }
+                    }
+                    line_widths
+                };
 
                 // 표 컨트롤이 없는 문단: 텍스트 먼저, 컨트롤 나중 (기존 동작)
                 // 표 컨트롤이 있는 문단: 문단 앞 간격 적용 → 표 먼저 배치 → 텍스트(엔터 등) 나중
@@ -1048,14 +1202,64 @@ impl LayoutEngine {
                         }
                         _ => inner_area.x,
                     };
+                    // Normal and partial table layout used to differ here: the normal
+                    // path maps picture-only TACs to their saved LINE_SEG slots, while
+                    // this fallback accumulated every picture on the first slot. Keep
+                    // this state local to the empty-run fallback; text-bearing and
+                    // same-line TAC handling stays on the original path.
+                    let all_runs_empty = composed.lines.iter().all(|line| line.runs.is_empty());
+                    let para_margin_left = styles
+                        .para_styles
+                        .get(para.para_shape_id as usize)
+                        .map(|style| style.margin_left)
+                        .unwrap_or(0.0);
+                    let para_indent = styles
+                        .para_styles
+                        .get(para.para_shape_id as usize)
+                        .map(|style| style.indent)
+                        .unwrap_or(0.0);
+                    let mut empty_tac_seq_index = 0usize;
+                    let mut empty_tac_current_line = 0usize;
+                    let first_tac_width = tac_line_widths
+                        .first()
+                        .copied()
+                        .unwrap_or(total_inline_width);
+                    let mut empty_tac_x = match para_alignment {
+                        Alignment::Center | Alignment::Distribute => {
+                            inner_area.x + (inner_area.width - first_tac_width).max(0.0) / 2.0
+                        }
+                        Alignment::Right => {
+                            inner_area.x + (inner_area.width - first_tac_width).max(0.0)
+                        }
+                        _ => {
+                            inner_area.x
+                                + effective_margin_left_line(para_margin_left, para_indent, 0)
+                        }
+                    };
+                    let mut empty_tac_y = para_y_before_compose;
                     let mut rendered_top_and_bottom_non_inline = false;
 
                     for (ctrl_idx, ctrl) in para.controls.iter().enumerate() {
                         match ctrl {
                             Control::Picture(pic) => {
+                                let visible_non_inline_control =
+                                    cut_units.map_or(true, |(su, eu)| {
+                                        self.cell_cut_starts_non_inline_control(
+                                            cell, table, styles, su, eu, cp_idx, ctrl_idx,
+                                        )
+                                    });
+                                let fragment_owned_square_flow =
+                                    self.profile.get().native_hwp5_layout()
+                                        && cut_units.is_some()
+                                        && visible_non_inline_control
+                                        && pic.common.flow_with_text
+                                        && matches!(
+                                            pic.common.text_wrap,
+                                            crate::model::shape::TextWrap::Square
+                                        );
                                 if !pic.common.treat_as_char
                                     && cut_units.is_some()
-                                    && !visible_non_inline_controls
+                                    && !visible_non_inline_control
                                 {
                                     continue;
                                 }
@@ -1077,6 +1281,79 @@ impl LayoutEngine {
                                                 })
                                         });
                                     if !will_render_inline {
+                                        if all_runs_empty && para.line_segs.len() > 1 {
+                                            let target_line =
+                                                empty_tac_seq_index.min(para.line_segs.len() - 1);
+                                            empty_tac_seq_index += 1;
+                                            if target_line > empty_tac_current_line {
+                                                empty_tac_current_line = target_line;
+                                                let line_width = tac_line_widths
+                                                    .get(target_line)
+                                                    .copied()
+                                                    .unwrap_or(0.0);
+                                                let line_margin = effective_margin_left_line(
+                                                    para_margin_left,
+                                                    para_indent,
+                                                    target_line,
+                                                );
+                                                empty_tac_x = match para_alignment {
+                                                    Alignment::Center | Alignment::Distribute => {
+                                                        inner_area.x
+                                                            + (inner_area.width - line_width)
+                                                                .max(0.0)
+                                                                / 2.0
+                                                    }
+                                                    Alignment::Right => {
+                                                        inner_area.x
+                                                            + (inner_area.width - line_width)
+                                                                .max(0.0)
+                                                    }
+                                                    _ => inner_area.x + line_margin,
+                                                };
+                                                let first_vpos = para
+                                                    .line_segs
+                                                    .first()
+                                                    .map(|line| line.vertical_pos)
+                                                    .unwrap_or(0);
+                                                if let Some(segment) =
+                                                    para.line_segs.get(target_line)
+                                                {
+                                                    empty_tac_y = para_y_before_compose
+                                                        + hwpunit_to_px(
+                                                            segment.vertical_pos - first_vpos,
+                                                            self.dpi,
+                                                        );
+                                                }
+                                            }
+                                            let pic_h =
+                                                hwpunit_to_px(pic.common.height as i32, self.dpi);
+                                            let clamped_w = pic_w.min(inner_area.width);
+                                            let clamped_h = if pic_w > 0.0 {
+                                                pic_h * (clamped_w / pic_w)
+                                            } else {
+                                                pic_h
+                                            };
+                                            let pic_area = LayoutRect {
+                                                x: empty_tac_x,
+                                                y: empty_tac_y,
+                                                width: clamped_w,
+                                                height: clamped_h,
+                                            };
+                                            self.layout_picture(
+                                                tree,
+                                                &mut cell_node,
+                                                pic,
+                                                &pic_area,
+                                                bin_data_content,
+                                                Alignment::Left,
+                                                Some(section_index),
+                                                Some(cell_context.parent_para_index),
+                                                Some(ctrl_idx),
+                                                Some(&cell_context),
+                                            );
+                                            empty_tac_x += clamped_w;
+                                            continue;
+                                        }
                                         // 단독 이미지(텍스트 없는 문단): 직접 렌더링
                                         let pic_h =
                                             hwpunit_to_px(pic.common.height as i32, self.dpi);
@@ -1120,7 +1397,35 @@ impl LayoutEngine {
                                         pic.common.vert_rel_to,
                                         crate::model::shape::VertRelTo::Para
                                     );
-                                    let anchor_y = if top_and_bottom_para {
+                                    // #1921 p8: 빈 top-anchored 문단 안에 Square 부동 그림과
+                                    // TAC 그림이 함께 있으면 compose가 TAC 높이만큼 para_y를
+                                    // advance한다. Square 그림의 Para 기준은 advance 후 위치가
+                                    // 아니라 그 문단이 시작한 physical cell content top이다.
+                                    // vpos>0으로 실제로 밀린 빈 줄(#2226)과 일반 Square 셀은
+                                    // 이 조건에 포함하지 않는다.
+                                    let empty_top_anchored_square_with_inline_sibling = para
+                                        .text
+                                        .trim()
+                                        .is_empty()
+                                        && para
+                                            .line_segs
+                                            .first()
+                                            .is_some_and(|seg| seg.vertical_pos == 0)
+                                        && pic.common.flow_with_text
+                                        && matches!(
+                                            pic.common.text_wrap,
+                                            crate::model::shape::TextWrap::Square
+                                        )
+                                        && para.controls.iter().any(|ctrl| {
+                                            matches!(
+                                                ctrl,
+                                                Control::Picture(sibling) if sibling.common.treat_as_char
+                                            )
+                                        });
+                                    let anchor_y = if empty_top_anchored_square_with_inline_sibling
+                                    {
+                                        cell_y + pad_top
+                                    } else if top_and_bottom_para {
                                         if cut_units.is_some() && visible_non_inline_controls {
                                             // continuation 조각에 개체 flow 유닛이 실제 포함된 경우
                                             // 원본 line_seg vertical_pos 는 전체 셀 내부 좌표다. 그대로
@@ -1185,7 +1490,13 @@ impl LayoutEngine {
                                     // 그림 자체 pos vert_align 은 무시한다. compute_object_position
                                     // 은 그림 pos vert_align 을 따르므로 콘텐츠 box·그림 높이 기준
                                     // 셀 valign 위치를 강제한다.
-                                    let pic_y = if top_and_bottom_para
+                                    let pic_y = if fragment_owned_square_flow {
+                                        // p0처럼 같은 physical fragment가 여러 Square
+                                        // control을 소유할 때, negative saved offset은
+                                        // 이전 source ladder의 값이다. current fragment의
+                                        // flow anchor를 다시 위로 끌어올리지 않는다.
+                                        picture_anchor_y
+                                    } else if top_and_bottom_para
                                         && pic.common.flow_with_text
                                         && !unrestricted_take_place_cell_float
                                     {
@@ -1252,6 +1563,9 @@ impl LayoutEngine {
                                         crate::model::shape::TextWrap::TopAndBottom
                                     ) {
                                         rendered_top_and_bottom_non_inline = true;
+                                    } else if fragment_owned_square_flow {
+                                        para_y +=
+                                            self.cell_non_inline_control_flow_height(&pic.common);
                                     } else {
                                         para_y += self.non_inline_control_flow_height(&pic.common);
                                     }
@@ -1259,6 +1573,10 @@ impl LayoutEngine {
                                 has_preceding_text = true;
                             }
                             Control::Shape(shape) => {
+                                // TextBox를 포함한 Shape는 한 control이 여러 physical
+                                // fragment에 걸쳐 내부 문단을 이어 그릴 수 있다. Picture의
+                                // entry-only owner 규칙을 Shape에 적용하면 뒤 fragment의
+                                // 잔여 TextBox가 통째로 사라진다(rowbreak p17).
                                 if !shape.common().treat_as_char
                                     && cut_units.is_some()
                                     && !visible_non_inline_controls
@@ -1515,6 +1833,7 @@ impl LayoutEngine {
                                                 visible_height: split.visible_height,
                                                 flow_height: split.flow_height,
                                                 offset_within_start: split.offset_within_start,
+                                                content_offset: split.content_offset,
                                                 terminal: split.terminal,
                                                 recursive_cut: split.recursive_cut.clone(),
                                             })
@@ -1525,6 +1844,7 @@ impl LayoutEngine {
                                                 visible_height: split.visible_height,
                                                 flow_height: split.flow_height,
                                                 offset_within_start: split.offset_within_start,
+                                                content_offset: split.content_offset,
                                                 terminal: split.terminal,
                                                 recursive_cut: split.recursive_cut.clone(),
                                             })
@@ -1560,6 +1880,7 @@ impl LayoutEngine {
                                                 end_row,
                                                 visible_height: vis_h,
                                                 flow_height: vis_h,
+                                                content_offset: 0.0,
                                                 // [#3658] per-중첩행 컷 경로도 마지막 유닛까지
                                                 // 포함한 컷(end_cut=[])이면 종료 조각이다.
                                                 terminal: cut_units
@@ -1608,6 +1929,7 @@ impl LayoutEngine {
                                         });
                                         new_ctx
                                     });
+                                    let first_new_child = cell_node.children.len();
                                     let table_h_rendered = if let Some(recursive_cut) = split_info
                                         .as_ref()
                                         .and_then(|split| split.recursive_cut.as_ref())
@@ -1617,19 +1939,23 @@ impl LayoutEngine {
                                         // 넘긴다. scalar y clip으로 표 전체를 매 쪽 재방출하면
                                         // vpos 리셋 프레임의 앞·뒤 문단이 서로 겹치므로, 동일
                                         // cursor가 선택한 문단/줄/자식 표만 방출해야 한다.
-                                        let nested_host = Paragraph {
-                                            controls: vec![Control::Table(Box::new(
-                                                (**nested_table).clone(),
-                                            ))],
-                                            ..Default::default()
-                                        };
-                                        let nested_paragraphs = [nested_host];
-                                        self.layout_partial_table(
+                                        // 이 cursor가 측정한 표는 문서 모델 안의 원본
+                                        // `nested_table`이다. 매 페이지 clone을 만들면
+                                        // `cell_units_cache`의 raw cell pointer가 allocator
+                                        // 재사용으로 다른 clone을 가리킬 수 있다. 일반 wrapper가
+                                        // 끝낸 table 해석 뒤의 구현을 원본 참조로 직접 호출한다.
+                                        let rendered_bottom = self.layout_partial_table_resolved(
                                             tree,
                                             &mut cell_node,
-                                            &nested_paragraphs,
-                                            0,
-                                            0,
+                                            nested_table.as_ref(),
+                                            PartialTableHostContext {
+                                                paragraphs: &[],
+                                                para_index: 0,
+                                                control_index: 0,
+                                                repeat_fragment_outer_margin: false,
+                                                pre_emitted_host_height: 0.0,
+                                                host_line_spacing: 0.0,
+                                            },
                                             section_index,
                                             styles,
                                             outline_numbering_id,
@@ -1647,7 +1973,17 @@ impl LayoutEngine {
                                             0.0,
                                             None,
                                             clamp_header_negative_para_offset,
-                                        ) - nested_y
+                                        );
+                                        // [#3820/issue2007 p14] recursive cut은 현재 호출의
+                                        // source 범위를 제한하지만 parent flow_height는 기존
+                                        // 조각 높이를 유지한다. 새 child root만 clip에 포섭해
+                                        // 현재 쪽 마지막 두 줄이 조상 clip에서 소실되지 않게
+                                        // 하고 pagination cursor에는 영향을 주지 않는다.
+                                        expand_cell_clip_to_new_source_bounded_children(
+                                            &mut cell_node,
+                                            first_new_child,
+                                        );
+                                        rendered_bottom - nested_y
                                     } else {
                                         self.layout_table(
                                             tree,
@@ -1806,21 +2142,120 @@ impl LayoutEngine {
             Some(p) => p,
             None => return y_start,
         };
-        let table = match para.controls.get(control_index) {
+        let outer_table = match para.controls.get(control_index) {
             Some(Control::Table(t)) => t,
             _ => return y_start,
         };
-
-        if table.cells.is_empty() {
-            return y_start;
-        }
-
         let repeat_fragment_outer_margin = repeats_native_empty_host_rowbreak_fragment_margin(
             self.profile.get().native_hwp5_layout(),
             paragraphs,
             para_index,
             control_index,
         );
+        let pre_emitted_host_height = self
+            .pre_emitted_host_heights
+            .borrow()
+            .get(&para_index)
+            .copied()
+            .unwrap_or(0.0);
+        let host_line_spacing = para
+            .line_segs
+            .first()
+            .map(|seg| hwpunit_to_px(seg.line_spacing, self.dpi))
+            .unwrap_or(0.0);
+
+        self.layout_partial_table_resolved(
+            tree,
+            col_node,
+            outer_table.as_ref(),
+            PartialTableHostContext {
+                paragraphs,
+                para_index,
+                control_index,
+                repeat_fragment_outer_margin,
+                pre_emitted_host_height,
+                host_line_spacing,
+            },
+            section_index,
+            styles,
+            outline_numbering_id,
+            col_area,
+            y_start,
+            bin_data_content,
+            start_row,
+            end_row,
+            is_continuation,
+            start_cut,
+            end_cut,
+            is_block_split,
+            host_margin_left,
+            host_margin_right,
+            measured_table,
+            clamp_header_negative_para_offset,
+        )
+    }
+
+    /// 이미 원본 표와 host 문맥이 해석된 부분 표 렌더 구현.
+    ///
+    /// 재귀 child cursor는 이 경로를 직접 호출해 문서 소유 `&Table`의 안정 주소를
+    /// 유지한다. 그러면 `cell_units_cache`와 `table_nested_text_flag_cache`가 페이지마다
+    /// 생성·폐기되는 clone의 재사용 주소를 잘못 적중하지 않는다.
+    #[allow(clippy::too_many_arguments)]
+    fn layout_partial_table_resolved(
+        &self,
+        tree: &mut PageRenderTree,
+        col_node: &mut RenderNode,
+        outer_table: &crate::model::table::Table,
+        host: PartialTableHostContext<'_>,
+        section_index: usize,
+        styles: &ResolvedStyleSet,
+        outline_numbering_id: u16,
+        col_area: &LayoutRect,
+        y_start: f64,
+        bin_data_content: &[BinDataContent],
+        start_row: usize,
+        end_row: usize,
+        is_continuation: bool,
+        start_cut: &[usize],
+        end_cut: &[usize],
+        is_block_split: bool,
+        host_margin_left: f64,
+        host_margin_right: f64,
+        measured_table: Option<&MeasuredTable>,
+        clamp_header_negative_para_offset: bool,
+    ) -> f64 {
+        let PartialTableHostContext {
+            paragraphs,
+            para_index,
+            control_index,
+            repeat_fragment_outer_margin,
+            pre_emitted_host_height,
+            host_line_spacing,
+        } = host;
+
+        // Pagination can deliberately use the rows of a transparent 1×1 wrapper's
+        // nested table.  The measured-table path has used that effective table since
+        // the wrapper-unwrapping rule was introduced, but a `PartialTable` still
+        // identifies its source by the outer control.  Rendering the outer 1-row
+        // table with an inner-table row cursor made a continuation beginning at row
+        // 1 paint no remaining rows at all (#3637, HWP 2020 p7).
+        //
+        // Only unwrap when the fragment cursor is outside the outer table's row
+        // domain.  A genuine 1×1 table containing a nested table can otherwise be
+        // intentionally rendered as its own one-row frame.
+        // A native HWP5 RowBreak wrapper owns its physical clip/frame only
+        // while the partial cursor still names its own outer row.  Once the
+        // cursor is outside that one-row domain, pagination has selected rows
+        // of the transparent nested content table.  Sending that cursor back
+        // through the outer wrapper paints the whole inner table in one page
+        // fragment (#1921 p16).  `fragment_row_geometry_table` preserves the
+        // outer table for its own row domain, so issue2007's native frame path
+        // remains intact.
+        let table = fragment_row_geometry_table(outer_table, end_row);
+
+        if table.cells.is_empty() {
+            return y_start;
+        }
 
         // 분할 표 첫 부분: vert_offset 적용 (자리차지 표의 세로 오프셋).
         // [Task #712] HwpUnit=u32 이라 `vertical_offset > 0` 는 음수 비트표현
@@ -1848,13 +2283,7 @@ impl LayoutEngine {
             // (부동 RowBreak 표 91.2px 오버플로우). 표의 참 상단 = para_start+vert_off =
             // y_start+(vert_off−host_h). typeset 예산도 동일 감액을 적용한다.
             // host pre-emit 이 아니면 host_h=0 → 종전과 동일(회귀 없음).
-            let host_h = self
-                .pre_emitted_host_heights
-                .borrow()
-                .get(&para_index)
-                .copied()
-                .unwrap_or(0.0);
-            (hwpunit_to_px(vert_off_signed, self.dpi) - host_h).max(0.0)
+            (hwpunit_to_px(vert_off_signed, self.dpi) - pre_emitted_host_height).max(0.0)
         } else {
             0.0
         };
@@ -2303,7 +2732,6 @@ impl LayoutEngine {
             tree,
             &mut table_node,
             table,
-            paragraphs,
             para_index,
             control_index,
             section_index,
@@ -2355,22 +2783,70 @@ impl LayoutEngine {
             ));
         }
 
-        // [Task #1860] 노드-자식 포섭 불변: 분할 표 조각의 셀 내 절대위치 shape
+        // Partial-table cells receive their nested table edge nodes only
+        // after the fragment cell loop. Preserve direct nested outer vertical
+        // borders in the horizontal clip without widening the RowBreak
+        // continuation viewport (issue2007 p2-p3).
+        extend_completed_nested_table_border_clips(
+            tree,
+            &mut table_node,
+            self.profile.get().native_hwp5_layout() || self.profile.get().hwp5_origin_hwpx(),
+            self.profile.get().hwpx_container(),
+        );
+
+        // [Task #1860/#3820] 노드-자식 포섭 불변: 분할 표 조각의 셀 내 절대위치 shape
         // (as-char 텍스트박스/그림 등)가 유닛 기반 셀 높이를 초과해 그려지면 표 노드
         // bbox 가 자식을 clip 한다(page17 pi=28 텍스트박스 하단 잘림). 렌더 완료 후 모든
-        // 자손의 최하단을 구해 표 노드 높이를 그만큼 확장한다(확장만, 축소 없음).
+        // **가시** 자손의 최하단을 구해 표 노드 높이를 그만큼 확장한다(확장만, 축소 없음).
+        //
+        // 단, RowBreak 조각의 `TableCell { clip: true }` 아래 일반 흐름 자손은 그 물리
+        // cell viewport 밖에서 다음/이전 쪽의 흐름을 보유할 수 있다. 그 invisible tail까지
+        // Table bbox에 포함하면 body clip도 수천 px로 확대되어 Canvas/WASM replay가
+        // 현재 쪽 밖의 내용을 paint 후보로 보게 된다(42065 p8 이후). 반면 직접 배치된
+        // 도형은 clip cell의 현재 쪽 표시물일 수 있으므로, **현재 column body 안에서 끝나는
+        // 경우에만** 그 도형 subtree를 계속 포함한다. 이 경계는 p17의 textbox-backed
+        // rectangle은 보존하면서, 다른 문서의 다음 쪽 밖 도형을 table/body clip으로
+        // 역류시키지 않는다.
         {
-            fn descendant_bottom(node: &RenderNode) -> f64 {
+            let physical_page_bottom = col_area.y + col_area.height;
+            fn descendant_bottom(node: &RenderNode, physical_page_bottom: f64) -> f64 {
                 let mut b = node.bbox.y + node.bbox.height;
+                if matches!(
+                    node.node_type,
+                    RenderNodeType::TableCell(TableCellNode { clip: true, .. })
+                ) {
+                    for child in &node.children {
+                        let is_direct_drawing = matches!(
+                            child.node_type,
+                            RenderNodeType::Rectangle(_)
+                                | RenderNodeType::Ellipse(_)
+                                | RenderNodeType::Path(_)
+                                | RenderNodeType::Image(_)
+                                | RenderNodeType::Group(_)
+                                | RenderNodeType::TextBox
+                                | RenderNodeType::Equation(_)
+                                | RenderNodeType::FormObject(_)
+                                | RenderNodeType::Placeholder(_)
+                                | RenderNodeType::RawSvg(_)
+                        );
+                        if is_direct_drawing {
+                            let drawing_bottom = descendant_bottom(child, physical_page_bottom);
+                            if drawing_bottom <= physical_page_bottom + 0.5 {
+                                b = b.max(drawing_bottom);
+                            }
+                        }
+                    }
+                    return b;
+                }
                 for c in &node.children {
-                    b = b.max(descendant_bottom(c));
+                    b = b.max(descendant_bottom(c, physical_page_bottom));
                 }
                 b
             }
             let content_bottom = table_node
                 .children
                 .iter()
-                .map(descendant_bottom)
+                .map(|child| descendant_bottom(child, physical_page_bottom))
                 .fold(table_node.bbox.y + table_node.bbox.height, f64::max);
             let grown = content_bottom - table_node.bbox.y;
             if grown > table_node.bbox.height {
@@ -2410,11 +2886,6 @@ impl LayoutEngine {
         }
         if render_bottom_caption {
             if let Some(ref caption) = table.caption {
-                let host_line_spacing = para
-                    .line_segs
-                    .first()
-                    .map(|seg| hwpunit_to_px(seg.line_spacing, self.dpi))
-                    .unwrap_or(0.0);
                 let caption_y =
                     table_y + partial_table_height + host_line_spacing + caption_spacing;
                 self.layout_caption(
@@ -2473,11 +2944,6 @@ impl LayoutEngine {
                     0.0
                 }
         } else if render_bottom_caption {
-            let host_line_spacing = para
-                .line_segs
-                .first()
-                .map(|seg| hwpunit_to_px(seg.line_spacing, self.dpi))
-                .unwrap_or(0.0);
             caption_height
                 + host_line_spacing
                 + if caption_height > 0.0 {
@@ -2514,8 +2980,8 @@ impl LayoutEngine {
 #[cfg(test)]
 mod tests {
     use super::{
-        cell_content_bottom, expand_terminal_cell_clip_to_nested_table_descendants,
-        fragment_vpos_origin,
+        cell_content_bottom, expand_cell_clip_to_new_source_bounded_children,
+        expand_terminal_cell_clip_to_nested_table_descendants, fragment_vpos_origin,
     };
     use crate::model::paragraph::{LineSeg, Paragraph};
     use crate::model::table::Cell;
@@ -2605,5 +3071,27 @@ mod tests {
         let mut cell = clipped_cell_with_overflowing_nested_table();
         expand_terminal_cell_clip_to_nested_table_descendants(&mut cell, false);
         assert_eq!(cell.bbox.height, 80.0);
+    }
+
+    #[test]
+    fn issue_2007_recursive_cut_clip_only_contains_new_source_bounded_child() {
+        let mut cell = clipped_cell_with_overflowing_nested_table();
+        let first_new_child = cell.children.len();
+        cell.children.push(RenderNode::new(
+            4,
+            RenderNodeType::Table(TableNode {
+                row_count: 1,
+                col_count: 1,
+                border_fill_id: 0,
+                section_index: None,
+                para_index: None,
+                control_index: None,
+            }),
+            BoundingBox::new(15.0, 25.0, 90.0, 78.0),
+        ));
+
+        expand_cell_clip_to_new_source_bounded_children(&mut cell, first_new_child);
+
+        assert_eq!(cell.bbox.height, 83.0);
     }
 }
