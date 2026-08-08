@@ -2336,6 +2336,8 @@ impl LayoutEngine {
                                             // 투영)이다. 투명 래퍼 벗기기는 별개 좌표계
                                             // 판정(#4326)이라 여기서는 항상 false.
                                             false,
+                                            None,
+                                            None,
                                             0.0,
                                             0.0,
                                             None,
@@ -2504,6 +2506,8 @@ impl LayoutEngine {
         end_cut: &[usize],
         is_block_split: bool,
         row_cursor_is_nested: bool,
+        end_row_height_override: Option<f64>,
+        start_row_height_override: Option<f64>,
         host_margin_left: f64,
         host_margin_right: f64,
         measured_table: Option<&MeasuredTable>,
@@ -2562,6 +2566,8 @@ impl LayoutEngine {
             end_cut,
             is_block_split,
             row_cursor_is_nested,
+            end_row_height_override,
+            start_row_height_override,
             host_margin_left,
             host_margin_right,
             measured_table,
@@ -2596,6 +2602,8 @@ impl LayoutEngine {
         end_cut: &[usize],
         is_block_split: bool,
         row_cursor_is_nested: bool,
+        end_row_height_override: Option<f64>,
+        start_row_height_override: Option<f64>,
         host_margin_left: f64,
         host_margin_right: f64,
         measured_table: Option<&MeasuredTable>,
@@ -2952,6 +2960,22 @@ impl LayoutEngine {
                         }
                     }
                 }
+            }
+        }
+
+        // [#3820 Stage 76] RowBreak 표의 rowspan-연속 밴드에서 실제 셀 내용은
+        // 현재 쪽에 모두 들어가지만, 원본 선언 행 높이만 남은 공간보다 큰 경우가
+        // 있다. 페이지네이터는 다음 조각을 다음 행부터 재개하고 이 조각의 마지막
+        // 행만 남은 물리 높이에 맞춰 소비한다. 렌더러도 같은 마지막 행 상한을
+        // 적용해야 p35의 `주요내용`을 보인 뒤 p36을 다음 행에서 시작한다.
+        if let Some(limit) = start_row_height_override {
+            if start_row < row_count {
+                row_heights[start_row] = row_heights[start_row].min(limit.max(0.0));
+            }
+        }
+        if let Some(limit) = end_row_height_override {
+            if let Some(last) = end_row.checked_sub(1).filter(|r| *r < row_count) {
+                row_heights[last] = row_heights[last].min(limit.max(0.0));
             }
         }
 
