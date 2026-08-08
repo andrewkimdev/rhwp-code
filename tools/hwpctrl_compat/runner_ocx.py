@@ -27,6 +27,8 @@ from __future__ import annotations
 import argparse
 import io
 import json
+import os
+import re
 import sys
 import traceback
 from pathlib import Path
@@ -59,22 +61,92 @@ ADAPTERS = {
     "GetSelectedPos": lambda com, args: dict(
         zip(("result", "slist", "spara", "spos", "elist", "epara", "epos"), com.GetSelectedPos())
     ),
-    # v2.4 §8.3.27 — 웹은 {secno, prnpageno, colno, line, pos, over, ctrlname} 객체.
+    # v2.4 §8.3.27 — 값 **아홉**이다: `result` 다음에 `seccnt`(구역 수)가 하나 더 온다.
+    # 그것을 빼먹어 `secno` 부터 이름이 한 칸씩 밀려 있었다(실측으로 바로잡음 — 마지막 값은
+    # 숫자가 아니라 "(A43): 문자 입력" 같은 **문자열**이라 밀림이 눈에 띄었다).
     "KeyIndicator": lambda com, args: dict(
         zip(
-            ("result", "secno", "prnpageno", "colno", "line", "pos", "over", "ctrlname"),
+            (
+                "result",
+                "seccnt",
+                "secno",
+                "prnpageno",
+                "colno",
+                "line",
+                "pos",
+                "over",
+                "ctrlname",
+            ),
             com.KeyIndicator(),
         )
     ),
 }
 
 
+CALL_WITH_ARGS = re.compile(r"^([A-Za-z_]\w*)\((.*)\)$")
+
+
+def split_call(part: str) -> tuple[str, list]:
+    """점 표기 한 마디를 `(이름, 인자들)` 로 가른다.
+
+    중간 마디가 인자를 받는 메서드일 때 쓴다 — `HeadCtrl.GetAnchorPos(0).Item` 처럼.
+    인자는 JSON 으로 읽는다(`0`·`"본문"`). 괄호가 없으면 인자 없는 마디다.
+    """
+    m = CALL_WITH_ARGS.match(part)
+    if not m:
+        return part, []
+    inner = m.group(2).strip()
+    return m.group(1), (json.loads(f"[{inner}]") if inner else [])
+
+
+def resolve_path(com, path: str):
+    """점 표기 경로를 따라가 그 자리의 값을 준다 — `$obj` 인자를 푸는 데 쓴다."""
+    obj = com
+    for part in path.split("."):
+        part, call_args = split_call(part)
+        obj = getattr(obj, part)
+        if callable(obj):
+            obj = obj(*call_args)
+    return obj
+
+
+def resolve_args(com, args: list) -> list:
+    """인자 중 `{"$obj": "경로"}` 를 **그 자리의 객체**로 바꾼다.
+
+    `SetPosBySet`·`DeleteCtrl` 처럼 파라미터셋이나 `Ctrl` 을 인자로 받는 API 가 있는데,
+    JSON 으로는 그런 객체를 적을 수 없어 시나리오가 아예 부르지 못했다. 경로를 적어 두면
+    러너가 자기 쪽에서 만들어 넘긴다 — 두 러너가 같은 규약이라 양쪽이 같은 것을 넘긴다.
+    """
+    out = []
+    for a in args:
+        if isinstance(a, dict) and "$obj" in a:
+            out.append(resolve_path(com, a["$obj"]))
+        else:
+            out.append(a)
+    return out
+
+
 def call_one(com, name: str, args: list):
-    """메서드면 호출하고, 속성이면 읽는다. 반환은 정규화한다."""
+    """메서드면 호출하고, 속성이면 읽는다. 반환은 정규화한다.
+
+    이름에 점을 찍으면 **객체를 타고 들어간다**(`CharShape.Item`). 서식은 값이 아니라
+    ParameterSet **객체**로 오기 때문에, 점 표기가 없으면 `{__type: …}` 만 대조하게 되고
+    아무 일도 안 하는 구현이 통과한다.
+    """
     adapter = ADAPTERS.get(name)
     if adapter:
         return normalize(adapter(com, args))
-    attr = getattr(com, name)
+    args = resolve_args(com, args)
+    obj = com
+    parts = name.split(".")
+    for part in parts[:-1]:
+        part, mid_args = split_call(part)
+        obj = getattr(obj, part)
+        # 중간이 **메서드**면 불러서 그 반환 객체를 탄다(`GetPosBySet.Item`). 속성이면 그대로
+        # 쓴다(`CharShape.Item`). rhwp 러너도 같은 규약이라 양쪽이 같은 값을 대조한다.
+        if callable(obj):
+            obj = obj(*mid_args)
+    attr = getattr(obj, parts[-1])
     if callable(attr):
         return normalize(attr(*args))
     return normalize(attr)
@@ -126,7 +198,13 @@ def run(scenario: dict, out_dir: Path, expect_version: str | None = None) -> dic
         "saved": None,
         "fatal": None,
     }
-    hwp = Hwp(new=True, visible=False)
+    # `HWPCTRL_VISIBLE=1` 이면 창을 띄운다. 기본은 숨김이다 — 창이 뜨면 사람이 쓰는 화면을
+    # 가로채고 대량 실행이 느려진다.
+    #
+    # 편집 액션이 **띄엄띄엄 먹는** 문제를 쫓다 만든 스위치인데 창은 원인이 아니었다
+    # (원인은 읽기 전용 열림 — 계획서 §4.24). 다음 사람이 같은 것을 다시 만들지 않도록 남긴다.
+    visible = os.environ.get("HWPCTRL_VISIBLE") == "1"
+    hwp = Hwp(new=True, visible=visible)
     com = hwp.hwp
     # 어느 한글이 답했는지 **매 실행 기록한다**. 이 머신에는 2022 와 2024 가 함께 깔려 있고
     # ProgID `HWPFrame.HwpObject` 가 어느 쪽으로 붙는지는 등록 상태에 달렸다. 기록하지 않으면
@@ -152,6 +230,18 @@ def run(scenario: dict, out_dir: Path, expect_version: str | None = None) -> dic
             src = (REPO / scenario["open"]).resolve()
             opened = com.Open(str(src), "", "")
             result["calls"].append({"call": "Open", "args": [scenario["open"]], "value": normalize(opened)})
+
+            # **읽기 전용으로 열렸으면 판정하지 않는다.**
+            #
+            # 같은 파일이 다른 한글 프로세스에 이미 열려 있으면 한글은 이 문서를 읽기 전용으로
+            # 연다. 그러면 편집 액션이 **조용히 무시된다** — 반환값은 그대로 `null` 이고 문서만
+            # 안 바뀐다. 그 정답지를 그대로 쓰면 "아무 일도 안 하는 구현"이 통과한다.
+            # 실측 짝: 남은 프로세스 없음 → `EditMode` 1 · `BreakPara` 8/8 성공,
+            #          같은 파일을 쥔 프로세스 있음 → `EditMode` 0 · 8/8 무동작.
+            mode = com.EditMode
+            if mode != 1:
+                result["rejected"] = f"읽기 전용으로 열렸다(EditMode {mode})"
+                return result
 
         for idx, call in enumerate(scenario.get("calls", [])):
             name, args = call[0], (call[1] if len(call) > 1 else [])
@@ -203,6 +293,13 @@ def main() -> int:
         with io.open(rejected_path, "w", encoding="utf-8", newline="\n") as fh:
             json.dump(result, fh, ensure_ascii=False, indent=2)
             fh.write("\n")
+        if "EditMode" in result["rejected"]:
+            print(
+                f"{scenario['id']}: **읽기 전용으로 열려 판정하지 않음** — {result['rejected']}\n"
+                "같은 파일을 쥔 한글 프로세스가 남아 있다. 다 닫고 다시 돌려라"
+                "(`Get-Process Hwp | Stop-Process -Force`). 계획서 §4.24.",
+            )
+            return 4
         print(
             f"{scenario['id']}: 오라클 버전 불일치로 **실행하지 않음** — {result['rejected']}\n"
             "이 머신에는 한글2022(12.x)와 2024(13.x)가 함께 있다. 전환은 계획서 §4.5.1.",

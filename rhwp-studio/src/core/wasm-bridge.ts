@@ -2800,6 +2800,8 @@ export class WasmBridge {
   getFieldList(): Array<{
     fieldId: number;
     fieldType: string;
+    /** 셀 구역 이름(가상 필드)이면 true. `fieldType` 은 누름틀과 셀 필드를 가르지 못한다. */
+    cellField: boolean;
     name: string;
     guide: string;
     command: string;

@@ -1,25 +1,15 @@
 {
   "id": "doc-basic",
-  "title": "문서 정보 속성과 커서 이동 — 읽기 전용",
+  "title": "쪽수와 커서 이동 — 읽기 전용 (P0 자체 검증용)",
   "ledger": [
     "HwpCtrl.property.PageCount",
-    "HwpCtrl.property.IsEmpty",
-    "HwpCtrl.property.IsModified",
-    "HwpCtrl.property.Version",
-    "HwpCtrl.property.EditMode",
-    "HwpCtrl.property.SelectionMode",
+    "HwpCtrl.method.SetPos",
     "HwpCtrl.method.GetPos",
-    "HwpCtrl.method.MovePos",
-    "HwpCtrl.method.SetPos"
+    "HwpCtrl.method.MovePos"
   ],
   "open": "samples/issue-986-receipt.hwp",
   "calls": [
     ["PageCount", []],
-    ["IsEmpty", []],
-    ["IsModified", []],
-    ["Version", []],
-    ["EditMode", []],
-    ["SelectionMode", []],
     ["GetPos", []],
     ["MovePos", [3, 0, 0]],
     ["GetPos", []],
