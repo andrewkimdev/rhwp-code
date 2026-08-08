@@ -7,7 +7,8 @@
 
 사용:
     RHWP_BIN=target/release/rhwp python tools/agent_bench/run_bench.py \
-        --solutions tools/agent_bench/reference_solutions [--tasks t01,t02] \
+        --solutions tools/agent_bench/reference_solutions \
+        [--tasks t01_form_fill,t02_table_roundtrip] \
         [--json-out results.json] [--keep-work]
 
 종료 코드 규약:
