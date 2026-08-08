@@ -2574,6 +2574,7 @@ impl LayoutEngine {
             host_margin_left,
             host_margin_right,
             measured_table,
+            enclosing_cell_ctx,
             clamp_header_negative_para_offset,
             probe,
         )
@@ -2606,6 +2607,7 @@ impl LayoutEngine {
         host_margin_left: f64,
         host_margin_right: f64,
         measured_table: Option<&MeasuredTable>,
+        enclosing_cell_ctx: Option<&CellContext>,
         clamp_header_negative_para_offset: bool,
         probe: Option<&PartialTableCellProbe>,
     ) -> f64 {

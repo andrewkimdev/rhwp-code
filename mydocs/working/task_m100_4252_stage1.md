@@ -6,6 +6,9 @@
 - **분기 기준**: `upstream/devel` `fcc3b2135`
 - **작업 시각**: 2026-08-08 KST
 
+> 이 문서는 최초 기준 `fcc3b2135`의 Stage 1 결과다. 최신 `upstream/devel` 재배치와 최종 후보
+> 검증은 [Stage 2 보고서](task_m100_4252_stage2.md)를 따른다.
+
 ## 1. 원인과 RED
 
 `layout_partial_table()`이 페이지 경계를 넘는 자식 표를 다시 조판할 때 자식 표 하나만 담은 합성
