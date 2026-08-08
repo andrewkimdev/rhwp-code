@@ -209,6 +209,29 @@ def ingest_verdict(entries: list[dict], verdict_path: Path) -> list[str]:
     return notes
 
 
+def scenario_ledger_problems(entries: list[dict]) -> list[str]:
+    """시나리오가 **없는 원장 이름**을 선언하고 있지 않은지 본다.
+
+    이름이 틀리면 그 시나리오는 아무것도 올리지 못하는데 게이트는 초록이라 **조용히 헛돈다**.
+    실제로 겪었다 — 액션은 `Action.X` 인데 컨트롤 본체는 `HwpCtrl.method.X`·
+    `HwpCtrl.property.X` 라, `HwpCtrl.GetPosBySet` 이라 적은 시나리오가 통과하고도 원장이
+    그대로였다. `--ingest` 때만 경고로 나오던 것을 검사 게이트로 올린다.
+    """
+    known = {e["id"] for e in entries}
+    problems: list[str] = []
+    for path in sorted((Path(__file__).resolve().parent / "scenarios").glob("*.json")):
+        try:
+            with io.open(path, encoding="utf-8") as fh:
+                scenario = json.load(fh)
+        except (OSError, json.JSONDecodeError) as exc:
+            problems.append(f"{path.name}: 읽을 수 없다 — {exc}")
+            continue
+        for entry_id in scenario.get("ledger", []):
+            if entry_id not in known:
+                problems.append(f"{path.name}: 원장에 없는 항목 선언 {entry_id}")
+    return problems
+
+
 def main() -> int:
     sys.stdout.reconfigure(encoding="utf-8")
     ap = argparse.ArgumentParser(description=__doc__)
@@ -227,6 +250,7 @@ def main() -> int:
     summary = summarize(entries)
 
     if args.check:
+        problems += scenario_ledger_problems(entries)
         if problems:
             print("원장 검사 실패:")
             for p in problems:
