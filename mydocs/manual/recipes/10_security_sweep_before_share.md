@@ -99,6 +99,8 @@ sanitize 는 짝이다(레시피 3의 명제 그대로).
 ```bash
 rhwp edit redact output/share-final.hwp --dry-run --no-raw --json
 rhwp inspect hidden-text output/share-final.hwp --json
+rhwp inspect injection   output/share-final.hwp --json
+rhwp inspect unicode     output/share-final.hwp --json
 ```
 
 실측:
@@ -106,10 +108,13 @@ rhwp inspect hidden-text output/share-final.hwp --json
 ```json
 {"dryRun":true,"findingCount":0,"findings":[],"redactedCount":0, …}   ← 개인정보 0
 {"clean":true,"hiddenCharCount":0, …}                                  ← 은닉 0
+{"clean":true,"signalCount":0,"highestConfidence":null, …}            ← 주입 0
+{"clean":true,"findingCount":0,"scannedChars":138, …}                 ← 유니코드 기만 0
 ```
 
-**게이트 조건: `findingCount == 0` 그리고 `clean == true`.** 이 두 값이 0/true 가
-아니면 `output/share-final.hwp` 는 내보내지 않는다 — 다시 3단계로 돌아간다.
+**게이트 조건: redact의 `findingCount == 0`, hidden-text의 `clean == true`, injection의
+`signalCount == 0`, unicode의 `findingCount == 0`.** 네 값 중 하나라도 0/true가 아니면
+`output/share-final.hwp` 는 내보내지 않는다 — 다시 3단계로 돌아간다.
 내보내는 파일은 최종본 하나뿐이고, 중간 산출물(초안·redacted)은 공유 경로에 두지
 않는다.
 
