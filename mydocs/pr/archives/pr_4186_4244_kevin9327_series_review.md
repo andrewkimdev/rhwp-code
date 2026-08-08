@@ -50,9 +50,9 @@
 
 | 커밋 | 보정 | 근거 |
 |---|---|---|
-| `23c27a9c` | 지식지도 사전에 6개 실제 출력 필드와 개수를 반영 | `knowledge_map_field_dictionary_contract` 실패 |
-| `0b5af4c0` | Node 생성 봉투 타입 수 35→37 정합 | `npm run gen:check` 드리프트 |
-| `286a7e55` | 벤치 문서의 존재하지 않는 태스크 ID를 실제 ID로 수정 | reference 솔루션 실실행 |
+| `5f234450` | 지식지도 사전에 6개 실제 출력 필드와 개수를 반영 | `knowledge_map_field_dictionary_contract` 실패 |
+| `ed1f7146` | Node 생성 봉투 타입 수 35→37 정합 | `npm run gen:check` 드리프트 |
+| `9b452eab` | 벤치 문서의 존재하지 않는 태스크 ID를 실제 ID로 수정 | reference 솔루션 실실행 |
 
 제목에 `fix(ci)`가 있는 네 커밋은 GitHub Actions 변경이 아니라 제품 코드의 프로필·Rustfmt·CodeQL
 오탐 정합이다. CI 설정 파일 변경은 #4185만 해당하며 제외했다.
