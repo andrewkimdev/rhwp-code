@@ -125,6 +125,36 @@ def test_export_provenance_map_builds_command(captured: List[List[Any]]) -> None
     assert _as_strings(captured[0]) == ["export-provenance-map", "--json"]
 
 
+def test_explain_builds_command(captured: List[List[Any]]) -> None:
+    rhwp.explain("a.hwp")
+    assert _as_strings(captured[0]) == ["explain", "a.hwp", "--json"]
+
+
+def test_export_plan_schema_flags(captured: List[List[Any]]) -> None:
+    rhwp.export_plan_schema()
+    assert _as_strings(captured[0]) == ["export-plan-schema", "--json"]
+    rhwp.export_plan_schema(bare=True, out="plan.json")
+    assert _as_strings(captured[1]) == [
+        "export-plan-schema", "--bare", "-o", "plan.json", "--json",
+    ]
+
+
+def test_export_agent_manifest_flags(captured: List[List[Any]]) -> None:
+    rhwp.export_agent_manifest()
+    assert _as_strings(captured[0]) == ["export-agent-manifest", "--json"]
+    rhwp.export_agent_manifest(bare=True)
+    assert _as_strings(captured[1]) == ["export-agent-manifest", "--bare", "--json"]
+
+
+def test_export_ontology_builds_command(captured: List[List[Any]]) -> None:
+    rhwp.export_ontology()
+    assert _as_strings(captured[0]) == ["export-ontology", "--json"]
+    rhwp.export_ontology(bare=True, out="onto.jsonld")
+    assert _as_strings(captured[1]) == [
+        "export-ontology", "--bare", "-o", "onto.jsonld", "--json",
+    ]
+
+
 def test_inspect_builds_each_supported_command(captured: List[List[Any]]) -> None:
     rhwp.inspect("a.hwp", "hidden-text", threshold_pt=0.5, include_offpage=True)
     rhwp.inspect("a.hwp", "injection", min_confidence="high", include_fields=True)
@@ -279,6 +309,21 @@ def test_csv_to_table_builds_command(captured: List[List[Any]]) -> None:
 
 
 # ── 대량 ────────────────────────────────────────────────────────────────
+
+
+def test_scan_builds_command(captured: List[List[Any]]) -> None:
+    rhwp.scan("폴더")
+    assert _as_strings(captured[0]) == ["scan", "폴더", "--json"]
+    rhwp.scan("a", "b", probe=True, max_depth=2, limit=100)
+    assert _as_strings(captured[1]) == [
+        "scan", "a", "b", "--probe", "--max-depth", "2", "--limit", "100", "--json",
+    ]
+
+
+def test_scan_rejects_empty_input() -> None:
+    with pytest.raises(ValueError) as caught:
+        rhwp.scan()
+    assert "최소 1개" in str(caught.value)
 
 
 def test_batch_streams_paths_through_stdin(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -57,6 +57,8 @@ e2e 스크립트의 **단일 권위 목록**이다. 파일 추가/변경/폐기 
 | `issue-3953-large-document-goto.test.mjs` | 상시 | active | #3953 대형 HWP 후반부 찾아가기, 오류 재입력과 상태 표시줄 진입 | 정책연구용역사업 중간진도보고서(살아있는 간장 기증자의 의학적 선별기준 연구).hwp | 수동 | |
 | `issue-4026-footnote-global-shortcuts.test.mjs` | 상시 | active | #4026 각주 편집 중 Cmd+Z 되돌리기와 Option+G 찾아가기 | footnote-01.hwp | 수동 | |
 | `issue-4030-footnote-goto-transition.test.mjs` | 상시 | active | #4030 실제 대형 HWP 각주에서 Option+G 200쪽 이동 시 본문 모드·상태 표시·viewport 전환 | 정책연구용역사업 중간진도보고서(살아있는 간장 기증자의 의학적 선별기준 연구).hwp | 수동 | |
+| `issue-4158-char-overlap-boxed-pua-canvas2d.test.mjs` | 상시 | active | #4158 실제 CharOverlap의 사각 안 숫자 PUA를 Canvas2D가 숫자와 사각형으로 합성 | basic/issue2007_nested_cell_pagination_42065.hwp | npm e2e:issue-4158 | 17쪽·물리 10쪽 raw IR 보존 계약 포함 |
+| `issue-4159-terminal-nested-bottom-border-canvas2d.test.mjs` | 상시 | active | #4159 실제 HWP 물리 3쪽 종료 재귀 중첩 표 bottom 선의 Canvas2D clip 포섭 | basic/issue2007_nested_cell_pagination_42065.hwp | npm e2e:issue-4159 | #4069 17쪽 pagination 계약 포함 |
 | `issue-536-boxed-pua-canvas2d.test.mjs` | 상시 | active | #536 실제 HWP의 사각 안 숫자 PUA를 기본 Canvas2D가 결정적으로 합성 | basic/issue2007_nested_cell_pagination_42065.hwp | npm e2e:issue-536 | #4122 17쪽 pagination stack 계약 포함 |
 | `issue-595.test.mjs` | 진단 | hold | Issue #595 진단 e2e | exam_math.hwp | 수동 | legacy-name · #595 진단 (assertion 0) |
 | `line-spacing.test.mjs` | 상시 | active | 줄간격 변경에 따른 페이지 넘김 검증 | — | 수동 |  |
@@ -68,6 +70,7 @@ e2e 스크립트의 **단일 권위 목록**이다. 파일 추가/변경/폐기 
 | `print-pdf-issue3126.test.mjs` | 상시 | active | #3126 same-origin iframe 인쇄/PDF UX, 상태 불변, #2524/#2525 browser PDF 회귀 | render-p35-font-native-bitmap.hwpx, hwpx/hwpx-02.hwpx | 수동 | native dialog는 Chrome/Edge 수동 절차 병행 |
 | `probe-input-perf-issue3137.mjs` | 진단 | active | Issue #3137 거대 표 셀 입력의 mutation·cursor update·focused repaint·operation·2-rAF·long task 성능 매트릭스 | issue1949_giant_cell_nested_tables_perf.hwp/.hwpx | npm e2e:issue-3137-perf | 시간 수치는 비-CI, 문서·cursor·focused repaint·flush 계약만 hard assertion |
 | `pr2260-vscode-zoom-menu.test.mjs` | 상시 | active | [PR #2260 검증] rhwp-vscode 배율 메뉴 — 호스트 Chrome CDP 로 webview 하네스 구동. | — | 수동 |  |
+| `issue-4224-pua-f02fb-small-right-triangle-canvas2d.test.mjs` | 상시 | active | #4224 한컴 문자표 U+F02FB 일반 TextRun을 작은 오른쪽 방향 삼각형으로 Canvas2D 투영 | basic/pau-004.hwp | npm e2e:issue-4224 | raw IR 보존·공개 글꼴 tofu 차단 |
 | `renderer-baseline-native-diff.mjs` | 유틸 | active | 렌더러 baseline — studio vs native 산출 대조 | — | CI |  |
 | `renderer-baseline-contract.mjs` | 유틸 | active | CanvasKit runtime 실패 진단 정규화 helper | — | 수동 | `renderer-baseline.mjs`에서 import |
 | `renderer-baseline.mjs` | 유틸 | active | 렌더러 baseline 스윕 러너 (manifest 기반 다문서 측정) | — | npm+CI |  |

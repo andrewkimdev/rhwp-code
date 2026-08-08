@@ -7596,6 +7596,16 @@ impl HwpDocument {
         self.core.get_structure_native(mode).map_err(|e| e.into())
     }
 
+    /// 문단 모양의 개요 번호만 탐색 정보로 반환한다.
+    ///
+    /// 일반 문단의 `1.` 같은 텍스트는 분석하지 않는다.
+    #[wasm_bindgen(js_name = getOutlineNavigation)]
+    pub fn get_outline_navigation(&self) -> Result<String, JsValue> {
+        self.core
+            .get_outline_navigation_native()
+            .map_err(|e| e.into())
+    }
+
     /// 책갈피 추가
     #[wasm_bindgen(js_name = addBookmark)]
     pub fn add_bookmark(
