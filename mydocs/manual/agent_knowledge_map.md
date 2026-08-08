@@ -304,7 +304,7 @@ printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocol
 를 싣고 `--dry-run` 에서는 싣지 않는다. `edit set-cell` 은 `oldText` 때문에
 `untrustedContent:true`, `edit fill-fields`·`replace-text` 는 `false` 다(실측).
 
-### 2-2. 전수 사전 — 166개 필드
+### 2-2. 전수 사전 — 172개 필드
 
 `capabilities` 의 `recordFields` 합집합이다. `등장 명령` 은 자기서술 기준이며,
 실제 봉투에는 조건부로 더 실리는 필드가 있다(§2-5).
@@ -361,6 +361,7 @@ printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocol
 | `nodeCount` | number | 구조 트리 노드 총수 | `export-structure` |
 | `structure` | object | 구조 트리 본체 `{mode,node_count,roots[]}` — **키가 snake_case 인 유일한 구역** | `export-structure` |
 | `imageCount` | number | 산출한 그림 파일 수 | `export-markdown` |
+| `roots` | string[] | `scan` 에 넘긴 검색 시작 경로. 실제 발견 파일은 `files` 에 결정적 순서로 실린다 | `scan` |
 
 #### 검색·추출
 
@@ -514,6 +515,7 @@ printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocol
 
 | 필드 | 타입 | 의미 · `null` 의 뜻 | 등장 명령 |
 |---|---|---|---|
+| `files` | array | `scan` 이 찾은 파일 레코드. 경로·크기·확장자/매직 형식·선택 probe 결과를 각각 담는다 | `scan` |
 | `error` | string | 그 파일만 실패한 이유. **스트림은 계속되고 최종 exit 1** | `batch` 실패 레코드 |
 | `exitClass` | string | 실패 분류(`runtime`·`usage`) — 재시도 가능성 판단의 근거 | `batch` 실패 레코드 |
 
@@ -538,6 +540,10 @@ printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocol
 | `provenanceMap` | object | 출처 지도 봉투(내장) | `export-agent-manifest` |
 | `planSchema` | object | `run` 계획서 JSON Schema 봉투(내장) | `export-agent-manifest` |
 | `missingAxes` | string[] | 조립에서 빠진 축 이름 — 전부 있으면 빈 배열 | `export-agent-manifest` |
+| `ontology` | object | 자기서술에서 유도한 JSON-LD 본문. `@context`·`@graph` 를 포함한다 | `export-ontology` |
+| `classCount` | number | JSON-LD 그래프의 `rdfs:Class` 노드 수 | `export-ontology` |
+| `propertyCount` | number | JSON-LD 그래프의 `rdf:Property` 노드 수 | `export-ontology` |
+| `actionCount` | number | JSON-LD 그래프의 `rhwp:Action` 노드 수 | `export-ontology` |
 
 #### 진단 (`dump-pages`)
 
