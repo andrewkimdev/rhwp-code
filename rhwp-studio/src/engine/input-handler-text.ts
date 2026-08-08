@@ -384,12 +384,10 @@ export function onCompositionStart(this: any): void {
     this.textarea.value = '';
     this.isComposing = false;
     this.compositionAnchor = null;
-    this.clearCompositionAnchorRect();
     this.compositionLength = 0;
     return;
   }
 
-  this.captureCompositionAnchorRect(basePos);
   this.isComposing = true;
   if (this.cursor.isInHeaderFooter()) {
     // 머리말/꼬리말 모드에서는 hfCharOffset을 anchor의 charOffset으로 사용
@@ -409,7 +407,6 @@ export function onCompositionEnd(this: any): void {
 
   this.isComposing = false;
   this.compositionAnchor = null;
-  this.clearCompositionAnchorRect();
   this.compositionLength = 0;
   this.textarea.value = '';
   this.caret.hideComposition();
@@ -500,7 +497,15 @@ export function onInput(this: any, e?: InputEvent): void {
       // wedge 된다. 조합을 현재 캐럿에 재정박하고 이번 조합 텍스트를 새로 삽입해
       // 입력 스트림을 잇는다 — 실패분은 다음 캐럿 이동에서 자연 동기화된다.
       console.warn('[InputHandler] 조합 replace 거부 — 현재 캐럿에 재정박:', err);
-      anchor = { ...this.cursor.getPosition() };
+      // 머리말/꼬리말·각주 모드에서는 cursor.getPosition()이 진입 전 본문 위치로
+      // 고정돼 있고 실제 오프셋은 hfCharOffset/fnCharOffset에 있다(onCompositionStart와
+      // 동일 규약). 이 override 없이 그대로 쓰면 insertTextAtRaw/deleteTextAt이 정확한
+      // hfParaIdx/hfSectionIdx에 엉뚱한 본문 charOffset을 실어 보낸다.
+      anchor = this.cursor.isInHeaderFooter()
+        ? { ...this.cursor.getPosition(), charOffset: this.cursor.hfCharOffset }
+        : this.cursor.isInFootnote()
+          ? { ...this.cursor.getPosition(), charOffset: this.cursor.fnCharOffset }
+          : { ...this.cursor.getPosition() };
       this.compositionAnchor = anchor;
       this.compositionLength = 0;
       try {
