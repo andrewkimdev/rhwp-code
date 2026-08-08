@@ -798,6 +798,56 @@ pub fn decompress_stream_limited(data: &[u8], max_bytes: usize) -> Result<Vec<u8
     }
 }
 
+/// 압축 해제 결과의 **길이만** 센다. 출력을 버퍼에 쌓지 않으므로 메모리 O(1)이다.
+///
+/// [#2550] `len()`/`is_empty()` 류 질의가 크기를 재려고 전체를 materialize 하지
+/// 않도록 한다. `decompress_stream_limited` 와 같은 순서(raw deflate → zlib)와
+/// 같은 `LimitExceeded` 우선순위를 따른다. `cap` 초과 시 `LimitExceeded`.
+pub fn decompressed_len_capped(data: &[u8], cap: usize) -> Result<usize, CfbError> {
+    fn count_limited<R: Read>(reader: R, cap: usize) -> Result<usize, CfbError> {
+        let mut limited = reader.take((cap as u64).saturating_add(1));
+        let copied = std::io::copy(&mut limited, &mut std::io::sink())
+            .map_err(|error| CfbError::DecompressError(error.to_string()))?;
+        if copied > cap as u64 {
+            return Err(CfbError::LimitExceeded(cap));
+        }
+        Ok(copied as usize)
+    }
+
+    let raw_result = count_limited(flate2::read::DeflateDecoder::new(data), cap);
+    if let Ok(len) = raw_result {
+        return Ok(len);
+    }
+    let raw_exceeded = matches!(raw_result, Err(CfbError::LimitExceeded(_)));
+
+    match count_limited(flate2::read::ZlibDecoder::new(data), cap) {
+        Ok(len) => Ok(len),
+        Err(CfbError::LimitExceeded(_)) => Err(CfbError::LimitExceeded(cap)),
+        Err(_) if raw_exceeded => Err(CfbError::LimitExceeded(cap)),
+        Err(error) => Err(error),
+    }
+}
+
+/// 압축 해제 결과의 **선두 `n` 바이트까지만** 얻는다. 이후가 더 있어도 오류가 아니다.
+///
+/// [#2550] OLE size prefix 판정(12바이트)이나 빈 항목 판정(1바이트)처럼 아주 짧은
+/// 프리픽스만 필요할 때, 전체 해제나 `LimitExceeded` 없이 안전하게 읽는 경로다.
+pub fn decompress_stream_prefix(data: &[u8], n: usize) -> Result<Vec<u8>, CfbError> {
+    fn prefix<R: Read>(reader: R, n: usize) -> Result<Vec<u8>, CfbError> {
+        let mut output = Vec::new();
+        reader
+            .take(n as u64)
+            .read_to_end(&mut output)
+            .map_err(|error| CfbError::DecompressError(error.to_string()))?;
+        Ok(output)
+    }
+
+    if let Ok(output) = prefix(flate2::read::DeflateDecoder::new(data), n) {
+        return Ok(output);
+    }
+    prefix(flate2::read::ZlibDecoder::new(data), n)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

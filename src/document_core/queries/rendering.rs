@@ -932,12 +932,13 @@ impl DocumentCore {
 
     /// 바이너리 데이터를 0-based `bin_data_content` 인덱스로 반환한다.
     /// [Task #2263] 지연 로딩 도입으로 바이트를 빌려줄 수 없어 소유값을 반환한다.
+    /// [#2550] 압축 해제 상한 초과(deflate bomb 포함)는 항목 없음과 같은 `None` 이다.
     pub fn get_bin_data(&self, index: usize) -> Option<Vec<u8>> {
         // 공개 계약은 소유 `Vec` 이다 — 호출부가 WASM 경계로 넘긴다.
-        self.document
-            .bin_data_content
-            .get(index)
-            .map(|b| b.data.load())
+        self.document.bin_data_content.get(index).and_then(|b| {
+            b.data
+                .load_limited(crate::model::bin_data::MAX_BIN_DATA_BYTES)
+        })
     }
 
     /// [#3668] 직전 렌더에서 발생한 `LAYOUT_OVERFLOW_CELL` 줄 수를 읽고 리셋한다.
@@ -1737,7 +1738,10 @@ impl DocumentCore {
         }
         let content =
             crate::renderer::layout::find_bin_data(&self.document.bin_data_content, bin_data_id)?;
-        let data = content.data.load_shared();
+        // [#2550] 상한 초과는 레이아웃이 이미 placeholder 로 그린 항목이라 바이트도 없다.
+        let data = content
+            .data
+            .load_limited_shared(crate::model::bin_data::MAX_BIN_DATA_BYTES)?;
         let (mime, bytes) =
             crate::renderer::image_resolver::emitted_image_bytes(&data, variant.bakes_watermark());
         Some((mime, bytes.into_owned()))

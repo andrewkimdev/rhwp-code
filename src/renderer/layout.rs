@@ -2004,8 +2004,8 @@ pub(crate) use border_rendering::{
 pub use paragraph_layout::map_pua_bullet_char;
 pub(crate) use utils::{
     default_outline_numbering, drawing_to_line_style, drawing_to_shape_style,
-    expand_numbering_format, find_bin_data, format_page_number, layout_rect_to_bbox,
-    picture_display_size_hu, picture_flow_frame_size_hu, resolve_numbering_id,
+    expand_numbering_format, find_bin_data, find_bin_data_bytes, format_page_number,
+    layout_rect_to_bbox, picture_display_size_hu, picture_flow_frame_size_hu, resolve_numbering_id,
 };
 
 #[cfg(test)]
@@ -3329,15 +3329,15 @@ impl LayoutEngine {
                 if let Some(bs) = styles.border_styles.get(bf_idx) {
                     let img = if allow_bg_image {
                         bs.image_fill.as_ref().and_then(|img_fill| {
-                            find_bin_data(bin_data_content, img_fill.bin_data_id).map(|c| {
-                                PageBackgroundImage {
-                                    data: c.data.load(),
+                            find_bin_data_bytes(bin_data_content, img_fill.bin_data_id).map(
+                                |data| PageBackgroundImage {
+                                    data,
                                     fill_mode: img_fill.fill_mode,
                                     brightness: img_fill.brightness,
                                     contrast: img_fill.contrast,
                                     effect: img_fill.effect,
-                                }
-                            })
+                                },
+                            )
                         })
                     } else {
                         None
@@ -9020,8 +9020,7 @@ impl LayoutEngine {
 
                         if !already_registered && !has_full_para_item {
                             let bin_data_id = pic.image_attr.bin_data_id;
-                            let image_data =
-                                find_bin_data(bin_data_content, bin_data_id).map(|c| c.data.load());
+                            let image_data = find_bin_data_bytes(bin_data_content, bin_data_id);
                             let crop = {
                                 let c = &pic.crop;
                                 if c.right > c.left && c.bottom > c.top {
