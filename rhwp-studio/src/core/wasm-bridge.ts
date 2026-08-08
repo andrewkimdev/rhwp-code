@@ -11,8 +11,10 @@ import {
   type HmlSaveState,
 } from './hml-save-capability';
 import {
+  getSelectionRectsInCellByPathWithPageHints,
   getSelectionRectsInCellWithPageHints,
   type CellSelectionRectDocument,
+  type PathCellSelectionRectDocument,
   type SelectionPageHints,
 } from './selection-page-hints';
 import {
@@ -2289,6 +2291,23 @@ export class WasmBridge {
         parentParaIdx: parentPara,
         controlIdx,
         cellIdx,
+        startCellParaIdx: startCellPara,
+        startCharOffset: startOffset,
+        endCellParaIdx: endCellPara,
+        endCharOffset: endOffset,
+      },
+      pageHints,
+    );
+  }
+
+  getSelectionRectsInCellByPath(sec: number, parentPara: number, path: string, startCellPara: number, startOffset: number, endCellPara: number, endOffset: number, pageHints?: SelectionPageHints): SelectionRect[] {
+    if (!this.doc) throw new Error('문서가 로드되지 않았습니다');
+    return getSelectionRectsInCellByPathWithPageHints(
+      this.doc as unknown as PathCellSelectionRectDocument,
+      {
+        sectionIdx: sec,
+        parentParaIdx: parentPara,
+        path,
         startCellParaIdx: startCellPara,
         startCharOffset: startOffset,
         endCellParaIdx: endCellPara,

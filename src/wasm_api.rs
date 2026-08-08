@@ -5635,6 +5635,59 @@ impl HwpDocument {
         .map_err(|e| e.into())
     }
 
+    /// 전체 cellPath로 중첩 셀 선택 영역의 줄별 사각형을 반환한다(#4272).
+    ///
+    /// `path_json`의 마지막 엔트리는 선택 대상 셀을 지정하며, 시작·끝 문단 인덱스는
+    /// 별도 인자로 받아 여러 문단 선택도 같은 컨테이너 경로에서 처리한다.
+    #[wasm_bindgen(js_name = getSelectionRectsInCellByPath)]
+    pub fn get_selection_rects_in_cell_by_path(
+        &self,
+        section_idx: u32,
+        parent_para_idx: u32,
+        path_json: &str,
+        start_cell_para_idx: u32,
+        start_char_offset: u32,
+        end_cell_para_idx: u32,
+        end_char_offset: u32,
+    ) -> Result<String, JsValue> {
+        self.get_selection_rects_in_cell_by_path_native(
+            section_idx as usize,
+            parent_para_idx as usize,
+            path_json,
+            start_cell_para_idx as usize,
+            start_char_offset as usize,
+            end_cell_para_idx as usize,
+            end_char_offset as usize,
+            None,
+        )
+        .map_err(|e| e.into())
+    }
+
+    /// `getSelectionRectsInCellByPath`의 page hint options 변형(#4272).
+    ///
+    /// options JSON 키: `{ sectionIdx, parentParaIdx, path, startCellParaIdx,
+    /// startCharOffset, endCellParaIdx, endCharOffset, startPageHint?, endPageHint? }`.
+    /// `path`는 cellPath JSON 문자열이다.
+    #[wasm_bindgen(js_name = getSelectionRectsInCellByPathEx)]
+    pub fn get_selection_rects_in_cell_by_path_ex(
+        &self,
+        options_json: &str,
+    ) -> Result<String, JsValue> {
+        use crate::document_core::helpers::{json_str, json_u32};
+        let path_json = json_str(options_json, "path").unwrap_or_default();
+        self.get_selection_rects_in_cell_by_path_native(
+            json_u32(options_json, "sectionIdx").unwrap_or(0) as usize,
+            json_u32(options_json, "parentParaIdx").unwrap_or(0) as usize,
+            &path_json,
+            json_u32(options_json, "startCellParaIdx").unwrap_or(0) as usize,
+            json_u32(options_json, "startCharOffset").unwrap_or(0) as usize,
+            json_u32(options_json, "endCellParaIdx").unwrap_or(0) as usize,
+            json_u32(options_json, "endCharOffset").unwrap_or(0) as usize,
+            json_u32(options_json, "startPageHint").zip(json_u32(options_json, "endPageHint")),
+        )
+        .map_err(|e| e.into())
+    }
+
     /// 각주/미주 내부 선택 영역의 줄별 사각형을 반환한다.
     #[wasm_bindgen(js_name = getSelectionRectsInFootnote)]
     pub fn get_selection_rects_in_footnote(

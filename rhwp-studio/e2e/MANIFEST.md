@@ -61,6 +61,7 @@ e2e 스크립트의 **단일 권위 목록**이다. 파일 추가/변경/폐기 
 | `issue-4158-char-overlap-boxed-pua-canvas2d.test.mjs` | 상시 | active | #4158 실제 CharOverlap의 사각 안 숫자 PUA를 Canvas2D가 숫자와 사각형으로 합성 | basic/issue2007_nested_cell_pagination_42065.hwp | npm e2e:issue-4158 | 17쪽·물리 10쪽 raw IR 보존 계약 포함 |
 | `issue-4159-terminal-nested-bottom-border-canvas2d.test.mjs` | 상시 | active | #4159 실제 HWP 물리 3쪽 종료 재귀 중첩 표 bottom 선의 Canvas2D clip 포섭 | basic/issue2007_nested_cell_pagination_42065.hwp | npm e2e:issue-4159 | #4069 17쪽 pagination 계약 포함 |
 | `issue-4252-nested-partial-table-object-selection.test.mjs` | 상시 | active | #4252 재귀 분할 중첩 표의 실제 IR cellPath·bbox 조회·Esc 객체 선택과 브라우저 성능 증적 | basic/issue2007_nested_cell_pagination_42065.hwp | npm e2e:issue-4252 | 물리 5쪽 외부→래퍼→자식 표 경로와 `output/4252/perf-*.json` |
+| `issue-4272-nested-cell-text-selection.test.mjs` | 상시 | active | #4272 중첩 표 안쪽 셀의 전체 cellPath 선택 rect와 실제 마우스 드래그 하이라이트 | basic/issue2007_nested_cell_pagination_42065.hwp | npm e2e:issue-4272 | 물리 5쪽 `23,504`, `output/4272/nested-cell-text-selection.*` |
 | `issue-536-boxed-pua-canvas2d.test.mjs` | 상시 | active | #536 실제 HWP의 사각 안 숫자 PUA를 기본 Canvas2D가 결정적으로 합성 | basic/issue2007_nested_cell_pagination_42065.hwp | npm e2e:issue-536 | #4122 17쪽 pagination stack 계약 포함 |
 | `issue-595.test.mjs` | 진단 | hold | Issue #595 진단 e2e | exam_math.hwp | 수동 | legacy-name · #595 진단 (assertion 0) |
 | `line-spacing.test.mjs` | 상시 | active | 줄간격 변경에 따른 페이지 넘김 검증 | — | 수동 |  |
