@@ -16,8 +16,15 @@ const RENDER_RUST_FILES = new Set([
   'src/document_core/queries/rendering.rs',
 ]);
 
+// [#4040] Native Skia job 이 명시적으로 실행하는 integration target 의 소유 목록.
+// 여기 없으면 그 파일을 고치는 PR 에서 native_skia_required=false 로 판정되어
+// 정작 그 테스트를 돌릴 job 이 skip 된다. workflow 의 `--test` 목록과 짝이며,
+// test_ci_impact_workflow.py 가 양방향으로 강제한다.
 const NATIVE_SKIA_RUST_FILES = new Set([
+  'tests/issue_2083_hide_fill_page_background.rs',
   'tests/issue_2225_missing_picture_placeholder.rs',
+  'tests/issue_2292_chart_png_clip.rs',
+  'tests/issue_2293_chart_png_text.rs',
   'tests/render_p37_direct_pdf_export.rs',
 ]);
 

@@ -10,7 +10,239 @@ from pathlib import Path
 
 WORKFLOW_PATH = Path(__file__).resolve().parents[2] / ".github/workflows/ci.yml"
 CLASSIFIER_PATH = Path(__file__).resolve().parents[1] / "ci-impact-classifier.cjs"
+TESTS_DIR = Path(__file__).resolve().parents[2] / "tests"
 WORKER_MARKER = "  # [#2393] 기본 테스트 병렬화"
+
+# [#4040] 파일 전체가 native-skia 로 게이트된 integration test.
+#
+# default-feature worker 는 이 파일을 통째로 cfg-out 하므로, Native Skia job 이
+# 명시적으로 실행하지 않으면 **어디에서도 돌지 않는다.**
+#
+# 판별은 양쪽 방향의 오탐을 모두 막아야 한다. 한쪽으로 좁으면 부류를 놓치고,
+# 반대쪽으로 넓으면 배선할 이유가 없는 파일을 배선하라고 요구한다.
+#
+# - 게이트는 중첩된다 — `render_p37_direct_pdf_export.rs` 는
+#   `#![cfg(all(not(target_arch = "wasm32"), feature = "native-skia"))]` 형태라
+#   정확 일치로 좁히면 놓친다. 그래서 괄호 균형으로 술어를 잘라 본다.
+# - `not(feature = "native-skia")` 는 **정반대 조건**이고 `any(feature =
+#   "native-skia", target_os = "linux")` 는 Linux 에서 feature 없이도 참이다.
+#   native-skia 를 끈 상태에서 술어가 반드시 거짓일 때만 이 부류로 본다.
+# - 문자열·줄/블록 주석 안의 cfg 인용과 블록 안의 inner attribute 는 crate
+#   게이트가 아니다. Rust 비코드 영역을 같은 길이의 공백으로 가린 뒤 최상위
+#   inner attribute 만 찾는다.
+_INNER_CFG_OPEN = re.compile(r"#!\[\s*cfg\s*\(")
+_RAW_STRING_OPEN = re.compile(r'(?:br|rb|r)(?P<hashes>#{0,255})"')
+_CFG_TOKEN = re.compile(
+    r'\s*(?:(?P<ident>[A-Za-z_][A-Za-z0-9_]*)|'
+    r'(?P<string>"(?:\\.|[^"\\])*")|(?P<punct>[(),=]))'
+)
+
+
+def _mask_rust_non_code(source: str) -> str:
+    """문자열과 중첩 가능 주석을 같은 길이의 공백으로 가린다."""
+    masked = list(source)
+
+    def blank(start: int, end: int) -> None:
+        for offset in range(start, end):
+            if masked[offset] != "\n":
+                masked[offset] = " "
+
+    index = 0
+    while index < len(source):
+        if source.startswith("//", index):
+            end = source.find("\n", index + 2)
+            end = len(source) if end == -1 else end
+            blank(index, end)
+            index = end
+            continue
+
+        if source.startswith("/*", index):
+            depth = 1
+            end = index + 2
+            while end < len(source) and depth > 0:
+                if source.startswith("/*", end):
+                    depth += 1
+                    end += 2
+                elif source.startswith("*/", end):
+                    depth -= 1
+                    end += 2
+                else:
+                    end += 1
+            blank(index, end)
+            index = end
+            continue
+
+        raw = _RAW_STRING_OPEN.match(source, index)
+        if raw:
+            terminator = '"' + raw.group("hashes")
+            end = source.find(terminator, raw.end())
+            end = len(source) if end == -1 else end + len(terminator)
+            blank(index, end)
+            index = end
+            continue
+
+        if source[index] == '"':
+            end = index + 1
+            escaped = False
+            while end < len(source):
+                char = source[end]
+                end += 1
+                if escaped:
+                    escaped = False
+                elif char == "\\":
+                    escaped = True
+                elif char == '"':
+                    break
+            blank(index, end)
+            index = end
+            continue
+
+        index += 1
+
+    return "".join(masked)
+
+
+def _inner_cfg_predicates(source: str) -> list[str]:
+    """crate 최상위 `#![cfg(...)]` 술어를 괄호 균형으로 잘라낸다."""
+    code = _mask_rust_non_code(source)
+    brace_depth = []
+    depth = 0
+    for char in code:
+        brace_depth.append(depth)
+        if char == "{":
+            depth += 1
+        elif char == "}" and depth > 0:
+            depth -= 1
+
+    predicates = []
+    for opened in _INNER_CFG_OPEN.finditer(code):
+        if brace_depth[opened.start()] != 0:
+            continue
+        depth = 1
+        index = opened.end()
+        while index < len(code) and depth > 0:
+            if code[index] == "(":
+                depth += 1
+            elif code[index] == ")":
+                depth -= 1
+            index += 1
+        if depth == 0:
+            predicates.append(source[opened.end():index - 1])
+    return predicates
+
+
+class _CfgParser:
+    """이 계약에 필요한 Rust cfg meta-item의 작은 재귀 하강 parser."""
+
+    def __init__(self, source: str) -> None:
+        self.tokens = []
+        index = 0
+        while index < len(source):
+            token = _CFG_TOKEN.match(source, index)
+            if not token:
+                if source[index:].strip():
+                    raise ValueError(f"unsupported cfg syntax: {source[index:]!r}")
+                break
+            self.tokens.append(token.group("ident") or token.group("string") or token.group("punct"))
+            index = token.end()
+        self.index = 0
+
+    def _take(self) -> str:
+        if self.index >= len(self.tokens):
+            raise ValueError("unexpected end of cfg predicate")
+        token = self.tokens[self.index]
+        self.index += 1
+        return token
+
+    def _accept(self, expected: str) -> bool:
+        if self.index < len(self.tokens) and self.tokens[self.index] == expected:
+            self.index += 1
+            return True
+        return False
+
+    def parse(self) -> tuple:
+        expression = self._expression()
+        if self.index != len(self.tokens):
+            raise ValueError(f"trailing cfg tokens: {self.tokens[self.index:]!r}")
+        return expression
+
+    def _expression(self) -> tuple:
+        name = self._take()
+        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name):
+            raise ValueError(f"expected cfg name, got {name!r}")
+
+        if self._accept("="):
+            value = self._take()
+            if not (value.startswith('"') and value.endswith('"')):
+                raise ValueError(f"expected cfg string, got {value!r}")
+            if name == "feature" and value[1:-1] == "native-skia":
+                return ("native-skia",)
+            return ("atom", name, value)
+
+        if not self._accept("("):
+            return ("atom", name)
+
+        arguments = []
+        if not self._accept(")"):
+            while True:
+                arguments.append(self._expression())
+                if self._accept(")"):
+                    break
+                if not self._accept(","):
+                    raise ValueError("expected ',' or ')' in cfg predicate")
+                if self._accept(")"):
+                    break
+        return (name, *arguments)
+
+
+def _evaluate_cfg(expression: tuple, native_skia: bool) -> bool | None:
+    """다른 cfg atom은 미정으로 둔 3값 평가 결과를 반환한다."""
+    operator, *arguments = expression
+    if operator == "native-skia":
+        return native_skia
+    if operator == "atom":
+        return None
+
+    values = [_evaluate_cfg(argument, native_skia) for argument in arguments]
+    if operator == "all":
+        if False in values:
+            return False
+        return True if all(value is True for value in values) else None
+    if operator == "any":
+        if True in values:
+            return True
+        return False if all(value is False for value in values) else None
+    if operator == "not" and len(values) == 1:
+        return None if values[0] is None else not values[0]
+    return None
+
+
+def _requires_native_skia_enabled(predicate: str) -> bool:
+    """native-skia를 끄면 반드시 거짓이고 켜면 가능성이 생기는 술어인가."""
+    try:
+        expression = _CfgParser(predicate).parse()
+    except ValueError:
+        return False
+    disabled = _evaluate_cfg(expression, native_skia=False)
+    enabled = _evaluate_cfg(expression, native_skia=True)
+    return disabled is False and enabled is not False
+
+
+def source_is_file_gated_native_skia(source: str) -> bool:
+    """소스 텍스트가 파일 전체를 native-skia **활성** 조건으로 게이트하는가."""
+    return any(
+        _requires_native_skia_enabled(predicate)
+        for predicate in _inner_cfg_predicates(source)
+    )
+
+
+def file_gated_native_skia_tests() -> list[str]:
+    """`tests/*.rs` 중 파일 게이트된 native-skia test 의 stem 목록."""
+    return sorted(
+        path.stem
+        for path in TESTS_DIR.glob("*.rs")
+        if source_is_file_gated_native_skia(path.read_text(encoding="utf-8"))
+    )
 
 
 class CiImpactWorkflowTests(unittest.TestCase):
@@ -209,6 +441,7 @@ class CiImpactWorkflowTests(unittest.TestCase):
         self.assertNotIn("startsWith(github.ref", script)
 
     def test_native_skia_integration_targets_are_classifier_inputs(self) -> None:
+        # 역방향 감시: job 이 실행하는 target 은 classifier 소유여야 한다.
         native_step = self._step("Native Skia tests")
         classifier = CLASSIFIER_PATH.read_text(encoding="utf-8")
         targets = set(re.findall(r"--test ([A-Za-z0-9_]+)", native_step))
@@ -216,6 +449,109 @@ class CiImpactWorkflowTests(unittest.TestCase):
         for target in targets:
             with self.subTest(target=target):
                 self.assertIn(f"'tests/{target}.rs'", classifier)
+
+    def test_discovery_finds_the_known_file_gated_native_skia_tests(self) -> None:
+        """발견 패턴이 망가지면 아래 테스트가 조용히 무의미해진다.
+
+        `render_p37_direct_pdf_export` 는 `all(...)` 중첩 게이트라, 정확 일치
+        패턴으로는 잡히지 않는다. 이 단언이 그 회귀를 막는다.
+        """
+        found = file_gated_native_skia_tests()
+        for expected in [
+            "issue_2083_hide_fill_page_background",
+            "issue_2292_chart_png_clip",
+            "issue_2293_chart_png_text",
+            "render_p37_direct_pdf_export",
+        ]:
+            self.assertIn(expected, found)
+        # 함수 게이트 파일은 이 부류가 아니다 — 별도 축(#4132)이다.
+        self.assertNotIn("issue_2225_missing_picture_placeholder", found)
+        self.assertNotIn("cli_exit_codes", found)
+
+    def test_discovery_rejects_negated_gates_and_quoted_attributes(self) -> None:
+        """[PR #4170 리뷰] 발견 패턴의 **반대 방향** 오탐도 막는다.
+
+        위 테스트는 "놓치지 않는가" 만 본다. 넓은 쪽 오탐은 저장소에 해당 파일이
+        생기기 전까지 드러나지 않으므로 합성 입력으로 고정한다.
+
+        - `not(feature = "native-skia")` 는 native-skia 빌드에서 오히려 cfg-out
+          되므로, 배선을 요구하면 0건짜리 target 이 생긴다.
+        - 이 저장소는 한국어 `//!` 문서에 cfg 속성을 자주 인용한다. 인용은
+          게이트가 아니다.
+        """
+        for source in [
+            '#![cfg(feature = "native-skia")]',
+            '#![cfg(all(not(target_arch = "wasm32"), feature = "native-skia"))]',
+            '#![cfg(all(\n    not(target_arch = "wasm32"),\n    feature = "native-skia"\n))]',
+            '#![cfg(not(not(feature = "native-skia")))]',
+            '#![cfg(any(feature = "native-skia", all(feature = "native-skia", unix)))]',
+        ]:
+            with self.subTest(gated=source):
+                self.assertTrue(source_is_file_gated_native_skia(source))
+
+        for source in [
+            '#![cfg(not(feature = "native-skia"))]',
+            '#![cfg(all(not(target_arch = "wasm32"), not(feature = "native-skia")))]',
+            '#![cfg(any(feature = "native-skia", target_os = "linux"))]',
+            '//! `#![cfg(feature = "native-skia")]` 로 파일을 게이트한다',
+            '// #![cfg(feature = "native-skia")]',
+            '/* #![cfg(feature = "native-skia")] */',
+            '/* outer /* #![cfg(feature = "native-skia")] */ comment */',
+            'const S: &str = r##"#![cfg(feature = "native-skia")]"##;',
+            'const S: &str = "#![cfg(feature = \\"native-skia\\")]";',
+            'fn nested() { #![cfg(feature = "native-skia")] }',
+            '#![cfg(not(target_arch = "wasm32"))]',
+        ]:
+            with self.subTest(not_gated=source):
+                self.assertFalse(source_is_file_gated_native_skia(source))
+
+    def test_every_file_gated_native_skia_test_is_wired(self) -> None:
+        """[#4040] 파일 게이트된 native-skia test 는 job·classifier 양쪽에 있어야 한다.
+
+        기존 `test_native_skia_integration_targets_are_classifier_inputs` 는
+        **job 이 실행하는 target** 만 순회하므로, 양쪽 어디에도 없는 파일은 대조
+        대상 자체가 아니라 조용히 빠진다. `issue_2083`·`issue_2292`·`issue_2293`
+        이 정확히 그 경로로 새어 나갔다 — 파일 전체가 cfg-out 되어 default worker
+        에서도 돌지 않고, Native job 도 실행하지 않는 상태였다.
+
+        저장소를 직접 훑어 부류 자체를 강제한다.
+        """
+        native_step = self._step("Native Skia tests")
+        classifier = CLASSIFIER_PATH.read_text(encoding="utf-8")
+        targets = set(re.findall(r"--test ([A-Za-z0-9_]+)", native_step))
+
+        missing_from_job = []
+        missing_from_classifier = []
+        for stem in file_gated_native_skia_tests():
+            if stem not in targets:
+                missing_from_job.append(stem)
+            if f"'tests/{stem}.rs'" not in classifier:
+                missing_from_classifier.append(stem)
+
+        self.assertEqual(
+            missing_from_job,
+            [],
+            "Native Skia job 이 실행하지 않는 파일 게이트 test 가 있다. "
+            "`--test <name>` 을 release-test·release 두 경로에 추가한다.",
+        )
+        self.assertEqual(
+            missing_from_classifier,
+            [],
+            "classifier 의 NATIVE_SKIA_RUST_FILES 에 없는 파일 게이트 test 가 있다. "
+            "빠지면 그 파일을 고치는 PR 에서 Native Skia job 이 skip 된다.",
+        )
+
+    def test_native_skia_targets_run_in_both_profiles(self) -> None:
+        """[#4040] release-test 와 release 두 경로가 같은 target 집합을 실행한다."""
+        native_step = self._step("Native Skia tests")
+        release_test = set(
+            re.findall(r"--profile release-test --features native-skia --test ([A-Za-z0-9_]+)", native_step)
+        )
+        release = set(
+            re.findall(r"--release --features native-skia --test ([A-Za-z0-9_]+)", native_step)
+        )
+        self.assertTrue(release_test)
+        self.assertEqual(release_test, release)
 
     def test_rust_workers_wait_only_for_their_test_archive(self) -> None:
         expected_archives = {
