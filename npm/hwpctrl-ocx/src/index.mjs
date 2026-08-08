@@ -460,17 +460,23 @@ const ACTIONS = {
  * 한글은 아는 이름이면 그 이름을 단 셋을, 모르는 이름이면 빈 이름을 준다. 규격 전체 목록이
  * 아니므로 여기 없는 이름을 한글이 받아 줄 수 있다 — 확인하면 그때 넣는다.
  */
+/**
+ * `CreateSet` 이 아는 이름들 — **한글2022 에 하나씩 물어 받은 목록**이다(49개 전수 확인).
+ *
+ * 아는 이름이면 그 이름을, 모르면 빈 이름을 단 셋을 준다. 규격 목록을 그대로 옮기지 않는다 —
+ * 규격에 있는 `DrawLayout` 은 이 빌드에 **없고**(빈 이름을 준다) 반대 경우도 있을 수 있다.
+ * `Style` 은 앞서 실측으로 확인한 것이라 남긴다.
+ */
 const KNOWN_SET_IDS = new Set([
-  'CharShape',
-  'ParaShape',
-  'SecDef',
-  'Table',
-  'TableCreation',
-  'InsertText',
-  'FindReplace',
-  'Style',
-  'CellBorderFill',
-  'ShapeObject',
+  'BorderFill', 'BorderFillExt', 'BulletShape', 'Caption', 'Cell', 'CellBorderFill',
+  'CharShape', 'CodeTable', 'ColDef', 'CtrlData', 'DocumentInfo', 'DrawArcType',
+  'DrawFillAttr', 'DrawImageAttr', 'DrawLineAttr', 'DrawRotate', 'DrawShadow', 'DrawShear',
+  'EngineProperties', 'FileSetSecurity', 'FindReplace', 'FootnoteShape', 'HeaderFooter',
+  'HyperLink', 'InsertFieldTemplate', 'InsertFile', 'InsertText', 'ListParaPos',
+  'ListProperties', 'MemoShape', 'NumberingShape', 'PageBorderFill', 'PageDef',
+  'PageHiding', 'PageNumCtrl', 'PageNumPos', 'ParaShape', 'SecDef', 'ShapeObject',
+  'SpellingCheck', 'Style', 'SummaryInfo', 'TabDef', 'Table', 'TableCreation',
+  'TableDeleteLine', 'TableInsertLine', 'TableSplitCell', 'TableStrToTbl', 'ViewProperties',
 ]);
 
 /** 개체 갈래 → 컨트롤 네 글자 코드. `CurSelectedCtrl` 이 사슬에서 짚을 때 쓴다. */
@@ -631,9 +637,32 @@ export class ParameterSet {
     return Object.keys(this.#items).length;
   }
 
+  /**
+   * 규격 §9 — 이것이 **셋**인가(배열이 아니라). 셋은 늘 `true` 다(실측 49종 전수).
+   *
+   * 배열([`ParameterArray`])은 `false` 를 준다 — 둘을 가르는 유일한 표지다.
+   */
+  get IsSet() {
+    return true;
+  }
+
   /** 규격 §9 — 항목 값. 없으면 `undefined`. */
   Item(name) {
     return this.#items[name];
+  }
+
+  /** 규격 §9 — 이름 붙은 **하위 셋**을 만들어 담는다. 만든 셋은 비어 있다(실측 `Count` 0). */
+  CreateItemSet(name, setId) {
+    const child = new ParameterSet(setId);
+    this.#items[name] = child;
+    return child;
+  }
+
+  /** 규격 §9 — 이름 붙은 **배열**을 만들어 담는다. 칸 수만큼 자리를 잡는다(실측 `Count` 3). */
+  CreateItemArray(name, count) {
+    const child = new ParameterArray(Number(count) || 0);
+    this.#items[name] = child;
+    return child;
   }
 
   /** 규격 §9 — 항목 값 설정. */
@@ -664,6 +693,48 @@ export class ParameterSet {
   /** 내부: 담긴 항목 전부. 호스트와 이 층이 쓴다. */
   toObject() {
     return { ...this.#items };
+  }
+}
+
+/**
+ * 규격 §9 의 ParameterArray — 셋 안에 담기는 **자리 배열**이다.
+ *
+ * 셋과 갈리는 표지는 `IsSet` 이다 — 셋은 `true`, 배열은 **`false`**(실측). `Count` 는 만들 때
+ * 준 칸 수 그대로다(3 을 주면 3).
+ */
+export class ParameterArray {
+  #items;
+
+  constructor(count = 0) {
+    this.#items = new Array(count).fill(undefined);
+  }
+
+  get Count() {
+    return this.#items.length;
+  }
+
+  get IsSet() {
+    return false;
+  }
+
+  Item(index) {
+    return this.#items[index];
+  }
+
+  SetItem(index, value) {
+    this.#items[index] = value;
+  }
+
+  Clone() {
+    const copy = new ParameterArray(this.#items.length);
+    this.#items.forEach((v, i) => copy.SetItem(i, v));
+    return copy;
+  }
+
+  /** 다른 배열의 내용을 그대로 받는다. */
+  Copy(other) {
+    if (!other || typeof other.Count !== 'number') return;
+    this.#items = new Array(other.Count).fill(undefined).map((_, i) => other.Item(i));
   }
 }
 

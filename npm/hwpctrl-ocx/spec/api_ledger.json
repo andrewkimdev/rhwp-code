@@ -4,21 +4,21 @@
   "oracleVersion": "한글2022 (설치본 COM)",
   "summary": {
     "total": 484,
-    "done": 201,
+    "done": 257,
     "byStatus": {
-      "verified": 199,
-      "unimplemented": 283,
+      "verified": 255,
+      "unimplemented": 227,
       "substituted": 2
     },
     "byUnit": {
       "property": {
-        "verified": 21,
-        "unimplemented": 8,
+        "verified": 25,
+        "unimplemented": 4,
         "substituted": 2
       },
       "method": {
-        "verified": 37,
-        "unimplemented": 51
+        "verified": 40,
+        "unimplemented": 48
       },
       "event": {
         "unimplemented": 3
@@ -28,7 +28,8 @@
         "verified": 141
       },
       "parameterSet": {
-        "unimplemented": 50
+        "verified": 49,
+        "unimplemented": 1
       }
     }
   },
@@ -308,14 +309,16 @@
       "name": "Count",
       "arity": 0,
       "section": "6.2.1",
-      "status": "unimplemented",
+      "status": "verified",
       "notes": "",
       "legacyHwpctl": false,
       "specArityAmbiguous": false,
       "oracle": {
-        "scenarios": [],
+        "scenarios": [
+          "p2-setmembers2"
+        ],
         "lastRun": null,
-        "diff": null
+        "diff": 0
       }
     },
     {
@@ -325,14 +328,16 @@
       "name": "IsSet",
       "arity": 0,
       "section": "6.2.2",
-      "status": "unimplemented",
+      "status": "verified",
       "notes": "",
       "legacyHwpctl": false,
       "specArityAmbiguous": false,
       "oracle": {
-        "scenarios": [],
+        "scenarios": [
+          "p2-setmembers2"
+        ],
         "lastRun": null,
-        "diff": null
+        "diff": 0
       }
     },
     {
@@ -361,14 +366,16 @@
       "name": "Clone",
       "arity": 0,
       "section": "6.3.1",
-      "status": "unimplemented",
+      "status": "verified",
       "notes": "",
       "legacyHwpctl": false,
       "specArityAmbiguous": false,
       "oracle": {
-        "scenarios": [],
+        "scenarios": [
+          "p2-setmembers2"
+        ],
         "lastRun": null,
-        "diff": null
+        "diff": 0
       }
     },
     {
@@ -378,14 +385,16 @@
       "name": "CreateItemArray",
       "arity": 2,
       "section": "6.3.2",
-      "status": "unimplemented",
+      "status": "verified",
       "notes": "",
       "legacyHwpctl": false,
       "specArityAmbiguous": false,
       "oracle": {
-        "scenarios": [],
+        "scenarios": [
+          "p2-setmembers2"
+        ],
         "lastRun": null,
-        "diff": null
+        "diff": 0
       }
     },
     {
@@ -395,14 +404,16 @@
       "name": "CreateItemSet",
       "arity": 2,
       "section": "6.3.3",
-      "status": "unimplemented",
+      "status": "verified",
       "notes": "",
       "legacyHwpctl": false,
       "specArityAmbiguous": false,
       "oracle": {
-        "scenarios": [],
+        "scenarios": [
+          "p2-setmembers2"
+        ],
         "lastRun": null,
-        "diff": null
+        "diff": 0
       }
     },
     {
@@ -452,6 +463,7 @@
       "specArityAmbiguous": false,
       "oracle": {
         "scenarios": [
+          "p2-setmembers2",
           "p3-shape-read"
         ],
         "lastRun": null,
@@ -552,14 +564,16 @@
       "name": "Count",
       "arity": 0,
       "section": "7.2.1",
-      "status": "unimplemented",
+      "status": "verified",
       "notes": "",
       "legacyHwpctl": false,
       "specArityAmbiguous": false,
       "oracle": {
-        "scenarios": [],
+        "scenarios": [
+          "p2-setmembers2"
+        ],
         "lastRun": null,
-        "diff": null
+        "diff": 0
       }
     },
     {
@@ -569,14 +583,16 @@
       "name": "IsSet",
       "arity": 0,
       "section": "7.2.2",
-      "status": "unimplemented",
+      "status": "verified",
       "notes": "",
       "legacyHwpctl": false,
       "specArityAmbiguous": false,
       "oracle": {
-        "scenarios": [],
+        "scenarios": [
+          "p2-setmembers2"
+        ],
         "lastRun": null,
-        "diff": null
+        "diff": 0
       }
     },
     {
@@ -7554,13 +7570,15 @@
       "name": "BorderFill",
       "aliases": [],
       "itemCount": 27,
-      "status": "unimplemented",
+      "status": "verified",
       "notes": "",
       "legacyHwpctl": false,
       "oracle": {
-        "scenarios": [],
+        "scenarios": [
+          "p2-setnames"
+        ],
         "lastRun": null,
-        "diff": null
+        "diff": 0
       }
     },
     {
@@ -7570,13 +7588,15 @@
       "name": "BorderFillExt",
       "aliases": [],
       "itemCount": 6,
-      "status": "unimplemented",
+      "status": "verified",
       "notes": "",
       "legacyHwpctl": false,
       "oracle": {
-        "scenarios": [],
+        "scenarios": [
+          "p2-setnames"
+        ],
         "lastRun": null,
-        "diff": null
+        "diff": 0
       }
     },
     {
@@ -7586,13 +7606,15 @@
       "name": "BulletShape",
       "aliases": [],
       "itemCount": 11,
-      "status": "unimplemented",
+      "status": "verified",
       "notes": "",
       "legacyHwpctl": false,
       "oracle": {
-        "scenarios": [],
+        "scenarios": [
+          "p2-setnames"
+        ],
         "lastRun": null,
-        "diff": null
+        "diff": 0
       }
     },
     {
@@ -7602,13 +7624,15 @@
       "name": "Caption",
       "aliases": [],
       "itemCount": 4,
-      "status": "unimplemented",
+      "status": "verified",
       "notes": "",
       "legacyHwpctl": false,
       "oracle": {
-        "scenarios": [],
+        "scenarios": [
+          "p2-setnames"
+        ],
         "lastRun": null,
-        "diff": null
+        "diff": 0
       }
     },
     {
@@ -7618,13 +7642,15 @@
       "name": "Cell",
       "aliases": [],
       "itemCount": 8,
-      "status": "unimplemented",
+      "status": "verified",
       "notes": "",
       "legacyHwpctl": false,
       "oracle": {
-        "scenarios": [],
+        "scenarios": [
+          "p2-setnames"
+        ],
         "lastRun": null,
-        "diff": null
+        "diff": 0
       }
     },
     {
@@ -7634,13 +7660,15 @@
       "name": "CellBorderFill",
       "aliases": [],
       "itemCount": 5,
-      "status": "unimplemented",
+      "status": "verified",
       "notes": "",
       "legacyHwpctl": false,
       "oracle": {
-        "scenarios": [],
+        "scenarios": [
+          "p2-setnames"
+        ],
         "lastRun": null,
-        "diff": null
+        "diff": 0
       }
     },
     {
@@ -7650,13 +7678,15 @@
       "name": "CharShape",
       "aliases": [],
       "itemCount": 65,
-      "status": "unimplemented",
+      "status": "verified",
       "notes": "",
       "legacyHwpctl": false,
       "oracle": {
-        "scenarios": [],
+        "scenarios": [
+          "p2-setnames"
+        ],
         "lastRun": null,
-        "diff": null
+        "diff": 0
       }
     },
     {
@@ -7666,13 +7696,15 @@
       "name": "CodeTable",
       "aliases": [],
       "itemCount": 1,
-      "status": "unimplemented",
+      "status": "verified",
       "notes": "",
       "legacyHwpctl": false,
       "oracle": {
-        "scenarios": [],
+        "scenarios": [
+          "p2-setnames"
+        ],
         "lastRun": null,
-        "diff": null
+        "diff": 0
       }
     },
     {
@@ -7682,13 +7714,15 @@
       "name": "ColDef",
       "aliases": [],
       "itemCount": 11,
-      "status": "unimplemented",
+      "status": "verified",
       "notes": "",
       "legacyHwpctl": false,
       "oracle": {
-        "scenarios": [],
+        "scenarios": [
+          "p2-setnames"
+        ],
         "lastRun": null,
-        "diff": null
+        "diff": 0
       }
     },
     {
@@ -7698,13 +7732,15 @@
       "name": "CtrlData",
       "aliases": [],
       "itemCount": 1,
-      "status": "unimplemented",
+      "status": "verified",
       "notes": "",
       "legacyHwpctl": false,
       "oracle": {
-        "scenarios": [],
+        "scenarios": [
+          "p2-setnames"
+        ],
         "lastRun": null,
-        "diff": null
+        "diff": 0
       }
     },
     {
@@ -7714,13 +7750,15 @@
       "name": "DocumentInfo",
       "aliases": [],
       "itemCount": 17,
-      "status": "unimplemented",
+      "status": "verified",
       "notes": "",
       "legacyHwpctl": false,
       "oracle": {
-        "scenarios": [],
+        "scenarios": [
+          "p2-setnames"
+        ],
         "lastRun": null,
-        "diff": null
+        "diff": 0
       }
     },
     {
@@ -7730,13 +7768,15 @@
       "name": "DrawArcType",
       "aliases": [],
       "itemCount": 2,
-      "status": "unimplemented",
+      "status": "verified",
       "notes": "",
       "legacyHwpctl": false,
       "oracle": {
-        "scenarios": [],
+        "scenarios": [
+          "p2-setnames"
+        ],
         "lastRun": null,
-        "diff": null
+        "diff": 0
       }
     },
     {
@@ -7746,13 +7786,15 @@
       "name": "DrawFillAttr",
       "aliases": [],
       "itemCount": 25,
-      "status": "unimplemented",
+      "status": "verified",
       "notes": "",
       "legacyHwpctl": false,
       "oracle": {
-        "scenarios": [],
+        "scenarios": [
+          "p2-setnames"
+        ],
         "lastRun": null,
-        "diff": null
+        "diff": 0
       }
     },
     {
@@ -7762,13 +7804,15 @@
       "name": "DrawImageAttr",
       "aliases": [],
       "itemCount": 19,
-      "status": "unimplemented",
+      "status": "verified",
       "notes": "",
       "legacyHwpctl": false,
       "oracle": {
-        "scenarios": [],
+        "scenarios": [
+          "p2-setnames"
+        ],
         "lastRun": null,
-        "diff": null
+        "diff": 0
       }
     },
     {
@@ -7794,13 +7838,15 @@
       "name": "DrawLineAttr",
       "aliases": [],
       "itemCount": 12,
-      "status": "unimplemented",
+      "status": "verified",
       "notes": "",
       "legacyHwpctl": false,
       "oracle": {
-        "scenarios": [],
+        "scenarios": [
+          "p2-setnames"
+        ],
         "lastRun": null,
-        "diff": null
+        "diff": 0
       }
     },
     {
@@ -7810,13 +7856,15 @@
       "name": "DrawRotate",
       "aliases": [],
       "itemCount": 7,
-      "status": "unimplemented",
+      "status": "verified",
       "notes": "",
       "legacyHwpctl": false,
       "oracle": {
-        "scenarios": [],
+        "scenarios": [
+          "p2-setnames"
+        ],
         "lastRun": null,
-        "diff": null
+        "diff": 0
       }
     },
     {
@@ -7826,13 +7874,15 @@
       "name": "DrawShadow",
       "aliases": [],
       "itemCount": 5,
-      "status": "unimplemented",
+      "status": "verified",
       "notes": "",
       "legacyHwpctl": false,
       "oracle": {
-        "scenarios": [],
+        "scenarios": [
+          "p2-setnames"
+        ],
         "lastRun": null,
-        "diff": null
+        "diff": 0
       }
     },
     {
@@ -7842,13 +7892,15 @@
       "name": "DrawShear",
       "aliases": [],
       "itemCount": 2,
-      "status": "unimplemented",
+      "status": "verified",
       "notes": "",
       "legacyHwpctl": false,
       "oracle": {
-        "scenarios": [],
+        "scenarios": [
+          "p2-setnames"
+        ],
         "lastRun": null,
-        "diff": null
+        "diff": 0
       }
     },
     {
@@ -7858,13 +7910,15 @@
       "name": "EngineProperties",
       "aliases": [],
       "itemCount": 7,
-      "status": "unimplemented",
+      "status": "verified",
       "notes": "",
       "legacyHwpctl": false,
       "oracle": {
-        "scenarios": [],
+        "scenarios": [
+          "p2-setnames"
+        ],
         "lastRun": null,
-        "diff": null
+        "diff": 0
       }
     },
     {
@@ -7874,13 +7928,15 @@
       "name": "FileSetSecurity",
       "aliases": [],
       "itemCount": 3,
-      "status": "unimplemented",
+      "status": "verified",
       "notes": "",
       "legacyHwpctl": false,
       "oracle": {
-        "scenarios": [],
+        "scenarios": [
+          "p2-setnames"
+        ],
         "lastRun": null,
-        "diff": null
+        "diff": 0
       }
     },
     {
@@ -7890,13 +7946,15 @@
       "name": "FindReplace",
       "aliases": [],
       "itemCount": 23,
-      "status": "unimplemented",
+      "status": "verified",
       "notes": "",
       "legacyHwpctl": false,
       "oracle": {
-        "scenarios": [],
+        "scenarios": [
+          "p2-setnames"
+        ],
         "lastRun": null,
-        "diff": null
+        "diff": 0
       }
     },
     {
@@ -7908,13 +7966,15 @@
         "EndnoteShape"
       ],
       "itemCount": 17,
-      "status": "unimplemented",
+      "status": "verified",
       "notes": "",
       "legacyHwpctl": false,
       "oracle": {
-        "scenarios": [],
+        "scenarios": [
+          "p2-setnames"
+        ],
         "lastRun": null,
-        "diff": null
+        "diff": 0
       }
     },
     {
@@ -7924,13 +7984,15 @@
       "name": "HeaderFooter",
       "aliases": [],
       "itemCount": 3,
-      "status": "unimplemented",
+      "status": "verified",
       "notes": "",
       "legacyHwpctl": false,
       "oracle": {
-        "scenarios": [],
+        "scenarios": [
+          "p2-setnames"
+        ],
         "lastRun": null,
-        "diff": null
+        "diff": 0
       }
     },
     {
@@ -7940,13 +8002,15 @@
       "name": "HyperLink",
       "aliases": [],
       "itemCount": 5,
-      "status": "unimplemented",
+      "status": "verified",
       "notes": "",
       "legacyHwpctl": false,
       "oracle": {
-        "scenarios": [],
+        "scenarios": [
+          "p2-setnames"
+        ],
         "lastRun": null,
-        "diff": null
+        "diff": 0
       }
     },
     {
@@ -7956,13 +8020,15 @@
       "name": "InsertFieldTemplate",
       "aliases": [],
       "itemCount": 6,
-      "status": "unimplemented",
+      "status": "verified",
       "notes": "",
       "legacyHwpctl": false,
       "oracle": {
-        "scenarios": [],
+        "scenarios": [
+          "p2-setnames"
+        ],
         "lastRun": null,
-        "diff": null
+        "diff": 0
       }
     },
     {
@@ -7972,13 +8038,15 @@
       "name": "InsertFile",
       "aliases": [],
       "itemCount": 7,
-      "status": "unimplemented",
+      "status": "verified",
       "notes": "",
       "legacyHwpctl": false,
       "oracle": {
-        "scenarios": [],
+        "scenarios": [
+          "p2-setnames"
+        ],
         "lastRun": null,
-        "diff": null
+        "diff": 0
       }
     },
     {
@@ -7988,13 +8056,15 @@
       "name": "InsertText",
       "aliases": [],
       "itemCount": 1,
-      "status": "unimplemented",
+      "status": "verified",
       "notes": "",
       "legacyHwpctl": false,
       "oracle": {
-        "scenarios": [],
+        "scenarios": [
+          "p2-setnames"
+        ],
         "lastRun": null,
-        "diff": null
+        "diff": 0
       }
     },
     {
@@ -8004,13 +8074,15 @@
       "name": "ListParaPos",
       "aliases": [],
       "itemCount": 3,
-      "status": "unimplemented",
+      "status": "verified",
       "notes": "",
       "legacyHwpctl": false,
       "oracle": {
-        "scenarios": [],
+        "scenarios": [
+          "p2-setnames"
+        ],
         "lastRun": null,
-        "diff": null
+        "diff": 0
       }
     },
     {
@@ -8020,13 +8092,15 @@
       "name": "ListProperties",
       "aliases": [],
       "itemCount": 7,
-      "status": "unimplemented",
+      "status": "verified",
       "notes": "",
       "legacyHwpctl": false,
       "oracle": {
-        "scenarios": [],
+        "scenarios": [
+          "p2-setnames"
+        ],
         "lastRun": null,
-        "diff": null
+        "diff": 0
       }
     },
     {
@@ -8036,13 +8110,15 @@
       "name": "MemoShape",
       "aliases": [],
       "itemCount": 7,
-      "status": "unimplemented",
+      "status": "verified",
       "notes": "",
       "legacyHwpctl": false,
       "oracle": {
-        "scenarios": [],
+        "scenarios": [
+          "p2-setnames"
+        ],
         "lastRun": null,
-        "diff": null
+        "diff": 0
       }
     },
     {
@@ -8052,13 +8128,15 @@
       "name": "NumberingShape",
       "aliases": [],
       "itemCount": 2,
-      "status": "unimplemented",
+      "status": "verified",
       "notes": "",
       "legacyHwpctl": false,
       "oracle": {
-        "scenarios": [],
+        "scenarios": [
+          "p2-setnames"
+        ],
         "lastRun": null,
-        "diff": null
+        "diff": 0
       }
     },
     {
@@ -8068,13 +8146,15 @@
       "name": "PageBorderFill",
       "aliases": [],
       "itemCount": 8,
-      "status": "unimplemented",
+      "status": "verified",
       "notes": "",
       "legacyHwpctl": false,
       "oracle": {
-        "scenarios": [],
+        "scenarios": [
+          "p2-setnames"
+        ],
         "lastRun": null,
-        "diff": null
+        "diff": 0
       }
     },
     {
@@ -8084,13 +8164,15 @@
       "name": "PageDef",
       "aliases": [],
       "itemCount": 13,
-      "status": "unimplemented",
+      "status": "verified",
       "notes": "",
       "legacyHwpctl": false,
       "oracle": {
-        "scenarios": [],
+        "scenarios": [
+          "p2-setnames"
+        ],
         "lastRun": null,
-        "diff": null
+        "diff": 0
       }
     },
     {
@@ -8100,13 +8182,15 @@
       "name": "PageHiding",
       "aliases": [],
       "itemCount": 1,
-      "status": "unimplemented",
+      "status": "verified",
       "notes": "",
       "legacyHwpctl": false,
       "oracle": {
-        "scenarios": [],
+        "scenarios": [
+          "p2-setnames"
+        ],
         "lastRun": null,
-        "diff": null
+        "diff": 0
       }
     },
     {
@@ -8116,13 +8200,15 @@
       "name": "PageNumCtrl",
       "aliases": [],
       "itemCount": 1,
-      "status": "unimplemented",
+      "status": "verified",
       "notes": "",
       "legacyHwpctl": false,
       "oracle": {
-        "scenarios": [],
+        "scenarios": [
+          "p2-setnames"
+        ],
         "lastRun": null,
-        "diff": null
+        "diff": 0
       }
     },
     {
@@ -8132,13 +8218,15 @@
       "name": "PageNumPos",
       "aliases": [],
       "itemCount": 6,
-      "status": "unimplemented",
+      "status": "verified",
       "notes": "",
       "legacyHwpctl": false,
       "oracle": {
-        "scenarios": [],
+        "scenarios": [
+          "p2-setnames"
+        ],
         "lastRun": null,
-        "diff": null
+        "diff": 0
       }
     },
     {
@@ -8148,13 +8236,15 @@
       "name": "ParaShape",
       "aliases": [],
       "itemCount": 32,
-      "status": "unimplemented",
+      "status": "verified",
       "notes": "",
       "legacyHwpctl": false,
       "oracle": {
-        "scenarios": [],
+        "scenarios": [
+          "p2-setnames"
+        ],
         "lastRun": null,
-        "diff": null
+        "diff": 0
       }
     },
     {
@@ -8164,13 +8254,15 @@
       "name": "SecDef",
       "aliases": [],
       "itemCount": 32,
-      "status": "unimplemented",
+      "status": "verified",
       "notes": "",
       "legacyHwpctl": false,
       "oracle": {
-        "scenarios": [],
+        "scenarios": [
+          "p2-setnames"
+        ],
         "lastRun": null,
-        "diff": null
+        "diff": 0
       }
     },
     {
@@ -8180,13 +8272,15 @@
       "name": "ShapeObject",
       "aliases": [],
       "itemCount": 30,
-      "status": "unimplemented",
+      "status": "verified",
       "notes": "",
       "legacyHwpctl": false,
       "oracle": {
-        "scenarios": [],
+        "scenarios": [
+          "p2-setnames"
+        ],
         "lastRun": null,
-        "diff": null
+        "diff": 0
       }
     },
     {
@@ -8196,13 +8290,15 @@
       "name": "SpellingCheck",
       "aliases": [],
       "itemCount": 11,
-      "status": "unimplemented",
+      "status": "verified",
       "notes": "",
       "legacyHwpctl": false,
       "oracle": {
-        "scenarios": [],
+        "scenarios": [
+          "p2-setnames"
+        ],
         "lastRun": null,
-        "diff": null
+        "diff": 0
       }
     },
     {
@@ -8212,13 +8308,15 @@
       "name": "SummaryInfo",
       "aliases": [],
       "itemCount": 2,
-      "status": "unimplemented",
+      "status": "verified",
       "notes": "",
       "legacyHwpctl": false,
       "oracle": {
-        "scenarios": [],
+        "scenarios": [
+          "p2-setnames"
+        ],
         "lastRun": null,
-        "diff": null
+        "diff": 0
       }
     },
     {
@@ -8228,13 +8326,15 @@
       "name": "TabDef",
       "aliases": [],
       "itemCount": 23,
-      "status": "unimplemented",
+      "status": "verified",
       "notes": "",
       "legacyHwpctl": false,
       "oracle": {
-        "scenarios": [],
+        "scenarios": [
+          "p2-setnames"
+        ],
         "lastRun": null,
-        "diff": null
+        "diff": 0
       }
     },
     {
@@ -8244,13 +8344,15 @@
       "name": "Table",
       "aliases": [],
       "itemCount": 3,
-      "status": "unimplemented",
+      "status": "verified",
       "notes": "",
       "legacyHwpctl": false,
       "oracle": {
-        "scenarios": [],
+        "scenarios": [
+          "p2-setnames"
+        ],
         "lastRun": null,
-        "diff": null
+        "diff": 0
       }
     },
     {
@@ -8260,13 +8362,15 @@
       "name": "TableCreation",
       "aliases": [],
       "itemCount": 11,
-      "status": "unimplemented",
+      "status": "verified",
       "notes": "",
       "legacyHwpctl": false,
       "oracle": {
-        "scenarios": [],
+        "scenarios": [
+          "p2-setnames"
+        ],
         "lastRun": null,
-        "diff": null
+        "diff": 0
       }
     },
     {
@@ -8276,13 +8380,15 @@
       "name": "TableDeleteLine",
       "aliases": [],
       "itemCount": 13,
-      "status": "unimplemented",
+      "status": "verified",
       "notes": "",
       "legacyHwpctl": false,
       "oracle": {
-        "scenarios": [],
+        "scenarios": [
+          "p2-setnames"
+        ],
         "lastRun": null,
-        "diff": null
+        "diff": 0
       }
     },
     {
@@ -8292,13 +8398,15 @@
       "name": "TableInsertLine",
       "aliases": [],
       "itemCount": 1,
-      "status": "unimplemented",
+      "status": "verified",
       "notes": "",
       "legacyHwpctl": false,
       "oracle": {
-        "scenarios": [],
+        "scenarios": [
+          "p2-setnames"
+        ],
         "lastRun": null,
-        "diff": null
+        "diff": 0
       }
     },
     {
@@ -8308,13 +8416,15 @@
       "name": "TableSplitCell",
       "aliases": [],
       "itemCount": 2,
-      "status": "unimplemented",
+      "status": "verified",
       "notes": "",
       "legacyHwpctl": false,
       "oracle": {
-        "scenarios": [],
+        "scenarios": [
+          "p2-setnames"
+        ],
         "lastRun": null,
-        "diff": null
+        "diff": 0
       }
     },
     {
@@ -8324,13 +8434,15 @@
       "name": "TableStrToTbl",
       "aliases": [],
       "itemCount": 5,
-      "status": "unimplemented",
+      "status": "verified",
       "notes": "",
       "legacyHwpctl": false,
       "oracle": {
-        "scenarios": [],
+        "scenarios": [
+          "p2-setnames"
+        ],
         "lastRun": null,
-        "diff": null
+        "diff": 0
       }
     },
     {
@@ -8340,13 +8452,15 @@
       "name": "ViewProperties",
       "aliases": [],
       "itemCount": 5,
-      "status": "unimplemented",
+      "status": "verified",
       "notes": "",
       "legacyHwpctl": false,
       "oracle": {
-        "scenarios": [],
+        "scenarios": [
+          "p2-setnames"
+        ],
         "lastRun": null,
-        "diff": null
+        "diff": 0
       }
     }
   ]
