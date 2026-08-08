@@ -1839,6 +1839,12 @@ export class InputHandler {
 
   /** 선택 범위에 글자 서식을 적용한다. 선택이 없으면 캐럿 대기 서식으로 예약한다. */
   private applyCharFormat(props: Partial<CharProperties>): void {
+    // [#4271 리뷰] cursor.getPosition() 은 머리말/꼬리말·각주 모드 진입 전 본문 위치에
+    // 고정돼(Cursor 편집 위치는 hfCharOffset/fnCharOffset 로 별도 추적) 예약 앵커로 쓸 수
+    // 없고, 전용 삽입 분기(insertTextInHeaderFooter/insertTextInFootnote)도 예약을 소비하지
+    // 않는다 — 그대로 두면 이 모드에서 고른 서식이 모드를 나온 뒤 본문으로 샌다. 아직 지원
+    // 범위 밖이므로 예약 자체를 차단한다.
+    if (this.cursor.isInHeaderFooter() || this.cursor.isInFootnote()) return;
     const block = this.getSelectedCellBlock();
     if (block) {
       // F5 블록에서 Ctrl+클릭으로 모든 셀을 제외한 경우다. 빈 블록을 일반 텍스트
@@ -1859,8 +1865,13 @@ export class InputHandler {
     this.executeOperation({ kind: 'command', command: cmd });
   }
 
-  /** [#4162] 선택 없이 지정한 글자 서식을 다음 삽입 런에 적용하도록 예약한다. */
+  /** [#4162][#4271 리뷰] 선택 없이 지정한 글자 서식을 다음 삽입 런에 적용하도록 예약한다.
+   *
+   * 새 props 를 병합하기 전에 getPendingCharShape() 로 낡은 예약을 먼저 걷어낸다 — 안 그러면
+   * A 에서 예약한 서식이 B 로 캐럿이 실제로 이동한 뒤에도 raw 필드에 남아 있다가, B 에서
+   * 새로 예약할 때 그대로 병합돼(굵게@A + 색@B) 요청한 적 없는 서식이 B 로 샌다. */
   private stagePendingCharShape(props: Partial<CharProperties>): void {
+    this.getPendingCharShape();
     this.pendingCharShape = { ...this.pendingCharShape, ...props };
     this.pendingCharShapeAnchor = this.cursor.getPosition();
   }
@@ -1869,9 +1880,19 @@ export class InputHandler {
    * 예약된 캐럿 대기 서식을 반환한다. 캐럿이 예약 지점에서 실제로 벗어났으면(탐색·클릭 등
    * 진짜 이동) 예약을 버리고 undefined 를 돌려준다 — 매 이동 지점을 일일이 후킹하는 대신
    * 조회 시점에 위치를 대조하는 지연 검증이다.
+   *
+   * [#4271 리뷰 후속] 머리말/꼬리말·각주 모드 중에는 앵커가 그대로 유효해도(진입 전 본문
+   * 위치와 cursor.getPosition() 이 여전히 같으므로) undefined 를 돌려준다. IME 조합 소비
+   * 경로(applyPendingCharShapeToRange)는 모드를 가리지 않고 이 값을 그대로 실제 wasm 범위
+   * 적용에 쓰는데, 그 범위는 hfCharOffset/fnCharOffset(모드 내부 오프셋)을 본문 charOffset
+   * 인 것처럼 anchor 에 실어 온다 — 걸러내지 않으면 모드 진입 직전 본문에서 예약한 서식이
+   * 엉뚱한 본문 오프셋에 실제로 적용된다. 예약 자체는 지우지 않으므로, 모드에 들어갔다
+   * 나오기만 하고 진짜 이동이 없었으면(캐럿이 예약 지점 그대로면) 본문 삽입에는 여전히
+   * 정상 적용된다.
    */
   getPendingCharShape(): Partial<CharProperties> | undefined {
     if (!this.pendingCharShape || !this.pendingCharShapeAnchor) return undefined;
+    if (this.cursor.isInHeaderFooter() || this.cursor.isInFootnote()) return undefined;
     if (CursorState.comparePositions(this.cursor.getPosition(), this.pendingCharShapeAnchor) !== 0) {
       this.pendingCharShape = null;
       this.pendingCharShapeAnchor = null;
@@ -1886,12 +1907,29 @@ export class InputHandler {
     if (!props) return;
     const to = anchor.charOffset + count;
     applyCharShapeModsToRange(this.wasm, anchor, anchor.charOffset, to, props);
-    this.advancePendingCharShapeAnchor({ ...anchor, charOffset: to });
+    this.advancePendingCharShapeAnchor(anchor, { ...anchor, charOffset: to });
   }
 
-  /** [#4162] 삽입으로 캐럿이 전진한 것은 "이동"이 아니므로 예약을 새 위치로 이어간다. */
-  private advancePendingCharShapeAnchor(newPos: DocumentPosition): void {
-    if (this.pendingCharShape) this.pendingCharShapeAnchor = { ...newPos };
+  /**
+   * [#4162][#4271 리뷰 후속] 삽입으로 캐럿이 전진한 것은 "이동"이 아니므로 예약을 새
+   * 위치로 이어간다 — 단, 이번 삽입이 실제로 예약 지점(oldPos)에서 시작했을 때만이다.
+   *
+   * `desc.command.type === 'insertText'`이기만 하면 호출부(executeOperation)가 무조건
+   * 이 메서드를 부르는데, 붙여넣기(pastePlainText)처럼 예약 서식과 무관한 삽입도
+   * `insertText` 타입이다. raw `pendingCharShape` 필드만 보고(옛 구현) 무조건 새 위치로
+   * 옮기면, A 에서 예약한 뒤 커서가 실제로 C 로 이동해(예약은 이미 낡았지만 아직
+   * getPendingCharShape() 로 걸러진 적 없어 필드엔 남아 있는 상태) C 에서 서식과 무관한
+   * 삽입(붙여넣기 등)을 해도 그 예약이 삽입 뒤 캐럿 위치로 그대로 딸려가 살아난다.
+   * oldPos 가 예약 지점과 다르면 이미 낡은 것이므로 이어가지 않고 버린다.
+   */
+  private advancePendingCharShapeAnchor(oldPos: DocumentPosition, newPos: DocumentPosition): void {
+    if (!this.pendingCharShape || !this.pendingCharShapeAnchor) return;
+    if (CursorState.comparePositions(oldPos, this.pendingCharShapeAnchor) !== 0) {
+      this.pendingCharShape = null;
+      this.pendingCharShapeAnchor = null;
+      return;
+    }
+    this.pendingCharShapeAnchor = { ...newPos };
   }
 
   /**
@@ -2560,7 +2598,7 @@ export class InputHandler {
         }
         // [#4162] 삽입으로 캐럿이 전진한 것은 "이동"이 아니므로 예약을 이어간다.
         if (desc.command.type === 'insertText') {
-          this.advancePendingCharShapeAnchor(newPos);
+          this.advancePendingCharShapeAnchor(beforePos, newPos);
         }
         if (keepFieldStartOutside) {
           this.markCurrentFieldStartOutside();
