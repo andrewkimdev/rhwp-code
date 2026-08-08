@@ -151,6 +151,12 @@ const EXEMPT: &[(&str, &str, Exempt, &str)] = &[
     ),
     (
         "commands/clipboard.rs",
+        "copy_selection_in_cell_by_path_native",
+        Exempt::SessionState,
+        "경로 기반 복사 — 읽기 후 `self.clipboard` 에만 기록.",
+    ),
+    (
+        "commands/clipboard.rs",
         "copy_control_native",
         Exempt::SessionState,
         "복사 — `self.clipboard` / `self.paste_cascade_count` 만 변경.",
