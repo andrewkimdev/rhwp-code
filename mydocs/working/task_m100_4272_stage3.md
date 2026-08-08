@@ -5,7 +5,7 @@
 - 기준 commit: `a7be7c0ac` (Stage 2 구현)
 - 작업 브랜치: `fix/issue-4272-nested-cell-text-selection`
 - 작성일: 2026-08-09 KST
-- 상태: 구현 및 focused 로컬 검증 완료, 후속 결함 분리 완료, PR 생성 승인 대기
+- 상태: 구현·전체 PR 검증·후속 결함 분리 완료, 원격 push 및 Open PR 생성 승인됨
 
 ## 목표
 
@@ -91,6 +91,40 @@ Studio 전체 테스트는 알려진 `spawnSync()` 샌드박스 `EPERM` 오탐�
 Stage 2에서 이미 dev 서버에 배치한 표준 Docker WASM을 그대로 사용했고 중복 WASM 빌드는 수행하지
 않았다. 실행 중인 Vite dev 서버에는 TypeScript 변경이 hot reload로 반영됐다.
 
+## 전체 PR 후보 검증
+
+작업지시자 승인 뒤 최신 `upstream/devel` `e4d07fab7`을 task branch에 병합했다. 새 devel의
+passthrough invalidation guard가 경로 기반 복사 API를 분류하지 않아 전체 nextest 최초 실행에서
+`classification_drift_is_blocked` 1건이 실패했다. 이 API는 문서를 읽고 세션의
+`self.clipboard`에만 기록하므로 기존 복사 API와 동일하게 `Exempt::SessionState`로 명시했다.
+focused guard 5/5와 전체 nextest 재실행으로 분류가 정확함을 확인했다.
+
+최종 후보 `e68cab959` 기준 결과는 다음과 같다.
+
+| 검증 | 최종 결과 |
+|---|---|
+| `cargo build --release` | 통과 |
+| `cargo test --release --lib` | 3,361 통과, 13 ignored |
+| 전체 `cargo nextest` | 5,484/5,484 통과, 35 skipped |
+| native Skia lib | 58/58 통과 |
+| native Skia 누락 그림 fixture | 2/2 통과 |
+| native Skia direct PDF | 4/4 통과 |
+| `cargo fmt --all -- --check` | 통과 |
+| `git diff --check` | 통과 |
+| `cargo clippy --all-targets -- -D warnings` | 통과 |
+| doctest | 4 통과, 2 ignored |
+| Studio `npx tsc --noEmit` | 통과 |
+| Studio 전체 `npm test` (샌드박스 밖) | 819/819 통과 |
+| 표준 Docker WASM 빌드 | 통과, `pkg/rhwp_bg.wasm` 갱신 |
+| headless #4272 텍스트 선택·복사·붙여넣기 | 통과 |
+| headless #4272 물리 11쪽 텍스트 복사 | 통과 |
+| headless #4272 3중 표 객체 복사 | 통과 |
+
+최종 WASM SHA-256은
+`78658b33f55919407295491c72678bbdf2327968f0a700404a50b08d10b226ca`다. 3중 표 객체 E2E의
+첫 실행은 테스트 단언 전에 headless Chrome 프로세스가 시작되지 않아 종료됐고, 동일 명령 재실행은
+모든 단언과 브라우저 warning/error 0건 조건까지 통과했다.
+
 ## CDP 시각·상태 증적
 
 - [3중 표 객체 복사 상태 JSON](../../output/4272/nested-table-object-copy.json)
@@ -120,6 +154,7 @@ cellzone 유효 BorderFill 누락, 셀 문단 ParaShape 기본값 덮어쓰기�
 
 ## 다음 승인 게이트
 
-#4272의 로컬 구현 후보는 준비됐다. 전체 PR 검증 게이트, 원격 push와 PR 생성은 각각 프로젝트
-절차의 별도 승인을 따른다. 현재 정정 commit은 아직 `devel`에 통합되지 않았으므로 #4272 GitHub
-이슈는 닫지 않으며, PR merge와 `devel` 포함 확인 뒤 승인받아 close한다.
+#4272의 로컬 구현 후보와 전체 검증은 준비됐고, 작업지시자가 원격 push와 Open PR 생성을 승인했다.
+현재 정정 commit은 아직 `devel`에 통합되지 않았으므로 #4272 GitHub 이슈는 닫지 않는다. PR 생성
+뒤 reviewer 지정·검토 기록 게시와 merge는 프로젝트 절차의 다음 승인 게이트로 분리하고, merge 및
+`devel` 포함 확인 뒤 승인받아 이슈를 close한다.
