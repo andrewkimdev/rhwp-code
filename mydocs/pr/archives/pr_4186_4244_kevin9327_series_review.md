@@ -3,8 +3,8 @@
 ## 기준과 범위
 
 - 검토 브랜치: `review/kevin9327-20260808`
-- 기준 `upstream/devel`: `c119e5db5` (검토 시작 시점)
-- 통합 head: `9b452eab1` (검토 기록 작성 전)
+- 검토 시작 `upstream/devel`: `c119e5db5`, PR 생성 전 최신 기준선: `fcc3b2135`
+- 통합 head: `dfe3a8fd0` (최신 기준선 rebase 후, 후속 기록 전)
 - 변경 규모: 85개 파일, +11,733/-24줄
 - #4185는 기여자 CI 워크플로 추가 PR이므로 작업지시자 지시에 따라 **통합 대상에서 제외**했다.
   이 검토 트리에는 `.github/` 변경이 없다.
@@ -50,9 +50,9 @@
 
 | 커밋 | 보정 | 근거 |
 |---|---|---|
-| `5f234450` | 지식지도 사전에 6개 실제 출력 필드와 개수를 반영 | `knowledge_map_field_dictionary_contract` 실패 |
-| `ed1f7146` | Node 생성 봉투 타입 수 35→37 정합 | `npm run gen:check` 드리프트 |
-| `9b452eab` | 벤치 문서의 존재하지 않는 태스크 ID를 실제 ID로 수정 | reference 솔루션 실실행 |
+| `fa274cb3` | 지식지도 사전에 6개 실제 출력 필드와 개수를 반영 | `knowledge_map_field_dictionary_contract` 실패 |
+| `6e1686eb` | Node 생성 봉투 타입 수 35→37 정합 | `npm run gen:check` 드리프트 |
+| `7d2b7d16` | 벤치 문서의 존재하지 않는 태스크 ID를 실제 ID로 수정 | reference 솔루션 실실행 |
 
 제목에 `fix(ci)`가 있는 네 커밋은 GitHub Actions 변경이 아니라 제품 코드의 프로필·Rustfmt·CodeQL
 오탐 정합이다. CI 설정 파일 변경은 #4185만 해당하며 제외했다.
