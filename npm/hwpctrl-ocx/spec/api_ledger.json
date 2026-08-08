@@ -1234,7 +1234,6 @@
       "specArityAmbiguous": false,
       "oracle": {
         "scenarios": [
-          "p3-field-pos",
           "p3-shape-apply"
         ],
         "lastRun": null,

@@ -630,10 +630,19 @@ impl DocumentCore {
             .get(host_para)?;
         for (control_index, cell_index, para_index) in path {
             let ctrl = para.controls.get(*control_index)?;
-            let Control::Table(table) = ctrl else {
-                return None;
+            para = match ctrl {
+                Control::Table(table) => {
+                    table.cells.get(*cell_index)?.paragraphs.get(*para_index)?
+                }
+                // 그리기 개체는 글상자와 캡션을 연다 — 둘째 칸이 그중 몇 번째인지다.
+                // 여기가 표만 알던 탓에 글상자·캡션 리스트는 **자리가 있어도 못 닿았다**
+                // (한글은 그 리스트 끝을 18 로 답하는데 rhwp 는 0 이었다).
+                Control::Shape(shape) => shape_lists(shape)
+                    .into_iter()
+                    .find(|(node, _)| node == cell_index)
+                    .and_then(|(_, paragraphs)| paragraphs.get(*para_index))?,
+                _ => return None,
             };
-            para = table.cells.get(*cell_index)?.paragraphs.get(*para_index)?;
         }
         Some(para)
     }
@@ -1485,30 +1494,30 @@ fn collect_fields_from_paragraph(
                 }
             }
             Control::Shape(shape) => {
-                if let Some(drawing) = shape.drawing() {
-                    if let Some(tb) = &drawing.text_box {
-                        // 글상자도 리스트 하나를 차지한다(한글2022 실측: 표 12칸 다음 글상자가
-                        // 그 자리에서 아이디를 받고, 그 뒤 표가 이어받는다).
-                        let box_list_id = walk.alloc();
-                        walk.lists.push(ListEntry {
-                            list_id: box_list_id,
-                            is_cell: false,
-                            host_list_id: list_id,
-                            section_index: base_location.section_index,
-                            host_para_index: para_in_list,
+                // 글상자도 리스트 하나를 차지한다(한글2022 실측: 표 12칸 다음 글상자가
+                // 그 자리에서 아이디를 받고, 그 뒤 표가 이어받는다). **캡션도 마찬가지다** —
+                // 안 세면 그 뒤 리스트 번호가 전부 밀린다.
+                for (node, paragraphs) in shape_lists(shape) {
+                    let box_list_id = walk.alloc();
+                    walk.lists.push(ListEntry {
+                        list_id: box_list_id,
+                        is_cell: false,
+                        host_list_id: list_id,
+                        section_index: base_location.section_index,
+                        host_para_index: para_in_list,
+                        control_index: ci,
+                        // 묶음 안에서 몇 번째 마디인지 — 사슬 쪽과 같은 번호를 쓴다.
+                        cell_index: node,
+                        para_count: paragraphs.len(),
+                        grid: None,
+                    });
+                    for (pi, tb_para) in paragraphs.iter().enumerate() {
+                        let mut loc = base_location.clone();
+                        loc.nested_path.push(NestedEntry::TextBox {
                             control_index: ci,
-                            cell_index: 0,
-                            para_count: tb.paragraphs.len(),
-                            grid: None,
+                            para_index: pi,
                         });
-                        for (pi, tb_para) in tb.paragraphs.iter().enumerate() {
-                            let mut loc = base_location.clone();
-                            loc.nested_path.push(NestedEntry::TextBox {
-                                control_index: ci,
-                                para_index: pi,
-                            });
-                            collect_fields_from_paragraph(tb_para, &loc, box_list_id, walk, result);
-                        }
+                        collect_fields_from_paragraph(tb_para, &loc, box_list_id, walk, result);
                     }
                 }
             }
@@ -1529,9 +1538,9 @@ pub(crate) fn cell_path_to_list(
     let mut current = lists.iter().find(|l| l.list_id == list_id)?;
     let mut para_index = para_in_list;
     loop {
-        if !current.is_cell {
-            return None; // 글상자 안 삽입은 아직 다루지 않는다.
-        }
+        // 셀만 풀던 자리다. 글상자·캡션도 같은 꼴의 경로를 쓴다 — 둘째 칸이 셀 번호가 아니라
+        // 그 개체가 연 리스트 중 몇 번째냐일 뿐이고, 푸는 쪽(`cell_paragraph_at_path`)이
+        // 컨트롤 갈래를 보고 가른다. 여기서 막고 있어서 캡션 리스트는 끝이 0 으로 나왔다.
         path.push((current.control_index, current.cell_index, para_index));
         if current.host_list_id == ROOT_LIST_ID {
             break;
@@ -1701,6 +1710,34 @@ pub(crate) fn stream_pos(para: &Paragraph, char_idx: usize) -> usize {
         }
     }
     units
+}
+
+/// 그리기 개체 하나가 여는 **글 리스트들** — 글상자와 **캡션**이다.
+///
+/// 첫 값은 그 개체 안에서 몇 번째 리스트인지다. 리스트 표(`cell_index` 자리)와 컨트롤 사슬이
+/// 이 번호를 같이 써서 둘이 **같은 마디를 같은 이름으로** 가리킨다.
+///
+/// 캡션을 안 세던 것이 리스트 번호가 밀리던 뿌리였다(실측: `samples/draw-group.hwp` 의 묶음은
+/// 글상자가 없는데도 한글이 list 2 를 주고, 그 부모가 바로 그 묶음이며, 안에 `atno` 가 든
+/// 가운데 정렬 한 문단이다 — 캡션이다).
+///
+/// 글상자와 캡션을 **둘 다** 가진 개체의 앞뒤 순서는 아직 못 쟀다. 그런 표본을 만나면 그때
+/// 실측해서 고칠 것 — 지금 순서는 기존에 검증된 글상자 자리를 지키려고 글상자를 앞에 둔 것뿐이다.
+pub(crate) fn shape_lists(shape: &crate::model::shape::ShapeObject) -> Vec<(usize, &[Paragraph])> {
+    let mut out: Vec<(usize, &[Paragraph])> = Vec::new();
+    if let Some(tb) = shape.drawing().and_then(|d| d.text_box.as_ref()) {
+        out.push((0, tb.paragraphs.as_slice()));
+    }
+    let caption = match shape {
+        crate::model::shape::ShapeObject::Group(g) => g.caption.as_ref(),
+        other => other.drawing().and_then(|d| d.caption.as_ref()),
+    };
+    if let Some(cap) = caption {
+        if !cap.paragraphs.is_empty() {
+            out.push((1, cap.paragraphs.as_slice()));
+        }
+    }
+    out
 }
 
 /// 컨트롤 하나가 **글자 몫을 빼고** 스트림에서 더 차지하는 칸 수.

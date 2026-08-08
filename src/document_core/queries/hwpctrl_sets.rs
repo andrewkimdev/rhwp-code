@@ -7,8 +7,9 @@
 
 use crate::document_core::queries::field_query::{
     caret_stops, cell_path_to_list, char_idx_at_stream_pos, cursor_paragraph, json_escape,
-    leading_anchor_pos, root_para_location, root_para_of, select_start_pos, stream_len, stream_pos,
-    word_end_from, word_starts, ListEntry, EXTENDED_CTRL_UNITS, ROOT_LIST_ID,
+    leading_anchor_pos, root_para_location, root_para_of, select_start_pos, shape_lists,
+    stream_len, stream_pos, word_end_from, word_starts, ListEntry, EXTENDED_CTRL_UNITS,
+    ROOT_LIST_ID,
 };
 use crate::document_core::DocumentCore;
 use crate::error::HwpError;
@@ -83,15 +84,26 @@ fn control_identity(ctrl: &Control) -> (&'static str, u32, &'static str) {
         Control::ColumnDef(_) => ("cold", 2, "단 정의"),
         Control::Table(_) => ("tbl", 11, "표"),
         // 그리기 개체의 이름은 갈래마다 다르다("사각형"·"타원" …). rhwp 가 이미 같은 이름을
-        // 들고 있어서 그대로 쓴다(오라클 실측과 일치).
-        Control::Shape(shape) => ("gso", 11, shape.shape_name()),
+        // 들고 있어서 그대로 쓴다(오라클 실측과 일치). 묶음만 다르다 — rhwp 는 "묶음",
+        // 한글은 **"그리기"** 다(실측).
+        Control::Shape(shape) => (
+            "gso",
+            11,
+            if matches!(**shape, crate::model::shape::ShapeObject::Group(_)) {
+                "그리기"
+            } else {
+                shape.shape_name()
+            },
+        ),
         Control::Picture(_) => ("gso", 11, "그림"),
         Control::Equation(_) => ("eqed", 11, "수식"),
         Control::Header(_) => ("head", 2, "머리말"),
         Control::Footer(_) => ("foot", 2, "꼬리말"),
         Control::Footnote(_) => ("fn", 2, "각주"),
         Control::Endnote(_) => ("en", 2, "미주"),
-        Control::AutoNumber(_) => ("atno", 2, "자동 번호"),
+        // 한글이 부르는 이름은 "번호 넣기" 다(실측). rhwp 안에서 쓰는 이름과 다르다.
+        // `CtrlCh` 는 스트림 글자 코드다 — 자동 번호는 `0x12` = 18 이다(실측).
+        Control::AutoNumber(_) => ("atno", 18, "번호 넣기"),
         Control::NewNumber(_) => ("nwno", 2, "새 번호 지정"),
         Control::PageNumberPos(_) => ("pgnp", 2, "쪽 번호 위치"),
         Control::PageHide(_) => ("pghd", 2, "감추기"),
@@ -168,9 +180,12 @@ fn collect_controls(
                 }
             }
             Control::Shape(shape) => {
-                if let Some(text_box) = shape.drawing().and_then(|d| d.text_box.as_ref()) {
-                    let Some(child) = child_of(0) else { continue };
-                    for (pi, box_para) in text_box.paragraphs.iter().enumerate() {
+                // 글상자와 **캡션** 둘 다 리스트를 연다 — 리스트 표와 같은 번호를 쓴다.
+                for (node, paragraphs) in shape_lists(shape) {
+                    let Some(child) = child_of(node) else {
+                        continue;
+                    };
+                    for (pi, box_para) in paragraphs.iter().enumerate() {
                         collect_controls(box_para, (child, pi), lists, items);
                     }
                 }
