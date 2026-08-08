@@ -4,7 +4,7 @@
 
 - 검토 브랜치: `review/kevin9327-20260808`
 - 검토 시작 `upstream/devel`: `c119e5db5`, PR 생성 전 최신 기준선: `fcc3b2135`
-- 통합 head: `dfe3a8fd0` (최신 기준선 rebase 후, 후속 기록 전)
+- Full CI 검증 head: `cbfb07de3` (최신 기준선 rebase와 검토 기록 반영 후)
 - 변경 규모: 85개 파일, +11,733/-24줄
 - #4185는 기여자 CI 워크플로 추가 PR이므로 작업지시자 지시에 따라 **통합 대상에서 제외**했다.
   이 검토 트리에는 `.github/` 변경이 없다.
@@ -71,12 +71,14 @@
 | Node production `npm audit --omit=dev` | 취약점 0건 |
 | 실제 CLI | `verify`, `scan`, `export-ontology` 정상 출력 |
 | 새 도구 실실행 | agent bench, provenance chain, scale ladder, render gate, fork harvest 정상 |
+| GitHub Full CI | [CI 31248491466](https://github.com/edwardkim/rhwp/actions/runs/31248491466), [CodeQL 31248491386](https://github.com/edwardkim/rhwp/actions/runs/31248491386), [Render Diff 31248491377](https://github.com/edwardkim/rhwp/actions/runs/31248491377), Node/Python binding 모두 `cbfb07de3`에서 통과 |
 
 `npm ci`의 개발 의존성 감사에는 기존 low/high 항목 2건이 남았으나 lockfile을 이 연작이 변경하지 않았고,
 production 의존성 감사는 0건이었다.
 
 ## 최종 권고
 
-**#4185를 제외한 27개 PR은 메인터너 보정 포함 수용 권고**다. 원 PR별 최신 head와 required check는
-원격 반영 직전에 다시 확인한다. 이 검토는 로컬 누적 브랜치에서만 수행했으며, 아직 원격 push, PR 생성,
-approve 또는 merge는 하지 않았다.
+**#4185를 제외한 27개 PR은 메인터너 보정 포함 수용 권고**다. 통합
+[PR #4253](https://github.com/edwardkim/rhwp/pull/4253)는 `cbfb07de3`에서 Full CI를 통과했고
+`mergeStateStatus=CLEAN`을 확인했다. 이 뒤의 오늘할일·검토 기록 갱신은 코드 후보를 바꾸지 않는
+trailing 문서 commit으로 반영하며, 최신 head의 docs-only gate와 작업지시자 승인 뒤 merge한다.
