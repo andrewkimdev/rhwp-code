@@ -2,7 +2,7 @@
  * 명령별 봉투 타입 — **자동 생성 파일. 손으로 고치지 마세요.**
  *
  * 재생성: `npm run gen:types` (tools/gen-types.ts)
- * 출처:   `rhwp capabilities` — version 0.8.2, `--json` 봉투 34개
+ * 출처:   `rhwp capabilities` — version 0.8.2, `--json` 봉투 37개
  *
  * `capabilities` 는 명령마다 **어떤 필드가 있는지**(`recordFields`)만 선언하고 타입은
  * 말하지 않습니다. 그래서 대부분의 필드가 `unknown` 입니다 — 짐작한 타입을 적으면 그
@@ -338,6 +338,22 @@ export interface ExportMarkdownEnvelope {
 }
 
 /**
+ * `rhwp export-ontology --json` 봉투.
+ *
+ * 자기서술에서 기계 유도한 JSON-LD 온톨로지 산출 — IR 클래스·속성, 명령/MCP 행위, 신뢰 술어
+ * (#3907 O1)
+ */
+export interface ExportOntologyEnvelope {
+  readonly actionCount?: unknown;
+  readonly classCount?: unknown;
+  readonly ontology?: unknown;
+  readonly propertyCount?: unknown;
+  readonly schemaVersion?: string;
+
+  readonly [key: string]: unknown;
+}
+
+/**
  * `rhwp export-pdf --json` 봉투.
  *
  * 문서를 PDF로 렌더 (svg|direct backend, --json 매니페스트)
@@ -616,6 +632,21 @@ export interface RunEnvelope {
 }
 
 /**
+ * `rhwp scan --json` 봉투.
+ *
+ * 디렉터리 재귀 발견·분류 — 확장자↔매직 대조(extMismatch), --probe 파싱 시도(암호·쪽수), batch
+ * stdin 목록의 원천
+ */
+export interface ScanEnvelope {
+  readonly files?: unknown;
+  readonly roots?: unknown;
+  readonly schemaVersion?: string;
+  readonly summary?: unknown;
+
+  readonly [key: string]: unknown;
+}
+
+/**
  * `rhwp search --json` 봉투.
  *
  * 문서 검색 결과를 구역·문단·페이지·문자 오프셋 주소와 함께 출력
@@ -670,6 +701,24 @@ export interface ThumbnailEnvelope {
 }
 
 /**
+ * `rhwp verify --json` 봉투.
+ *
+ * 기대
+ * 조건(--expect-pages/min-pages/max-pages/min-chars/min-tables/table-count/contains/not-contains/field/format)
+ * 대조 — 전부 만족 exit 0, 불일치는 봉투 후 exit 3
+ */
+export interface VerifyEnvelope {
+  readonly expectations?: unknown;
+  readonly failCount?: unknown;
+  readonly passCount?: unknown;
+  readonly schemaVersion?: string;
+  readonly source?: string;
+  readonly verdict?: unknown;
+
+  readonly [key: string]: unknown;
+}
+
+/**
  * 명령 이름 → 봉투 타입.
  *
  * `recordFields` 를 선언한 명령만 들어 있습니다 — 나머지는 `--json` 봉투를 내지 않습니다.
@@ -691,6 +740,7 @@ export interface EnvelopeByCommand {
   "export-hwpx": ExportHwpxEnvelope;
   "export-ir-schema": ExportIrSchemaEnvelope;
   "export-markdown": ExportMarkdownEnvelope;
+  "export-ontology": ExportOntologyEnvelope;
   "export-pdf": ExportPdfEnvelope;
   "export-plan-schema": ExportPlanSchemaEnvelope;
   "export-provenance-map": ExportProvenanceMapEnvelope;
@@ -706,9 +756,11 @@ export interface EnvelopeByCommand {
   "ir-diff": IrDiffEnvelope;
   "render-diff": RenderDiffEnvelope;
   run: RunEnvelope;
+  scan: ScanEnvelope;
   search: SearchEnvelope;
   "table-to-csv": TableToCsvEnvelope;
   thumbnail: ThumbnailEnvelope;
+  verify: VerifyEnvelope;
 }
 
 /** `--json` 봉투를 내는 명령 이름. */
