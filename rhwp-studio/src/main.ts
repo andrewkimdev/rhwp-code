@@ -25,6 +25,7 @@ import { insertCommands } from '@/command/commands/insert';
 import { tableCommands } from '@/command/commands/table';
 import { pageCommands } from '@/command/commands/page';
 import { toolCommands } from '@/command/commands/tool';
+import { templateValidatorCommands } from '@/command/commands/template-validator';
 import { installPwaFileHandling, type FileHandlingWindowLike } from '@/command/pwa-file-handling';
 import {
   isSupportedDocumentFileName,
@@ -264,6 +265,7 @@ registry.registerAll(insertCommands);
 registry.registerAll(tableCommands);
 registry.registerAll(pageCommands);
 registry.registerAll(toolCommands);
+registry.registerAll(templateValidatorCommands);
 
 /**
  * embed 프로파일의 메뉴·도구막대 정리 — index.html은 그대로 두고 부트 시 런타임에

@@ -66,6 +66,12 @@ export interface AutosaveSettings {
   idleDelaySeconds: number;
 }
 
+/** hwpx-template-engine 템플릿 검증 도구 설정 */
+export interface TemplateValidatorSettings {
+  /** hwpx-template-engine 서버 베이스 URL (예: http://localhost:8080) */
+  backendUrl: string;
+}
+
 /** 전체 설정 구조 */
 export interface AppSettings {
   version: number;
@@ -74,6 +80,7 @@ export interface AppSettings {
   dialog: DialogSettings;
   view: ViewSettings;
   autosave: AutosaveSettings;
+  templateValidator: TemplateValidatorSettings;
 }
 
 /** 언어 인덱스 상수 (HWP 7개 언어) */
@@ -120,6 +127,7 @@ export const BUILTIN_FONT_SETS: readonly FontSet[] = [
 ];
 
 const STORAGE_KEY = 'rhwp-settings';
+const DEFAULT_TEMPLATE_VALIDATOR_BACKEND_URL = 'http://localhost:8080';
 
 function defaultSettings(): AppSettings {
   return {
@@ -147,7 +155,16 @@ function defaultSettings(): AppSettings {
       idleSaveEnabled: true,
       idleDelaySeconds: 10,
     },
+    templateValidator: {
+      backendUrl: DEFAULT_TEMPLATE_VALIDATOR_BACKEND_URL,
+    },
   };
+}
+
+function normalizeBackendUrl(value: unknown, fallback: string): string {
+  if (typeof value !== 'string') return fallback;
+  const trimmed = value.trim().replace(/\/+$/, '');
+  return trimmed || fallback;
 }
 
 function normalizeThemeMode(value: unknown): ThemeMode {
@@ -182,6 +199,7 @@ class UserSettingsService {
       const dialog: Partial<DialogSettings> = parsed.dialog ?? {};
       const view: Partial<ViewSettings> = parsed.view ?? {};
       const autosave: Partial<AutosaveSettings> = parsed.autosave ?? {};
+      const templateValidator: Partial<TemplateValidatorSettings> = parsed.templateValidator ?? {};
       return {
         version: parsed.version ?? defaults.version,
         font: {
@@ -243,6 +261,14 @@ class UserSettingsService {
             defaults.autosave.idleDelaySeconds,
             5,
             600,
+          ),
+        },
+        templateValidator: {
+          ...defaults.templateValidator,
+          ...templateValidator,
+          backendUrl: normalizeBackendUrl(
+            templateValidator.backendUrl,
+            defaults.templateValidator.backendUrl,
           ),
         },
       };
@@ -399,6 +425,18 @@ class UserSettingsService {
     this.data.font.fontSets.splice(index, 1);
     this.save();
     return true;
+  }
+
+  /** 템플릿 검증 도구 설정 반환 */
+  getTemplateValidatorSettings(): TemplateValidatorSettings {
+    return this.data.templateValidator;
+  }
+
+  /** hwpx-template-engine 서버 베이스 URL 설정 */
+  setTemplateValidatorBackendUrl(url: string): void {
+    this.data.templateValidator.backendUrl = normalizeBackendUrl(
+      url, DEFAULT_TEMPLATE_VALIDATOR_BACKEND_URL);
+    this.save();
   }
 
   /** FontSet의 언어 인덱스로 글꼴 이름 조회 */
