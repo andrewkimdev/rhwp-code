@@ -24,6 +24,12 @@ const FIELD_VIEW_DEFAULT = 0;
 /** 확장 컨트롤 하나가 문단 안에서 차지하는 코드 유닛 수 — 한글의 `pos` 는 글자 수가 아니다. */
 const CONTROL_CODE_UNITS = 8;
 
+/**
+ * 되돌리기 더미의 깊이. 문서를 통째로 찍어 두는 방식이라 무한정 쌓으면 메모리를 먹는다.
+ * 한글의 실제 깊이는 못 쟀다 — 여기서 정한 값이지 실측이 아니다.
+ */
+const HISTORY_DEPTH = 32;
+
 /** `EditMode` 기본값 — 일반 편집(규격 §8.2.4). */
 const EDIT_MODE_NORMAL = 1;
 
@@ -111,7 +117,35 @@ const MOVE = {
  * `item` 은 지금 상태를 읽을 파라미터셋 항목, `prop`·`props` 는 코어 서식 API 의 키다.
  * 색은 CSS 문자열로 준다 — 코어가 한글의 BGR 로 옮긴다(빨강 `#FF0000` → 255).
  */
+/**
+ * 문서를 안 고치는 액션 갈래 — 되돌리기 목록에 안 쌓는다.
+ *
+ * 캐럿을 옮기거나 블록을 잡는 것뿐이라 되돌릴 것이 없다. 한글도 그렇다(실측: 이동·고르기
+ * 다음에 `Undo` 를 걸면 그 앞의 **고침**이 되돌아온다).
+ */
+const NON_MUTATING_KINDS = new Set([
+  'move',
+  'movePara',
+  'select',
+  'selectAll',
+  'selectColumn',
+  'cancel',
+  'tableMove',
+  'tableBlock',
+  'tableBlockExtend',
+  'objectSelect',
+  'objectCellSelect',
+  'history',
+]);
+
 const ACTIONS = {
+  // 되돌리기·다시 하기. 문서를 통째로 찍어 두고 되돌린다 — 코어에 되돌리기가 없어서다.
+  // 찍는 매체는 **HWPX** 다. HWP5 저장은 무손실이 아닌 것으로 밝혀져 있고(그림 스트림이
+  // 빠진다) HWPX 왕복은 10k 표본에서 IR 차이 0 으로 닫힌 축이라, 되돌리기가 문서를 조용히
+  // 깎지 않게 하려면 이쪽이어야 한다.
+  Undo: { kind: 'history', redo: false },
+  Redo: { kind: 'history', redo: true },
+
   // 글자 모양 토글
   CharShapeBold: { kind: 'toggle', item: 'Bold', prop: 'bold' },
   CharShapeItalic: { kind: 'toggle', item: 'Italic', prop: 'italic' },
@@ -859,6 +893,10 @@ export class HwpCtrl {
   #selectionMode = SELECTION_NONE;
   /** 글자 블록의 범위 `{start, end}` (둘 다 커서 좌표). 셀 블록·블록 없음이면 null. */
   #selection = null;
+
+  /** 되돌리기·다시 하기 더미. 코어에 되돌리기가 없어 이 층이 문서를 통째로 들고 있는다. */
+  #undoStack = [];
+  #redoStack = [];
 
   /** 선택 확장 이동의 닻. 블록이 풀려도 남아서 반대쪽으로 다시 잡히게 한다. */
   #selAnchor = null;
@@ -1829,6 +1867,13 @@ export class HwpCtrl {
       callback?.(null, false, callbackUserData);
       return;
     }
+    if (action.kind === 'history') {
+      const done = this.#runHistory(action.redo === true);
+      callback?.(null, done, callbackUserData);
+      return;
+    }
+    // 고치는 액션은 걸기 **전에** 문서를 찍어 둔다 — 되돌리기가 그 자리로 돌아간다.
+    if (!NON_MUTATING_KINDS.has(action.kind)) this.#pushHistory();
     if (action.kind === 'move' || action.kind === 'movePara') {
       const moved = this.#runMoveAction(action);
       callback?.(null, moved, callbackUserData);
@@ -2029,6 +2074,65 @@ export class HwpCtrl {
     // 문서가 이 갈래인데, 그 문서에도 구역·단 정의가 있어 시작이 0 이 아니라 **16** 이다.
     const bounds = this.#paraBounds(at.list, at.para);
     this.#cursor = { ...at, pos: Math.min(Math.max(at.pos, bounds.start), bounds.end) };
+  }
+
+  /**
+   * 지금 문서를 통째로 찍는다 — 되돌리기용. 캐럿과 고르기까지 함께 담는다.
+   *
+   * 실측에서 `InsertTab` 을 되돌리면 캐럿이 **끼우기 전 자리**(20)로 돌아온다. 글자만 되돌리고
+   * 캐럿을 그대로 두면 그 한 줄이 어긋난다.
+   */
+  #snapshot() {
+    const bytes = this.#doc?.exportHwpx?.();
+    if (!bytes) return null;
+    return {
+      bytes,
+      cursor: { ...this.#cursor },
+      selectionMode: this.#selectionMode,
+      selection: this.#selection ? JSON.parse(JSON.stringify(this.#selection)) : null,
+      modified: this.#modified,
+    };
+  }
+
+  #restore(shot) {
+    if (!shot) return false;
+    try {
+      this.#doc = new this.#wasm.HwpDocument(shot.bytes);
+    } catch (e) {
+      console.warn('[hwpctrl] 되돌리기 실패:', e);
+      return false;
+    }
+    this.#listModel = null;
+    this.#sections = null;
+    this.#ctrls = null;
+    this.#cursor = { ...shot.cursor };
+    this.#selectionMode = shot.selectionMode;
+    this.#selection = shot.selection;
+    this.#selAnchor = null;
+    this.#tableBlock = null;
+    this.#selectedObject = null;
+    this.#modified = shot.modified;
+    return true;
+  }
+
+  /** 고치기 전에 부른다. 새 고침이 생기면 **다시 하기** 목록은 버린다 — 한글도 그렇다. */
+  #pushHistory() {
+    const shot = this.#snapshot();
+    if (!shot) return;
+    this.#undoStack.push(shot);
+    if (this.#undoStack.length > HISTORY_DEPTH) this.#undoStack.shift();
+    this.#redoStack.length = 0;
+  }
+
+  #runHistory(isRedo) {
+    const from = isRedo ? this.#redoStack : this.#undoStack;
+    const to = isRedo ? this.#undoStack : this.#redoStack;
+    if (!from.length) return false;
+    const here = this.#snapshot();
+    const shot = from.pop();
+    if (!this.#restore(shot)) return false;
+    if (here) to.push(here);
+    return true;
   }
 
   /** 리스트 표는 문서가 바뀌지 않는 한 그대로다 — 호출마다 다시 만들지 않는다. */

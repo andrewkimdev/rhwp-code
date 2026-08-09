@@ -4,10 +4,10 @@
   "oracleVersion": "한글2022 (설치본 COM)",
   "summary": {
     "total": 484,
-    "done": 281,
+    "done": 283,
     "byStatus": {
-      "verified": 279,
-      "unimplemented": 203,
+      "verified": 281,
+      "unimplemented": 201,
       "substituted": 2
     },
     "byUnit": {
@@ -24,8 +24,8 @@
         "unimplemented": 3
       },
       "action": {
-        "unimplemented": 158,
-        "verified": 154
+        "unimplemented": 156,
+        "verified": 156
       },
       "parameterSet": {
         "verified": 49,
@@ -5819,13 +5819,15 @@
       "name": "Redo",
       "parameterSetId": null,
       "requiresExternalSet": false,
-      "status": "unimplemented",
+      "status": "verified",
       "notes": "",
       "legacyHwpctl": true,
       "oracle": {
-        "scenarios": [],
+        "scenarios": [
+          "p5-undo"
+        ],
         "lastRun": null,
-        "diff": null
+        "diff": 0
       }
     },
     {
@@ -7552,13 +7554,15 @@
       "name": "Undo",
       "parameterSetId": null,
       "requiresExternalSet": false,
-      "status": "unimplemented",
+      "status": "verified",
       "notes": "",
       "legacyHwpctl": true,
       "oracle": {
-        "scenarios": [],
+        "scenarios": [
+          "p5-undo"
+        ],
         "lastRun": null,
-        "diff": null
+        "diff": 0
       }
     },
     {
