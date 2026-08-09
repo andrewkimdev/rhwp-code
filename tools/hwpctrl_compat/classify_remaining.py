@@ -83,7 +83,10 @@ NO_WINDOW = {
     # 칸 블록(모드 3)을 잡고 걸어도 리스트가 그대로다 — 지워진 자취가 어디에도 안 남는다.
     "Action.TableDeleteCell",
     # 걸면 **한글이 죽는다**(COM 서버가 사라져 그 뒤 호출이 전부 RPC 오류). 정답지를 못 만든다.
-    "Action.TableStringToTable",
+    "Action.TableStringToTable", "Action.CellBorder", "Action.CellBorderFill",
+    # 칸 나눔 — 유일한 창인 표 셋(`CellShape` 은 이름과 달리 **표**의 셋이다)이 한 박자 늦게
+    # 답하고 같은 표를 연달아 읽어도 값이 다르다(31679 → 33171). 정답지가 안 선다.
+    "Action.TableDistributeCellWidth", "Action.TableDistributeCellHeight",
     # 캐럿이 누름틀 안인데도 안 지워진다.
     "Action.DeleteField",
 }
@@ -93,6 +96,9 @@ NO_WINDOW = {
 # 읽지도 정하지도 못하니 조판 정밀도만 올려서는 안 열린다. 닻을 맞춰도 x → 글자 번호가 폰트
 # advance 로 한 칸씩 갈린다.
 HIDDEN_STATE = {
+    # 찾기·치환 — 찾을 말이 **대화상자에 남은 상태**라 API 로는 못 정한다. 상태가 없으면
+    # `AllReplace` 는 예외로 죽고 `BackwardFind` 는 조용히 아무 일도 안 한다(실측).
+    "Action.AllReplace", "Action.BackwardFind",
     "Action.MoveUp", "Action.MoveDown", "Action.MoveLineUp", "Action.MoveLineDown",
     "Action.MoveSelUp", "Action.MoveSelDown", "Action.MoveSelLineUp", "Action.MoveSelLineDown",
 }
