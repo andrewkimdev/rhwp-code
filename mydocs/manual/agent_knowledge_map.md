@@ -315,7 +315,7 @@ IR·provenance·plan 네 축을 한 번에 조립하고, 빠진 축은 `missingA
 | 필드 | 타입 | 의미 · `null` 의 뜻 | 등장 명령 |
 |---|---|---|---|
 | `schemaVersion` | string | 봉투 계약 버전 | 전 40개 `--json` 명령(`--bare` 본문 제외) |
-| `source` | string | 입력 경로 | 24개(문서를 여는 명령 전부) |
+| `source` | string | 입력 경로 | 26개(문서를 여는 명령 전부) |
 | `tool` | string | 도구 이름(`"rhwp"`) | `capabilities`·`export-provenance-map` |
 | `version` | string | 문서 판본(`info`) 또는 바이너리 버전(`capabilities`) — **같은 이름, 다른 뜻** | `info`·`capabilities`·`export-provenance-map` |
 | `a` / `b` | string | 비교 대상 두 문서 경로 | `ir-diff` |
@@ -561,10 +561,10 @@ IR·provenance·plan 네 축을 한 번에 조립하고, 빠진 축은 `missingA
 | `envelopeFlags` | object | `untrustedContent`/`untrustedFields` 의 뜻 | `export-provenance-map` |
 | `pathSyntax` | string | 필드 경로 표기법(`.`/`[]`) | `export-provenance-map` |
 | `policy` | object | 출처 표지 정책(`coverage`·`conservatism`·`guards`·`meaning`) | `export-provenance-map` |
-| `schema` | object | JSON Schema 본체 | `export-ir-schema`·`export-capabilities-schema` |
+| `schema` | object | JSON Schema 본체 | `export-ir-schema`·`export-plan-schema`·`export-capabilities-schema` |
 | `mcpSchema` | object | MCP 도구 선언용 스키마 | `export-capabilities-schema` |
-| `dialect` | string | JSON Schema 방언 URI | 두 schema 명령 |
-| `definitionCount` | number | `$defs` 개수 | 두 schema 명령 |
+| `dialect` | string | JSON Schema 방언 URI | 세 schema 명령 |
+| `definitionCount` | number | `$defs` 개수 | 세 schema 명령 |
 | `irSchemaVersion` / `capabilitiesSchemaVersion` | string | 각 스키마의 자체 버전 | 각 명령 |
 | `planSchemaVersion` | string | `run` 계획서 스키마의 자체 버전 | `export-plan-schema` |
 | `capabilities` | object | 명령 표면 자기서술 봉투(내장) | `export-agent-manifest` |
