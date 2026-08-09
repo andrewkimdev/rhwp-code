@@ -1,6 +1,6 @@
 ---
 kind: pr-review-implementation
-status: active
+status: archived
 canonical: mydocs/manual/pr_review_workflow.md
 last_verified: 2026-08-09
 ---
@@ -11,16 +11,19 @@ last_verified: 2026-08-09
 
 ```text
 base route: maintainer_general.md
-modifiers: intake_and_review.md, local_validation.md,
-           rework_and_exceptions.md, multi_pr_update_branch.md
+modifiers: collaborator_external_pr.md, intake_and_review.md, local_validation.md,
+           rework_and_exceptions.md, multi_pr_update_branch.md, post_merge.md
 loaded documents: pr_review_workflow.md, pr_review/README.md,
-                  maintainer_general.md, intake_and_review.md,
+                  maintainer_general.md, collaborator_external_pr.md,
+                  intake_and_review.md,
                   local_validation.md, rework_and_exceptions.md,
-                  multi_pr_update_branch.md
+                  multi_pr_update_branch.md, post_merge.md
 contributor head: 2a3ab45e1e533b0670fa9d7e5fcbe74fe635bff6
 maintainer correction: 034df2ec0
 integrated local head: edc1869ea
 integrated devel: f94fe5e4f834867d830cb7dacfd1d0043d9383d5
+final PR head: 06d3ec7e5167e03b16561c28d509f282c709a745
+merge commit: d4834d7375c5fa7cff850c378e8c939de6a6e90e
 ```
 
 ## 목표
@@ -66,8 +69,10 @@ pending 서식이 원문 끝까지 퍼진다.
 - [x] 두 충돌에서 #4271·#4272 helper와 #4271·#4272/#4276 오늘할일 기록을 모두 보존했다.
 - [x] 통합 head에서 fmt, clippy, nextest 5,486건, Docker web·Node WASM, TypeScript,
   focused Studio 5건, Studio 전체 823건, diff 검사를 통과했다.
-- [ ] contributor fork push — 별도 승인 대기.
-- [ ] 새 GitHub head CI·mergeability 확인, review 게시, merge — 각각 별도 승인 게이트.
+- [x] contributor fork의 같은 source branch에 `GIT_LFS_SKIP_PUSH=1` non-force push했다.
+- [x] 최종 head `06d3ec7e5`의 Full CI·CodeQL·Render Diff 통과와 `MERGEABLE / CLEAN`을 확인했다.
+- [x] [승인 review](https://github.com/edwardkim/rhwp/pull/4271#pullrequestreview-4890430796)를 게시했다.
+- [x] 작업지시자 승인 뒤 merge commit `d4834d737`로 `devel`에 반영했다.
 
 ## rollback 경계
 
