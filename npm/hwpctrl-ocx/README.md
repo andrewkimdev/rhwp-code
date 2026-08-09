@@ -106,8 +106,10 @@ npm --prefix npm/hwpctrl-ocx run gate
 
 `gate`는 새 패키지 구현(`npm/hwpctrl-ocx/src/index.mjs`)을 대상으로 실행한다. 기존 studio
 구현(`legacy`)은 하니스 자체 검증 전용이며 패키지의 통과 근거가 아니다. macOS/Linux의 기본
-결과는 호출·저장 회귀 검증이다. Windows Hancom 2022로 수집·검토한 fixture가 있으면 모든 OS에서
-정적 Oracle 대조를 수행할 수 있으며, 정확한 명령과 fixture 갱신 권한은
+결과는 호출·저장 회귀 검증이다. Windows live gate는 `Quit()` 뒤 남는 **이번 실행의** Hancom
+프로세스만 정리한다. 시작 시 이미 열려 있던 Hancom 프로세스는 종료하지 않고 `OCCUPIED`로
+거부하므로, 전용 검증 계정에서 실행한다. Windows Hancom 2022로 수집·검토한 fixture가 있으면
+모든 OS에서 정적 Oracle 대조를 수행할 수 있으며, 정확한 명령과 fixture 갱신 권한은
 [`tools/hwpctrl_compat/README.md`](../../tools/hwpctrl_compat/README.md)를 따른다.
 
 ## 파일 역할

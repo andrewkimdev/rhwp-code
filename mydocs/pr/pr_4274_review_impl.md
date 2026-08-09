@@ -35,6 +35,18 @@ Windows에서 이 값을 그대로 COM Oracle에 전달하므로, 다른 Windows
 - Windows `win10-ted` review worktree에서 fresh WASM 빌드를 시작했다. 완료 후 실제 Hancom
   Oracle의 `pF`, `pG`, `pH`와 전체 gate 결과를 이 문서에 추가한다.
 
+## 2차 결과 및 보정 (Windows Hancom 2022, 2026-08-09)
+
+- fresh WASM(`pkg/rhwp_bg.wasm`, 9,195,123 bytes)과 active RDP 세션의 Hancom 2022 Oracle로
+  portable path 시나리오를 재실행했다. `pF-insertpicture` 14/14, `pG-pageimage` 10/10,
+  `pH-insertrepeat` 20/20 호출이 모두 `MATCH`였다.
+- 기본 `run_gate.py`는 `Quit()` 뒤 10초 동안 남은 새 `Hwp.exe`를 안전상 자동 종료하지 않아,
+  live Windows에서 첫 시나리오가 `OK/LEFTOVER`가 되고 뒤 시나리오가 `OCCUPIED`가 됐다.
+  이는 시나리오 계약 불일치가 아니라 npm 공개 gate의 실행 경로 결함이다.
+- `run_package_gate.py`를 추가해 Windows package gate에만 기존의 명시적
+  `--cleanup-spawned`를 전달한다. baseline에 있던 사용자 Hancom 프로세스는 기존처럼
+  `OCCUPIED`로 거부하며 종료하지 않는다. Linux/macOS는 이전과 동일한 WASM self-check다.
+
 ## 경계와 rollback
 
 - HwpCtrl API 구현·원장 완료 수·Oracle 반환 계약은 수정하지 않는다.

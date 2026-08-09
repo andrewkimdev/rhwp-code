@@ -15,6 +15,7 @@ sys.path.insert(0, str(HERE))
 from compare import classify, selected_oracle_paths
 from extract_spec import verify
 from oracle_version import matches_expected_version
+from run_package_gate import gate_command
 from scenario_spec import call_contract, platform_path_key, resolve_args
 from run_gate import (
     hwp_pids,
@@ -69,6 +70,11 @@ class HarnessContractTests(unittest.TestCase):
         self.assertEqual(oracle_mode("Windows", False, False, None), "live")
         self.assertEqual(oracle_mode("Linux", False, False, Path("fixture")), "fixture")
         self.assertEqual(oracle_mode("Darwin", False, False, None, fixture=True), "fixture")
+
+    def test_package_gate_cleans_only_windows_com_processes(self) -> None:
+        self.assertIn("--cleanup-spawned", gate_command("Windows"))
+        self.assertNotIn("--cleanup-spawned", gate_command("Linux"))
+        self.assertNotIn("--cleanup-spawned", gate_command("Darwin"))
 
     def test_wasm_output_requires_successful_calls_and_saved_file(self) -> None:
         scenario = {"id": "sample", "open": "samples/input.hwp", "calls": [["GetPos", []]], "saveAs": "saved.hwp"}
