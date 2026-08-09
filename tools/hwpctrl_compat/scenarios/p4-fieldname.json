@@ -1,0 +1,26 @@
+{
+  "id": "p4-fieldname",
+  "title": "누름틀 안에서 이름 바꾸기 — SetCurFieldName 은 인자 넷",
+  "ledger": [
+    "HwpCtrl.method.SetCurFieldName"
+  ],
+  "open": "samples/issue-986-receipt.hwp",
+  "calls": [
+    ["MoveToField", ["pt_nm", true, true, false]],
+    ["GetPos", []],
+    ["GetCurFieldName", [0]],
+    ["SetCurFieldName", ["새이름"]],
+    ["SetCurFieldName", ["새이름", 0]],
+    ["SetCurFieldName", ["새이름", 0, ""]],
+    ["SetCurFieldName", ["새이름", 0, "", ""]],
+    ["GetCurFieldName", [0]],
+    ["GetFieldList", [0, 0]],
+    ["FieldExist", ["pt_nm"]],
+    ["FieldExist", ["새이름"]],
+    ["SetCurFieldName", ["pt_nm", 0, "", ""]],
+    ["GetCurFieldName", [0]],
+    ["FieldExist", ["pt_nm"]],
+    ["FieldExist", ["새이름"]],
+    ["GetFieldList", [0, 0]]
+  ]
+}

@@ -4,10 +4,10 @@
   "oracleVersion": "한글2022 (설치본 COM)",
   "summary": {
     "total": 484,
-    "done": 272,
+    "done": 274,
     "byStatus": {
-      "verified": 270,
-      "unimplemented": 212,
+      "verified": 272,
+      "unimplemented": 210,
       "substituted": 2
     },
     "byUnit": {
@@ -17,8 +17,8 @@
         "substituted": 2
       },
       "method": {
-        "verified": 49,
-        "unimplemented": 39
+        "verified": 51,
+        "unimplemented": 37
       },
       "event": {
         "unimplemented": 3
@@ -1297,14 +1297,16 @@
       "name": "GetSelectedPosBySet",
       "arity": 2,
       "section": "8.3.15",
-      "status": "unimplemented",
+      "status": "verified",
       "notes": "",
       "legacyHwpctl": false,
       "specArityAmbiguous": false,
       "oracle": {
-        "scenarios": [],
+        "scenarios": [
+          "p4-selposbyset"
+        ],
         "lastRun": null,
-        "diff": null
+        "diff": 0
       }
     },
     {
@@ -1790,16 +1792,16 @@
       "name": "SetCurFieldName",
       "arity": 4,
       "section": "8.3.41",
-      "status": "unimplemented",
+      "status": "verified",
       "notes": "",
       "legacyHwpctl": true,
       "specArityAmbiguous": false,
       "oracle": {
         "scenarios": [
-          "p1-field-write"
+          "p4-fieldname"
         ],
         "lastRun": null,
-        "diff": 1
+        "diff": 0
       }
     },
     {

@@ -1143,8 +1143,14 @@ export class HwpCtrl {
     return cell ? cell.name : '';
   }
 
-  /** 규격 §8.3.41 — 캐럿 위치의 필드 이름을 바꾼다(없으면 만든다). */
+  /**
+   * 규격 §8.3.41 — 캐럿 위치의 필드 이름을 바꾼다(없으면 만든다).
+   *
+   * **인자 넷을 다 줘야 한다.** 셋 이하로 부르면 한글이 `필수 매개 변수입니다` 로 죽는다(실측).
+   * 규격에는 뒤 셋이 선택으로 적혀 있는데 실물은 그렇지 않아 그대로 옮긴다.
+   */
   SetCurFieldName(fieldname, option, direction, memo) {
+    if (arguments.length < 4) throw new Error('SetCurFieldName: 필수 매개 변수입니다');
     const current = this.GetCurFieldName(0);
     if (current) return this.#renameField(current, fieldname);
     return this.CreateField(direction ?? '', memo ?? '', fieldname);
@@ -1765,6 +1771,28 @@ export class HwpCtrl {
       epara: sel.end.para,
       epos: sel.end.pos,
     };
+  }
+
+  /**
+   * 규격 §8.3.15 — 블록의 시작·끝 위치를 **주어진 셋 둘에 담는다**. 반환은 블록이 있는가다.
+   *
+   * 담긴 값은 되읽을 수 없다 — `CreateSet` 이 부를 때마다 새 셋을 주고 이 컨트롤에는 상태가
+   * 남는 셋이 없어서, 넘긴 셋을 다시 잡을 길이 없다. 그래서 판별되는 것은 **반환값뿐**이고
+   * 그것만 대조한다(블록 없으면 `false`, 있으면 `true`).
+   */
+  GetSelectedPosBySet(sset, eset) {
+    const pos = this.GetSelectedPos();
+    if (sset && typeof sset.SetItem === 'function') {
+      sset.SetItem('List', pos.slist);
+      sset.SetItem('Para', pos.spara);
+      sset.SetItem('Pos', pos.spos);
+    }
+    if (eset && typeof eset.SetItem === 'function') {
+      eset.SetItem('List', pos.elist);
+      eset.SetItem('Para', pos.epara);
+      eset.SetItem('Pos', pos.epos);
+    }
+    return pos.result;
   }
 
   /**
