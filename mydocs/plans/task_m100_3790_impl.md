@@ -4,9 +4,9 @@
 - **수행계획서**: `mydocs/plans/task_m100_3790.md`
 - **브랜치**: Stage 1 `codex/issue-3790-ci-impact-shadow`, Stage 2·2.5
   `codex/issue-3790-shadow-observation`, Stage 3 `codex/issue-3790-stage3-frontend`, Stage 4
-  `issue-3790-stage4-rust-native`
-- **절차 상태**: Stage 3 merge·canary 완료, Stage 4 draft PR #4032 review F1–F6 보정·current-base
-  full CI 통과
+  `issue-3790-stage4-rust-native`, Stage 5A `issue-3790-stage5a-codeql-safety`
+- **절차 상태**: Stage 3·4 merge·canary 완료. 최신 `upstream/devel` `e48fe86947fb`에서 Stage 5A의
+  보안 check 재사용과 Rust no-build shadow를 구현하고 focused 검증을 통과했다.
 
 ## Stage 1 — shadow classifier
 
@@ -117,12 +117,29 @@ Stage 3 merge 직후 frontend-only canary PR #3951에서 unit/package/render 진
 10. `tests/issue_2293_chart_png_text.rs`가 어떤 CI job에서도 실행되지 않던 기존 누락은
     #4040으로 분리하고 Stage 4 영향축 활성화의 blocker로 취급하지 않는다.
 
-## Stage 5 이후
+## Stage 5A — 보안 check 재사용과 Rust no-build shadow
 
-- CodeQL 언어별 matrix를 활성화한다. cache 총량은 #4080의 새 기준선을 따르고 더는 유효하지 않은
-  4.73GB를 게이트로 쓰지 않는다.
-- Stage 3 merge 직후 첫 canary, Stage 5 merge 뒤 두 번째 canary에서 동일 SHA의 수동 full/selective를
-  대조한다.
+1. `codeqlResult`가 고른 PR CodeQL workflow run은 기존처럼 event, base branch, head repository,
+   head branch와 candidate SHA를 모두 검증한다.
+2. 그 candidate SHA에 대해 check-runs를 조회하고 app slug `github-advanced-security`, name `CodeQL`,
+   동일 `head_sha`, 현재 workflow run attempt 시작 이후 시작이라는 조건으로 현재 실행의 보안 check를
+   식별한다. 재실행에서는 이전 attempt의 check를 재사용하지 않는다.
+3. 보안 check가 없으면 `missing`, 완료 전이면 `pending`, conclusion이 `success`가 아니면 `failed`로
+   aggregate를 닫는다. 세 `Analyze (...)` job과 이 check가 모두 성공한 경우에만 green이다.
+4. 기존 세 언어 blocking matrix와 Rust stable toolchain·cache·`cargo build`는 비교 기준선으로 유지한다.
+5. PR non-fast-pass 전용 `Rust no-build shadow`를 추가한다. 같은 Rust toolchain을 설치하되 cache와
+   `cargo build`는 생략하고 CodeQL init에 `languages: rust`, `build-mode: none`을 지정한다.
+6. shadow analyze는 `upload: never`, 고유 output directory를 쓰며 SARIF는 pinned
+   `actions/upload-artifact`로만 보존한다. 따라서 code scanning 결과와 required check identity를
+   오염시키지 않는다.
+7. 정적 workflow 계약 테스트로 보안 check가 실패한 경우와 blocking Rust lane 보존, shadow 격리를
+   고정한 뒤 YAML·classifier 인접 회귀를 focused 검증한다.
+
+## Stage 5B 이후
+
+- Stage 5A 원격 canary에서 blocking/shadow SARIF와 duration을 대조하고 required status check 구성을
+  repository admin에게 확인한 뒤 CodeQL 언어별 matrix를 활성화한다.
+- Stage 3 merge 직후 첫 canary와 Stage 5 canary의 selective/full 결과를 비교한다.
 - default-branch controller는 Stage 3~5 진리표가 확정된 뒤 축소 구현하고 정상 릴리즈로 main에 등록한다.
 - artifact 재시도는 #3892의 논리 label `slow/1/2/3`별 test archive, archive expected count와 worker run
   count를 함께 다루고, draft 경량화와 별도 PR로 진행한다.
