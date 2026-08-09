@@ -499,6 +499,64 @@ impl DocumentCore {
         )))
     }
 
+    /// 전체 cellPath가 가리키는 중첩 셀의 선택 영역을 내부 클립보드에 복사한다(#4272).
+    pub fn copy_selection_in_cell_by_path_native(
+        &mut self,
+        section_idx: usize,
+        parent_para_idx: usize,
+        path: &[(usize, usize, usize)],
+        start_cell_para_idx: usize,
+        start_char_offset: usize,
+        end_cell_para_idx: usize,
+        end_char_offset: usize,
+    ) -> Result<String, HwpError> {
+        if path.is_empty() {
+            return Err(HwpError::RenderError("경로가 비어있습니다".to_string()));
+        }
+        if start_cell_para_idx > end_cell_para_idx {
+            return Err(HwpError::RenderError(
+                "시작 위치가 끝 위치보다 뒤에 있음".to_string(),
+            ));
+        }
+
+        let mut clip_paragraphs = Vec::new();
+        for cell_para_idx in start_cell_para_idx..=end_cell_para_idx {
+            let mut para_path = path.to_vec();
+            para_path.last_mut().unwrap().2 = cell_para_idx;
+            let para = self.resolve_paragraph_by_path(section_idx, parent_para_idx, &para_path)?;
+            let start = if cell_para_idx == start_cell_para_idx {
+                start_char_offset
+            } else {
+                0
+            };
+            let end = if cell_para_idx == end_cell_para_idx {
+                end_char_offset
+            } else {
+                para.text.chars().count()
+            };
+            clip_paragraphs.push(clip_paragraph_text_range_for_clipboard(para, start, end));
+        }
+
+        for para in &mut clip_paragraphs {
+            strip_structural_controls_for_text_clipboard(para);
+        }
+        let plain_text = clip_paragraphs
+            .iter()
+            .map(|para| para.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        let escaped = super::super::helpers::json_escape(&plain_text);
+        self.clipboard = Some(ClipboardData {
+            paragraphs: clip_paragraphs,
+            plain_text,
+        });
+
+        Ok(super::super::helpers::json_ok_with(&format!(
+            "\"text\":\"{}\"",
+            escaped
+        )))
+    }
+
     /// 컨트롤 객체(표, 이미지, 도형)를 내부 클립보드에 복사한다.
     pub fn copy_control_native(
         &mut self,
@@ -1308,6 +1366,39 @@ impl DocumentCore {
             html.push_str(&self.paragraph_to_html(cpara, start, end));
         }
 
+        html.push_str("<!--EndFragment-->\n</body></html>");
+        Ok(html)
+    }
+
+    /// 전체 cellPath가 가리키는 중첩 셀의 선택 영역을 HTML로 변환한다(#4272).
+    pub fn export_selection_in_cell_html_by_path_native(
+        &self,
+        section_idx: usize,
+        parent_para_idx: usize,
+        path: &[(usize, usize, usize)],
+        start_cell_para_idx: usize,
+        start_char_offset: usize,
+        end_cell_para_idx: usize,
+        end_char_offset: usize,
+    ) -> Result<String, HwpError> {
+        if path.is_empty() {
+            return Err(HwpError::RenderError("경로가 비어있습니다".to_string()));
+        }
+        if start_cell_para_idx > end_cell_para_idx {
+            return Err(HwpError::RenderError(
+                "시작 위치가 끝 위치보다 뒤에 있음".to_string(),
+            ));
+        }
+
+        let mut html = String::from("<html><body>\n<!--StartFragment-->\n");
+        for cell_para_idx in start_cell_para_idx..=end_cell_para_idx {
+            let mut para_path = path.to_vec();
+            para_path.last_mut().unwrap().2 = cell_para_idx;
+            let para = self.resolve_paragraph_by_path(section_idx, parent_para_idx, &para_path)?;
+            let start = (cell_para_idx == start_cell_para_idx).then_some(start_char_offset);
+            let end = (cell_para_idx == end_cell_para_idx).then_some(end_char_offset);
+            html.push_str(&self.paragraph_to_html(para, start, end));
+        }
         html.push_str("<!--EndFragment-->\n</body></html>");
         Ok(html)
     }

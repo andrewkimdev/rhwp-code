@@ -1,7 +1,7 @@
 /** input-handler keyboard methods — extracted from InputHandler class */
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
-import { InsertTextCommand, InsertLineBreakCommand, InsertTabCommand, SplitParagraphCommand, SplitParagraphInCellCommand, InsertTextInHeaderFooterCommand, SplitParagraphInHeaderFooterCommand, SplitParagraphInFootnoteCommand, DeleteTextInFootnoteCommand, MergeParagraphInFootnoteCommand } from './command';
+import { InsertTextCommand, InsertLineBreakCommand, InsertTabCommand, SplitParagraphCommand, SplitParagraphInCellCommand, InsertTextInHeaderFooterCommand, SplitParagraphInHeaderFooterCommand, SplitParagraphInFootnoteCommand, DeleteTextInFootnoteCommand, MergeParagraphInFootnoteCommand, cellParaIndexOf } from './command';
 import { matchShortcut, defaultShortcuts } from '@/command/shortcut-map';
 import * as _connector from './input-handler-connector';
 import {
@@ -13,6 +13,7 @@ import {
 } from './navigation-keymap';
 import type { DocumentPosition, CellBbox, CellPathLike } from '@/core/types';
 import type { WasmBridge } from '@/core/wasm-bridge';
+import { tableObjectClipboardTarget } from './table-object-clipboard-target';
 
 const RHWP_CLIPBOARD_MARKER_RE = /<!--\s*rhwp-studio-clipboard:([A-Za-z0-9._:-]+)\s*-->/;
 const PAGINATION_BOUNDARY_KEYS = new Set([
@@ -963,15 +964,20 @@ export function onKeyDown(this: any, e: KeyboardEvent): void {
       const ref = this.cursor.getSelectedTableRef();
       if (ref) {
         try {
-          // [Task #2880] 중첩 표(셀 안 표) 선택 시 cellPath 를 native 에 전달하지 않으면
-          // copyControl/exportControlHtml 이 본문 표로 오인해 엉뚱한 표를 복사한다.
-          // 그림 개체 Ctrl+C(위 pictureCellPathJson 사용부) 와 동일하게 cellPathJson 전달.
-          const cellPathJson = pictureCellPathJson(ref);
-          this.wasm.copyControl(ref.sec, ref.ppi, ref.ci, cellPathJson);
+          // #4272: 선택 경로의 마지막 엔트리는 표 안 셀이므로, 그 엔트리의
+          // controlIndex와 앞쪽 owner path를 분리해 선택된 표 자체를 복사한다.
+          const target = tableObjectClipboardTarget(ref);
+          this.wasm.copyControl(
+            ref.sec, ref.ppi, target.controlIndex, target.ownerCellPathJson,
+          );
           const text = this.wasm.getClipboardText();
           if (text) {
             let html = '';
-            try { html = this.wasm.exportControlHtml(ref.sec, ref.ppi, ref.ci, cellPathJson) || ''; } catch { /* 무시 */ }
+            try {
+              html = this.wasm.exportControlHtml(
+                ref.sec, ref.ppi, target.controlIndex, target.ownerCellPathJson,
+              ) || '';
+            } catch { /* 무시 */ }
             const markedHtml = prepareRhwpInternalClipboardHtml(this, html, text);
             writeTextHtmlToClipboard(text, markedHtml)
               .catch(() => navigator.clipboard.writeText(text).catch(() => {}));
@@ -1597,7 +1603,13 @@ export function onCopy(this: any, e: ClipboardEvent): void {
 
   try {
     // WASM 내부 클립보드에 복사 (서식 보존)
-    if (start.parentParaIndex !== undefined) {
+    if (isNestedCellPosition(start)) {
+      this.wasm.copySelectionInCellByPath(
+        start.sectionIndex, start.parentParaIndex!, JSON.stringify(start.cellPath),
+        cellParaIndexOf(start), start.charOffset,
+        cellParaIndexOf(end), end.charOffset,
+      );
+    } else if (start.parentParaIndex !== undefined) {
       this.wasm.copySelectionInCell(
         start.sectionIndex, start.parentParaIndex, start.controlIndex!, start.cellIndex!,
         start.cellParaIndex!, start.charOffset,
@@ -1618,7 +1630,13 @@ export function onCopy(this: any, e: ClipboardEvent): void {
       // HTML 내보내기 (표/서식 보존)
       let html = '';
       try {
-        if (start.parentParaIndex !== undefined) {
+        if (isNestedCellPosition(start)) {
+          html = this.wasm.exportSelectionInCellHtmlByPath(
+            start.sectionIndex, start.parentParaIndex!, JSON.stringify(start.cellPath),
+            cellParaIndexOf(start), start.charOffset,
+            cellParaIndexOf(end), end.charOffset,
+          );
+        } else if (start.parentParaIndex !== undefined) {
           html = this.wasm.exportSelectionInCellHtml(
             start.sectionIndex, start.parentParaIndex, start.controlIndex!, start.cellIndex!,
             start.cellParaIndex!, start.charOffset,

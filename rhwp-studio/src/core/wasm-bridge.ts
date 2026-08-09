@@ -11,8 +11,10 @@ import {
   type HmlSaveState,
 } from './hml-save-capability';
 import {
+  getSelectionRectsInCellByPathWithPageHints,
   getSelectionRectsInCellWithPageHints,
   type CellSelectionRectDocument,
+  type PathCellSelectionRectDocument,
   type SelectionPageHints,
 } from './selection-page-hints';
 import {
@@ -2298,6 +2300,23 @@ export class WasmBridge {
     );
   }
 
+  getSelectionRectsInCellByPath(sec: number, parentPara: number, path: string, startCellPara: number, startOffset: number, endCellPara: number, endOffset: number, pageHints?: SelectionPageHints): SelectionRect[] {
+    if (!this.doc) throw new Error('문서가 로드되지 않았습니다');
+    return getSelectionRectsInCellByPathWithPageHints(
+      this.doc as unknown as PathCellSelectionRectDocument,
+      {
+        sectionIdx: sec,
+        parentParaIdx: parentPara,
+        path,
+        startCellParaIdx: startCellPara,
+        startCharOffset: startOffset,
+        endCellParaIdx: endCellPara,
+        endCharOffset: endOffset,
+      },
+      pageHints,
+    );
+  }
+
   getSelectionRectsInFootnote(pageNum: number, footnoteIndex: number, startFnPara: number, startOffset: number, endFnPara: number, endOffset: number): SelectionRect[] {
     if (!this.doc) throw new Error('문서가 로드되지 않았습니다');
     return JSON.parse((this.doc as any).getSelectionRectsInFootnote(pageNum, footnoteIndex, startFnPara, startOffset, endFnPara, endOffset));
@@ -2323,6 +2342,11 @@ export class WasmBridge {
   copySelectionInCell(sec: number, parentPara: number, controlIdx: number, cellIdx: number, startCellPara: number, startOffset: number, endCellPara: number, endOffset: number): string {
     if (!this.doc) throw new Error('문서가 로드되지 않았습니다');
     return this.doc.copySelectionInCell(sec, parentPara, controlIdx, cellIdx, startCellPara, startOffset, endCellPara, endOffset);
+  }
+
+  copySelectionInCellByPath(sec: number, parentPara: number, pathJson: string, startCellPara: number, startOffset: number, endCellPara: number, endOffset: number): string {
+    if (!this.doc) throw new Error('문서가 로드되지 않았습니다');
+    return (this.doc as any).copySelectionInCellByPath(sec, parentPara, pathJson, startCellPara, startOffset, endCellPara, endOffset);
   }
 
   pasteInternal(sec: number, para: number, charOffset: number): string {
@@ -2390,6 +2414,11 @@ export class WasmBridge {
   exportSelectionInCellHtml(sec: number, parentPara: number, controlIdx: number, cellIdx: number, startCellPara: number, startOffset: number, endCellPara: number, endOffset: number): string {
     if (!this.doc) throw new Error('문서가 로드되지 않았습니다');
     return this.doc.exportSelectionInCellHtml(sec, parentPara, controlIdx, cellIdx, startCellPara, startOffset, endCellPara, endOffset);
+  }
+
+  exportSelectionInCellHtmlByPath(sec: number, parentPara: number, pathJson: string, startCellPara: number, startOffset: number, endCellPara: number, endOffset: number): string {
+    if (!this.doc) throw new Error('문서가 로드되지 않았습니다');
+    return (this.doc as any).exportSelectionInCellHtmlByPath(sec, parentPara, pathJson, startCellPara, startOffset, endCellPara, endOffset);
   }
 
   pasteHtml(sec: number, para: number, charOffset: number, html: string): string {
@@ -2771,6 +2800,8 @@ export class WasmBridge {
   getFieldList(): Array<{
     fieldId: number;
     fieldType: string;
+    /** 셀 구역 이름(가상 필드)이면 true. `fieldType` 은 누름틀과 셀 필드를 가르지 못한다. */
+    cellField: boolean;
     name: string;
     guide: string;
     command: string;

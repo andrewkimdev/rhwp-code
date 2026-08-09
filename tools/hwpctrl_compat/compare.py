@@ -210,7 +210,7 @@ def main() -> int:
         l3 = rep["l3"]["verdict"] if rep["l3"] else "-"
         print(f"  {rep['scenario']}: {codes} | L3 {l3}")
     print(f"→ {out_dir / 'verdict.tsv'}")
-    return 0
+    return 0 if all(report["pass"] for report in reports) else 1
 
 
 if __name__ == "__main__":
