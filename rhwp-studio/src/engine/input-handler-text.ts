@@ -519,6 +519,9 @@ export function onInput(this: any, e?: InputEvent): void {
     // 다음 조합 업데이트의 삭제 count는 scalar 단위다.
     this.compositionLength = charCount(text);
     if (text) this._lastCompositionText = text;
+    // [#4162] 캐럿 대기 서식이 있으면 이번 조합 텍스트 전체(매 갱신마다 새로 깔린 range)에
+    // 적용한다. Command 를 거치지 않는 raw 삽입이라 InsertTextCommand 의 서식 적용을 못 탄다.
+    this.applyPendingCharShapeToRange?.(anchor, charCount(text));
 
     // cursor.moveTo() 내부의 exact lookup 전에 deferred mutation을 등록하고,
     // 실제 cell-flow 경계에서만 동기 flush한다.
@@ -669,7 +672,8 @@ export function onInput(this: any, e?: InputEvent): void {
     this.textarea.value = '';
     return;
   }
-  this.executeOperation({ kind: 'command', command: new InsertTextCommand(insertPos, text) });
+  // [#4162] 선택 없이 지정한 서식은 예약(pending)돼 있다 — 있으면 삽입 커맨드에 실어 보낸다.
+  this.executeOperation({ kind: 'command', command: new InsertTextCommand(insertPos, text, undefined, this.getPendingCharShape?.()) });
   if (refreshClickHereGuide) {
     this.refreshClickHereAfterFirstInput?.();
   }

@@ -537,6 +537,32 @@ function doGetTextRange(wasm: WasmBridge, pos: DocumentPosition, count: number):
   }
 }
 
+/**
+ * [#4162] 캐럿 대기 글자 모양(pending char shape) — 방금 삽입된 range 에 글자 서식을 건다.
+ *
+ * ApplyCharFormatCommand.execute() 의 셀/본문 분기와 같은 축이다(셀은 항상 ...ByPath).
+ * from === to(빈 range)면 적용 대상이 없으므로 아무것도 하지 않는다.
+ */
+export function applyCharShapeModsToRange(
+  wasm: WasmBridge,
+  pos: DocumentPosition,
+  from: number,
+  to: number,
+  props: Partial<CharProperties>,
+): void {
+  if (to <= from) return;
+  const propsJson = JSON.stringify(props);
+  if (isCell(pos)) {
+    wasm.applyCharFormatInCellByPath(pos.sectionIndex, pos.parentParaIndex!, cellPathJson(pos), from, to, propsJson);
+  } else {
+    wasm.applyCharFormat(pos.sectionIndex, pos.paragraphIndex, from, to, propsJson);
+  }
+}
+
+function sameCharFormat(a: Partial<CharProperties> | undefined, b: Partial<CharProperties> | undefined): boolean {
+  return JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
+}
+
 // ─── 텍스트 삽입 명령 ─────────────────────────────────
 
 export class InsertTextCommand implements EditCommand {
@@ -548,14 +574,24 @@ export class InsertTextCommand implements EditCommand {
     private position: DocumentPosition,
     private text: string,
     timestamp?: number,
+    /** [#4162] 선택 없이 지정한 예약 글자 모양 — 삽입된 텍스트에 그대로 건다. */
+    private charFormat?: Partial<CharProperties>,
   ) {
     this.timestamp = timestamp ?? Date.now();
+  }
+
+  getCharFormat(): Partial<CharProperties> | undefined {
+    return this.charFormat;
   }
 
   execute(wasm: WasmBridge): DocumentPosition {
     this.lastMutationEffects = NO_TEXT_MUTATION_EFFECTS;
     this.lastMutationEffects = insertTextWithMutationEffects(wasm, this.position, this.text);
-    return { ...this.position, charOffset: this.position.charOffset + this.text.length };
+    const after = { ...this.position, charOffset: this.position.charOffset + this.text.length };
+    if (this.charFormat) {
+      applyCharShapeModsToRange(wasm, this.position, this.position.charOffset, after.charOffset, this.charFormat);
+    }
+    return after;
   }
 
   consumeTextMutationEffects(): TextMutationEffects {
@@ -595,8 +631,10 @@ export class InsertTextCommand implements EditCommand {
     if (other.timestamp - this.timestamp > 300) return null;
     // 줄바꿈/탭 포함 시 병합 불가
     if (other.text.includes('\n') || other.text.includes('\t')) return null;
+    // [#4162] 예약 글자 모양이 다르면 하나의 undo 단위로 묶지 않는다
+    if (!sameCharFormat(this.charFormat, other.charFormat)) return null;
 
-    return new InsertTextCommand(this.position, this.text + other.text, this.timestamp);
+    return new InsertTextCommand(this.position, this.text + other.text, this.timestamp, this.charFormat);
   }
 }
 
