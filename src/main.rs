@@ -15599,6 +15599,7 @@ fn cmd_replay(args: &[String]) -> i32 {
                 };
                 let capsule_dir = std::path::Path::new(cp)
                     .parent()
+                    .filter(|path| !path.as_os_str().is_empty())
                     .unwrap_or(std::path::Path::new("."));
                 let capsule_dir_abs = match fs::canonicalize(capsule_dir) {
                     Ok(path) => path,
@@ -15780,7 +15781,24 @@ fn cmd_lineage(args: &[String]) -> i32 {
             }));
             break;
         };
-        let parent = &capsule["parent"];
+        let (validated_plan, expected_steps) = match validated_capsule_plan(&capsule) {
+            Ok(value) => value,
+            Err(error) => {
+                valid = false;
+                broken_at = Some(name.clone());
+                links.push(serde_json::json!({ "capsule": name, "error": error }));
+                break;
+            }
+        };
+        let Some(parent) = capsule.get("parent") else {
+            valid = false;
+            broken_at = Some(name.clone());
+            links.push(serde_json::json!({
+                "capsule": name,
+                "error": "parent 필드 없음",
+            }));
+            break;
+        };
         let parent_link = if parent.is_null() {
             None
         } else {
@@ -15807,11 +15825,13 @@ fn cmd_lineage(args: &[String]) -> i32 {
         let parent_ok = recorded_parent_sha.as_deref().map(|r| r == file_sha);
         let lineage_ok = child_input_sha.as_deref().map(|ci| output_sha == ci);
         let reproduced = if deep {
-            let mut plan = capsule["plan"].clone();
+            let mut plan = validated_plan;
             match replay_execute_to_temp(&mut plan, &format!("lineage{guard}")) {
-                Ok((actual, _, actual_input)) => {
-                    Some(actual == output_sha && actual_input == input_sha)
-                }
+                Ok((actual, actual_steps, actual_input)) => Some(
+                    actual == output_sha
+                        && actual_input == input_sha
+                        && actual_steps as u64 == expected_steps,
+                ),
                 Err(_) => Some(false),
             }
         } else {
