@@ -696,9 +696,37 @@ export class ParameterSet {
     delete this.#items[name];
   }
 
-  /** 규격 §9 — 전부 제거. */
-  RemoveAll() {
+  /**
+   * 규격 §9 — 전부 제거. **인자를 하나 받는다.**
+   *
+   * 규격에는 인자가 없는데 한글은 인자 없이 부르면 `필수 매개 변수입니다` 로 죽는다(실측).
+   * 값이 무엇인지는 가릴 수 없었다 — 0 이든 1 이든 똑같이 받고 똑같이 다 지운다. 그래도
+   * **없으면 죽는다**는 것은 판별되므로 그대로 옮긴다.
+   */
+  RemoveAll(depth) {
+    if (depth === undefined) throw new Error('RemoveAll: 필수 매개 변수입니다');
     this.#items = {};
+  }
+
+  /**
+   * 규격 §9 — 다른 셋을 합친다. 실측 반환은 **늘 `true`** 다.
+   *
+   * 셋 ID 가 달라도(CharShape ← ParaShape) `true` 를 준다 — 성공 여부를 가리는 값이 아니다.
+   */
+  Merge(other) {
+    if (other && typeof other.toObject === 'function') {
+      Object.assign(this.#items, other.toObject());
+    }
+    return true;
+  }
+
+  /**
+   * 규격 §9 — 같은 셋인가. 실측은 **셋 ID 만 본다** — 같은 ID 면 `true`, 다르면 `false`.
+   *
+   * 담긴 항목은 안 본다(양쪽 다 빈 CharShape ↔ ParaShape 가 `false`).
+   */
+  IsEquivalent(other) {
+    return Boolean(other) && other.SetID === this.#setId;
   }
 
   /** 규격 §9 — 같은 내용의 새 셋. */
@@ -741,10 +769,12 @@ export class ParameterArray {
     this.#items[index] = value;
   }
 
+  /**
+   * 규격 §9 에는 있으나 한글은 **죽는다**(실측: 서버에서 예외 오류). 셋 쪽 `Clone` 은 멀쩡히
+   * 도는데 배열 쪽만 그렇다 — 규격이 아니라 실물을 옮기는 자리라 죽는 것까지 옮긴다.
+   */
   Clone() {
-    const copy = new ParameterArray(this.#items.length);
-    this.#items.forEach((v, i) => copy.SetItem(i, v));
-    return copy;
+    throw new Error('ParameterArray.Clone: 서버에서 예외 오류가 발생했습니다');
   }
 
   /** 다른 배열의 내용을 그대로 받는다. */

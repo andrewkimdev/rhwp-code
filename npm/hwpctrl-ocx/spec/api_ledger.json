@@ -4,10 +4,10 @@
   "oracleVersion": "한글2022 (설치본 COM)",
   "summary": {
     "total": 484,
-    "done": 263,
+    "done": 272,
     "byStatus": {
-      "verified": 261,
-      "unimplemented": 221,
+      "verified": 270,
+      "unimplemented": 212,
       "substituted": 2
     },
     "byUnit": {
@@ -17,8 +17,8 @@
         "substituted": 2
       },
       "method": {
-        "verified": 40,
-        "unimplemented": 48
+        "verified": 49,
+        "unimplemented": 39
       },
       "event": {
         "unimplemented": 3
@@ -440,14 +440,16 @@
       "name": "IsEquivalent",
       "arity": 1,
       "section": "6.3.5",
-      "status": "unimplemented",
+      "status": "verified",
       "notes": "",
       "legacyHwpctl": false,
       "specArityAmbiguous": false,
       "oracle": {
-        "scenarios": [],
+        "scenarios": [
+          "p4-setmutate"
+        ],
         "lastRun": null,
-        "diff": null
+        "diff": 0
       }
     },
     {
@@ -496,14 +498,16 @@
       "name": "Merge",
       "arity": 1,
       "section": "6.3.8",
-      "status": "unimplemented",
+      "status": "verified",
       "notes": "",
       "legacyHwpctl": false,
       "specArityAmbiguous": false,
       "oracle": {
-        "scenarios": [],
+        "scenarios": [
+          "p4-setmutate"
+        ],
         "lastRun": null,
-        "diff": null
+        "diff": 0
       }
     },
     {
@@ -513,14 +517,16 @@
       "name": "RemoveAll",
       "arity": 1,
       "section": "6.3.9",
-      "status": "unimplemented",
+      "status": "verified",
       "notes": "",
       "legacyHwpctl": false,
       "specArityAmbiguous": false,
       "oracle": {
-        "scenarios": [],
+        "scenarios": [
+          "p4-setmutate"
+        ],
         "lastRun": null,
-        "diff": null
+        "diff": 0
       }
     },
     {
@@ -530,14 +536,16 @@
       "name": "RemoveItem",
       "arity": 1,
       "section": "6.3.10",
-      "status": "unimplemented",
+      "status": "verified",
       "notes": "",
       "legacyHwpctl": false,
       "specArityAmbiguous": false,
       "oracle": {
-        "scenarios": [],
+        "scenarios": [
+          "p4-setmutate"
+        ],
         "lastRun": null,
-        "diff": null
+        "diff": 0
       }
     },
     {
@@ -547,14 +555,16 @@
       "name": "SetItem",
       "arity": 2,
       "section": "6.3.11",
-      "status": "unimplemented",
+      "status": "verified",
       "notes": "",
       "legacyHwpctl": false,
       "specArityAmbiguous": false,
       "oracle": {
-        "scenarios": [],
+        "scenarios": [
+          "p4-setmutate"
+        ],
         "lastRun": null,
-        "diff": null
+        "diff": 0
       }
     },
     {
@@ -602,14 +612,16 @@
       "name": "Clone",
       "arity": 0,
       "section": "7.3.1",
-      "status": "unimplemented",
+      "status": "verified",
       "notes": "",
       "legacyHwpctl": false,
       "specArityAmbiguous": false,
       "oracle": {
-        "scenarios": [],
+        "scenarios": [
+          "p4-setmutate"
+        ],
         "lastRun": null,
-        "diff": null
+        "diff": 0
       }
     },
     {
@@ -619,14 +631,16 @@
       "name": "Copy",
       "arity": 1,
       "section": "7.3.2",
-      "status": "unimplemented",
+      "status": "verified",
       "notes": "",
       "legacyHwpctl": false,
       "specArityAmbiguous": false,
       "oracle": {
-        "scenarios": [],
+        "scenarios": [
+          "p4-setmutate"
+        ],
         "lastRun": null,
-        "diff": null
+        "diff": 0
       }
     },
     {
@@ -636,14 +650,16 @@
       "name": "Item",
       "arity": 1,
       "section": "7.3.3",
-      "status": "unimplemented",
+      "status": "verified",
       "notes": "",
       "legacyHwpctl": false,
       "specArityAmbiguous": false,
       "oracle": {
-        "scenarios": [],
+        "scenarios": [
+          "p4-setmutate"
+        ],
         "lastRun": null,
-        "diff": null
+        "diff": 0
       }
     },
     {
@@ -653,14 +669,16 @@
       "name": "SetItem",
       "arity": 2,
       "section": "7.3.4",
-      "status": "unimplemented",
+      "status": "verified",
       "notes": "",
       "legacyHwpctl": false,
       "specArityAmbiguous": false,
       "oracle": {
-        "scenarios": [],
+        "scenarios": [
+          "p4-setmutate"
+        ],
         "lastRun": null,
-        "diff": null
+        "diff": 0
       }
     },
     {
