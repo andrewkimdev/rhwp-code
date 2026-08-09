@@ -1622,8 +1622,9 @@ impl DocumentCore {
                     section.raw_stream = None;
                     let target_para =
                         Self::resolve_cell_paragraph_mut(section, para_idx, cell_path)?;
-                    // [#4347] 셀 안 경로도 같은 자취가 필요하지만 아직 안 쟀다 — 본문 경로만
-                    // 고친다.
+                    // [#4347] 이 경로는 자취가 **필요 없다**(실측). 글자 없는 표 문단에서는
+                    // `control_text_positions()` 의 폴백 셈(`ci × 8`)이 곧 정답이라 갭이 없어도
+                    // 자리가 맞는다 — 셀에 그림을 넣으면 `표@0 그림@8` 로 나온다.
                     let new_ctrl_idx = target_para.controls.len();
                     target_para.controls.push(Control::Picture(Box::new(pic)));
                     target_para.ctrl_data_records.push(None);
@@ -1698,9 +1699,9 @@ impl DocumentCore {
 
             // table 같은 paragraph 의 sibling control 로 append.
             //
-            // [#4347] 이 경로는 **글자 없는 표 문단**에 붙는 자리라 좌표 자취를 남기지 않는다 —
-            // 본문 문단과 달리 되짚을 갭이 없고, 길이를 더하면 표 배치가 흔들린다(실측:
-            // 글자처럼 그림 둘의 줄 넘김 테스트가 깨진다). 그 축은 따로 재야 한다.
+            // [#4347] 이 경로는 **글자 없는 표 문단**에 붙는 자리라 좌표 자취가 필요 없다 —
+            // 폴백 셈(`ci × 8`)이 곧 정답이다(실측 `표@0 그림@8`). 그런데도 길이를 더하면
+            // 표 배치가 흔들린다(글자처럼 그림 둘의 줄 넘김 테스트가 깨진다). 건드리지 않는다.
             self.document.sections[section_idx].raw_stream = None;
             let parent = &mut self.document.sections[section_idx].paragraphs[para_idx];
             let new_ctrl_idx = parent.controls.len();
