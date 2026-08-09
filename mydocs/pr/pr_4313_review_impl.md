@@ -1,6 +1,6 @@
 ---
 kind: review_plan
-status: in-progress
+status: completed-local-pending-push-approval
 canonical: mydocs/manual/pr_review_workflow.md
 last_verified: 2026-08-10
 ---
@@ -110,5 +110,18 @@ Draft이므로 이 후보에서 제외한다. 누적 브랜치는 검증 전용�
   바꾸고 재저장·재로드해도 PUA 날인선과 `(인)` 표시가 유지되고
   `overflowCellLines=0`이다.
 
-자동 도구는 최종 시각 합격 권위가 아니므로 작업지시자 판정 전까지 상태는
-`in-progress`로 유지한다.
+## 최종 재확인과 권고
+
+- 작업지시자가 2026-08-10 누적 후보의 시각 판정을 통과시켰다.
+- 같은 날 원 PR 20건을 다시 조회했다. 검토 시작 뒤 contributor의 추가 push가 없었고,
+  모든 원 head가 기록값과 일치하며 `OPEN` / `CLEAN` / `MERGEABLE` /
+  required checks `SUCCESS`다.
+- `upstream/devel`도 누적 검증 기준
+  `e48fe86947fbf9a44b1b98c7037150751af541ab`에서 변하지 않았다.
+
+**통합 PR 수용 권고.** 승인된 네 건의 의미 충돌 해소와 메인테이너 보정
+`1f5c4f3e4`는 원 PR head에 없으므로 원 PR들을 개별 merge하면 검증한 누적 트리를
+재현하지 못한다. 별도 승인을 받아 현재 누적 branch를 integration PR로 게시하고 그
+최신 head의 required checks를 통과시킨 뒤 merge한다. 통합 뒤에는 원 PR별 기여 안내와
+close, 관련 issue 상태 확인을 후속 처리한다. 의도적인 red-test Draft #4315는 이
+통합과 후속 close 대상에서 제외한다.

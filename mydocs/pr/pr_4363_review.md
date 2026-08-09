@@ -33,9 +33,13 @@ core: 셀 합치기 후 병합 셀 문단을 새 폭으로 재배치. 원 commit
 - 로컬 focused·누적 검증: focused 회귀와 누적 release-test 5,567/5,567,
   Native Skia 58+2+4, fmt·diff·clippy, 표준 Docker WASM을 통과했다. 적용 SHA와
   충돌 해소·시각 자료는 [누적 구현 계획](pr_4313_review_impl.md)에 기록했다.
-- 시각 검증: 사용자-visible layout/render 영향이 있어 누적 후보에서 수행해야 한다.
+- 누적 시각 판정: 작업지시자가 2026-08-10 누적 후보를 직접 확인해 통과시켰다.
+- GitHub 최종 재확인: 검토 시작 뒤 contributor 추가 push가 없고 원 head가 기록값과
+  일치한다. `OPEN` / `CLEAN` / `MERGEABLE`, required checks `SUCCESS`다.
 
 ## 현재 판정
 
-**누적 검증 통과, 최종 판정 대기.** 작업지시자 시각 판정과 merge 직전 GitHub 최신
-head·mergeable·required checks 재확인 뒤 최종 권고를 갱신한다.
+**통합 PR 수용 권고.** 이 PR의 변경은 승인된 충돌 해소와 메인테이너 보정을 포함한
+누적 트리에서 검증됐다. 원 PR들을 개별 merge하면 그 트리를 재현하지 못하므로 현재
+누적 branch를 별도 integration PR로 게시해 최신 head CI를 받은 뒤 통합하고, 이 원
+PR은 기여 내역 안내와 함께 후속 close한다.
