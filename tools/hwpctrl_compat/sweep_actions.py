@@ -45,7 +45,7 @@ CONFIRMED_HANG = {
     "CharShapeHeight", "CharShapeWidth", "CharShapeSpacing",
     # **맥락을 맞춰야 멈춘다**(계획서 §4.73). 글만 있는 문단에서는 몇 초에 끝나 "안 멈춘다"고
     # 볼 뻔했다 — 개체를 고르거나 칸 블록을 잡고 걸어야 대화상자가 뜨고 그대로 멈춘다.
-    "ShapeObjDialog", "TablePropertyDialog",
+    "ShapeObjDialog", "TablePropertyDialog", "ModifyHyperlink",
 }
 
 FORBIDDEN = KILLS_HANGUL | CONFIRMED_HANG
