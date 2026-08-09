@@ -6,7 +6,9 @@
   `codex/issue-3790-shadow-observation`, Stage 3 `codex/issue-3790-stage3-frontend`, Stage 4
   `issue-3790-stage4-rust-native`, Stage 5A `issue-3790-stage5a-codeql-safety`
 - **절차 상태**: Stage 3·4 merge·canary 완료. 최신 `upstream/devel` `e48fe86947fb`에서 Stage 5A의
-  보안 check 재사용과 Rust no-build shadow를 구현하고 focused 검증을 통과했다.
+  보안 check 재사용과 Rust no-build shadow를 구현하고 focused 검증을 통과했다. Draft PR #4341의
+  1차 원격 canary 분석 뒤 raw blocking SARIF·동일 권한·기본 build mode의 no-prebuild shadow로
+  보정하고 focused 검증을 통과했다. 다음 gate는 보정 canary의 원격 동등성 측정이다.
 
 ## Stage 1 — shadow classifier
 
@@ -134,6 +136,33 @@ Stage 3 merge 직후 frontend-only canary PR #3951에서 unit/package/render 진
    오염시키지 않는다.
 7. 정적 workflow 계약 테스트로 보안 check가 실패한 경우와 blocking Rust lane 보존, shadow 격리를
    고정한 뒤 YAML·classifier 인접 회귀를 focused 검증한다.
+
+### Stage 5A 1차 canary 판정
+
+- PR #4341의 CodeQL run `31311707469`에서 blocking Rust 704초, no-build shadow 658초로 shadow가
+  46초(6.5%) 빨랐다. 그러나 실제 analyze 단계는 576초와 585초로 shadow가 9초 느렸고, 차이는 주로
+  blocking의 cargo cache 복원 13초와 사전 build 49초에서 나왔다.
+- 두 lane의 성공 추출 파일은 1,097개로 같았지만 오류 파일은 blocking 7개, shadow 3개로 달랐다.
+  동일 CLI 2.26.2와 raw diagnostic 2건을 사용했어도 database가 완전히 동등하다고 판정할 수 없다.
+- shadow raw SARIF artifact에는 32개 결과와 fingerprint가 있었지만 blocking raw SARIF는 artifact로
+  남기지 않았다. Code Scanning analysis API의 server-processed 결과는 PR baseline 반영 뒤 0건이라
+  raw result·fingerprint 비교를 대신할 수 없다.
+- shadow job은 `security-events` 권한이 없어 CodeQL Action feature API를 읽지 못했다는 annotation을
+  남겼다. 따라서 blocking과 동일 권한이라는 A/B 전제가 충족되지 않았다.
+- 결론은 `build-mode: none` 활성화 보류다. 다음 canary는 blocking raw Rust SARIF를 artifact로 남기고,
+  shadow 권한을 blocking과 같게 맞춘 뒤, 가능하면 기본 build mode에서 cargo prebuild만 제거해 변수를
+  하나로 제한한다.
+
+### Stage 5A 보정 canary
+
+- blocking matrix의 기본 build mode, Rust cache·수동 `cargo build`, Code Scanning upload는 그대로 두고
+  CodeQL CLI SARIF 출력 `rust-blocking-results`를 7일 artifact로 추가한다.
+- shadow도 기본 build mode와 `security-events: write`, `contents: read`를 사용한다. cache·수동
+  `cargo build`만 생략하고 `upload: never`를 유지해 Code Scanning 결과를 만들지 않는다.
+- shadow check·artifact 이름을 `Rust no-prebuild shadow`와 `rust-no-prebuild-sarif-*`로 바꿔 첫
+  `build-mode: none` 측정과 구별한다.
+- 원격에서는 두 raw SARIF의 result fingerprint·artifact URI와 추출 성공·오류 수가 같고 feature API
+  권한 annotation이 사라지는지 확인한 뒤 활성화 여부를 판정한다.
 
 ## Stage 5B 이후
 
