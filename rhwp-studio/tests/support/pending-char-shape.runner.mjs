@@ -114,6 +114,10 @@ assert.ok(para >= 0, '10글자 이상인 본문 문단이 있어야 한다');
 // ── 2. 캐럿 대기 서식은 다음 삽입 런에만 적용된다 ───────────────────────────
 {
   const at = 3;
+  const baseline = [at, at + 1, at + 2].map((off) => ({
+    bold: props(para, off).bold,
+    textColor: props(para, off).textColor,
+  }));
   const cmd = new InsertTextCommand(pos(para, at), 'ABC', undefined, { bold: true, textColor: '#0000ff' });
   const after = cmd.execute(wasm);
 
@@ -128,6 +132,14 @@ assert.ok(para >= 0, '10글자 이상인 본문 문단이 있어야 한다');
 
   cmd.undo(wasm);
   assert.notEqual(doc.getTextRange(0, para, at, 3), 'ABC', 'undo 는 삽입 텍스트를 지운다');
+  assert.deepEqual(
+    [at, at + 1, at + 2].map((off) => ({
+      bold: props(para, off).bold,
+      textColor: props(para, off).textColor,
+    })),
+    baseline,
+    'undo 는 삽입 런의 예약 서식을 원문에 남기면 안 된다',
+  );
 }
 
 // ── 3. 예약 서식이 다른 삽입끼리 병합 금지 ─────────────────────────────────
