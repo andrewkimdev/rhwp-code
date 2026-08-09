@@ -331,6 +331,18 @@ const ACTIONS = {
   MoveSelLineBegin: { kind: 'move', moveID: MOVE.START_OF_LINE, sel: true },
   MoveSelLineEnd: { kind: 'move', moveID: MOVE.END_OF_LINE, sel: true },
 
+  // 쪽 이동. 쪽 경계는 **파일이 안 알려 준다** — 저장 vpos 되돌아감으로는 표가 쪽을 넘는
+  // 자리를 못 짚는다(셀 안 vpos 는 셀 기준이다). 그래서 rhwp 조판기가 답하고, 그만큼
+  // **조판 정밀도를 물려받는다**.
+  //
+  // `Up` 은 지금 쪽의 시작에 서 있을 때만 앞 쪽으로 간다 — 아니면 지금 쪽의 시작이다(실측).
+  MovePageBegin: { kind: 'page', to: 'begin' },
+  MovePageEnd: { kind: 'page', to: 'end' },
+  MovePageUp: { kind: 'page', to: 'up' },
+  MovePageDown: { kind: 'page', to: 'down' },
+  MoveSelPageUp: { kind: 'page', to: 'up', sel: true },
+  MoveSelPageDown: { kind: 'page', to: 'down', sel: true },
+
   // 단어 이동. 단어는 공백으로 나뉜 덩어리이고 누름틀이 그 자체로 경계를 만든다.
   MoveNextWord: { kind: 'move', moveID: MOVE.NEXT_WORD },
   MovePrevWord: { kind: 'move', moveID: MOVE.PREV_WORD },
@@ -1888,6 +1900,11 @@ export class HwpCtrl {
     }
     // 고치는 액션은 걸기 **전에** 문서를 찍어 둔다 — 되돌리기가 그 자리로 돌아간다.
     if (!NON_MUTATING_KINDS.has(action.kind)) this.#pushHistory();
+    if (action.kind === 'page') {
+      const moved = this.#runPageAction(action);
+      callback?.(null, moved, callbackUserData);
+      return;
+    }
     if (action.kind === 'move' || action.kind === 'movePara') {
       const moved = this.#runMoveAction(action);
       callback?.(null, moved, callbackUserData);
@@ -2731,6 +2748,73 @@ export class HwpCtrl {
       end: { list, para: last, pos: tail.end },
     };
     this.#cursor = { list, para: last, pos: tail.end };
+  }
+
+  /**
+   * 쪽 이동 넷. 쪽마다 **캐럿이 설 첫 자리**를 코어에서 받아 그 목록 위를 걷는다.
+   *
+   * 실측한 규칙(`20250130-hongbo`, 쪽 시작 0/16 · 15/122 · 26/0 · 30/0):
+   *
+   * | 건 것 | 하는 일 |
+   * | --- | --- |
+   * | `Begin` | 지금 쪽의 시작 |
+   * | `End` | **다음 쪽 시작 바로 앞** — 같은 문단이면 자리 −1, 문단이 바뀌면 앞 문단의 끝 |
+   * | `Down` | 다음 쪽의 시작(마지막 쪽이면 제자리) |
+   * | `Up` | 지금 쪽의 시작에 서 있으면 **앞 쪽**, 아니면 지금 쪽의 시작 |
+   *
+   * 본문(리스트 0) 밖에서는 아무 일도 하지 않는다 — 쪽 목록이 본문 좌표라서다.
+   */
+  #runPageAction(action) {
+    if (this.#cursor.list !== 0) return false;
+    const starts = parseJson(this.#doc?.getPageCaretStarts?.() ?? '', null);
+    if (!Array.isArray(starts) || !starts.length) return false;
+    const { para, pos } = this.#cursor;
+    // **제 시작이 없는 쪽**(이어지는 표뿐인 쪽)은 `null` 이다. 캐럿이 든 쪽을 찾을 때는 그런
+    // 쪽을 건너뛴다 — 한글이 그 캐럿을 앞 쪽에 속한 것으로 다룬다(실측). 다음 쪽을 볼 때는
+    // 건너뛰지 않는다: 그리로 내려가면 **실패**해서 캐럿이 0/0 에 놓인다.
+    const before = (s) =>
+      s && s.list === 0 && (s.para < para || (s.para === para && s.pos <= pos));
+    const at = starts.reduce((k, s, i) => (before(s) ? i : k), 0);
+    const here = starts[at] ?? { para: 0, pos: 0 };
+    const next = starts[at + 1];
+
+    let dest;
+    if (action.to === 'begin') {
+      dest = here;
+    } else if (action.to === 'down') {
+      // 다음 쪽이 아예 없으면 제자리. 있으면 그 쪽의 첫 자리인데, **본문이 아니라 칸 안**일
+      // 수 있다(이어지는 표만 있는 쪽) — 그때는 그 칸 리스트로 들어간다.
+      dest = at + 1 >= starts.length ? here : (next ?? { list: 0, para: 0, pos: 0 });
+    } else if (action.to === 'up') {
+      const atStart = here.para === para && here.pos === pos;
+      dest = atStart ? (starts.slice(0, at).filter(Boolean).pop() ?? here) : here;
+    } else {
+      // end — 다음 쪽 시작 **바로 앞**. 문단이 바뀌면 앞 문단의 끝이다.
+      // 다음 쪽에 설 자리가 없으면(null) **캐럿을 그대로 둔다** — 내려가기가 0/0 으로
+      // 떨어지는 것과 달리 이쪽은 제자리다(실측).
+      if (at + 1 < starts.length && (!next || next.list !== 0)) {
+        // 다음 쪽의 첫 자리가 본문에 없으면(칸 안이거나 아예 없으면) **캐럿을 그대로 둔다** —
+        // 내려가기가 그 칸으로 들어가는 것과 달리 이쪽은 제자리다(실측).
+        dest = { para, pos };
+      } else if (!next) {
+        const last = this.#cursorModel().root;
+        dest = { para: last.endPara, pos: last.endPos };
+      } else if (next.pos > 0) {
+        dest = { para: next.para, pos: next.pos - 1 };
+      } else {
+        const prev = next.para - 1;
+        dest = { para: prev, pos: this.#paraBounds(0, prev).end };
+      }
+    }
+
+    const extending = action.sel || this.#selectMode;
+    const anchor = extending ? (this.#selAnchor ?? { ...this.#cursor }) : null;
+    const wasSelectMode = this.#selectMode;
+    this.#clearSelection();
+    this.#selectMode = wasSelectMode;
+    this.#cursor = { list: dest.list ?? 0, para: dest.para, pos: dest.pos };
+    if (anchor) this.#applyExtendedSelection(anchor);
+    return true;
   }
 
   #runMoveAction(action) {

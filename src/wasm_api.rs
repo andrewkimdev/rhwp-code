@@ -5540,6 +5540,12 @@ impl HwpDocument {
             .map_err(|e| e.into())
     }
 
+    /// 쪽마다 캐럿이 설 수 있는 첫 자리 — 웹한글컨트롤 `Run("MovePage*")` 용.
+    #[wasm_bindgen(js_name = getPageCaretStarts)]
+    pub fn page_caret_starts_api(&self) -> Result<String, JsValue> {
+        self.page_caret_starts().map_err(|e| e.into())
+    }
+
     /// 개체에 글상자를 붙이거나 뗀다 — 웹한글컨트롤 `Run("ShapeObjAttach/DetachTextBox")`.
     #[wasm_bindgen(js_name = setTextBoxAt)]
     pub fn set_text_box_at_api(

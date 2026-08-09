@@ -1049,6 +1049,139 @@ impl DocumentCore {
         Ok(r#"{"ok":true,"moved":true}"#.to_string())
     }
 
+    /// 쪽마다 **캐럿이 설 수 있는 첫 자리** — 웹한글컨트롤 `Run("MovePage*")` 용.
+    ///
+    /// 줄과 달리 쪽 경계는 **파일이 안 알려 준다.** 저장 vpos 가 되돌아가는 자리로 두 곳은
+    /// 짚히는데(실측 `20250130-hongbo` 의 15/122 · 26/0), 셋째는 못 짚는다 — 표가 쪽을
+    /// 넘어가는 자리이고 셀 안 `vpos` 는 **셀 기준**이라 되돌아감이 안 남는다. 그래서 이 값은
+    /// rhwp 조판기가 답한다.
+    ///
+    /// 항목 갈래를 가려야 한글과 같아진다:
+    ///
+    /// - 문단이 이어지는 쪽(`PartialParagraph`)은 **그 줄의 시작**이 답이다(15/122).
+    /// - 표가 이어지는 쪽(`PartialTable` 이어짐)은 캐럿이 설 자리가 **본문에 없다** — 셀 안이다.
+    ///   건너뛰고 그 다음 항목을 본다(그래서 넷째 쪽이 29 가 아니라 **30/0** 이다).
+    /// - 첫 쪽의 시작은 앞머리 자리차지 뒤다(줄 이동과 같은 규칙).
+    ///
+    /// **조판 정밀도를 물려받는다.** 쪽 나눔이 한글과 갈리는 문서에서는 이 값도 갈린다.
+    pub fn page_caret_starts(&self) -> Result<String, HwpError> {
+        use crate::renderer::pagination::PageItem;
+        let mut out: Vec<String> = Vec::new();
+        for (sec_idx, pr) in self.pagination.iter().enumerate() {
+            for page in pr.pages.iter() {
+                let mut found: Option<(usize, usize)> = None;
+                'items: for col in &page.column_contents {
+                    for item in &col.items {
+                        match item {
+                            PageItem::PartialTable {
+                                is_continuation: true,
+                                ..
+                            } => continue,
+                            PageItem::PartialParagraph {
+                                para_index,
+                                start_line,
+                                ..
+                            } => {
+                                let ts = self
+                                    .document
+                                    .sections
+                                    .get(sec_idx)
+                                    .and_then(|s| s.paragraphs.get(*para_index))
+                                    .and_then(|p| p.line_segs.get(*start_line))
+                                    .map(|seg| seg.text_start as usize)
+                                    .unwrap_or(0);
+                                found = Some((*para_index, ts));
+                                break 'items;
+                            }
+                            PageItem::FullParagraph { para_index }
+                            | PageItem::Table { para_index, .. }
+                            | PageItem::PartialTable { para_index, .. }
+                            | PageItem::Shape { para_index, .. } => {
+                                found = Some((*para_index, 0));
+                                break 'items;
+                            }
+                            _ => continue,
+                        }
+                    }
+                }
+                // 쪽 전체가 **이어지는 표**뿐이면 본문에는 설 자리가 없다 — 캐럿은 그 쪽에
+                // 보이는 **첫 칸 안**으로 들어간다(실측: 리스트 52·118 의 0/0). 빠뜨리면 목록이
+                // 밀려 뒤가 다 어긋나므로 그 칸의 리스트를 찾아 채운다.
+                let Some((para_index, pos)) = found else {
+                    let cell = page
+                        .column_contents
+                        .iter()
+                        .flat_map(|col| col.items.iter())
+                        .find_map(|item| match item {
+                            PageItem::PartialTable {
+                                para_index,
+                                control_index,
+                                start_row,
+                                ..
+                            } => self.first_cell_list_of_row(
+                                sec_idx,
+                                *para_index,
+                                *control_index,
+                                *start_row,
+                            ),
+                            _ => None,
+                        });
+                    match cell {
+                        Some(list_id) => {
+                            out.push(format!("{{\"list\":{},\"para\":0,\"pos\":0}}", list_id))
+                        }
+                        None => out.push("null".to_string()),
+                    }
+                    continue;
+                };
+                // 본문 문단 번호는 구역을 가로질러 이어 센다 — 캐럿 좌표가 그렇다.
+                let before: usize = self
+                    .document
+                    .sections
+                    .iter()
+                    .take(sec_idx)
+                    .map(|s| s.paragraphs.len())
+                    .sum();
+                let para_in_list = before + para_index;
+                let start = self
+                    .document
+                    .sections
+                    .get(sec_idx)
+                    .and_then(|s| s.paragraphs.get(para_index))
+                    .map(leading_anchor_pos)
+                    .unwrap_or(0);
+                out.push(format!(
+                    "{{\"list\":0,\"para\":{},\"pos\":{}}}",
+                    para_in_list,
+                    pos.max(start)
+                ));
+            }
+        }
+        Ok(format!("[{}]", out.join(",")))
+    }
+
+    /// 표의 어떤 **행에서 첫 칸**의 리스트 번호. 쪽을 넘어 이어지는 표의 시작 칸을 짚는다.
+    fn first_cell_list_of_row(
+        &self,
+        section_index: usize,
+        host_para: usize,
+        control_index: usize,
+        row: usize,
+    ) -> Option<u32> {
+        let (_, lists) = self.collect_fields_and_lists();
+        lists
+            .iter()
+            .filter(|l| {
+                l.is_cell
+                    && l.section_index == section_index
+                    && l.host_para_index == host_para
+                    && l.control_index == control_index
+                    && l.grid.is_some_and(|g| g.row as usize == row)
+            })
+            .min_by_key(|l| l.grid.map(|g| g.col).unwrap_or(u16::MAX))
+            .map(|l| l.list_id)
+    }
+
     /// 글상자 붙이기·떼기 — 웹한글컨트롤 `Run("ShapeObjAttach/DetachTextBox")`.
     ///
     /// 캡션과 달리 **빈 채로 생긴다**(붙이면 캐럿이 `list 2, para 0, pos 0`). 떼면 그 리스트가
