@@ -82,6 +82,14 @@ ADAPTERS = {
             com.KeyIndicator(),
         )
     ),
+    # v2.4 §8.3.57·§8.3.59 — 웹은 날짜를 객체로 리턴한다(`result`·`year`·`month`·`day`,
+    # 음력 쪽은 `leap` 까지). COM 은 같은 값을 out 파라미터 튜플로 준다.
+    "SolarToLunar": lambda com, args: dict(
+        zip(("result", "year", "month", "day", "leap"), com.SolarToLunar(*args))
+    ),
+    "LunarToSolar": lambda com, args: dict(
+        zip(("result", "year", "month", "day"), com.LunarToSolar(*args))
+    ),
 }
 
 

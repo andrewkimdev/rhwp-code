@@ -15,6 +15,8 @@
  *   `SaveAs` 는 다운로드다. Node 에서 돌릴 때는 호스트가 넣어 준 `onSave` 싱크를 쓴다.
  */
 
+import { lunarToSolar, solarToLunar } from './lunar.mjs';
+
 /** 필드 목록 구분자 — 규격 §8.3.9. 마지막 필드에는 붙지 않는다. */
 const SEP = String.fromCharCode(2);
 
@@ -613,7 +615,7 @@ class IDHwpCtrlCode {
    * 셀 안의 표는 그 문단의 글자 자리 그대로).
    */
   GetAnchorPos() {
-    return new ParameterSet('AnchorPos', {
+    return new IDHwpParameterSet('AnchorPos', {
       List: this.#at.list,
       Para: this.#at.para,
       Pos: this.#at.pos,
@@ -630,7 +632,7 @@ class IDHwpCtrlCode {
     // 속성 셋의 이름은 **컨트롤 갈래마다 다르다**(실측: 표는 `Table`, 그리기·그림은
     // `ShapeObject`). 나머지 갈래는 아직 안 쟀으므로 예전 이름을 그대로 둔다.
     const byKind = { tbl: 'Table', gso: 'ShapeObject' };
-    return new ParameterSet(byKind[this.#at.ctrlId] ?? 'Ctrl', this.#at.props ?? {});
+    return new IDHwpParameterSet(byKind[this.#at.ctrlId] ?? 'Ctrl', this.#at.props ?? {});
   }
 
   /** 이 컨트롤이 문서 어디에 있는지 — `DeleteCtrl` 이 쓰는 내부 값이다(규격 API 아님). */
@@ -707,7 +709,10 @@ function ocxFieldOrder(fields) {
  * 없는 항목을 물으면 `undefined` 를 돌려준다. 0 으로 채우지 않는다 — "모른다"와 "0이다"를
  * 뭉개면 서식이 틀린 것을 못 잡는다.
  */
-export class ParameterSet {
+// `IDHwpCtrlCode` 와 같은 이유로 **형 이름**을 한글이 내보이는 것에 맞춘다 — 실측:
+// `SolarToLunarBySet` 이 돌려주는 객체의 형이 `IDHwpParameterSet` 이다. 규격이 부르는
+// 이름(`ParameterSet`)은 아래에서 별칭으로 남긴다.
+class IDHwpParameterSet {
   #setId;
   #items;
   #countOverride;
@@ -752,7 +757,7 @@ export class ParameterSet {
 
   /** 규격 §9 — 이름 붙은 **하위 셋**을 만들어 담는다. 만든 셋은 비어 있다(실측 `Count` 0). */
   CreateItemSet(name, setId) {
-    const child = new ParameterSet(setId);
+    const child = new IDHwpParameterSet(setId);
     this.#items[name] = child;
     return child;
   }
@@ -814,7 +819,7 @@ export class ParameterSet {
 
   /** 규격 §9 — 같은 내용의 새 셋. */
   Clone() {
-    return new ParameterSet(this.#setId, this.#items);
+    return new IDHwpParameterSet(this.#setId, this.#items);
   }
 
   /** 내부: 담긴 항목 전부. 호스트와 이 층이 쓴다. */
@@ -822,6 +827,8 @@ export class ParameterSet {
     return { ...this.#items };
   }
 }
+
+export { IDHwpParameterSet as ParameterSet };
 
 /**
  * 규격 §9 의 ParameterArray — 셋 안에 담기는 **자리 배열**이다.
@@ -893,7 +900,7 @@ export class HwpAction {
 
   /** 이 액션이 쓸 빈 셋. 셋을 안 쓰는 액션이면 이름 없는 셋이다. */
   get CreateSet() {
-    return new ParameterSet(this.SetID);
+    return new IDHwpParameterSet(this.SetID);
   }
 
   /** 셋에 이 액션의 기본값을 채운다. 아직 채울 값이 없어 셋은 그대로 둔다. */
@@ -1384,7 +1391,7 @@ export class HwpCtrl {
    * 집어 간다.
    */
   CreateSet(setId) {
-    return new ParameterSet(setId);
+    return new IDHwpParameterSet(setId);
   }
 
   /**
@@ -1399,7 +1406,7 @@ export class HwpCtrl {
       this.#cursor.para,
       this.#cursor.pos,
     );
-    return new ParameterSet('CharShape', parseJson(raw ?? '', {}) ?? {});
+    return new IDHwpParameterSet('CharShape', parseJson(raw ?? '', {}) ?? {});
   }
 
   /**
@@ -1410,7 +1417,7 @@ export class HwpCtrl {
    * 값은 창 없는 컨트롤의 기본 상태라 문서와 무관하다.
    */
   get ViewProperties() {
-    return new ParameterSet(
+    return new IDHwpParameterSet(
       'ViewProperties',
       { ZoomType: 5, ZoomRatio: 100, OptionFlag: 8192 },
       12,
@@ -1424,13 +1431,64 @@ export class HwpCtrl {
    * 없다 — 지어내 채우지 않는다.
    */
   get EngineProperties() {
-    return new ParameterSet('EngineProperties', {}, 12);
+    return new IDHwpParameterSet('EngineProperties', {}, 12);
+  }
+
+  // ── 음·양력 (규격 §8.3.57~§8.3.60) ──
+  //
+  // 표와 그 한계는 `lunar.mjs` 머리에 적었다. **한글과 어긋나는 날이 35개 있고 일부러 그렇게
+  // 두었다** — 한글의 표가 국가 기관이 펴낸 달력과 다르다. 그래서 이 넷은 오라클이 판정자가
+  // 될 수 없는 항목이다.
+
+  /**
+   * 규격 §8.3.57 — 양력을 음력으로. 웹 규약이라 **객체**를 돌려준다.
+   *
+   * 표 밖이면 한글은 날짜를 0 으로 채우면서도 `result` 는 **true** 로 답한다(실측 —
+   * `probes/pC-lunar-edge.json`). 음→양 쪽만 `false` 다. 어긋난 규약이지만 그대로 맞춘다.
+   */
+  SolarToLunar(solarYear, solarMonth, solarDay) {
+    const at = solarToLunar(solarYear, solarMonth, solarDay);
+    if (!at) return { result: true, year: 0, month: 0, day: 0, leap: false };
+    return { result: true, year: at.year, month: at.month, day: at.day, leap: at.leap };
+  }
+
+  /** 규격 §8.3.59 — 음력을 양력으로. 실패하면 `result` 가 `false` 다(실측). */
+  LunarToSolar(lunarYear, lunarMonth, lunarDay, leap) {
+    const at = lunarToSolar(lunarYear, lunarMonth, lunarDay, Boolean(leap));
+    if (!at) return { result: false, year: 0, month: 0, day: 0 };
+    return { result: true, year: at.year, month: at.month, day: at.day };
+  }
+
+  /**
+   * 규격 §8.3.58 — 같은 값을 ParameterSet 으로.
+   *
+   * 셋 ID 와 항목 이름은 실측이다(`probes/pC-lunar-set.json`): `SolarToLunar` 에 네 항목
+   * `Year`·`Month`·`Day`·`Leap` 이고 `Leap` 은 0/1 이다. `result` 는 담기지 않는다.
+   */
+  SolarToLunarBySet(solarYear, solarMonth, solarDay) {
+    const at = this.SolarToLunar(solarYear, solarMonth, solarDay);
+    return new IDHwpParameterSet('SolarToLunar', {
+      Year: at.year,
+      Month: at.month,
+      Day: at.day,
+      Leap: at.leap ? 1 : 0,
+    });
+  }
+
+  /** 규격 §8.3.60 — 셋 ID `LunarToSolar`, 항목 셋(`Year`·`Month`·`Day`) — 실측. */
+  LunarToSolarBySet(lunarYear, lunarMonth, lunarDay, leap) {
+    const at = this.LunarToSolar(lunarYear, lunarMonth, lunarDay, leap);
+    return new IDHwpParameterSet('LunarToSolar', {
+      Year: at.year,
+      Month: at.month,
+      Day: at.day,
+    });
   }
 
   /** 규격 §8.2.11 — 캐럿이 놓인 문단의 문단 모양. */
   get ParaShape() {
     const raw = this.#doc?.getParaShapeSet?.(this.#cursor.list, this.#cursor.para);
-    return new ParameterSet('ParaShape', parseJson(raw ?? '', {}) ?? {});
+    return new IDHwpParameterSet('ParaShape', parseJson(raw ?? '', {}) ?? {});
   }
 
   // ── 문서 속성 (규격 §8.2) ──
@@ -1735,7 +1793,7 @@ export class HwpCtrl {
   get CellShape() {
     const { list, para, pos } = this.#cursor;
     const raw = this.#doc?.getCellShapeSet?.(list, para, pos);
-    return new ParameterSet('CellShape', parseJson(raw, {}));
+    return new IDHwpParameterSet('CellShape', parseJson(raw, {}));
   }
 
   /** 어느 리스트든 그것을 담은 **본문 문단** 번호로 올라간다. 본문이면 그대로다. */
@@ -1816,7 +1874,7 @@ export class HwpCtrl {
    */
   GetPosBySet() {
     const { list, para, pos } = this.#cursor;
-    return new ParameterSet('Pos', { List: list, Para: para, Pos: pos });
+    return new IDHwpParameterSet('Pos', { List: list, Para: para, Pos: pos });
   }
 
   /** 규격 §8.3 — 파라미터셋으로 캐럿을 옮긴다. `SetPos` 와 같은 자를 쓴다. */
@@ -1833,7 +1891,7 @@ export class HwpCtrl {
    * 아니다. 확인한 적 없는 이름을 넣으면 "모른다"가 사라진다.
    */
   CreateSet(setId) {
-    return new ParameterSet(KNOWN_SET_IDS.has(setId) ? setId : '', {});
+    return new IDHwpParameterSet(KNOWN_SET_IDS.has(setId) ? setId : '', {});
   }
 
   /**

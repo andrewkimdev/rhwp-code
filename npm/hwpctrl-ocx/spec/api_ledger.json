@@ -4,11 +4,11 @@
   "oracleVersion": "한글2022 (설치본 COM)",
   "summary": {
     "total": 484,
-    "done": 308,
+    "done": 312,
     "byStatus": {
       "verified": 306,
-      "unimplemented": 176,
-      "substituted": 2
+      "unimplemented": 172,
+      "substituted": 6
     },
     "byUnit": {
       "property": {
@@ -18,7 +18,8 @@
       },
       "method": {
         "verified": 56,
-        "unimplemented": 32
+        "unimplemented": 28,
+        "substituted": 4
       },
       "event": {
         "unimplemented": 3
@@ -2086,14 +2087,16 @@
       "name": "SolarToLunar",
       "arity": 3,
       "section": "8.3.57",
-      "status": "unimplemented",
-      "notes": "",
+      "status": "substituted",
+      "notes": "한글의 음력 표가 한국천문연구원(KASI)이 펴낸 공공자료와 다르다 — 1841~2043 의 2,051일 표본 중 35일(1.71%)에서 갈리고, 그중 스물둘은 한글이 29일짜리 달의 '30일'을 말하는, 그 달력에 없는 날이다(넷은 2033년 윤달 배치). 오라클이 이 항목의 판정자가 될 수 없어 공공자료를 따랐다. 어긋난 목록은 양쪽 답과 함께 spec/lunar_divergence.json 에 적었다. 표 자체는 원자료의 달 머리 2,511개와 왕복으로 검증했고(test/lunar.test.mjs), 반환 모양·경계·BySet 규약은 오라클로 잰 그대로다(scenarios/pJ-lunar.json).",
       "legacyHwpctl": false,
       "specArityAmbiguous": true,
       "oracle": {
-        "scenarios": [],
+        "scenarios": [
+          "pJ-lunar"
+        ],
         "lastRun": null,
-        "diff": null
+        "diff": 0
       }
     },
     {
@@ -2103,14 +2106,16 @@
       "name": "SolarToLunarBySet",
       "arity": 3,
       "section": "8.3.58",
-      "status": "unimplemented",
-      "notes": "",
+      "status": "substituted",
+      "notes": "한글의 음력 표가 한국천문연구원(KASI)이 펴낸 공공자료와 다르다 — 1841~2043 의 2,051일 표본 중 35일(1.71%)에서 갈리고, 그중 스물둘은 한글이 29일짜리 달의 '30일'을 말하는, 그 달력에 없는 날이다(넷은 2033년 윤달 배치). 오라클이 이 항목의 판정자가 될 수 없어 공공자료를 따랐다. 어긋난 목록은 양쪽 답과 함께 spec/lunar_divergence.json 에 적었다. 표 자체는 원자료의 달 머리 2,511개와 왕복으로 검증했고(test/lunar.test.mjs), 반환 모양·경계·BySet 규약은 오라클로 잰 그대로다(scenarios/pJ-lunar.json).",
       "legacyHwpctl": false,
       "specArityAmbiguous": true,
       "oracle": {
-        "scenarios": [],
+        "scenarios": [
+          "pJ-lunar"
+        ],
         "lastRun": null,
-        "diff": null
+        "diff": 0
       }
     },
     {
@@ -2120,14 +2125,16 @@
       "name": "LunarToSolar",
       "arity": 4,
       "section": "8.3.59",
-      "status": "unimplemented",
-      "notes": "",
+      "status": "substituted",
+      "notes": "한글의 음력 표가 한국천문연구원(KASI)이 펴낸 공공자료와 다르다 — 1841~2043 의 2,051일 표본 중 35일(1.71%)에서 갈리고, 그중 스물둘은 한글이 29일짜리 달의 '30일'을 말하는, 그 달력에 없는 날이다(넷은 2033년 윤달 배치). 오라클이 이 항목의 판정자가 될 수 없어 공공자료를 따랐다. 어긋난 목록은 양쪽 답과 함께 spec/lunar_divergence.json 에 적었다. 표 자체는 원자료의 달 머리 2,511개와 왕복으로 검증했고(test/lunar.test.mjs), 반환 모양·경계·BySet 규약은 오라클로 잰 그대로다(scenarios/pJ-lunar.json).",
       "legacyHwpctl": false,
       "specArityAmbiguous": true,
       "oracle": {
-        "scenarios": [],
+        "scenarios": [
+          "pJ-lunar"
+        ],
         "lastRun": null,
-        "diff": null
+        "diff": 0
       }
     },
     {
@@ -2137,14 +2144,16 @@
       "name": "LunarToSolarBySet",
       "arity": 4,
       "section": "8.3.60",
-      "status": "unimplemented",
-      "notes": "",
+      "status": "substituted",
+      "notes": "한글의 음력 표가 한국천문연구원(KASI)이 펴낸 공공자료와 다르다 — 1841~2043 의 2,051일 표본 중 35일(1.71%)에서 갈리고, 그중 스물둘은 한글이 29일짜리 달의 '30일'을 말하는, 그 달력에 없는 날이다(넷은 2033년 윤달 배치). 오라클이 이 항목의 판정자가 될 수 없어 공공자료를 따랐다. 어긋난 목록은 양쪽 답과 함께 spec/lunar_divergence.json 에 적었다. 표 자체는 원자료의 달 머리 2,511개와 왕복으로 검증했고(test/lunar.test.mjs), 반환 모양·경계·BySet 규약은 오라클로 잰 그대로다(scenarios/pJ-lunar.json).",
       "legacyHwpctl": false,
       "specArityAmbiguous": true,
       "oracle": {
-        "scenarios": [],
+        "scenarios": [
+          "pJ-lunar"
+        ],
         "lastRun": null,
-        "diff": null
+        "diff": 0
       }
     },
     {

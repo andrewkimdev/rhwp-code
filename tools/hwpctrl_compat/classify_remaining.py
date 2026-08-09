@@ -170,10 +170,11 @@ MACHINE = {
 #
 # 다만 표를 **오라클에서 뽑아 만들면 검증이 순환**이 된다(한글로 만든 표를 한글로 검증). 표는
 # 한국천문연구원 같은 독립된 출처에서 와야 하고, 그때 이 넷이 열린다.
-DATA_MISSING = {
-    "HwpCtrl.method.LunarToSolar", "HwpCtrl.method.LunarToSolarBySet",
-    "HwpCtrl.method.SolarToLunar", "HwpCtrl.method.SolarToLunarBySet",
-}
+#
+# **열렸다.** 한국천문연구원 자료를 공공데이터포털 API 로 받아 표를 만들어 넷을 구현했다.
+# 다만 그 표는 한글의 표와 35일(1.71%)이 어긋나므로 오라클이 판정자가 될 수 없다 —
+# 원장에서 `substituted` 다. 그래서 이 갈래는 이제 비어 있다.
+DATA_MISSING: set[str] = set()
 
 
 HANG_DIALOGS = REPO / "output" / "poc" / "hwpctrl" / "hang_dialogs.tsv"
