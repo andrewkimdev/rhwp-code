@@ -49,15 +49,11 @@ UI_ONLY = {
 # 조판(쪽·줄)이 맞아야 잴 수 있는 것들.
 LAYOUT = {
     "HwpCtrl.method.KeyIndicator", "HwpCtrl.method.GetPageText",
-    "Action.TableColPageDown", "Action.TableColPageUp",
-    "Action.MoveLineBegin", "Action.MoveLineEnd", "Action.MoveLineUp", "Action.MoveLineDown",
-    "Action.MoveUp", "Action.MoveDown", "Action.MovePageBegin", "Action.MovePageEnd",
-    "Action.MovePageUp", "Action.MovePageDown", "Action.MoveViewBegin", "Action.MoveViewEnd",
+        "Action.MoveLineUp", "Action.MoveLineDown",
+    "Action.MoveUp", "Action.MoveDown",     "Action.MoveViewBegin", "Action.MoveViewEnd",
     "Action.MoveViewUp", "Action.MoveViewDown", "Action.MoveScrollUp", "Action.MoveScrollDown",
-    "Action.MoveScrollNext", "Action.MoveScrollPrev", "Action.DeleteLine",
-    "Action.DeleteLineEnd", "Action.MoveSelLineBegin", "Action.MoveSelLineEnd",
-    "Action.MoveSelLineUp", "Action.MoveSelLineDown", "Action.MoveSelUp", "Action.MoveSelDown",
-    "Action.MoveSelPageUp", "Action.MoveSelPageDown", "Action.MoveSelViewUp",
+    "Action.MoveScrollNext", "Action.MoveScrollPrev",         "Action.MoveSelLineUp", "Action.MoveSelLineDown", "Action.MoveSelUp", "Action.MoveSelDown",
+    "Action.MoveSelViewUp",
     "Action.MoveSelViewDown", "Action.ParagraphShapeIndentAtCaret",
 }
 
@@ -90,6 +86,15 @@ NO_WINDOW = {
     "Action.TableStringToTable",
     # 캐럿이 누름틀 안인데도 안 지워진다.
     "Action.DeleteField",
+}
+
+# 세로 이동 — **숨은 x 닻**이 막는다(계획서 §4.63). `SetPos` 는 세로 이동이 딛는 x 를 안 바꾸고
+# (시작 자리를 뭘로 주든 답이 같다) 그 x 는 문서를 연 뒤 **첫 자리 지정**이 정한다. API 로는
+# 읽지도 정하지도 못하니 조판 정밀도만 올려서는 안 열린다. 닻을 맞춰도 x → 글자 번호가 폰트
+# advance 로 한 칸씩 갈린다.
+HIDDEN_STATE = {
+    "Action.MoveUp", "Action.MoveDown", "Action.MoveLineUp", "Action.MoveLineDown",
+    "Action.MoveSelUp", "Action.MoveSelDown", "Action.MoveSelLineUp", "Action.MoveSelLineDown",
 }
 
 # **맥락을 API 로 만들 수 없는** 것들 — 맞추기는 개체를 여럿 골라야 먹는데, `SelectAll` 은
@@ -187,6 +192,8 @@ def main() -> int:
             key = "관측창 없음"
         elif ident in UNBUILDABLE_CONTEXT:
             key = "맥락을 못 만듦"
+        elif ident in HIDDEN_STATE:
+            key = "숨은 상태"
         elif ident in LAYOUT:
             key = "조판 의존"
         elif action and action in DIALOG_TITLES:
@@ -214,6 +221,7 @@ def main() -> int:
             "안 끝남(대화상자 없음)",
             "관측창 없음",
             "맥락을 못 만듦",
+            "숨은 상태",
         ):
             blocked += len(names)
         print(f"  {key:<22} {len(names):>4}")
