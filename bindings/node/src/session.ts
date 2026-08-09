@@ -185,6 +185,14 @@ export class Session {
     name: string,
     args: Readonly<Record<string, unknown>>,
   ): Promise<Envelope<T>> {
+    // 앞선 요청이 제한 시간을 넘겼다면 그 요청이 서버에서 실제로 끝났는지 알 수
+    // 없다. 같은 프로세스에 다음 편집을 밀어 넣으면 타임아웃으로 실패했다고 본
+    // 작업까지 뒤늦게 저장될 수 있으므로 세션을 재사용하지 않는다.
+    if (this.closed) {
+      throw new SessionClosedError(`세션이 이미 닫혔습니다 (도구: ${name})`, {
+        argv: this.argv,
+      });
+    }
     this.nextId += 1;
     const id = this.nextId;
     const request = {
@@ -204,7 +212,16 @@ export class Session {
 
       if (this.timeoutMs !== null) {
         waiter.timer = setTimeout(() => {
-          this.pending.delete(id);
+          if (!this.pending.delete(id)) return;
+          // JSON-RPC stdio에는 진행 중인 도구 호출을 취소하는 계약이 없다. 대기만
+          // 끊으면 서버가 편집/저장을 뒤늦게 끝낼 수 있으므로, 불확정 세션 자체를
+          // 종료해 이후 호출과 재시도를 안전하게 분리한다.
+          this.closed = true;
+          try {
+            this.child.kill('SIGKILL');
+          } catch {
+            /* 이미 종료됐으면 timeout 예외를 우선 보존한다. */
+          }
           reject(
             new RhwpTimeoutError(
               `${name} 호출이 제한 시간 ${this.timeoutMs}ms 를 초과했습니다`,
