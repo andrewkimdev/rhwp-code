@@ -1,10 +1,10 @@
 # @rhwp/hwpctrl - 웹한글컨트롤 호환 층
 
 한컴 웹한글컨트롤(WebHwpCtrl) API v2.4를 rhwp WASM 위에서 호출 호환으로 구현한다.
-현재는 P1~P5 개발자 미리보기이며, 원장 기준 **305/484** 항목이 한글 2022 COM Oracle과 0 diff 로
-대조됐다. 남은 179 중 176 은 이 하니스로는 구조적으로 못 재는 것들이라(대화상자·안 끝남·
-관측창 없음·숨은 상태 따위) **도달 가능한 상한은 308** 이다 —
-`tools/hwpctrl_compat/classify_remaining.py` 가 그 갈래와 이유를 낸다.
+현재는 P1~P5 개발자 미리보기이며, 원장 기준 **306/484** 항목이 한글 2022 COM Oracle과 0 diff 로
+대조됐다. 남은 178 은 **전부** 이 하니스로 구조적으로 못 재는 것들이다(대화상자·안 끝남·
+관측창 없음·숨은 상태·글자 폭 정밀도 따위) — 즉 **도달 가능한 상한 306 을 채웠다**.
+갈래와 그 이유는 `tools/hwpctrl_compat/classify_remaining.py` 가 낸다.
 지원 범위와 보류 항목의 권위 자료는 [`spec/api_ledger.json`](spec/api_ledger.json)이다.
 
 이 패키지는 아직 `private` 상태다. npm 레지스트리에서 설치하거나 단독 `<script>` 파일을

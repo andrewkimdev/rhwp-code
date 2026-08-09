@@ -50,15 +50,21 @@ UI_ONLY = {
     "Action.ToggleOverwrite",
 }
 
+# **글자 폭(advance)이 한글과 같아야** 잴 수 있는 것들 — 조판 정밀도가 아니라 글꼴 계측이다
+# (계획서 §4.67). `KeyIndicator` 의 `pos` 와 캐럿 들여쓰기가 캐럿의 **x** 에서 나온다.
+GLYPH_METRICS = {
+    "HwpCtrl.method.KeyIndicator",
+    "Action.ParagraphShapeIndentAtCaret",
+}
+
 # 조판(쪽·줄)이 맞아야 잴 수 있는 것들.
 LAYOUT = {
-    "HwpCtrl.method.KeyIndicator", "HwpCtrl.method.GetPageText",
         "Action.MoveLineUp", "Action.MoveLineDown",
     "Action.MoveUp", "Action.MoveDown",     "Action.MoveViewBegin", "Action.MoveViewEnd",
     "Action.MoveViewUp", "Action.MoveViewDown", "Action.MoveScrollUp", "Action.MoveScrollDown",
     "Action.MoveScrollNext", "Action.MoveScrollPrev",         "Action.MoveSelLineUp", "Action.MoveSelLineDown", "Action.MoveSelUp", "Action.MoveSelDown",
     "Action.MoveSelViewUp",
-    "Action.MoveSelViewDown", "Action.ParagraphShapeIndentAtCaret",
+    "Action.MoveSelViewDown",
 }
 
 # **관측창이 없는** 것들 — 맥락은 섰는데 어느 API 도 결과를 안 비춘다(계획서 §4.58).
@@ -214,6 +220,8 @@ def main() -> int:
             key = "맥락을 못 만듦"
         elif ident in HIDDEN_STATE:
             key = "숨은 상태"
+        elif ident in GLYPH_METRICS:
+            key = "글자 폭 정밀도"
         elif ident in LAYOUT:
             key = "조판 의존"
         elif action and action in DIALOG_TITLES:
@@ -242,6 +250,7 @@ def main() -> int:
             "관측창 없음",
             "맥락을 못 만듦",
             "숨은 상태",
+            "글자 폭 정밀도",
         ):
             blocked += len(names)
         print(f"  {key:<22} {len(names):>4}")
