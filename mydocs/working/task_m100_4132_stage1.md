@@ -1,10 +1,11 @@
 # task_m100_4132 Stage 1 — 함수 게이트 native-skia test 파일 규약화
 
 - **이슈**: [#4132](https://github.com/edwardkim/rhwp/issues/4132)
-- **브랜치**: `codex/issue-4132-native-cli-exit`
-- **분기 기준**: `upstream/devel` `e4d07fab713828266c3f365ebf862306b739f24a`
+- **PR**: [#4310](https://github.com/edwardkim/rhwp/pull/4310)
+- **브랜치**: `issue-4132-native-cli-exit`
+- **분기 기준**: `upstream/devel` `f94fe5e4f`
 - **계획서**: [수행](../plans/task_m100_4132.md) / [구현](../plans/task_m100_4132_impl.md)
-- **상태**: 로컬 구현·전체 회귀 검증 완료, 미커밋·미푸시
+- **상태**: Draft PR 게시, 원격 CI 대기
 - **기록일**: 2026-08-09 KST
 
 ## 1. #4170 후처리와 선행 규약
@@ -77,8 +78,8 @@ classifier를 배선한 뒤 같은 계약이 GREEN이 됐다.
 | `actionlint .github/workflows/ci.yml` | 통과 |
 | `node --check scripts/ci-impact-classifier.cjs` | 통과 |
 | `git diff --check` | 통과 |
-| `CARGO_INCREMENTAL=0 cargo test --profile release-test --tests` | 전체 통과(exit 0, compile 2분 39초; lib 3,359 통과·13 ignored 포함) |
-| `CARGO_INCREMENTAL=0 cargo clippy --all-targets -- -D warnings` | 통과(39.78초) |
+| `CARGO_INCREMENTAL=0 cargo test --profile release-test --tests` | 최신 devel rebase 후 전체 통과(exit 0, compile 2분 19초; lib 3,361 통과·13 ignored 포함) |
+| `CARGO_INCREMENTAL=0 cargo clippy --all-targets -- -D warnings` | 최신 devel rebase 후 통과(24.88초) |
 
 첫 native build는 샌드박스에서 Skia 바이너리 다운로드 DNS가 차단돼 `curl` code 6으로 실패했다. 승인된
 네트워크 재시도에서 공식 Skia 바이너리를 내려받은 뒤 native 두 target이 모두 통과했다. 제품·테스트 실패가
@@ -86,11 +87,11 @@ classifier를 배선한 뒤 같은 계약이 GREEN이 됐다.
 
 focused 결과 공유 뒤 작업지시자 승인을 받아 장시간 release-test 전체와 clippy도 순차 실행했다.
 `cargo-nextest`가 설치돼 있지 않아 계획서에 적은 `cargo test --profile release-test --tests` 경로를 사용했다.
-원격 PR CI는 아직 수행하지 않았다.
+접두사를 제거한 `issue-4132-native-cli-exit` 브랜치를 push하고 Draft PR #4310을 생성했다.
+원격 PR CI는 아직 완료되지 않았다.
 
 ## 5. 다음 게이트
 
-1. 작업지시자 승인 뒤 검증 완료 변경을 커밋한다.
-2. 별도 승인 뒤 push·Open PR을 생성한다.
-3. 원격 Native Skia job에서 두 target의 실제 실행과 총 소요시간 증가폭을 확인한다.
-4. #4132 merge 뒤 보존 중인 #3790 Stage 5 worktree를 최신 `devel`로 갱신한다.
+1. PR #4310 원격 CI에서 새 native target 두 건의 실제 실행을 확인한다.
+2. Native Skia job 총 소요시간 증가폭을 확인하고 Draft를 review-ready로 전환한다.
+3. #4132 merge 뒤 보존 중인 #3790 Stage 5 worktree를 최신 `devel`로 갱신한다.
