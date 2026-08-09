@@ -91,13 +91,13 @@ HWPX 파싱 시 HWP 바이너리와 동일한 IR(중간 표현)을 생성하기 
 
 ## 6. HWPX 구현 현황 (2026-08-09 재검증)
 
-과거 "향후 추가 조사 필요"로 남아 있던 항목들이다. 아래 여섯 항목의 "미구현"
+과거 "향후 추가 조사 필요"로 남아 있던 항목들이다. 아래 일곱 항목의 구현 현황
 표시는 전부 스테일이었다 — 2026-08-09 기준 코드 확인 결과 대부분 이미
 구현이 끝나 있었다.
 
 | 항목 | HWP | HWPX | 상태 |
 |------|-----|------|------|
-| Shape CommonObjAttr | CTRL_HEADER 파싱 | `<shapeObject>` 요소 | 구현됨(추정) — 파서가 rect/ellipse/line/arc/polygon/curve/container 전량 처리, 직렬화 `src/serializer/hwpx/shape.rs`(함수 81개·테스트 28개) + `section.rs:1940-2058`의 `render_shape()`. round-trip 비교는 `src/serializer/hwpx/roundtrip.rs:463-479`. 원래 "부분 구현"이 가리키던 구체적 공백은 특정하지 못함 |
+| Shape CommonObjAttr | CTRL_HEADER 파싱 | `<shapeObject>` 요소 | 구현됨(추정) — 파서가 rect/ellipse/line/arc/polygon/curve/container를 처리하고, 직렬화는 `src/serializer/hwpx/shape.rs`(테스트 28개) + `section.rs:1939-2066`의 `render_shape()`에 있다. round-trip 비교는 `src/serializer/hwpx/roundtrip.rs:463-479`. 원래 "부분 구현"이 가리키던 구체적 공백은 특정하지 못함 |
 | 각주/미주 | CTRL_FOOTNOTE | `<footNote>`/`<endNote>` | 구현됨 — 파서 `parse_ctrl_footnote()`(`src/parser/hwpx/section.rs:4743`), 직렬화 `render_footnote()`/`render_endnote()`(`src/serializer/hwpx/section.rs:2286,2303`). footNotePr/endNotePr 서식까지 Task #1050·#1984·#2716·#2742·#2779로 반영 |
 | 머리말/꼬리말 | CTRL_HEADER/FOOTER | `<hp:header>`/`<hp:footer>`, MasterPage | 구현됨 — 파서 `parse_ctrl_header()`/footer(`src/parser/hwpx/section.rs:4685,4732`), 직렬화 `render_header()`/`render_footer()`(`src/serializer/hwpx/section.rs:1802,1818`). MasterPage(EVEN/ODD/BOTH 적용)도 파싱·직렬화 존재 |
 | 그리기 객체 | control/shape.rs | `<rect>`,`<line>`,`<ellipse>`,`<arc>`,`<polygon>`,`<curve>`,`<container>` 등 | 구현됨 — 파서가 7종 도형+그룹을 전량 처리(`src/parser/hwpx/section.rs:4076-4149`), 직렬화도 대칭(`src/serializer/hwpx/shape.rs`, `section.rs:1940-2058`) |
