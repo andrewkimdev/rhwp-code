@@ -123,12 +123,16 @@ last_verified: 2026-08-09
   둘 중 하나가 회귀한다(PR #956 vs Task #987 이력).
 - **근거**: `mydocs/tech/hwp_spec_errata.md` §31.
 
-## 14. HWPX→HWP5 저장 시 한컴이 요구하는 OLE contract 스트림 — OWPML에 대응물 없음
+## 14. HWPX→HWP5 저장 시 한컴이 요구하는 OLE contract 스트림
 
-- **관찰**: 한컴 HWP 5.0이 정상으로 인식하려면 HWPX 컨테이너에 동등 데이터가 없는
-  contract 스트림(예: `Scripts/DefaultJScript`, `HwpSummaryInformation`, `DocOptions/_LinkDoc`)이
-  필요하다. `samples/form-01.hwp`(한컴 정답지)와 `saved/blank2010.hwp`에서 사전 추출한 fallback을
-  강제로 채워 넣지 않으면 한컴이 파일을 거부하거나 Form 컨트롤 JS 핸들러가 동작하지 않는다.
+- **관찰**: 한컴 HWP 5.0이 정상으로 인식하려면 HWPX ZIP과는 다른 OLE
+  스트림 컨테이너 계약이 필요하다. HWPX에 `Scripts/headerScripts`·
+  `Scripts/sourceScripts`가 있으면 둘을 `Scripts/DefaultJScript`로 변환한다.
+  동등 데이터가 없는 `HwpSummaryInformation`·`DocOptions/_LinkDoc`·
+  `Scripts/JScriptVersion`과 누락된 script·preview는 `samples/form-01.hwp`(한컴
+  정답지)와 `saved/blank2010.hwp`에서 사전 추출한 fallback으로 보충한다.
+  이 계약을 누락하면 한컴이 파일을 거부하거나 Form 컨트롤 JS 핸들러가
+  동작하지 않는다.
 - **근거**: `src/parser/hwpx/contract_streams.rs:1-25`, `:39-42`, `:61-65`, `:91-121`(Task #852).
 
 ## 15. 한컴 2020 HWPX 희소 Odd 바탕쪽 — HWP5 저장 시 압축 인코딩
