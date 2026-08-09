@@ -1,8 +1,8 @@
 """남은 원장 항목을 **왜 못 올렸는지**로 갈래 지어 도달 가능한 상한을 낸다.
 
-원장 484 가 도달 가능한 상한이 아니다 — 대화상자를 띄우는 액션은 COM 이 답을 못 주고, 이
-빌드에 아예 없는 API 도 있다. 그 선을 숫자로 그어 두면 다음 사람이 "남은 것을 다 할 수 있다"는
-잘못된 기대로 시간을 태우지 않는다.
+원장 484 가 도달 가능한 상한이 아니다 — 아예 답을 안 주고 안 끝나는 액션이 있고, 이 빌드에
+없는 API 도 있다. 그 선을 숫자로 그어 두면 다음 사람이 "남은 것을 다 할 수 있다"는 잘못된
+기대로 시간을 태우지 않는다.
 
     python tools/hwpctrl_compat/classify_remaining.py
 """
@@ -70,10 +70,10 @@ MACHINE = {
 
 
 def sweep_kinds() -> dict[str, str]:
-    # 스윕이 아예 안 건 것들 — 이미 대화상자로 확인해 금지 목록에 넣은 이름이다.
+    # 스윕이 아예 안 건 것들 — 이미 "안 끝남"으로 확인해 금지 목록에 넣은 이름이다.
     from sweep_actions import FORBIDDEN
 
-    kinds: dict[str, str] = {name: "DIALOG" for name in FORBIDDEN}
+    kinds: dict[str, str] = {name: "HANG" for name in FORBIDDEN}
     for path in SWEEPS:
         if not path.exists():
             continue
@@ -120,8 +120,8 @@ def main() -> int:
             key = "머신 의존"
         elif ident in LAYOUT:
             key = "조판 의존"
-        elif action and kinds.get(action) == "DIALOG":
-            key = "대화상자"
+        elif action and kinds.get(action) == "HANG":
+            key = "안 끝나는 호출"
         elif action and kinds.get(action) in ("CHANGED", "MOVED"):
             key = "관측됨 — 다음 후보"
         elif action and kinds.get(action) == "NOOP":
@@ -134,7 +134,7 @@ def main() -> int:
     blocked = 0
     for key in sorted(buckets, key=lambda k: -len(buckets[k])):
         names = buckets[key]
-        if key in ("없는 API", "UI 전용(관측 불가)", "머신 의존", "대화상자"):
+        if key in ("없는 API", "UI 전용(관측 불가)", "머신 의존", "안 끝나는 호출"):
             blocked += len(names)
         print(f"  {key:<22} {len(names):>4}")
         if key in ("관측됨 — 다음 후보", "아직 안 잼"):

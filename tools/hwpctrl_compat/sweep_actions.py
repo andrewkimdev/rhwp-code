@@ -1,12 +1,16 @@
-"""남은 액션을 **하나씩** 걸어 갈래를 분류한다 — 대화상자·무동작·움직임.
+"""남은 액션을 **하나씩** 걸어 갈래를 분류한다 — 안 끝남·무동작·움직임.
 
-왜 필요한가: 남은 원장의 대부분이 액션인데, 어느 것이 대화상자를 띄우고 어느 것이 관측
-가능한지 목록이 없다. 하나씩 짧은 시한으로 걸어 그 지도를 만든다. 멈추면 대화상자이므로
-곧바로 한글을 죽이고 다음으로 간다 — 그 이름은 다시 걸지 않는다.
+왜 필요한가: 남은 원장의 대부분이 액션인데, 어느 것이 답을 안 주고 어느 것이 관측 가능한지
+목록이 없다. 하나씩 짧은 시한으로 걸어 그 지도를 만든다. 시한을 넘기면 한글을 죽이고 다음으로
+간다 — 그 이름은 다시 걸지 않는다.
+
+**`HANG` 은 "대화상자"가 아니다.** 화면을 찍어 보니 대화상자가 **안 보이는데도** 호출이 안
+끝난다(`tools/hwpctrl_compat/screenshot.ps1` 로 확인). 관측한 사실은 "시한 안에 안 끝난다"
+뿐이므로 그 이름만 쓴다 — 보지 않고 "대화상자"라고 적었다가 틀렸다.
 
     python tools/hwpctrl_compat/sweep_actions.py [--out 결과.tsv] [--limit N]
 
-결과는 TSV 다: 이름, 갈래(DIALOG/NOOP/MOVED/CHANGED/FAIL), 무엇이 달라졌는지.
+결과는 TSV 다: 이름, 갈래(HANG/NOOP/MOVED/CHANGED/FAIL), 무엇이 달라졌는지.
 """
 
 from __future__ import annotations
@@ -24,7 +28,7 @@ REPO = HERE.parents[1]
 LEDGER = REPO / "npm" / "hwpctrl-ocx" / "spec" / "api_ledger.json"
 SAMPLE = "samples/para-001.hwp"
 
-# 이미 대화상자로 확인된 것들 — 다시 걸지 않는다(계획서 §4.32).
+# 이미 "안 끝남"으로 확인된 것들 — 다시 걸지 않는다(계획서 §4.32).
 FORBIDDEN = {
     "PutBullet", "PutParaNumber", "PutOutlineNumber", "ParaNumberBullet",
     "CharShapeHeight", "CharShapeWidth", "CharShapeSpacing",
@@ -186,9 +190,9 @@ def main() -> int:
                 capture_output=True, timeout=args.timeout, check=False,
             )
         except subprocess.TimeoutExpired:
-            rows.append((action, "DIALOG", "시한 안에 안 끝났다 — 대화상자로 본다"))
+            rows.append((action, "HANG", "시한 안에 안 끝났다"))
             subprocess.run(["taskkill", "/F", "/IM", "Hwp.exe"], capture_output=True, check=False)
-            print(f"  [{i}/{len(names)}] {action}: DIALOG")
+            print(f"  [{i}/{len(names)}] {action}: HANG")
             continue
         if proc.returncode != 0:
             rows.append((action, "FAIL", f"종료코드 {proc.returncode}"))
