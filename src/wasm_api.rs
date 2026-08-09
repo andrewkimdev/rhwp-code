@@ -5494,10 +5494,16 @@ impl HwpDocument {
             .map_err(|e| e.into())
     }
 
-    /// 문서 글 전체 — `GetTextFile("TEXT")`. JSON 문자열 하나를 준다.
+    /// 문서 글 전체 — `GetTextFile("TEXT")`. CP949 수치 참조를 적용한 JSON 문자열이다.
     #[wasm_bindgen(js_name = getTextFileText)]
     pub fn get_text_file_text(&self) -> String {
         self.text_file_json()
+    }
+
+    /// 문서 글 전체 — `GetTextFile("UNICODE")`. 원문 Unicode JSON 문자열이다.
+    #[wasm_bindgen(js_name = getTextFileUnicode)]
+    pub fn get_text_file_unicode(&self) -> String {
+        self.text_file_unicode_json()
     }
 
     /// 문서 글을 한글 스캔 차례로 — `InitScan`·`GetText`·`ReleaseScan` 이 쓴다.

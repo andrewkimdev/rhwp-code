@@ -75,6 +75,11 @@ HwpCtrl.Open(fileInput.files[0], '', '', (ok) => {
 지원한다. 정확한 지원·보류·대체 항목은 원장에서 확인한다. `Version`과 `IsModified`는 COM 값이
 아니라 웹 호환 계약에 따른 `substituted` 항목이다.
 
+`GetTextFile("TEXT", ...)`는 한글의 CP949 계약처럼 인코딩할 수 없는 문자를 `&#N;`으로
+바꾼다. `GetTextFile("UNICODE", ...)`는 같은 문서 순서를 원문 Unicode로 돌려준다.
+JavaScript 문자열을 받는 `SetTextFile`은 두 형식 모두 Unicode 입력을 보존한다. Windows live
+Oracle 시나리오는 시스템 ANSI code page에 따라 `TEXT` 결과가 달라지지 않도록 `UNICODE`를 쓴다.
+
 **호스트 고리.** 규격이 **경로**를 받는 API 는 호스트가 거들어야 한다 —
 `createHwpCtrl({ wasm, onSave, onReadFile, onCreatePageImage })`. 고리가 없으면 그 API 는
 아무 일도 하지 않는다. `CreatePageImage` 는 코어가 그린 쪽 SVG 를 호스트에 넘기고 픽셀로
@@ -97,7 +102,7 @@ Oracle 하니스의 Windows 전용 준비와 실행 규칙은
 [`tools/hwpctrl_compat/README.md`](../../tools/hwpctrl_compat/README.md)에 있다.
 
 ```bash
-# 공개 패키지 진입점과 생성자 계약만 빠르게 검사한다.
+# 공개 패키지 진입점과 TEXT/UNICODE dispatch 계약을 빠르게 검사한다.
 npm --prefix npm/hwpctrl-ocx run test:contract
 
 # Windows에서는 Hancom 2022 COM Oracle, macOS/Linux에서는 WASM 자체 시나리오를 검사한다.

@@ -21,7 +21,7 @@
     [
       "GetTextFile",
       [
-        "TEXT",
+        "UNICODE",
         ""
       ]
     ],
@@ -29,7 +29,7 @@
       "SetTextFile",
       [
         "가나다",
-        "TEXT",
+        "UNICODE",
         ""
       ]
     ],
@@ -40,7 +40,7 @@
     [
       "GetTextFile",
       [
-        "TEXT",
+        "UNICODE",
         ""
       ]
     ],
@@ -56,7 +56,7 @@
       "SetTextFile",
       [
         "라마",
-        "TEXT",
+        "UNICODE",
         ""
       ]
     ],
@@ -67,7 +67,7 @@
     [
       "GetTextFile",
       [
-        "TEXT",
+        "UNICODE",
         ""
       ]
     ],
@@ -75,14 +75,14 @@
       "SetTextFile",
       [
         "",
-        "TEXT",
+        "UNICODE",
         ""
       ]
     ],
     [
       "GetTextFile",
       [
-        "TEXT",
+        "UNICODE",
         ""
       ]
     ]

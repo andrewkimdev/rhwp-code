@@ -8,6 +8,12 @@
   "open": "samples/para-001.hwp",
   "calls": [
     [
+      "Run",
+      [
+        "ViewZoomNormal"
+      ]
+    ],
+    [
       "ViewProperties.SetID",
       []
     ],
@@ -29,12 +35,6 @@
       "ViewProperties.Item",
       [
         "ZoomRatio"
-      ]
-    ],
-    [
-      "ViewProperties.Item",
-      [
-        "OptionFlag"
       ]
     ],
     [

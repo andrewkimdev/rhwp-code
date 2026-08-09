@@ -33,6 +33,6 @@
     ["GetPos", []],
     ["Run", ["Redo"]],
     ["GetPos", []],
-    ["GetTextFile", ["TEXT", ""]]
+    ["GetTextFile", ["UNICODE", ""]]
   ]
 }

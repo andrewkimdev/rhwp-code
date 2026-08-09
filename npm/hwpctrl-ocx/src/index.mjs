@@ -721,7 +721,7 @@ class IDHwpParameterSet {
    * `countOverride` 는 **이름을 못 밝힌 항목이 있는 셋**에만 쓴다.
    *
    * `ViewProperties`·`EngineProperties` 가 그렇다 — 한글은 `Count` 12 를 주는데 이름을 물어
-   * 값이 나온 것은 셋(`ZoomType`·`ZoomRatio`·`OptionFlag`)뿐이다. 후보 이름 70여 개를 훑어도
+   * 환경과 무관하게 값이 나온 것은 둘(`ZoomType`·`ZoomRatio`)뿐이다. 후보 이름 70여 개를 훑어도
    * 더 안 나왔고, 이 컨트롤에는 항목을 **열거하는 길이 없다**. 아는 것만 담고 개수는 실측값을
    * 그대로 주는 것이, 모르는 이름을 지어내 채우는 것보다 정직하다.
    */
@@ -1179,6 +1179,9 @@ export class HwpCtrl {
 
   GetTextFile(format, option) {
     if (String(option ?? '').includes('saveblock') && !this.#selection) return null;
+    if (String(format ?? '').trim().toUpperCase() === 'UNICODE') {
+      return parseJson(this.#doc?.getTextFileUnicode?.() ?? '""', '');
+    }
     // 이어 붙이기와 CP949 밖 글자 escape 는 코어가 한다 — 인코딩 판정을 여기서 흉내 내면
     // 반드시 틀린다(CP949 는 EUC-KR + 마이크로소프트 확장이다).
     return parseJson(this.#doc?.getTextFileText?.() ?? '""', '');
@@ -1410,18 +1413,14 @@ export class HwpCtrl {
   }
 
   /**
-   * 규격 §8.2 — 보기 상태. **이 층에는 창이 없어 고정이다.**
+   * 규격 §8.2 — 보기 상태. **이 층에는 창이 없어 정규화한 값만 제공한다.**
    *
-   * 실측으로 이름이 밝혀진 항목은 셋뿐이다(`ZoomType` 5 · `ZoomRatio` 100 · `OptionFlag` 8192).
-   * `Count` 는 한글이 주는 12 를 그대로 준다 — 나머지 아홉은 이름을 못 밝혔고 열거할 길도 없다.
-   * 값은 창 없는 컨트롤의 기본 상태라 문서와 무관하다.
+   * `ViewZoomNormal` 뒤에도 안정적인 항목은 둘이다(`ZoomType` 5 · `ZoomRatio` 100).
+   * `OptionFlag`는 한컴 버전·사용자 상태에 따라 0과 8192가 모두 관측돼 알려진 값에서 뺐다.
+   * `Count` 는 한글이 주는 12 를 그대로 준다 — 나머지는 이름을 못 밝혔고 열거할 길도 없다.
    */
   get ViewProperties() {
-    return new IDHwpParameterSet(
-      'ViewProperties',
-      { ZoomType: 5, ZoomRatio: 100, OptionFlag: 8192 },
-      12,
-    );
+    return new IDHwpParameterSet('ViewProperties', { ZoomType: 5, ZoomRatio: 100 }, 12);
   }
 
   /**

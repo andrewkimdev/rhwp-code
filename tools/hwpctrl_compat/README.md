@@ -51,6 +51,10 @@ node tools/hwpctrl_compat/python_runner.mjs run_gate.py \
 - Node.js, `wasm-pack`, `rhwp-studio/node_modules/`가 있어야 한다.
 - 시작 전에 `Hwp.exe` 또는 `HwpFrame.exe`가 실행 중이면 게이트는 `OCCUPIED`로 중단한다.
   다른 사용자의 한글 프로세스를 종료하지 않는다.
+- `GetTextFile("TEXT")`와 `SetTextFile(..., "TEXT")`는 Windows 시스템 ANSI code page의
+  영향을 받는다. ACP 65001에서는 한컴 COM이 한글을 U+FFFD로 돌려주거나 삽입 위치를 CP949
+  byte 수로 옮기는 것이 확인됐다. 따라서 본문 완전일치와 편집 시나리오는 공식
+  `UNICODE` 형식을 사용하고, `TEXT`의 CP949 수치 참조 규칙은 Rust·npm 계약 테스트로 고정한다.
 - macOS·Linux에서는 `npm run gate`가 WASM 자체 시나리오 검증을 수행한다. 한글 2022 fixture를
   명시한 읽기 전용 대조는 가능하지만, live COM Oracle 수집·fixture 갱신은 Windows에서만 한다.
 
@@ -80,7 +84,7 @@ node tools/hwpctrl_compat/python_runner.mjs build_ledger.py --check   # CI 게�
   "saveAs": "field-read.hwp" }
 ```
 
-규칙 다섯 가지.
+규칙 여섯 가지.
 
 1. **`ledger` 를 반드시 적는다.** 원장은 시나리오 단위로 올라간다 — 선언이 없으면 무엇을
    검증했는지 알 수 없고, 그 실행은 진척으로 세지 않는다.
@@ -95,6 +99,9 @@ node tools/hwpctrl_compat/python_runner.mjs build_ledger.py --check   # CI 게�
    이름의 상대 경로**라, 없는 폴더를 재려던 자리가 성공하고 작업본에 쓰레기가 남는다.
 5. **일부러 죽는 호출은 미리 선언한다.** `expectError` 없이 죽으면 게이트는 붉어진다 —
    그 규칙을 무르게 하면 진짜 오류도 함께 통과하기 때문이다.
+6. **문자열 완전일치는 `UNICODE`로 잰다.** `TEXT`는 시스템 ACP에 영향을 받는 한컴의
+   ANSI 형식이므로 서로 다른 Windows host의 live Oracle 기준으로 쓰지 않는다. `TEXT`
+   자체 규칙을 고칠 때는 별도 단위·패키지 계약 테스트를 함께 갱신한다.
 
 계약을 적는 자리는 호출의 **세 번째 칸**이다. 규칙 전문과 이유는
 [`scenario_spec.py`](scenario_spec.py) 가 갖는다.

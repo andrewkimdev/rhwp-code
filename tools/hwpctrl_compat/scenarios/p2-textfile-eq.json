@@ -9,14 +9,14 @@
     [
       "GetTextFile",
       [
-        "TEXT",
+        "UNICODE",
         ""
       ]
     ],
     [
       "GetTextFile",
       [
-        "TEXT",
+        "UNICODE",
         "saveblock"
       ]
     ]

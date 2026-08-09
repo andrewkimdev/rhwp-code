@@ -1,6 +1,6 @@
 {
   "id": "p2-textfile-escape",
-  "title": "GetTextFile escape 규칙 — 어떤 글자가 &#N; 이 되는가",
+  "title": "GetTextFile UNICODE — 여러 문자 원문 보존",
   "ledger": [
     "HwpCtrl.method.GetTextFile"
   ],
@@ -22,7 +22,7 @@
     [
       "GetTextFile",
       [
-        "TEXT",
+        "UNICODE",
         ""
       ]
     ]

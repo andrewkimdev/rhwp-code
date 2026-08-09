@@ -93,6 +93,89 @@ Windows에서 이 값을 그대로 COM Oracle에 전달하므로, 다른 Windows
   모달과 무관한 검증 선행조건 누락이다. 이후 Windows release CLI를 생성했고, 최신 contributor
   head의 확장 시나리오까지 반영한 full gate에서 최종 판정을 다시 고정한다.
 
+## 6차 계획 (동결 source 재정렬과 업데이트 한컴 재검증, 2026-08-10)
+
+- contributor가 반복 검증 요청을 수용해 PR source를 `4276d5dea`로 되돌리고 동결했다.
+  `89312fdbc`의 저장본 차분 관측과 `4e2db92d8`의 z-order 6개 액션은 새 PR #4418로
+  분리됐으므로, 해당 두 commit과 그 위의 메인터너 보정은 #4274 최종 판정에서 제외한다.
+- 같은 가시성 branch를 동결 source 위로 다시 정렬하고, 이 PR에 필요한 경로 이식성·Windows
+  package gate·종료 대기·line segment 왕복·한컴 종료 보정 5개만 single-parent commit으로
+  유지한다. `upstream/pr4274-head`가 local `HEAD`의 조상인지와 diff 범위를 다시 확인한다.
+- Linux에서는 하니스 계약, package 계약, 원장, 좌표 집중 회귀, fmt·clippy를 현재 head에서
+  다시 실행한다. source가 바뀌었으므로 `89312fdbc` 이후 실행 결과는 역사 기록으로도 이
+  단계의 통과 근거에 사용하지 않는다.
+- Windows에서는 기존 dirty worktree를 덮어쓰지 않고 `4276d5dea` 전용 새 worktree를 쓴다.
+  메인터너 보정 파일만 적용한 뒤 fresh release CLI와 WASM을 만들고, 업데이트된 Hancom 2022
+  버전을 기록한다. `pF`·`pG`·`pH`, 수정 문서 종료, 공식 전체 gate를 순차 실행해 반환값,
+  저장본 판정, 잔류 `Hwp.exe`와 저장 질문 대화상자를 함께 확인한다.
+
+## 6차 결과 (동결 source와 업데이트 한컴 재검증, 2026-08-10)
+
+- GitHub의 #4274 head는 `4276d5dea`로 동결됐고 local review branch는 그 위에 경로 이식성,
+  package gate 정리, 종료 대기, 저장 질문 차단 네 commit만 둔 상태다. line segment 왕복 보정은
+  contributor source의 `1ae455345`에 포함돼 있다. `89312fdbc`부터 시작하는 저장본 차분 작업은
+  별도 PR #4418로 이동했으며 #4274의 현재 commit 목록에는 없다.
+- Linux에서 하니스 mock 계약 24건, npm 공개 패키지 계약 6건, 원장 `312/484`, line segment와
+  그림 좌표 집중 회귀가 모두 통과했다. `cargo fmt --all --check`와
+  `cargo clippy --all-targets -- -D warnings`도 통과했다.
+- Windows 전용 clean worktree에서 release CLI(19,473,920 bytes,
+  SHA-256 `83A9EC8E7D4BD16473B4E84A39572AA12970C250BEDAC5A0A95582B027621D2E`)와
+  WASM(7,853,478 bytes,
+  SHA-256 `318229ABDBD1B628D0F36823A00008EFF997EA3763F642178040F7D3B935DED1`)을
+  새로 만들었다. 업데이트된 한컴 COM 버전은 `12, 0, 0, 4605`다.
+- 실제 한컴에서 `pF` 14/14, `pG` 10/10, `pH` 20/20, `p4-setmutate` 20/20이 모두
+  일치했다. 공식 82개 시나리오도 중단·점유 없이 끝까지 실행됐지만 20건이 달랐다:
+  `GetTextFile` 계열 11건, `SetTextFile` 6건, `ViewProperties` 2건, undo 뒤 텍스트 1건이다.
+- Windows ACP가 65001인 환경에서 한컴의 `GetTextFile("TEXT", "")` 자체가 한글을 U+FFFD와
+  깨진 문자열로 반환하고, 한글 `SetTextFile(..., "TEXT", "")`는 세 글자의 캐럿을 3이 아니라
+  6만큼 옮겼다. 같은 호출을 ASCII로 실행하면 3·2만큼 정확히 이동했다. 반면 공식
+  `UNICODE` 형식은 한글 4,030자를 손실 없이 반환하고 세 글자·두 글자 삽입도 각각 3·2만큼
+  이동했다. 이는 rhwp 구현 차이가 아니라 `TEXT`의 시스템 ANSI code page 의존성이다.
+- `ViewProperties`는 새 process에서도 `ZoomType=5`, `ZoomRatio=125`, `OptionFlag=0`으로
+  반복됐고 `ViewZoomNormal` 뒤에는 확대율만 100으로 정규화됐다. `OptionFlag`는 이전 실측
+  8192와도 달라 문서 계약이 아니라 사용자·버전별 창 상태임이 확인됐다.
+
+## 7차 계획 (코드페이지·보기 상태 독립 Oracle 계약, 2026-08-10)
+
+- Rust의 문서 글 조립은 한 번만 수행하고, 기존 `TEXT`용 CP949 수치 참조 JSON과 새
+  `UNICODE`용 원문 JSON을 각각 노출한다. npm bridge는 `GetTextFile`의 format이
+  `UNICODE`일 때만 원문 경로를 사용하고 기존 `TEXT` 동작은 유지한다.
+- 한글 live gate의 본문·편집 검증은 시스템 ACP에 영향을 받지 않는 `UNICODE` 형식으로 바꾼다.
+  `TEXT`의 CP949 밖 문자 `&#N;` 규칙은 Rust와 npm 공개 계약 테스트로 별도 고정해, Oracle
+  이식성을 얻기 위해 기존 형식 계약을 없애지 않는다.
+- `p8-props`는 먼저 `ViewZoomNormal`을 실행해 확대율을 100으로 고정한다. 버전·사용자 상태에
+  따라 0과 8192가 모두 관측된 `OptionFlag`는 검증 시나리오와 rhwp의 알려진 값 목록에서
+  제거하되, 한글의 실측 `Count=12`는 유지한다.
+- Linux 집중 회귀와 계약·원장 검사를 통과시킨 뒤 Windows WASM을 다시 만들고, 같은 한컴
+  `12, 0, 0, 4605`에서 82개 live gate를 재실행한다. 최종 로그에서 호출 불일치, 원본 변경,
+  저장 질문, 잔류 한컴 process를 각각 확인한다.
+
+## 7차 결과 (코드페이지·보기 상태 독립 Oracle 계약, 2026-08-10)
+
+- 문서 글 조립을 공용 `text_file_content`로 모으고, `TEXT`의 CP949 수치 참조 경로와
+  `UNICODE` 원문 경로를 별도 WASM 메서드로 노출했다. npm bridge는 format이
+  `UNICODE`일 때만 새 메서드를 사용하며 기존 `TEXT` dispatch와 escape 규칙은 유지한다.
+- 본문·편집 live 시나리오는 `UNICODE`로 전환했다. `p8-props`는
+  `ViewZoomNormal`로 확대율을 100에 고정하고, 버전·사용자 상태에 종속된 `OptionFlag`를
+  알려진 값과 비교 호출에서 제거했다. `ViewProperties.Count=12`와 안정적인
+  `ZoomType=5`·`ZoomRatio=100` 계약은 유지했다.
+- Linux에서 Rust 형식별 단위 테스트 1건, npm 공개 계약 8건, 하니스 mock 계약 24건,
+  원장 `312/484`, 공식 82개 WASM self gate가 모두 통과했다.
+  `wasm-pack build --target web --out-dir pkg`, `cargo fmt --all --check`,
+  `cargo clippy --all-targets -- -D warnings`, `git diff --check`도 통과했다.
+- Windows 검증 환경은 16 logical CPU·16GB RAM이며 한컴 COM은 `12, 0, 0, 4605`다.
+  fresh WASM은 7,853,949 bytes, SHA-256
+  `41972C136E10A701EB983BE7ECD0164CF3D8118A33D7DFC3DAAE0BFD6D4BE0A3`이고,
+  생성된 JS·TypeScript binding에서 `getTextFileUnicode`를 확인했다.
+- 첫 live full run은 82개 시나리오를 끝까지 실행해 3,519개 중 3,518개가 일치했다.
+  유일한 차이는 `p4-setmutate`의 `ParameterArray.Copy`에서 한컴 COM이 한 차례 낸
+  `RPC 호출 실패`였다. 같은 head·새 한컴 process의 단독 재실행은 20/20이 일치해 재현되지
+  않았고, 갱신된 p4 결과와 첫 run의 나머지 81개 결과를 다시 비교해 최종
+  **82개 시나리오·3,519/3,519 MATCH**를 확인했다.
+- 최종 결과에서 `p2-textfile-*`, `p5-undo`, `p6-deleteline`,
+  `p8-props`, `p8-settextfile`를 포함한 모든 호출과 저장본 L3가 일치했다. 실행 뒤
+  `Hwp.exe`·`HwpFrame.exe`는 0개였고, 추적된 sample 변경이나 저장 질문 대화상자는 없었다.
+
 ## 경계와 rollback
 
 - HwpCtrl API 구현·원장 완료 수·Oracle 반환 계약은 수정하지 않는다.

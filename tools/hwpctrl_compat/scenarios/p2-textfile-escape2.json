@@ -1,6 +1,6 @@
 {
   "id": "p2-textfile-escape2",
-  "title": "GetTextFile escape — CP949 밖 글자만 바뀌는가",
+  "title": "GetTextFile UNICODE — CP949 밖 문자도 원문 보존",
   "ledger": [
     "HwpCtrl.method.GetTextFile"
   ],
@@ -22,7 +22,7 @@
     [
       "GetTextFile",
       [
-        "TEXT",
+        "UNICODE",
         ""
       ]
     ]

@@ -687,16 +687,13 @@ impl DocumentCore {
         format!("[{}]", body.join(","))
     }
 
-    /// 문서 글 전체 — 웹한글컨트롤 `GetTextFile("TEXT")`.
+    /// 문서 글 전체를 GetTextFile 공통 순서로 조립한다.
     ///
     /// 훑기([`scan_items_json`](Self::scan_items_json))와 **같은 뿌리**다. 표식 항목(구역·단
     /// 정의)만 빼고 각 조각이 줄 끝으로 끝나게 이어 붙이되, **마지막 문단 뒤에는 줄 끝을 안
     /// 붙인다**(실측: 오라클이 정확히 두 글자 짧다).
     ///
-    /// 이 형식만의 규칙이 하나 더 있다. **CP949 로 못 담는 글자는 `&#N;` 수치 참조가 된다** —
-    /// `◦`(U+25E6)는 바뀌고 `€`·`①`·`㈜` 는 그대로다(여덟 글자로 예측 전수 적중). 훑기는
-    /// escape 하지 않는다.
-    pub fn text_file_json(&self) -> String {
+    fn text_file_content(&self) -> String {
         let (_, lists) = self.collect_fields_and_lists();
         let mut items: Vec<(u8, String, u8)> = Vec::new();
         let mut para_in_body = 0usize;
@@ -721,7 +718,23 @@ impl DocumentCore {
         if out.ends_with("\r\n") {
             out.truncate(out.len() - 2);
         }
-        json_escape(&escape_outside_cp949(&out))
+        out
+    }
+
+    /// 문서 글 전체 — 웹한글컨트롤 `GetTextFile("TEXT")`.
+    ///
+    /// 이 형식만의 규칙이 하나 더 있다. **CP949 로 못 담는 글자는 `&#N;` 수치 참조가 된다** —
+    /// `◦`(U+25E6)는 바뀌고 `€`·`①`·`㈜` 는 그대로다(여덟 글자로 예측 전수 적중). 훑기와
+    /// `UNICODE` 형식은 escape 하지 않는다.
+    pub fn text_file_json(&self) -> String {
+        json_escape(&escape_outside_cp949(&self.text_file_content()))
+    }
+
+    /// 문서 글 전체 — 웹한글컨트롤 `GetTextFile("UNICODE")`.
+    ///
+    /// 문자열을 CP949로 왕복시키지 않고 원문 Unicode를 그대로 JSON 문자열로 내보낸다.
+    pub fn text_file_unicode_json(&self) -> String {
+        json_escape(&self.text_file_content())
     }
 
     /// 컨트롤 하나를 지운다 — 웹한글컨트롤 `DeleteCtrl`.
@@ -2071,5 +2084,14 @@ mod tests {
         let core = DocumentCore::new_empty();
         assert_eq!(core.para_shape_set_json(ROOT_LIST_ID, 99), "{}");
         assert_eq!(core.char_shape_set_json(ROOT_LIST_ID, 99, 0), "{}");
+    }
+
+    /// TEXT는 CP949 밖 글자를 수치 참조로 바꾸고 UNICODE는 원문을 보존한다.
+    #[test]
+    fn text_file_formats_keep_distinct_encoding_contracts() {
+        let source = "가◦€";
+        assert_eq!(escape_outside_cp949(source), "가&#9702;€");
+        assert_eq!(json_escape(source), "\"가◦€\"");
+        assert_eq!(json_escape(&escape_outside_cp949(source)), "\"가&#9702;€\"");
     }
 }
