@@ -37,11 +37,19 @@ _CFG_TOKEN = re.compile(
     r'\s*(?:(?P<ident>[A-Za-z_][A-Za-z0-9_]*)|'
     r'(?P<string>"(?:\\.|[^"\\])*")|(?P<punct>[(),=]))'
 )
-_OUTER_ATTR_FUNCTION = re.compile(
-    r"(?m)^(?P<attrs>(?:[ \t]*#\s*\[[^]]*\]\s*)+)"
-    r"(?:(?:pub(?:\([^)]*\))?)\s+)?(?:async\s+)?(?:unsafe\s+)?fn\s+"
+_FUNCTION_DECLARATION = re.compile(
+    r"(?<![A-Za-z0-9_])"
+    r"(?:(?:pub(?:\s*\([^()\n]*\))?)\s+)?"
+    r"(?:const\s+)?(?:async\s+)?(?:unsafe\s+)?(?:extern\s+)?fn\s+"
     r"(?P<name>[A-Za-z_][A-Za-z0-9_]*)"
 )
+_MODULE_DECLARATION = re.compile(
+    r"(?<![A-Za-z0-9_])"
+    r"(?:(?:pub(?:\s*\([^()\n]*\))?)\s+)?mod\s+"
+    r"(?P<name>[A-Za-z_][A-Za-z0-9_]*)"
+)
+_CFG_ATTR_OPEN = re.compile(r"#\s*\[\s*cfg_attr\s*\(")
+_PATH_ATTRIBUTE_OPEN = re.compile(r"#\s*\[\s*path\s*=")
 _TEST_ATTRIBUTE = re.compile(r"#\s*\[\s*test\s*\]")
 
 
@@ -121,6 +129,83 @@ def _brace_depths(code: str) -> list[int]:
     return depths
 
 
+def _matching_delimiter(code: str, opened: int, opening: str, closing: str) -> int | None:
+    """마스킹된 Rust 코드에서 `opened`와 짝인 닫는 구분자 위치를 찾는다."""
+    depth = 1
+    index = opened + 1
+    while index < len(code):
+        if code[index] == opening:
+            depth += 1
+        elif code[index] == closing:
+            depth -= 1
+            if depth == 0:
+                return index
+        index += 1
+    return None
+
+
+def _outer_attributes_before(source: str, code: str, item_start: int) -> str:
+    """item 바로 앞에 연속된 outer attribute 원문을 반환한다."""
+    cursor = item_start
+    attributes = []
+    while True:
+        while cursor > 0 and code[cursor - 1].isspace():
+            cursor -= 1
+        if cursor == 0 or code[cursor - 1] != "]":
+            break
+
+        close = cursor - 1
+        depth = 1
+        opened = close - 1
+        while opened >= 0 and depth > 0:
+            if code[opened] == "]":
+                depth += 1
+            elif code[opened] == "[":
+                depth -= 1
+            opened -= 1
+        if depth != 0:
+            break
+
+        opened += 1
+        hash_at = opened - 1
+        while hash_at >= 0 and code[hash_at].isspace():
+            hash_at -= 1
+        if hash_at < 0 or code[hash_at] != "#":
+            break
+        if hash_at + 1 < len(code) and code[hash_at + 1] == "!":
+            break
+
+        attributes.append(source[hash_at:close + 1])
+        cursor = hash_at
+
+    return "\n".join(reversed(attributes))
+
+
+def _item_body_range(code: str, declaration_end: int) -> tuple[int, int] | None:
+    """함수 또는 inline module 선언 뒤의 body 범위를 반환한다."""
+    index = declaration_end
+    paren_depth = 0
+    bracket_depth = 0
+    while index < len(code):
+        char = code[index]
+        if char == "(":
+            paren_depth += 1
+        elif char == ")" and paren_depth > 0:
+            paren_depth -= 1
+        elif char == "[":
+            bracket_depth += 1
+        elif char == "]" and bracket_depth > 0:
+            bracket_depth -= 1
+        elif paren_depth == 0 and bracket_depth == 0:
+            if char == ";":
+                return None
+            if char == "{":
+                closing = _matching_delimiter(code, index, "{", "}")
+                return None if closing is None else (index, closing)
+        index += 1
+    return None
+
+
 def _cfg_predicate_at(source: str, code: str, opened: re.Match[str]) -> str | None:
     depth = 1
     index = opened.end()
@@ -133,6 +218,47 @@ def _cfg_predicate_at(source: str, code: str, opened: re.Match[str]) -> str | No
     if depth != 0:
         return None
     return source[opened.end():index - 1]
+
+
+def _cfg_predicates_in_attributes(attributes: str) -> list[str]:
+    code = _mask_rust_non_code(attributes)
+    predicates = []
+    for opened in _OUTER_CFG_OPEN.finditer(code):
+        predicate = _cfg_predicate_at(attributes, code, opened)
+        if predicate is not None:
+            predicates.append(predicate)
+    return predicates
+
+
+def _split_top_level_comma(source: str) -> tuple[str, str] | None:
+    depth = 0
+    for index, char in enumerate(source):
+        if char == "(":
+            depth += 1
+        elif char == ")" and depth > 0:
+            depth -= 1
+        elif char == "," and depth == 0:
+            return source[:index], source[index + 1:]
+    return None
+
+
+def _cfg_attr_enables_native_skia_test(attributes: str) -> bool:
+    """`cfg_attr(native-skia 술어, test)`가 있는지 판정한다."""
+    code = _mask_rust_non_code(attributes)
+    for opened in _CFG_ATTR_OPEN.finditer(code):
+        arguments = _cfg_predicate_at(attributes, code, opened)
+        if arguments is None:
+            continue
+        split = _split_top_level_comma(arguments)
+        if split is None:
+            continue
+        predicate, applied = split
+        if (
+            _requires_native_skia_enabled(predicate)
+            and re.search(r"(?:^|,)\s*test\s*(?:,|$)", applied)
+        ):
+            return True
+    return False
 
 
 def _inner_cfg_predicates(source: str) -> list[str]:
@@ -265,30 +391,49 @@ def file_gated_native_skia_tests() -> list[str]:
 
 
 def _function_gated_native_skia_test_names(source: str) -> list[str]:
-    """혼합 crate의 최상위 함수 단위 native-skia test 이름을 찾는다."""
+    """혼합 crate의 native-skia 전용 test 이름을 module 내부까지 찾는다."""
     if source_is_file_gated_native_skia(source):
         return []
 
     code = _mask_rust_non_code(source)
-    brace_depth = _brace_depths(code)
-    names = []
-    for function in _OUTER_ATTR_FUNCTION.finditer(code):
-        if brace_depth[function.start()] != 0:
-            continue
-        attributes = function.group("attrs")
-        if not _TEST_ATTRIBUTE.search(attributes):
-            continue
+    functions = [
+        (function, _item_body_range(code, function.end()))
+        for function in _FUNCTION_DECLARATION.finditer(code)
+    ]
+    function_bodies = [body for _, body in functions if body is not None]
 
-        predicates = []
-        for opened in _OUTER_CFG_OPEN.finditer(
-            code,
-            function.start("attrs"),
-            function.end("attrs"),
+    native_module_bodies = []
+    for module in _MODULE_DECLARATION.finditer(code):
+        if any(opened < module.start() < closed for opened, closed in function_bodies):
+            continue
+        attributes = _outer_attributes_before(source, code, module.start())
+        if not any(
+            _requires_native_skia_enabled(predicate)
+            for predicate in _cfg_predicates_in_attributes(attributes)
         ):
-            predicate = _cfg_predicate_at(source, code, opened)
-            if predicate is not None:
-                predicates.append(predicate)
-        if any(_requires_native_skia_enabled(predicate) for predicate in predicates):
+            continue
+        body = _item_body_range(code, module.end())
+        if body is not None:
+            native_module_bodies.append(body)
+
+    names = []
+    for function, _ in functions:
+        if any(opened < function.start() < closed for opened, closed in function_bodies):
+            continue
+        attributes = _outer_attributes_before(source, code, function.start())
+        is_test = bool(_TEST_ATTRIBUTE.search(attributes))
+        cfg_attr_test = _cfg_attr_enables_native_skia_test(attributes)
+        if not is_test and not cfg_attr_test:
+            continue
+        function_gate = any(
+            _requires_native_skia_enabled(predicate)
+            for predicate in _cfg_predicates_in_attributes(attributes)
+        )
+        module_gate = any(
+            opened < function.start() < closed
+            for opened, closed in native_module_bodies
+        )
+        if function_gate or module_gate or cfg_attr_test:
             names.append(function.group("name"))
     return names
 
@@ -305,6 +450,22 @@ def function_gated_native_skia_tests() -> list[str]:
     return sorted(found)
 
 
+def _path_attribute_values(source: str) -> list[str]:
+    """주석·문자열을 제외한 `#[path = "..."]` 값을 반환한다."""
+    code = _mask_rust_non_code(source)
+    found = []
+    for opened in _PATH_ATTRIBUTE_OPEN.finditer(code):
+        bracket = code.find("[", opened.start())
+        close = _matching_delimiter(code, bracket, "[", "]")
+        if close is None:
+            continue
+        attribute = source[opened.start():close + 1]
+        matched = re.search(r'=\s*"([^"]+)"', attribute)
+        if matched is not None:
+            found.append(matched.group(1))
+    return found
+
+
 def file_gated_native_skia_support_files() -> list[str]:
     """파일 게이트 target의 `#[path]` support를 저장소 상대 경로로 반환한다."""
     repo_root = TESTS_DIR.parent.resolve()
@@ -313,7 +474,7 @@ def file_gated_native_skia_support_files() -> list[str]:
         source = path.read_text(encoding="utf-8")
         if not source_is_file_gated_native_skia(source):
             continue
-        for relative in re.findall(r'#\[\s*path\s*=\s*"([^"]+)"\s*\]', source):
+        for relative in _path_attribute_values(source):
             resolved = (path.parent / relative).resolve()
             found.add(resolved.relative_to(repo_root).as_posix())
     return sorted(found)
@@ -577,6 +738,21 @@ class CiImpactWorkflowTests(unittest.TestCase):
         detected = [
             '#[cfg(feature = "native-skia")]\n#[test]\nfn native_test() {}',
             '#[test]\n#[cfg(all(unix, feature = "native-skia"))]\nfn native_test() {}',
+            (
+                'mod native_probe {\n'
+                '    #[cfg(feature = "native-skia")]\n'
+                '    #[test]\n'
+                '    fn native_test() {}\n'
+                '}'
+            ),
+            (
+                '#[cfg(feature = "native-skia")]\n'
+                'mod native_probe {\n'
+                '    #[test]\n'
+                '    fn native_test() {}\n'
+                '}'
+            ),
+            '#[cfg_attr(feature = "native-skia", test)]\nfn native_test() {}',
         ]
         rejected = [
             '#[cfg(not(feature = "native-skia"))]\n#[test]\nfn opposite() {}',
@@ -594,6 +770,28 @@ class CiImpactWorkflowTests(unittest.TestCase):
         for source in rejected:
             with self.subTest(rejected=source):
                 self.assertEqual(_function_gated_native_skia_test_names(source), [])
+
+    def test_function_gate_discovery_handles_attributes_without_backtracking(self) -> None:
+        source = (
+            "\t#[]\n" * 2_000
+            + '#[doc = "a]b"]\n'
+            '#[cfg(feature = "native-skia")]\n'
+            '#[test]\n'
+            'fn bracketed_doc() {}\n'
+        )
+        self.assertEqual(
+            _function_gated_native_skia_test_names(source),
+            ["bracketed_doc"],
+        )
+
+    def test_path_support_discovery_ignores_commented_attributes(self) -> None:
+        source = '''
+#![cfg(feature = "native-skia")]
+// #[path = "support/commented.rs"]
+#[path = "support/real.rs"]
+mod support;
+'''
+        self.assertEqual(_path_attribute_values(source), ["support/real.rs"])
 
     def test_discovery_rejects_negated_gates_and_quoted_attributes(self) -> None:
         """[PR #4170 리뷰] 발견 패턴의 **반대 방향** 오탐도 막는다.

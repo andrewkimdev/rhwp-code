@@ -2,7 +2,7 @@
 
 - **이슈**: [#4132](https://github.com/edwardkim/rhwp/issues/4132)
 - **수행계획서**: [`task_m100_4132.md`](task_m100_4132.md)
-- **브랜치**: `codex/issue-4132-native-cli-exit`
+- **브랜치**: `issue-4132-native-cli-exit`
 - **기록 시각**: 2026-08-09 KST
 
 ## 1. 파일별 변경
@@ -58,9 +58,10 @@ default feature의 `export_png_without_native_skia_reports_usage_error`는 원 �
 
 ## 4. 함수 게이트 재발 감시
 
-기존 Rust 비코드 마스킹과 cfg 의미 판정기를 재사용해 `tests/*.rs`의 최상위 outer `#[cfg(...)]`를 찾는다.
-파일 전체가 native-skia로 게이트되지 않은 crate에서 native-skia를 요구하는 cfg와 `#[test] fn`이 결합되면
-목록에 넣는다. 문자열·주석·함수 내부 속성은 대상이 아니며 합성 입력으로 넓은 쪽 오탐도 고정한다.
+기존 Rust 비코드 마스킹과 cfg 의미 판정기를 재사용해 `tests/*.rs`의 outer attribute와 함수·inline module
+body 범위를 찾는다. 파일 전체가 native-skia로 게이트되지 않은 crate에서 함수 cfg, module cfg 또는
+`cfg_attr(native-skia, test)`가 test를 native 전용으로 만들면 목록에 넣는다. 문자열·주석·함수 내부
+속성은 대상이 아니며 합성 입력으로 넓은 쪽 오탐도 고정한다.
 이미 workflow·classifier에 배선된 `issue_2225`의 함수 한 건은 명시적 allowlist로 고정하고, 그 밖의 새
 항목이 생기면 실패한다.
 

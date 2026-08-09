@@ -95,3 +95,17 @@ focused 결과 공유 뒤 작업지시자 승인을 받아 장시간 release-tes
 1. PR #4310 원격 CI에서 새 native target 두 건의 실제 실행을 확인한다.
 2. Native Skia job 총 소요시간 증가폭을 확인하고 Draft를 review-ready로 전환한다.
 3. #4132 merge 뒤 보존 중인 #3790 Stage 5 worktree를 최신 `devel`로 갱신한다.
+
+## 6. PR #4310 self-review 보정
+
+초기 self-review에서 재발 감시가 최상위 함수만 읽는 공백과 CodeQL의 비효율 정규식 경고를 확인했다.
+outer attribute 전체를 중첩 반복 정규식으로 잡는 대신 함수·inline module body와 직전 attribute를 구조적으로
+읽도록 바꿨다. 다음 세 우회와 support 경로 오탐을 회귀 입력으로 추가했다.
+
+- inline module 안의 함수 단위 native-skia cfg
+- native-skia cfg가 붙은 inline module 안의 test
+- `cfg_attr(feature = "native-skia", test)`
+- 주석 처리된 `#[path = "..."]`
+
+`#[doc = "a]b"]` 사례는 문자열 마스킹 뒤 정상 탐지됨을 재확인해 초기 self-review의 해당 지적을 철회한다.
+계획서의 실제 branch와 분기 기준도 `issue-4132-native-cli-exit` / `f94fe5e4f`로 정정했다.
