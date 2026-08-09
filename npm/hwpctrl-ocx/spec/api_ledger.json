@@ -4,10 +4,10 @@
   "oracleVersion": "한글2022 (설치본 COM)",
   "summary": {
     "total": 484,
-    "done": 303,
+    "done": 305,
     "byStatus": {
-      "verified": 301,
-      "unimplemented": 181,
+      "verified": 303,
+      "unimplemented": 179,
       "substituted": 2
     },
     "byUnit": {
@@ -24,8 +24,8 @@
         "unimplemented": 3
       },
       "action": {
-        "unimplemented": 140,
-        "verified": 172
+        "unimplemented": 138,
+        "verified": 174
       },
       "parameterSet": {
         "verified": 49,
@@ -6472,13 +6472,15 @@
       "name": "ShapeObjNextObject",
       "parameterSetId": null,
       "requiresExternalSet": false,
-      "status": "unimplemented",
+      "status": "verified",
       "notes": "",
       "legacyHwpctl": false,
       "oracle": {
-        "scenarios": [],
+        "scenarios": [
+          "p9-nextobj"
+        ],
         "lastRun": null,
-        "diff": null
+        "diff": 0
       }
     },
     {
@@ -6488,13 +6490,15 @@
       "name": "ShapeObjPrevObject",
       "parameterSetId": null,
       "requiresExternalSet": false,
-      "status": "unimplemented",
+      "status": "verified",
       "notes": "",
       "legacyHwpctl": false,
       "oracle": {
-        "scenarios": [],
+        "scenarios": [
+          "p9-nextobj"
+        ],
         "lastRun": null,
-        "diff": null
+        "diff": 0
       }
     },
     {

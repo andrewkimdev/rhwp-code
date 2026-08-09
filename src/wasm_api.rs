@@ -5540,6 +5540,12 @@ impl HwpDocument {
             .map_err(|e| e.into())
     }
 
+    /// 개체 사이를 도는 차례(쪽·z) — 웹한글컨트롤 `Run("ShapeObjNext/PrevObject")` 용.
+    #[wasm_bindgen(js_name = getObjectCycle)]
+    pub fn object_cycle_api(&self) -> Result<String, JsValue> {
+        self.object_cycle_json().map_err(|e| e.into())
+    }
+
     /// 스트림 자리를 글자 번호로 옮긴다 — 글자 번호를 받는 코어 API 에 넘길 때 쓴다.
     #[wasm_bindgen(js_name = getCharIndexAtStreamPos)]
     pub fn char_index_at_api(

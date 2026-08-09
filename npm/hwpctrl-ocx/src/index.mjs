@@ -2447,7 +2447,29 @@ export class HwpCtrl {
       return true;
     }
 
-    const next = chain[(at + action.step + chain.length * 2) % chain.length];
+    // **쪽 안에서만 돈다.** 실측(`20250130-hongbo`): 1쪽에서 걸면 문단 0 → 5 → 2 → 0 만,
+    // 3쪽에서 걸면 26 ↔ 29 만 돈다. 문서 전체를 도는 것이 아니다 — 앞서 "일곱 중 셋만 돈다"고
+    // 적힌 수수께끼가 이것이었다. 쪽 안의 차례는 문단 순서가 아니라 **z 순서**다.
+    const cycle = parseJson(this.#doc?.getObjectCycle?.() ?? '', null);
+    let ring = chain;
+    if (Array.isArray(cycle) && cycle.length && at >= 0) {
+      const key = (o) => `${o.para}:${o.controlIndex}`;
+      const info = new Map(cycle.map((o) => [key(o), o]));
+      const mine = info.get(key(chain[at].location));
+      if (mine) {
+        ring = chain
+          .filter((c) => info.get(key(c.location))?.page === mine.page)
+          .sort((a, b) => info.get(key(a.location)).z - info.get(key(b.location)).z);
+      }
+    }
+    if (!ring.length) return false;
+    const from = ring.findIndex(
+      (c) =>
+        at >= 0 &&
+        c.location.para === chain[at].location.para &&
+        c.location.controlIndex === chain[at].location.controlIndex,
+    );
+    const next = ring[(from + action.step + ring.length * 2) % ring.length];
     const anchor = next.GetAnchorPos().toObject();
     this.#selectedObject = { ...next.location, kind: null };
     this.#selectionMode = SELECTION_OBJECT;

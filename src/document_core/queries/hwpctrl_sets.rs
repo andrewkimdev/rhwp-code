@@ -1177,6 +1177,66 @@ impl DocumentCore {
         ))
     }
 
+    /// 개체 사이를 도는 차례 — 웹한글컨트롤 `Run("ShapeObjNext/PrevObject")` 용.
+    ///
+    /// **쪽 단위로 돈다.** 실측(`20250130-hongbo`): 1쪽에서 걸면 문단 0 → 5 → 2 → 0 만 돌고,
+    /// 3쪽에서 걸면 26 ↔ 29 만, 2쪽에서 걸면 24 ↔ 25 만 돈다. 문서 전체를 도는 것이 아니라
+    /// **그 쪽에 놓인 개체**끼리 돈다 — 앞서 "일곱 중 셋만 돈다"고 적힌 수수께끼가 이것이었다.
+    ///
+    /// 쪽 안의 차례는 문단 순서가 아니라 **z 순서**다(0 → 5 → 2 는 문단 순서가 아니다).
+    ///
+    /// 쪽을 조판기에 물으므로 **조판 정밀도를 물려받는다**.
+    pub fn object_cycle_json(&self) -> Result<String, HwpError> {
+        use crate::renderer::pagination::PageItem;
+        // 문단 → 쪽. 한 문단이 여러 쪽에 걸치면 **처음 나온 쪽**으로 친다.
+        let mut page_of: std::collections::HashMap<(usize, usize), usize> =
+            std::collections::HashMap::new();
+        let mut page_no = 0usize;
+        for (sec_idx, pr) in self.pagination.iter().enumerate() {
+            for page in pr.pages.iter() {
+                for col in &page.column_contents {
+                    for item in &col.items {
+                        let para = match item {
+                            PageItem::FullParagraph { para_index }
+                            | PageItem::PartialParagraph { para_index, .. }
+                            | PageItem::Table { para_index, .. }
+                            | PageItem::PartialTable { para_index, .. }
+                            | PageItem::Shape { para_index, .. } => Some(*para_index),
+                            _ => None,
+                        };
+                        if let Some(p) = para {
+                            page_of.entry((sec_idx, p)).or_insert(page_no);
+                        }
+                    }
+                }
+                page_no += 1;
+            }
+        }
+
+        let mut out: Vec<String> = Vec::new();
+        let mut para_in_list = 0usize;
+        for (sec_idx, section) in self.document.sections.iter().enumerate() {
+            for (para_idx, para) in section.paragraphs.iter().enumerate() {
+                for (ci, ctrl) in para.controls.iter().enumerate() {
+                    let common = match ctrl {
+                        Control::Table(t) => Some(&t.common),
+                        Control::Shape(s) => Some(s.common()),
+                        Control::Picture(p) => Some(&p.common),
+                        _ => None,
+                    };
+                    let Some(c) = common else { continue };
+                    let page = page_of.get(&(sec_idx, para_idx)).copied().unwrap_or(0);
+                    out.push(format!(
+                        "{{\"para\":{},\"controlIndex\":{},\"page\":{},\"z\":{}}}",
+                        para_in_list, ci, page, c.z_order
+                    ));
+                }
+                para_in_list += 1;
+            }
+        }
+        Ok(format!("[{}]", out.join(",")))
+    }
+
     /// 표의 어떤 **행에서 첫 칸**의 리스트 번호. 쪽을 넘어 이어지는 표의 시작 칸을 짚는다.
     fn first_cell_list_of_row(
         &self,
