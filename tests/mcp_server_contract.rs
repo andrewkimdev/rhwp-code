@@ -841,6 +841,7 @@ fn mcp_serve_stats_summarizes_call_counts_without_leaking_document_data() {
     // 존재하지 않는 경로 — 오류 호출을 만들면서, 통계에 새면 안 될 "민감한
     // 경로 성분"의 대역으로도 쓴다(경로는 계약 §3 상 준식별자로 금지 항목).
     let bogus_path = "/no/such/문서-극비-누설되면-안됨-72d9f3.hwp";
+    let unknown_tool = format!("미등록-도구-{}", "x".repeat(32 * 1024));
 
     let mut child = Command::new(env!("CARGO_BIN_EXE_rhwp"))
         .arg("mcp-serve")
@@ -895,6 +896,26 @@ fn mcp_serve_stats_summarizes_call_counts_without_leaking_document_data() {
             "존재하지 않는 경로는 isError:true 여야 합니다: {resp}"
         );
 
+        // 호출자가 넣은 임의 도구명은 stats HashMap의 키로 남기면 안 된다. 고유한
+        // 이름을 반복 전송하면 옵트인 통계만으로 서버 메모리를 소진할 수 있기 때문이다.
+        let unknown_call = serde_json::json!({
+            "jsonrpc": "2.0", "id": 4, "method": "tools/call",
+            "params": {"name": unknown_tool, "arguments": {}}
+        });
+        writeln!(stdin, "{unknown_call}").expect("미등록 도구 호출 쓰기 실패");
+        stdin.flush().expect("flush");
+        line.clear();
+        let n = stdout
+            .read_line(&mut line)
+            .expect("미등록 도구 응답 읽기 실패");
+        assert!(n > 0, "서버가 미등록 도구 호출 후 응답 없이 종료했습니다");
+        let resp: serde_json::Value =
+            serde_json::from_str(line.trim()).expect("미등록 도구 응답 JSON 파싱 실패");
+        assert_eq!(
+            resp["result"]["isError"], true,
+            "미등록 도구는 오류여야 합니다: {resp}"
+        );
+
         // stdin 을 닫아 서버가 EOF 로 정상 종료하며 통계를 stderr 로 낸다.
     }
     let status = child.wait().expect("서버 종료 대기 실패");
@@ -919,6 +940,10 @@ fn mcp_serve_stats_summarizes_call_counts_without_leaking_document_data() {
         stderr_out.contains("2회 호출") && stderr_out.contains("오류 1건"),
         "호출 수 2·오류 수 1 이 집계되지 않았습니다: {stderr_out:?}"
     );
+    assert!(
+        stderr_out.contains("(알 수 없는 도구): 1회 호출, 오류 1건"),
+        "미등록 도구가 고정 버킷으로 집계되지 않았습니다: {stderr_out:?}"
+    );
 
     // §3 금지 목록 — 문서 경로는 성공·오류 어느 쪽이든 stderr 에 어떤
     // 형태로도 나타나면 안 된다.
@@ -929,5 +954,9 @@ fn mcp_serve_stats_summarizes_call_counts_without_leaking_document_data() {
     assert!(
         !stderr_out.contains(bogus_path) && !stderr_out.contains("극비-누설되면-안됨"),
         "오류 호출의 문서 경로가 --stats 출력에 샜습니다: {stderr_out:?}"
+    );
+    assert!(
+        !stderr_out.contains(&unknown_tool),
+        "호출자가 보낸 미등록 도구명이 --stats 출력에 샜습니다: {stderr_out:?}"
     );
 }
