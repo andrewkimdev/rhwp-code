@@ -137,7 +137,7 @@ last_verified: 2026-08-09
   한컴 2020이 HWPX의 희소 Odd 바탕쪽을 HWP5로 저장할 때는 `LIST_HEADER` 하나와
   `SECTION_DEF` 상위 플래그 `0x80000000`만 써서, 앞 구역의 짝수 쪽을 상속하고 현재 구역의
   홀수 쪽만 바꾸는 압축 인코딩을 쓴다. 첫 목록을 그대로 Both로 해석하면 안 된다.
-- **근거**: `src/parser/hwpx/body_text.rs:665-669`(경로 표기: `src/parser/body_text.rs`).
+- **근거**: `src/parser/body_text.rs:665-669`.
 
 ## 16. LAST_PAGE 바탕쪽의 overlap bit — `pageDuplicate="0"`이어도 함께 세팅됨
 
