@@ -15254,6 +15254,110 @@ fn replay_sha256_hex(bytes: &[u8]) -> String {
         .collect()
 }
 
+fn is_sha256_hex(value: &str) -> bool {
+    value.len() == 64 && value.bytes().all(|b| b.is_ascii_hexdigit())
+}
+
+struct ReplayScratchDir(std::path::PathBuf);
+
+impl Drop for ReplayScratchDir {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
+    }
+}
+
+fn replay_scratch_dir(tag: &str) -> Result<ReplayScratchDir, String> {
+    #[cfg(unix)]
+    use std::os::unix::fs::DirBuilderExt;
+
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|e| e.to_string())?
+        .as_nanos();
+    for attempt in 0..128_u16 {
+        let candidate = std::env::temp_dir().join(format!(
+            "rhwp-replay-{}-{nonce:x}-{tag}-{attempt}",
+            std::process::id()
+        ));
+        let mut builder = fs::DirBuilder::new();
+        #[cfg(unix)]
+        builder.mode(0o700);
+        match builder.create(&candidate) {
+            Ok(()) => return Ok(ReplayScratchDir(candidate)),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(e.to_string()),
+        }
+    }
+    Err("사용 가능한 임시 폴더 이름이 없습니다".to_string())
+}
+
+/// 해시한 입력 바이트를 임시 파일에 고정하고, 엔진에는 그 스냅샷만 넘긴다.
+fn with_replay_input_snapshot<T>(
+    plan: &mut serde_json::Value,
+    input_bytes: &[u8],
+    scratch_dir: &std::path::Path,
+    execute: impl FnOnce(&serde_json::Value) -> T,
+) -> Result<T, String> {
+    use std::io::Write;
+    #[cfg(unix)]
+    use std::os::unix::fs::OpenOptionsExt;
+
+    let input = plan["input"]
+        .as_str()
+        .ok_or_else(|| "계획에 input 이 필요합니다".to_string())?;
+    let ext = std::path::Path::new(input)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("hwp");
+    let snapshot = scratch_dir.join(format!("input.{ext}"));
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    options.mode(0o600);
+    let mut file = options.open(&snapshot).map_err(|e| e.to_string())?;
+    file.write_all(input_bytes).map_err(|e| e.to_string())?;
+    drop(file);
+    let original_input = plan["input"].clone();
+    plan["input"] = serde_json::json!(snapshot.to_string_lossy());
+    let result = execute(plan);
+    plan["input"] = original_input;
+    Ok(result)
+}
+
+fn validated_capsule_plan(capsule: &serde_json::Value) -> Result<(serde_json::Value, u64), String> {
+    let plan_text = capsule
+        .get("planText")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| "planText 없음".to_string())?;
+    let expected_plan_sha = capsule["receipt"]["planSha256"]
+        .as_str()
+        .filter(|value| is_sha256_hex(value))
+        .ok_or_else(|| "receipt.planSha256 가 없거나 64자리 16진이 아님".to_string())?;
+    let actual_plan_sha = replay_sha256_hex(plan_text.as_bytes());
+    if actual_plan_sha != expected_plan_sha {
+        return Err("planText 와 receipt.planSha256 불일치".to_string());
+    }
+    let plan: serde_json::Value =
+        serde_json::from_str(plan_text).map_err(|e| format!("planText JSON 파싱 실패: {e}"))?;
+    if !plan.is_object() {
+        return Err("planText 계획 객체 없음".to_string());
+    }
+    if capsule.get("plan") != Some(&plan) {
+        return Err("plan 과 planText 불일치".to_string());
+    }
+    let steps = capsule["receipt"]["steps"]
+        .as_u64()
+        .ok_or_else(|| "receipt.steps 가 음이 아닌 정수가 아님".to_string())?;
+    let plan_steps = plan["steps"]
+        .as_array()
+        .ok_or_else(|| "planText.steps 가 배열이 아님".to_string())?
+        .len() as u64;
+    if steps != plan_steps {
+        return Err("receipt.steps 와 planText.steps 길이 불일치".to_string());
+    }
+    Ok((plan, steps))
+}
+
 /// [#4393] replay·audit 공용 실행 코어 — 계획을 **임시 산출**로 실행해 (산출
 /// SHA-256, step 수, 입력 SHA-256)를 얻는다. 임시 파일은 성공·실패 모두
 /// 정리한다. 계획의 output 은 이 함수가 임시 경로로 덮어쓴다(호출자는 필요 시
@@ -15435,6 +15539,7 @@ fn cmd_replay(args: &[String]) -> i32 {
             "schemaVersion": "1.0",
             "kind": "workCapsule",
             "plan": plan_original,
+            "planText": plan_text,
             "receipt": envelope,
         });
         if let Err(e) = fs::write(
@@ -15465,72 +15570,22 @@ fn cmd_replay(args: &[String]) -> i32 {
     }
 }
 
-struct ReplayScratchDir(std::path::PathBuf);
-
-impl Drop for ReplayScratchDir {
-    fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.0);
-    }
-}
-
-fn replay_scratch_dir(tag: &str) -> Result<ReplayScratchDir, String> {
-    #[cfg(unix)]
-    use std::os::unix::fs::DirBuilderExt;
-
-    let nonce = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_err(|e| e.to_string())?
-        .as_nanos();
-    for attempt in 0..128_u16 {
-        let candidate = std::env::temp_dir().join(format!(
-            "rhwp-replay-{}-{nonce:x}-{tag}-{attempt}",
-            std::process::id()
-        ));
-        let mut builder = fs::DirBuilder::new();
-        #[cfg(unix)]
-        builder.mode(0o700);
-        match builder.create(&candidate) {
-            Ok(()) => return Ok(ReplayScratchDir(candidate)),
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
-            Err(e) => return Err(e.to_string()),
+fn collect_audit_capsules(
+    entries: impl IntoIterator<Item = std::io::Result<std::path::PathBuf>>,
+) -> Result<Vec<std::path::PathBuf>, String> {
+    let mut capsules = Vec::new();
+    for entry in entries {
+        let path = entry.map_err(|e| format!("폴더 항목 읽기 실패: {e}"))?;
+        let is_capsule = path
+            .file_name()
+            .map(|name| name.to_string_lossy().ends_with(".capsule.json"))
+            .unwrap_or(false);
+        if is_capsule {
+            capsules.push(path);
         }
     }
-    Err("사용 가능한 임시 폴더 이름이 없습니다".to_string())
-}
-
-/// replay가 해시한 입력과 엔진이 읽는 입력을 한 파일 스냅샷으로 묶는다.
-/// closure가 끝나면 계획의 원래 input을 복원한다. 전용 임시 폴더와 그 안의
-/// 입력·산출은 ReplayScratchDir가 모든 반환 경로에서 함께 제거한다.
-fn with_replay_input_snapshot<T>(
-    plan: &mut serde_json::Value,
-    input_bytes: &[u8],
-    scratch_dir: &std::path::Path,
-    execute: impl FnOnce(&serde_json::Value) -> T,
-) -> Result<T, String> {
-    use std::io::Write;
-    #[cfg(unix)]
-    use std::os::unix::fs::OpenOptionsExt;
-
-    let input = plan["input"]
-        .as_str()
-        .ok_or_else(|| "계획에 input 이 필요합니다".to_string())?;
-    let ext = std::path::Path::new(input)
-        .extension()
-        .and_then(|e| e.to_str())
-        .unwrap_or("hwp");
-    let snapshot = scratch_dir.join(format!("input.{ext}"));
-    let mut options = fs::OpenOptions::new();
-    options.write(true).create_new(true);
-    #[cfg(unix)]
-    options.mode(0o600);
-    let mut file = options.open(&snapshot).map_err(|e| e.to_string())?;
-    file.write_all(input_bytes).map_err(|e| e.to_string())?;
-    drop(file);
-    let original_input = plan["input"].clone();
-    plan["input"] = serde_json::json!(snapshot.to_string_lossy());
-    let result = execute(plan);
-    plan["input"] = original_input;
-    Ok(result)
+    capsules.sort();
+    Ok(capsules)
 }
 
 /// [#4393] 에이전트 노동 감사 — 작업 캡슐(*.capsule.json) 폴더를 전수 재실행해
@@ -15562,16 +15617,14 @@ fn cmd_audit(args: &[String]) -> i32 {
             return EXIT_RUNTIME;
         }
     };
-    let mut capsules: Vec<std::path::PathBuf> = entries
-        .flatten()
-        .map(|e| e.path())
-        .filter(|p| {
-            p.file_name()
-                .and_then(|n| n.to_str())
-                .is_some_and(|n| n.ends_with(".capsule.json"))
-        })
-        .collect();
-    capsules.sort();
+    let capsules =
+        match collect_audit_capsules(entries.map(|entry| entry.map(|entry| entry.path()))) {
+            Ok(capsules) => capsules,
+            Err(e) => {
+                eprintln!("오류: {dir} 감사 대상을 전수 열거할 수 없습니다 - {e}");
+                return EXIT_RUNTIME;
+            }
+        };
     if capsules.is_empty() {
         eprintln!("오류: {dir} 에 *.capsule.json 이 없습니다 — 감사 대상 없음.");
         return EXIT_USAGE;
@@ -15581,9 +15634,8 @@ fn cmd_audit(args: &[String]) -> i32 {
     for (idx, path) in capsules.iter().enumerate() {
         let name = path
             .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or_default()
-            .to_string();
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| path.display().to_string());
         let fail = |reason: String| serde_json::json!({ "capsule": name, "error": reason });
         let text = match fs::read_to_string(path) {
             Ok(t) => t,
@@ -15603,27 +15655,46 @@ fn cmd_audit(args: &[String]) -> i32 {
             failed.push(fail("kind 가 workCapsule 이 아님".into()));
             continue;
         }
-        let Some(expected) = capsule["receipt"]["outputSha256"].as_str() else {
-            failed.push(fail("receipt.outputSha256 없음".into()));
+        let Some(expected) = capsule["receipt"]["outputSha256"]
+            .as_str()
+            .filter(|value| is_sha256_hex(value))
+        else {
+            failed.push(fail(
+                "receipt.outputSha256 가 없거나 64자리 16진이 아님".into(),
+            ));
             continue;
         };
-        let Some(expected_input) = capsule["receipt"]["inputSha256"].as_str() else {
-            failed.push(fail("receipt.inputSha256 없음".into()));
+        let Some(expected_input) = capsule["receipt"]["inputSha256"]
+            .as_str()
+            .filter(|value| is_sha256_hex(value))
+        else {
+            failed.push(fail(
+                "receipt.inputSha256 가 없거나 64자리 16진이 아님".into(),
+            ));
             continue;
         };
-        let mut plan = capsule["plan"].clone();
-        if !plan.is_object() {
-            failed.push(fail("plan 없음".into()));
-            continue;
-        }
+        let (mut plan, expected_steps) = match validated_capsule_plan(&capsule) {
+            Ok(value) => value,
+            Err(error) => {
+                failed.push(fail(error));
+                continue;
+            }
+        };
         match replay_execute_to_temp(&mut plan, &format!("audit{idx}")) {
-            Ok((actual, _steps, actual_input)) => {
+            Ok((actual, actual_steps, actual_input)) => {
                 if actual_input != expected_input {
                     failed.push(serde_json::json!({
                         "capsule": name,
                         "kind": "inputSha256",
                         "expected": expected_input,
                         "actual": actual_input,
+                    }));
+                } else if actual_steps as u64 != expected_steps {
+                    failed.push(serde_json::json!({
+                        "capsule": name,
+                        "kind": "steps",
+                        "expected": expected_steps,
+                        "actual": actual_steps,
                     }));
                 } else if actual == expected {
                     reproduced_count += 1;
@@ -20027,9 +20098,10 @@ fn extract_thumbnail(args: &[String]) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::{
-        allows_implicit_sibling_resources, cli_output_password, cli_password, replay_scratch_dir,
-        set_cli_output_password, set_cli_password, strip_global_auth_options,
-        tab_ext_semantic_differs, with_replay_input_snapshot, EXIT_USAGE,
+        allows_implicit_sibling_resources, cli_output_password, cli_password,
+        collect_audit_capsules, replay_scratch_dir, set_cli_output_password, set_cli_password,
+        strip_global_auth_options, tab_ext_semantic_differs, with_replay_input_snapshot,
+        EXIT_USAGE,
     };
     use rhwp::parser::FileFormat;
 
@@ -20088,6 +20160,16 @@ mod tests {
         drop(scratch);
         assert!(!scratch_path.exists(), "전용 임시 폴더는 RAII 정리");
         let _ = std::fs::remove_file(original);
+    }
+
+    #[test]
+    fn audit_directory_entry_errors_are_not_silently_dropped() {
+        let entries: [std::io::Result<std::path::PathBuf>; 1] = [Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "denied",
+        ))];
+        let error = collect_audit_capsules(entries).expect_err("항목 오류는 fail-closed");
+        assert!(error.contains("폴더 항목 읽기 실패"));
     }
 
     #[test]
