@@ -137,9 +137,20 @@ UNBUILDABLE_CONTEXT = {
     "Action.ShapeObjAlignHorzSpacing", "Action.ShapeObjAlignVertSpacing",
 }
 
-# 머신(설치 글꼴·음력 자료)에 달린 것들.
+# 머신(설치 글꼴)에 달린 것들.
 MACHINE = {
     "Action.CharShapeNextFaceName", "Action.CharShapePrevFaceName",
+}
+
+# **막힌 것이 아니라 아직 자료가 없는 것들** — 세는 자리를 옮긴다(계획서 §4.68).
+#
+# 음·양력 넷을 오래 "머신 의존"으로 세고 있었는데 그 딱지가 틀렸다. 재 보니 **결정적인 표
+# 조회**다 — 같은 날짜에 늘 같은 답이 나오고 범위도 뚜렷하다(음력 1841~2043). 머신 상태가
+# 아니라 rhwp 에 **음력 표가 없을 뿐**이다. 구조적으로 막힌 것으로 세면 상한이 거짓이 된다.
+#
+# 다만 표를 **오라클에서 뽑아 만들면 검증이 순환**이 된다(한글로 만든 표를 한글로 검증). 표는
+# 한국천문연구원 같은 독립된 출처에서 와야 하고, 그때 이 넷이 열린다.
+DATA_MISSING = {
     "HwpCtrl.method.LunarToSolar", "HwpCtrl.method.LunarToSolarBySet",
     "HwpCtrl.method.SolarToLunar", "HwpCtrl.method.SolarToLunarBySet",
 }
@@ -222,6 +233,8 @@ def main() -> int:
             key = "숨은 상태"
         elif ident in GLYPH_METRICS:
             key = "글자 폭 정밀도"
+        elif ident in DATA_MISSING:
+            key = "자료 없음(막힌 것 아님)"
         elif ident in LAYOUT:
             key = "조판 의존"
         elif action and action in DIALOG_TITLES:

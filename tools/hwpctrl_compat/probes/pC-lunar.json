@@ -1,0 +1,88 @@
+{
+  "id": "pC-lunar",
+  "title": "음·양력 — 부름 규약과 답",
+  "ledger": [],
+  "open": "samples/para-001.hwp",
+  "calls": [
+    [
+      "SolarToLunar",
+      [
+        2026,
+        8,
+        9
+      ]
+    ],
+    [
+      "SolarToLunar",
+      [
+        2026,
+        8,
+        9,
+        0,
+        0,
+        0,
+        0
+      ]
+    ],
+    [
+      "LunarToSolar",
+      [
+        2026,
+        6,
+        26
+      ]
+    ],
+    [
+      "LunarToSolar",
+      [
+        2026,
+        6,
+        26,
+        0,
+        0,
+        0,
+        0
+      ]
+    ],
+    [
+      "SolarToLunar",
+      [
+        2000,
+        1,
+        1
+      ]
+    ],
+    [
+      "SolarToLunar",
+      [
+        1900,
+        1,
+        1
+      ]
+    ],
+    [
+      "SolarToLunar",
+      [
+        2050,
+        12,
+        31
+      ]
+    ],
+    [
+      "SolarToLunarBySet",
+      [
+        {
+          "$obj": "CreateSet(\"Date\")"
+        }
+      ]
+    ],
+    [
+      "LunarToSolarBySet",
+      [
+        {
+          "$obj": "CreateSet(\"Date\")"
+        }
+      ]
+    ]
+  ]
+}
