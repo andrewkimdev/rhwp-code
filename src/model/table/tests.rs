@@ -162,7 +162,7 @@ fn test_insert_row_out_of_bounds() {
 }
 
 #[test]
-fn test_insert_row_near_u16_max_span_does_not_panic() {
+fn test_insert_row_at_u16_max_rejects_without_mutation() {
     // [#4264] row/row_span은 파일에서 그대로 온 u16이고 row_count도 별도의
     // 손상 가능한 u16 필드라, row=60000·row_span=6000(합이 u16 상한 초과)인
     // 셀이 row_count=65535인 손상된 문서에 실릴 수 있다. saturating_add 없이
@@ -174,8 +174,10 @@ fn test_insert_row_near_u16_max_span_does_not_panic() {
         cell.row_span = 6000;
     }
 
-    // 패닉 없이 처리되기만 하면 된다 (성공/실패 여부는 이 시험의 관심사가 아님).
-    let _ = table.insert_row(60001, true);
+    let before_cells = table.cells.clone();
+    assert!(table.insert_row(60001, true).is_err());
+    assert_eq!(table.row_count, u16::MAX);
+    assert_eq!(table.cells.len(), before_cells.len());
 }
 
 // === insert_column 테스트 ===
@@ -255,7 +257,7 @@ fn test_insert_column_out_of_bounds() {
 }
 
 #[test]
-fn test_insert_column_near_u16_max_span_does_not_panic() {
+fn test_insert_column_at_u16_max_rejects_without_mutation() {
     // [#4264] insert_row 쪽과 대칭인 결함. col/col_span은 파일에서 그대로
     // 온 u16이고 col_count도 별도로 손상 가능한 u16 필드라, col=60000·
     // col_span=6000(합이 u16 상한 초과)인 셀이 col_count=65535인 손상된
@@ -267,7 +269,10 @@ fn test_insert_column_near_u16_max_span_does_not_panic() {
         cell.col_span = 6000;
     }
 
-    let _ = table.insert_column(60001, true);
+    let before_cells = table.cells.clone();
+    assert!(table.insert_column(60001, true).is_err());
+    assert_eq!(table.col_count, u16::MAX);
+    assert_eq!(table.cells.len(), before_cells.len());
 }
 
 // === set_column_widths 테스트 ===
@@ -520,6 +525,22 @@ fn test_split_cell_zero_span_cell_does_not_panic() {
 
     let result = table.split_cell(0, 0);
     assert!(result.is_err());
+}
+
+#[test]
+fn test_split_cell_overflowing_span_is_rejected_without_mutation() {
+    let mut table = make_table(2, 2);
+    table.col_count = u16::MAX;
+    let cell = table
+        .cells
+        .iter_mut()
+        .find(|c| c.col == 0 && c.row == 0)
+        .unwrap();
+    cell.col = u16::MAX - 1;
+    cell.col_span = 2;
+
+    assert!(table.split_cell(0, u16::MAX - 1).is_err());
+    assert_eq!(table.cells.len(), 4);
 }
 
 #[test]
@@ -950,6 +971,16 @@ fn test_split_cell_into_noop() {
     table.split_cell_into(0, 0, 1, 1, true, false).unwrap();
     assert_eq!(table.col_count, 2);
     assert_eq!(table.row_count, 2);
+    assert_eq!(table.cells.len(), 4);
+}
+
+#[test]
+fn test_split_cell_into_rejects_table_count_overflow_without_mutation() {
+    let mut table = make_table(2, 2);
+    table.col_count = u16::MAX;
+
+    assert!(table.split_cell_into(0, 0, 1, 2, true, false).is_err());
+    assert_eq!(table.col_count, u16::MAX);
     assert_eq!(table.cells.len(), 4);
 }
 

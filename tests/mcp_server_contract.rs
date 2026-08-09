@@ -871,7 +871,9 @@ fn mcp_serve_stats_summarizes_call_counts_without_leaking_document_data() {
         writeln!(stdin, "{ok_call}").expect("hwp_info 성공 호출 쓰기 실패");
         stdin.flush().expect("flush");
         line.clear();
-        stdout.read_line(&mut line).expect("hwp_info 성공 응답 읽기 실패");
+        stdout
+            .read_line(&mut line)
+            .expect("hwp_info 성공 응답 읽기 실패");
 
         // 오류 호출 1건(같은 도구, 존재하지 않는 경로) — isError:true 경로를
         // 태워 오류 수 집계와 "경로는 절대 안 샌다"를 같은 호출로 검증한다.
@@ -882,9 +884,12 @@ fn mcp_serve_stats_summarizes_call_counts_without_leaking_document_data() {
         writeln!(stdin, "{err_call}").expect("hwp_info 오류 호출 쓰기 실패");
         stdin.flush().expect("flush");
         line.clear();
-        let n = stdout.read_line(&mut line).expect("hwp_info 오류 응답 읽기 실패");
+        let n = stdout
+            .read_line(&mut line)
+            .expect("hwp_info 오류 응답 읽기 실패");
         assert!(n > 0, "서버가 오류 호출 후 응답 없이 종료했습니다");
-        let resp: serde_json::Value = serde_json::from_str(line.trim()).expect("응답 JSON 파싱 실패");
+        let resp: serde_json::Value =
+            serde_json::from_str(line.trim()).expect("응답 JSON 파싱 실패");
         assert_eq!(
             resp["result"]["isError"], true,
             "존재하지 않는 경로는 isError:true 여야 합니다: {resp}"

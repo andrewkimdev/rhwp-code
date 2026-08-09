@@ -5470,8 +5470,7 @@ mod tests {
     #[test]
     fn merge_paragraph_in_caption_cell_does_not_panic() {
         let mut core = DocumentCore::new_empty();
-        core.document =
-            table_with_caption(vec![Paragraph::default(), Paragraph::default()]);
+        core.document = table_with_caption(vec![Paragraph::default(), Paragraph::default()]);
 
         let result = core.merge_paragraph_in_cell_native(
             0,
