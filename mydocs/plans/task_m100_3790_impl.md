@@ -8,7 +8,8 @@
 - **절차 상태**: Stage 3·4 merge·canary 완료. 최신 `upstream/devel` `e48fe86947fb`에서 Stage 5A의
   보안 check 재사용과 Rust no-build shadow를 구현하고 focused 검증을 통과했다. Draft PR #4341의
   1차 원격 canary 분석 뒤 raw blocking SARIF·동일 권한·기본 build mode의 no-prebuild shadow로
-  보정하고 focused 검증을 통과했다. 다음 gate는 보정 canary의 원격 동등성 측정이다.
+  보정하고 원격 동등성 gate를 통과했다. 수동 cache·prebuild와 측정 요소를 제거한 최종 구성도 focused
+  검증을 통과했으며 다음 gate는 최종 PR CI다.
 
 ## Stage 1 — shadow classifier
 
@@ -163,6 +164,34 @@ Stage 3 merge 직후 frontend-only canary PR #3951에서 unit/package/render 진
   `build-mode: none` 측정과 구별한다.
 - 원격에서는 두 raw SARIF의 result fingerprint·artifact URI와 추출 성공·오류 수가 같고 feature API
   권한 annotation이 사라지는지 확인한 뒤 활성화 여부를 판정한다.
+
+### Stage 5A 보정 canary 판정
+
+- candidate `484f6a3286dfd71b61809b95374a0fce31f8d8e9`, CodeQL run `31313096097`의 모든
+  workflow job과 GHAS `CodeQL` check가 성공했다. blocking·shadow check annotation은 모두 0건이다.
+- blocking Rust는 701초, no-prebuild shadow는 642초로 59초(8.4%) 단축됐다. analyze는 각각
+  582초와 579초여서 차이 3초이고, 절감분은 cache 복원 10초와 수동 `cargo build` 50초에 대응한다.
+- 두 raw SARIF의 CodeQL CLI 2.26.2, tool metadata, config, 32개 전체 result object와 partial
+  fingerprint가 완전히 같다. 규칙별 결과도 hard-coded cryptographic value 31건, weak cryptographic
+  algorithm 1건으로 같다.
+- 성공 추출은 1,097파일, unresolved macro는 63건으로 같다. blocking에만
+  `target/debug/build/serde*` 생성 파일 4개가 추가됐고 네 파일 모두 semantic analyzer unavailable
+  warning이라 유효한 소스 coverage나 alert를 늘리지 않았다.
+- 따라서 기본 build mode와 내부 `autobuild.sh`를 유지한 채 수동 cargo cache·prebuild를 제거하는 gate는
+  통과다. `build-mode: none`은 1차 canary가 동등성을 증명하지 못했으므로 활성화하지 않는다.
+- PR #4341의 최종 형태에서는 blocking `Analyze (rust)` check identity를 유지하면서 cache restore/save와
+  수동 `cargo build`, 측정용 shadow·raw artifact를 제거하고 최종 CI를 다시 확인한다.
+
+### Stage 5A 최종 전환
+
+- 기존 `analyze` matrix와 `Analyze (rust)` check identity, `security-events: write`, 기본 build mode,
+  stable Rust toolchain, 정상 Code Scanning upload를 유지한다.
+- Rust 전용 cargo cache restore/save와 수동 `cargo build`를 제거한다. CodeQL 내부 `autobuild.sh`는
+  기본 analyze 동작으로 유지된다.
+- canary 측정용 `rust-no-prebuild-shadow` job과 blocking·shadow raw SARIF output·artifact를 제거한다.
+- 최종 계약은 수동 cache·build와 측정 요소가 다시 들어오면 실패하도록 고정했다. TDD RED 2건을 확인한
+  뒤 Stage 5A 6/6, 연관 Python workflow 계약 74/74, classifier 28/28, `actionlint`,
+  `git diff --check`가 통과했다.
 
 ## Stage 5B 이후
 

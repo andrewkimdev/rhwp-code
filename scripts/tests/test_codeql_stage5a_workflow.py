@@ -1,4 +1,4 @@
-"""[#3790 Stage 5A] CodeQL 보안 판정 재사용과 Rust no-build shadow 계약."""
+"""[#3790 Stage 5A] CodeQL 보안 판정 재사용과 Rust no-prebuild 계약."""
 
 from __future__ import annotations
 
@@ -76,52 +76,27 @@ class CodeQLStage5AWorkflowTests(unittest.TestCase):
         self.assertEqual(outputs["fast_pass"], "false")
         self.assertEqual(outputs["reason"], "no-green-codeql-candidate")
 
-    def test_blocking_lane_preserves_rust_prebuild_and_raw_sarif(self) -> None:
+    def test_blocking_lane_uses_default_build_mode_without_manual_prebuild(self) -> None:
         analyze = job_body(self.workflow, "analyze")
         self.assertIn("language: [javascript-typescript, python, rust]", analyze)
         self.assertIn("languages: ${{ matrix.language }}", analyze)
         self.assertIn("security-events: write", analyze)
         self.assertIn("contents: read", analyze)
-        self.assertIn("Build Rust (for CodeQL)", analyze)
-        self.assertIn("run: cargo build", analyze)
-        self.assertIn("actions/cache/restore@v6", analyze)
-        self.assertIn("actions/cache/save@v6", analyze)
-        self.assertNotIn("build-mode: none", analyze)
-        self.assertIn("output: rust-blocking-results", analyze)
-        self.assertIn("if: ${{ always() && matrix.language == 'rust' }}", analyze)
-        self.assertIn(
-            "name: rust-blocking-sarif-${{ github.run_id }}-${{ github.run_attempt }}",
-            analyze,
-        )
-        self.assertIn("path: rust-blocking-results", analyze)
-        self.assertIn("if-no-files-found: warn", analyze)
+        self.assertIn("Perform CodeQL Analysis", analyze)
+        self.assertNotIn("build-mode:", analyze)
+        self.assertNotIn("actions/cache/", analyze)
+        self.assertNotIn("cargo build", analyze)
+        self.assertNotIn("rust-blocking-results", analyze)
+        self.assertNotIn("actions/upload-artifact", analyze)
 
-    def test_rust_no_prebuild_shadow_changes_only_manual_prebuild(self) -> None:
-        shadow = job_body(self.workflow, "rust-no-prebuild-shadow")
-        self.assertIn("name: Rust no-prebuild shadow", shadow)
-        self.assertIn("needs: preflight", shadow)
-        self.assertIn("github.event_name == 'pull_request'", shadow)
-        self.assertIn("needs.preflight.result == 'success'", shadow)
-        self.assertIn("needs.preflight.outputs.fast_pass != 'true'", shadow)
-        self.assertIn("security-events: write", shadow)
-        self.assertIn("contents: read", shadow)
-        self.assertIn("languages: rust", shadow)
-        self.assertNotIn("build-mode:", shadow)
-        self.assertIn(
-            "dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4",
-            shadow,
-        )
-        self.assertIn("upload: never", shadow)
-        self.assertIn("output: rust-no-prebuild-results", shadow)
-        self.assertIn(
-            "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
-            shadow,
-        )
-        self.assertIn("if: ${{ always() }}", shadow)
-        self.assertIn("path: rust-no-prebuild-results", shadow)
-        self.assertIn("if-no-files-found: warn", shadow)
-        self.assertNotIn("actions/cache/", shadow)
-        self.assertNotIn("cargo build", shadow)
+    def test_measurement_shadow_and_raw_artifacts_are_removed_after_canary(self) -> None:
+        workflow = self.workflow
+        self.assertNotIn("rust-no-prebuild-shadow:", workflow)
+        self.assertNotIn("Rust no-prebuild shadow", workflow)
+        self.assertNotIn("rust-no-prebuild-results", workflow)
+        self.assertNotIn("rust-blocking-results", workflow)
+        self.assertNotIn("rust-blocking-sarif-", workflow)
+        self.assertNotIn("rust-no-prebuild-sarif-", workflow)
 
     def _run_preflight(
         self,

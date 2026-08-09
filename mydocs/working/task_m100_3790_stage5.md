@@ -4,7 +4,7 @@
 - **브랜치**: `issue-3790-stage5a-codeql-safety`
 - **worktree**: `tmp/issue-3790-stage5a-codeql`
 - **기준**: `upstream/devel` `e48fe86947fb` (#4310·#4317 merge 포함)
-- **상태**: Draft PR #4341 보정 canary 구현·focused 검증 완료, 원격 재측정 대기
+- **상태**: Draft PR #4341 no-prebuild 최종 전환·focused 검증 완료, 최종 CI 재실행 대기
 
 ## 재개와 보존 경계
 
@@ -44,6 +44,8 @@ coverage·진단 비교 기준으로 쓴다. 보정 전 GHAS check `93182688114`
 - [x] PR non-fast-pass 전용 Rust no-build shadow와 SARIF artifact 추가
 - [x] Stage 5A workflow 계약 테스트와 CI test wiring 추가
 - [x] focused 검증 통과
+- [x] 보정 canary에서 기본 build mode의 no-prebuild 동등성 확인
+- [x] blocking lane의 수동 cache·prebuild 제거와 측정용 shadow 정리
 
 Stage 5B의 동적 언어 matrix, required status 변경, 원격 push·PR·canary는 이번 focused 구현 범위 밖이다.
 
@@ -136,4 +138,78 @@ API 권한 부재다. 마지막 항목은 shadow에 `security-events` 권한이 
 계약 테스트는 보정 전 blocking raw artifact와 no-prebuild shadow가 없어 2건 실패하는 RED를 확인했다.
 구현 뒤 `python3 -m unittest scripts/tests/test_codeql_stage5a_workflow.py` 6/6, 연관 Python workflow
 계약 테스트 74/74, classifier Node 테스트 28/28이 통과했다. `actionlint`와 `git diff --check`도
-통과했다. 원격 CI가 완료되면 같은 run의 두 raw SARIF, 추출 통계, annotation과 duration을 비교한다.
+통과했다. 같은 run의 두 raw SARIF, 추출 통계, annotation과 duration 비교 결과는 다음 절에 기록한다.
+
+## PR #4341 보정 원격 canary 판정
+
+- **candidate**: `484f6a3286dfd71b61809b95374a0fce31f8d8e9`
+- **CodeQL run**: [31313096097](https://github.com/edwardkim/rhwp/actions/runs/31313096097)
+- **결론**: 기본 build mode의 no-prebuild gate 통과. `build-mode: none`은 활성화하지 않는다.
+
+### 시간
+
+| 구간 | Blocking Rust | No-prebuild shadow | 차이 |
+| --- | ---: | ---: | ---: |
+| 전체 job | 701초 | 642초 | -59초 (-8.4%) |
+| checkout | 36초 | 37초 | +1초 |
+| CodeQL init | 15초 | 15초 | 0초 |
+| Rust toolchain | 1초 | 1초 | 0초 |
+| cargo cache 복원 + 수동 build | 60초 | 0초 | -60초 |
+| analyze | 582초 | 579초 | -3초 |
+
+두 analyze는 CodeQL CLI 2.26.2, 기본 build mode, `database trace-command --index-traceless-dbs`,
+Rust `autobuild.sh`를 동일하게 사용했다. analyze 시간은 사실상 같고 전체 59초 절감은 blocking의 cache
+복원 10초와 수동 `cargo build` 50초를 제거한 결과다.
+
+### raw SARIF 동등성
+
+| 항목 | Blocking Rust | No-prebuild shadow | 판정 |
+| --- | ---: | ---: | --- |
+| 전체 alert result | 32 | 32 | 전체 object 일치 |
+| hard-coded cryptographic value | 31 | 31 | 일치 |
+| weak cryptographic algorithm | 1 | 1 | 일치 |
+| partial fingerprint | 32 | 32 | 전부 일치 |
+| 성공 추출 파일 | 1,097 | 1,097 | 일치 |
+| artifact URI | 1,104 | 1,100 | generated 4개 차이 |
+| extraction warning | 19 | 15 | generated 4개 차이 |
+| 추출 LOC | 504,259 | 504,237 | 22줄 차이 |
+| unresolved macro | 63 | 63 | 일치 |
+| raw diagnostic message | 2 | 2 | 일치 |
+
+32개 result는 message·location·code flow·related location·fingerprint를 포함한 전체 SARIF object가
+동일하다. 공통 artifact 1,100개도 비의미적 배열 index를 제외한 metadata가 모두 같다. blocking에만
+있는 네 artifact는 다음 `target/` 생성 파일이다.
+
+- `target/debug/build/serde-252a9bbeccb60cd9/out/private.rs`
+- `target/debug/build/serde-8c63de14314a3a66/out/private.rs`
+- `target/debug/build/serde_core-3b35127d46588d93/out/private.rs`
+- `target/debug/build/serde_core-b2bf78d088e03c97/out/private.rs`
+
+네 파일은 모두 `semantic analyzer unavailable (not included in files loaded from manifest)` warning을
+남겼고 alert는 만들지 않았다. 즉 수동 prebuild가 추가한 차이는 repository source coverage가 아니라
+실패한 generated dependency artifact 네 개다. 양쪽 check annotation도 0건이라 1차 측정의 feature API
+권한 차이는 해소됐다.
+
+### 활성화 경계
+
+blocking `Analyze (rust)`에서 cargo cache restore/save와 수동 `cargo build`를 제거해도 alert·fingerprint와
+유효한 source extraction coverage가 유지된다는 gate는 통과했다. 기본 build mode와 CodeQL 내부
+`autobuild.sh`는 유지한다. 1차 canary의 `build-mode: none`은 이 판정에 포함하지 않는다.
+
+PR #4341의 측정 구성은 그대로 merge하지 않고, blocking check identity와 정상 Code Scanning upload를
+유지한 채 수동 cache·prebuild를 제거했다. 측정용 shadow와 두 raw SARIF artifact도 정리했다.
+
+## PR #4341 최종 no-prebuild 전환
+
+- 기존 세 언어 matrix, `Analyze (rust)` 이름, `security-events: write`, 기본 build mode, stable Rust
+  toolchain과 정상 Code Scanning upload를 유지했다.
+- Rust cargo cache restore/save와 수동 `cargo build`를 제거했다. CodeQL 내부 `autobuild.sh`는 기본
+  analyze에서 계속 실행된다.
+- `rust-no-prebuild-shadow`와 blocking·shadow raw SARIF output·artifact를 제거해 canary 비용과 임시
+  산출물을 남기지 않는다.
+- 최종 계약 테스트는 수동 cache·build와 측정 shadow가 남아 있어 2건 실패하는 RED를 확인한 뒤 6/6
+  통과했다. 연관 Python workflow 계약 74/74, classifier Node 테스트 28/28, `actionlint`,
+  `git diff --check`도 통과했다.
+
+최종 PR CI에서 기존 세 Analyze job과 GHAS `CodeQL` check가 성공하고 Rust duration이 보정 shadow와
+같은 범위인지 확인하면 Stage 5A를 merge 가능한 상태로 판정한다.
