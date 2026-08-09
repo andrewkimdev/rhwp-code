@@ -30,9 +30,12 @@ serializer(hwpx): hp:arc 왕복과 표현 불가 컨트롤 손실 경고. 원 co
 충돌·적용 SHA는 [누적 구현 계획](pr_4313_review_impl.md)에 기록한다.
 
 - GitHub CI: 원 head `ba4d3ca8758ce8d97d2862ca8f2da2baf6fee0b9`에서 성공을 확인했다. merge 전 최신 상태 재확인이 필요하다.
-- 로컬 focused·누적 검증: 진행 전.
+- 로컬 focused·누적 검증: focused 회귀와 누적 release-test 5,567/5,567,
+  Native Skia 58+2+4, fmt·diff·clippy, 표준 Docker WASM을 통과했다. 적용 SHA와
+  충돌 해소·시각 자료는 [누적 구현 계획](pr_4313_review_impl.md)에 기록했다.
 - 시각 검증: 현재 변경 성격상 필수 대상이 아닌 것으로 접수했으며 diff 검토 뒤 재판정한다.
 
 ## 현재 판정
 
-**보류.** 누적 체리픽, PR 고유 diff 검토와 로컬 검증이 끝난 뒤 최종 권고를 갱신한다.
+**누적 검증 통과, 최종 판정 대기.** 작업지시자 시각 판정과 merge 직전 GitHub 최신
+head·mergeable·required checks 재확인 뒤 최종 권고를 갱신한다.

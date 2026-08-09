@@ -30,9 +30,12 @@ core: 문단 서식의 흐름 영향 술어 도입 + 머리말/꼬리말 stale �
 충돌·적용 SHA는 [누적 구현 계획](pr_4313_review_impl.md)에 기록한다.
 
 - GitHub CI: 원 head `be05f13f0597274a12acc4a23a633ebf8960b5b9`에서 성공을 확인했다. merge 전 최신 상태 재확인이 필요하다.
-- 로컬 focused·누적 검증: 진행 전.
+- 로컬 focused·누적 검증: focused 회귀와 누적 release-test 5,567/5,567,
+  Native Skia 58+2+4, fmt·diff·clippy, 표준 Docker WASM을 통과했다. 적용 SHA와
+  충돌 해소·시각 자료는 [누적 구현 계획](pr_4313_review_impl.md)에 기록했다.
 - 시각 검증: 사용자-visible layout/render 영향이 있어 누적 후보에서 수행해야 한다.
 
 ## 현재 판정
 
-**보류.** 누적 체리픽, PR 고유 diff 검토와 로컬 검증이 끝난 뒤 최종 권고를 갱신한다.
+**누적 검증 통과, 최종 판정 대기.** 작업지시자 시각 판정과 merge 직전 GitHub 최신
+head·mergeable·required checks 재확인 뒤 최종 권고를 갱신한다.
