@@ -1443,6 +1443,34 @@ impl DocumentCore {
     /// — 기존 동작 + API caller 호환. studio drag 좌표 기반 호출은 `Some` 으로 전달.
     /// 본문 inline 분기 (cell_path 비어있음) 는 본 매개변수를 사용하지 않는다.
     #[allow(clippy::too_many_arguments)]
+    /// [#4347] 확장 컨트롤이 끼어들 `controls` 자리 — **글자 차례**를 따른다.
+    ///
+    /// 끝에 붙이면 자리표가 뒤죽박죽이 된다. 새 번호·수식·각주 경로가 쓰는 규약과 같다.
+    fn control_insert_index(
+        paragraph: &crate::model::paragraph::Paragraph,
+        char_offset: usize,
+    ) -> usize {
+        let positions = crate::document_core::helpers::find_control_text_positions(paragraph);
+        positions
+            .iter()
+            .position(|&pos| pos > char_offset)
+            .unwrap_or(paragraph.controls.len())
+    }
+
+    /// [#4347] 넣은 컨트롤이 **스트림에서 차지한 8칸**을 문단 좌표에 남긴다.
+    ///
+    /// 파서는 확장 컨트롤에 보이는 글자를 안 남기므로, 그 컨트롤의 자리는
+    /// `control_text_positions()` 가 `char_offsets` 의 **갭**으로 되짚는다. 삽입이 그 갭을
+    /// 안 만들면 컨트롤이 자리를 잃고 문단 끝 폴백으로 떨어진다 — 그림 앵커가 20 대신 406
+    /// 이던 것이 그 탓이다. 수식·각주 경로가 이미 이 꼴이다.
+    fn leave_coordinate_trace(
+        paragraph: &mut crate::model::paragraph::Paragraph,
+        char_offset: usize,
+    ) {
+        paragraph.shift_for_inline_control_insert(char_offset);
+        paragraph.char_count += 8;
+    }
+
     pub fn insert_picture_native(
         &mut self,
         section_idx: usize,
@@ -1594,6 +1622,8 @@ impl DocumentCore {
                     section.raw_stream = None;
                     let target_para =
                         Self::resolve_cell_paragraph_mut(section, para_idx, cell_path)?;
+                    // [#4347] 셀 안 경로도 같은 자취가 필요하지만 아직 안 쟀다 — 본문 경로만
+                    // 고친다.
                     let new_ctrl_idx = target_para.controls.len();
                     target_para.controls.push(Control::Picture(Box::new(pic)));
                     target_para.ctrl_data_records.push(None);
@@ -1667,6 +1697,10 @@ impl DocumentCore {
             };
 
             // table 같은 paragraph 의 sibling control 로 append.
+            //
+            // [#4347] 이 경로는 **글자 없는 표 문단**에 붙는 자리라 좌표 자취를 남기지 않는다 —
+            // 본문 문단과 달리 되짚을 갭이 없고, 길이를 더하면 표 배치가 흔들린다(실측:
+            // 글자처럼 그림 둘의 줄 넘김 테스트가 깨진다). 그 축은 따로 재야 한다.
             self.document.sections[section_idx].raw_stream = None;
             let parent = &mut self.document.sections[section_idx].paragraphs[para_idx];
             let new_ctrl_idx = parent.controls.len();
@@ -1749,12 +1783,16 @@ impl DocumentCore {
             ..Default::default()
         };
 
-        // 현재 paragraph 의 sibling control 로 append (새 paragraph 생성 X).
+        // 현재 paragraph 의 sibling control 로 끼운다 (새 paragraph 생성 X).
         self.document.sections[section_idx].raw_stream = None;
         let parent = &mut self.document.sections[section_idx].paragraphs[para_idx];
-        let new_ctrl_idx = parent.controls.len();
-        parent.controls.push(Control::Picture(Box::new(pic)));
-        parent.ctrl_data_records.push(None);
+        let new_ctrl_idx = Self::control_insert_index(parent, char_offset);
+        parent.align_ctrl_data_records();
+        parent
+            .controls
+            .insert(new_ctrl_idx, Control::Picture(Box::new(pic)));
+        parent.ctrl_data_records.insert(new_ctrl_idx, None);
+        Self::leave_coordinate_trace(parent, char_offset);
         let logical_positions =
             crate::document_core::helpers::find_logical_control_positions(parent);
         let logical_after = logical_positions
@@ -4104,5 +4142,77 @@ mod bindata_storage_id_collision_tests {
             datas.iter().any(|d| &d[..] == minimal_png().as_slice()),
             "저장 왕복 후 신규 이미지가 소실됨"
         );
+    }
+}
+
+#[cfg(test)]
+mod issue_4347_insert_leaves_coordinate_trace {
+    //! [#4347] 그림 삽입이 `char_offsets` 에 갭을 안 남겨 개체 좌표가 문단 끝으로 떨어졌다.
+    //!
+    //! 파서는 확장 컨트롤을 만나면 8 코드 유닛을 건너뛰고 **보이는 글자를 안 남긴다**. 그래서
+    //! 컨트롤의 자리는 `control_text_positions()` 가 `char_offsets` 의 **갭**으로 되짚는다.
+    //! 삽입 경로가 그 갭을 만들지 않으면 그 컨트롤은 자리를 잃고 문단 끝 폴백으로 떨어진다.
+    //! 수식·각주·새 번호 경로는 이미 `shift_for_inline_control_insert` 로 갭을 만든다.
+
+    use super::*;
+    use crate::model::document::{Document, Section};
+    use crate::model::paragraph::Paragraph;
+
+    fn core_with_two_leading_controls() -> DocumentCore {
+        // 앞머리에 확장 컨트롤 둘(구역·단 정의처럼 16칸)이 있고 그 뒤로 글자 열이 오는 문단.
+        let mut para = Paragraph {
+            text: "0123456789".to_string(),
+            char_offsets: (16..26).collect(),
+            char_count: 27,
+            ..Default::default()
+        };
+        para.controls.push(Control::SectionDef(Default::default()));
+        para.controls.push(Control::ColumnDef(Default::default()));
+        para.ctrl_data_records.push(None);
+        para.ctrl_data_records.push(None);
+        let mut doc = Document::default();
+        doc.sections.push(Section {
+            paragraphs: vec![para],
+            ..Default::default()
+        });
+        let mut core = DocumentCore::new_empty();
+        core.set_document(doc);
+        core
+    }
+
+    fn png() -> Vec<u8> {
+        vec![
+            0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48,
+            0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00,
+            0x00, 0x1F, 0x15, 0xC4, 0x89,
+        ]
+    }
+
+    #[test]
+    fn inserted_picture_keeps_its_place_not_the_paragraph_end() {
+        let mut core = core_with_two_leading_controls();
+        core.insert_picture_native(0, 0, 4, &[], &png(), 100, 100, 1, 1, "png", "", None, None)
+            .expect("그림 삽입");
+
+        let para = &core.document.sections[0].paragraphs[0];
+        // 넣은 자리 뒤 글자들은 8칸 밀려야 한다 — 그 갭이 곧 그림의 자리다.
+        assert_eq!(
+            para.char_offsets[3], 19,
+            "넣은 자리 앞 글자는 그대로여야 한다"
+        );
+        assert_eq!(
+            para.char_offsets[4], 28,
+            "넣은 자리 뒤 글자는 컨트롤 몫 8칸만큼 밀려야 한다"
+        );
+        assert_eq!(para.char_count, 35, "문단 길이도 8칸 늘어야 한다");
+
+        // 그 갭 덕분에 컨트롤 자리가 되짚어진다 — 문단 끝이 아니라 넣은 자리다.
+        let positions = para.control_text_positions();
+        assert_eq!(
+            positions.len(),
+            3,
+            "구역 정의·단 정의·그림 셋의 자리가 나와야 한다"
+        );
+        assert_eq!(positions[2], 4, "그림은 넣은 글자 자리에 있어야 한다");
     }
 }
