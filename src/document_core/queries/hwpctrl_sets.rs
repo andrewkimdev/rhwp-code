@@ -8,9 +8,8 @@
 use crate::document_core::queries::field_query::{
     caret_stops, cell_path_to_list, char_idx_at_stream_pos, cursor_paragraph, json_escape,
     leading_anchor_pos, root_para_count, root_para_location, root_para_of, select_start_pos,
-    shape_lists,
-    stream_len, stream_pos, word_end_from, word_starts, ListEntry, EXTENDED_CTRL_UNITS,
-    ROOT_LIST_ID,
+    shape_lists, stream_len, stream_pos, word_end_from, word_starts, ListEntry,
+    EXTENDED_CTRL_UNITS, ROOT_LIST_ID,
 };
 use crate::document_core::DocumentCore;
 use crate::error::HwpError;
@@ -169,16 +168,16 @@ fn collect_controls(
             rebuilt.get(ci).copied().unwrap_or(0)
         } else {
             control_positions
-            .get(ci)
-            .map(|char_idx| {
-                let placeholders_before = control_positions[..ci]
-                    .iter()
-                    .filter(|p| *p < char_idx)
-                    .count();
-                let plain_before = char_idx.saturating_sub(placeholders_before);
-                plain_before + ci * EXTENDED_CTRL_UNITS
-            })
-            .unwrap_or(0)
+                .get(ci)
+                .map(|char_idx| {
+                    let placeholders_before = control_positions[..ci]
+                        .iter()
+                        .filter(|p| *p < char_idx)
+                        .count();
+                    let plain_before = char_idx.saturating_sub(placeholders_before);
+                    plain_before + ci * EXTENDED_CTRL_UNITS
+                })
+                .unwrap_or(0)
         };
         items.push(format!(
             "{{\"ctrlId\":{},\"ctrlCh\":{},\"userDesc\":{},\"list\":{},\"para\":{},\"pos\":{},\"controlIndex\":{},\"props\":{}}}",
@@ -1237,7 +1236,11 @@ impl DocumentCore {
             // 경계 문단은 **양쪽 쪽에 다 들어간다**(다음 쪽이 그 문단의 처음부터라 이 쪽에는
             // 빈 줄로 들어간다) — 실측: 2쪽 끝이 `끝.` 뒤 빈 줄 넷으로 끝나는데 그 마지막이
             // 3쪽 첫 문단이다. 빼면 쪽마다 한 줄씩 모자란다.
-            lines.push(chars[begin.min(chars.len())..end.min(chars.len())].iter().collect());
+            lines.push(
+                chars[begin.min(chars.len())..end.min(chars.len())]
+                    .iter()
+                    .collect(),
+            );
         }
         // 마지막 쪽에는 다음 쪽이 없는데도 **경계 항목이 하나 더** 붙는다(실측: 마지막 쪽이
         // 줄바꿈 하나다 — 문단 하나뿐인데 항목은 둘이다). 문서 끝을 경계로 치는 셈이다.
