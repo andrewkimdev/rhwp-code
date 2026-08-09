@@ -591,10 +591,14 @@ impl Paragraph {
     /// 문단 메타데이터를 일괄 시프트한다.
     ///
     /// `char_offsets[safe_offset..]` 를 +8 하고, 삽입 지점(UTF-16) 이후의
-    /// `char_shapes.start_pos` 와 `range_tags.start/end` 도 +8 시프트한다. 종전에는
-    /// 각 삽입 경로가 char_offsets 만 밀고 char_shapes/range_tags 를 그대로 둬서, 삽입
-    /// 지점 이후 글자모양 run 경계가 텍스트와 어긋났다(글자모양 오염). `insert_text_at`
-    /// 의 시프트 규약과 동형이다.
+    /// `char_shapes.start_pos`·`range_tags.start/end`·`line_segs.text_start` 도 +8
+    /// 시프트한다. 종전에는 각 삽입 경로가 char_offsets 만 밀고 char_shapes/range_tags 를
+    /// 그대로 둬서, 삽입 지점 이후 글자모양 run 경계가 텍스트와 어긋났다(글자모양 오염).
+    /// `insert_text_at` 의 시프트 규약과 동형이다.
+    ///
+    /// **이 문단의 UTF-16 좌표를 들고 있는 것은 전부 여기서 함께 민다.** 하나라도 빠지면
+    /// 그것만 8 만큼 어긋난 채 남아, 다음에 그 문단을 다시 조판할 때 값이 튀어 원인이
+    /// 삽입이 아닌 곳에서 찾아진다(#4347 에서 line_segs 가 그랬다).
     pub(crate) fn shift_for_inline_control_insert(&mut self, char_offset: usize) {
         if self.char_offsets.is_empty() {
             return;
@@ -631,6 +635,15 @@ impl Paragraph {
             }
             if rt.end >= insert_pos {
                 rt.end += 8;
+            }
+        }
+        // [#4347] 줄 시작도 같은 좌표계(UTF-16 code unit)를 쓴다 — 함께 밀지 않으면 저장된
+        // 줄 나눔이 삽입 지점 뒤로 8 만큼 어긋난다. 눈에 안 띄다가 문단을 다시 조판하는
+        // 순간(그림 배치 토글 따위) 값이 갑자기 8 뛰어 "왕복이 원복을 깼다"로 보인다.
+        // 첫 줄은 문단 시작에 고정한다 — 넣은 컨트롤이 그 줄에 든다(char_shapes 와 같은 규약).
+        for seg in &mut self.line_segs {
+            if seg.text_start > insert_pos || (seg.text_start == insert_pos && seg.text_start > 0) {
+                seg.text_start += 8;
             }
         }
     }
