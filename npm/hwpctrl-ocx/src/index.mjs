@@ -3378,8 +3378,16 @@ export class HwpCtrl {
       console.warn('[hwpctrl] 여러 문단에 걸친 블록은 아직 다루지 않는다');
       return [];
     }
+    // **블록의 끝 글자도 포함이다.** `SelectText(0,16,0,21)` 뒤 굵게를 걸면 한글은 자리
+    // 16~21 을 굵게 하고(캐럿 22 에서 0 으로 떨어진다) 우리는 16~20 만 했다 — 끝에서 한 글자가
+    // 빠졌다. 블록 자체(`GetSelectedPos`)는 양쪽이 같으므로 어긋난 곳은 서식이 덮는 범위다.
     return [
-      { list: sel.start.list, para: sel.start.para, start: sel.start.pos, end: sel.end.pos },
+      {
+        list: sel.start.list,
+        para: sel.start.para,
+        start: sel.start.pos,
+        end: sel.end.pos + 1,
+      },
     ];
   }
 
