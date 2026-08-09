@@ -91,6 +91,24 @@ CONTEXTS = {
         ],
         "labels": ["캐럿", "모드", "고른개체", "폭", "높이", "잠금", "다음컨트롤"],
     },
+    # **그리기 개체**를 고른 상태. `object` 맥락은 hongbo 의 첫 개체가 **표**라, 옮기기·크기·
+    # 뒤집기처럼 그리기에만 먹는 액션이 전부 무동작으로 보였다. 개체를 골랐다고 다 같은 개체가
+    # 아니다 — 갈래까지 맞춰야 잣대가 닿는다.
+    "drawing": {
+        "sample": "samples/draw-group.hwp",
+        "setup": [["SetPos", [0, 0, 0]], ["Run", ["SelectCtrlFront"]]],
+        "reads": [
+            ["GetPos", []],
+            ["SelectionMode", []],
+            ["CurSelectedCtrl.CtrlID", []],
+            ["CurSelectedCtrl.UserDesc", []],
+            ["HeadCtrl.Next.Next.Properties.Item", ["Width"]],
+            ["HeadCtrl.Next.Next.Properties.Item", ["Height"]],
+            ["HeadCtrl.Next.Next.Properties.Item", ["TextWrap"]],
+            ["HeadCtrl.Next.Next.Properties.Item", ["Lock"]],
+        ],
+        "labels": ["캐럿", "모드", "고른개체", "이름", "폭", "높이", "배치", "잠금"],
+    },
     # 셀 안이되 **칸 블록은 없는** 상태. 블록이 있어야 먹는 액션은 여기서도 무동작으로 보이므로
     # `cellblock` 으로 한 번 더 돌려야 한다 — 맥락을 하나만 두면 또 빈 곳을 재게 된다.
     #

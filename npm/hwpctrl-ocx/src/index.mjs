@@ -353,6 +353,13 @@ const ACTIONS = {
 
   // 잠금은 고른 개체 하나에 걸고, 풀기는 본문 전체를 푼다. 둘 다 **고르기를 놓는다**(모드 0)
   // — 캐럿은 그 개체 자리에 남는다(실측: 0/0/16 그대로).
+  // 크기 조절 — 걸음은 **283 HWPUNIT**(≈1mm)로 일정하고 결정적이다(실측). 방향 이름이
+  // **가장자리를 미는 쪽**이라 `Left`·`Up` 은 줄인다. 표의 크기 조절과 달리 판정이 된다.
+  ShapeObjResizeRight: { kind: 'objectResize', dw: 283, dh: 0 },
+  ShapeObjResizeLeft: { kind: 'objectResize', dw: -283, dh: 0 },
+  ShapeObjResizeDown: { kind: 'objectResize', dw: 0, dh: 283 },
+  ShapeObjResizeUp: { kind: 'objectResize', dw: 0, dh: -283 },
+
   ShapeObjLock: { kind: 'objectLock', locked: true },
   ShapeObjUnlockAll: { kind: 'objectLock', locked: false, all: true },
 
@@ -1799,6 +1806,24 @@ export class HwpCtrl {
         this.#modified = true;
         this.#clearSelection();
         this.#cursor = { list, para, pos: pos + CONTROL_CODE_UNITS };
+      }
+      callback?.(null, ok, callbackUserData);
+      return;
+    }
+    if (action.kind === 'objectResize') {
+      const here = this.#selectedObject;
+      let ok = false;
+      if (here) {
+        try {
+          const raw = this.#doc.resizeControlAt(here.para, here.controlIndex, action.dw, action.dh);
+          ok = parseJson(raw, { ok: false }).ok !== false;
+        } catch (e) {
+          console.warn(`[hwpctrl] Run("${actionID}") 실패:`, e);
+        }
+      }
+      if (ok) {
+        this.#ctrls = null; // 크기가 바뀌었다 — 사슬의 Properties 를 다시 읽는다
+        this.#modified = true;
       }
       callback?.(null, ok, callbackUserData);
       return;

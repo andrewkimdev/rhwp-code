@@ -916,6 +916,51 @@ impl DocumentCore {
         self.split_paragraph_in_cell_by_path(section_index, host_para, &path, char_idx, None)
     }
 
+    /// 개체 크기를 한 걸음 늘이거나 줄인다 — 웹한글컨트롤 `Run("ShapeObjResize*")`.
+    ///
+    /// 걸음은 **283 HWPUNIT**(≈1mm)로 일정하다(실측: 25704 → 25987 → 26270, 되돌리면 그대로
+    /// 되짚는다). 표의 크기 조절과 달리 **결정적**이다 — 같은 값을 두 번 읽어도 같다(§4.47 의
+    /// 표 계열은 읽을 때마다 달라 판정 불가였다).
+    ///
+    /// `Right`·`Left` 는 폭을, `Down`·`Up` 은 높이를 바꾼다. 방향 이름이 **가장자리를 미는 쪽**
+    /// 이라 `Left`·`Up` 은 줄인다.
+    pub fn resize_control_at(
+        &mut self,
+        para_in_list: usize,
+        control_index: usize,
+        d_width: i32,
+        d_height: i32,
+    ) -> Result<String, HwpError> {
+        let (sec, para_idx) = root_para_location(self, para_in_list)
+            .ok_or_else(|| HwpError::InvalidField(format!("본문 문단 {} 없음", para_in_list)))?;
+        let section = self
+            .document
+            .sections
+            .get_mut(sec)
+            .ok_or_else(|| HwpError::InvalidField(format!("구역 {} 없음", sec)))?;
+        let para = section
+            .paragraphs
+            .get_mut(para_idx)
+            .ok_or_else(|| HwpError::InvalidField(format!("문단 {} 없음", para_idx)))?;
+        let ctrl = para
+            .controls
+            .get_mut(control_index)
+            .ok_or_else(|| HwpError::InvalidField(format!("컨트롤 {} 없음", control_index)))?;
+        let common = match ctrl {
+            Control::Table(t) => Some(&mut t.common),
+            Control::Shape(s) => Some(s.common_mut()),
+            Control::Picture(p) => Some(&mut p.common),
+            _ => None,
+        };
+        let Some(c) = common else {
+            return Ok(r#"{"ok":false,"reason":"크기를 가진 개체가 아니다"}"#.to_string());
+        };
+        c.width = (c.width as i64 + d_width as i64).max(0) as u32;
+        c.height = (c.height as i64 + d_height as i64).max(0) as u32;
+        section.raw_stream = None;
+        Ok(r#"{"ok":true}"#.to_string())
+    }
+
     /// 나누기 — 웹한글컨트롤 `Run("BreakPage"·"BreakColumn"·"BreakColDef"·"BreakSection")`.
     ///
     /// 넷은 **한 규칙**이다(실측 15건, 계획서 §4.45). 표식이 앉는 문단은 캐럿이 문단의 어디에

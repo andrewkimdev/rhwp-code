@@ -4,10 +4,10 @@
   "oracleVersion": "한글2022 (설치본 COM)",
   "summary": {
     "total": 484,
-    "done": 259,
+    "done": 263,
     "byStatus": {
-      "verified": 257,
-      "unimplemented": 225,
+      "verified": 261,
+      "unimplemented": 221,
       "substituted": 2
     },
     "byUnit": {
@@ -24,8 +24,8 @@
         "unimplemented": 3
       },
       "action": {
-        "unimplemented": 169,
-        "verified": 143
+        "unimplemented": 165,
+        "verified": 147
       },
       "parameterSet": {
         "verified": 49,
@@ -6434,13 +6434,15 @@
       "name": "ShapeObjResizeDown",
       "parameterSetId": null,
       "requiresExternalSet": false,
-      "status": "unimplemented",
+      "status": "verified",
       "notes": "",
       "legacyHwpctl": false,
       "oracle": {
-        "scenarios": [],
+        "scenarios": [
+          "p3-objresize"
+        ],
         "lastRun": null,
-        "diff": null
+        "diff": 0
       }
     },
     {
@@ -6450,13 +6452,15 @@
       "name": "ShapeObjResizeLeft",
       "parameterSetId": null,
       "requiresExternalSet": false,
-      "status": "unimplemented",
+      "status": "verified",
       "notes": "",
       "legacyHwpctl": false,
       "oracle": {
-        "scenarios": [],
+        "scenarios": [
+          "p3-objresize"
+        ],
         "lastRun": null,
-        "diff": null
+        "diff": 0
       }
     },
     {
@@ -6466,13 +6470,15 @@
       "name": "ShapeObjResizeRight",
       "parameterSetId": null,
       "requiresExternalSet": false,
-      "status": "unimplemented",
+      "status": "verified",
       "notes": "",
       "legacyHwpctl": false,
       "oracle": {
-        "scenarios": [],
+        "scenarios": [
+          "p3-objresize"
+        ],
         "lastRun": null,
-        "diff": null
+        "diff": 0
       }
     },
     {
@@ -6482,13 +6488,15 @@
       "name": "ShapeObjResizeUp",
       "parameterSetId": null,
       "requiresExternalSet": false,
-      "status": "unimplemented",
+      "status": "verified",
       "notes": "",
       "legacyHwpctl": false,
       "oracle": {
-        "scenarios": [],
+        "scenarios": [
+          "p3-objresize"
+        ],
         "lastRun": null,
-        "diff": null
+        "diff": 0
       }
     },
     {
