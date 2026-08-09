@@ -927,6 +927,13 @@ export class HwpCtrl {
    * 없으면 그 API 는 아무 일도 하지 않는다(거짓말하지 않는다).
    */
   #onReadFile;
+  /**
+   * 호스트의 **그림 쓰기** 고리 — `CreatePageImage` 용. 이 층은 픽셀을 만들지 않는다. rhwp 는
+   * 원래 그렇게 생겼다: 코어가 쪽을 그려 내주면 **호스트가 화면·파일로 옮긴다**(studio 도
+   * CanvasKit 으로 그런다). 그래서 쪽의 SVG 를 코어에서 받아 호스트에 넘기고, 파일로 어떻게
+   * 앉힐지는 호스트가 정한다. 고리가 없으면 `false` 를 준다 — 못 한 것을 했다고 하지 않는다.
+   */
+  #onCreatePageImage;
   #cursor = { list: 0, para: 0, pos: 0 };
   /** 리스트 표 캐시 — 문서를 새로 열 때 버린다. */
   #listModel = null;
@@ -964,11 +971,12 @@ export class HwpCtrl {
   #version = PACKAGE_VERSION;
   #listeners = new Map();
 
-  constructor({ wasm, doc, onSave, onReadFile, version } = {}) {
+  constructor({ wasm, doc, onSave, onReadFile, onCreatePageImage, version } = {}) {
     this.#wasm = wasm;
     this.#doc = doc ?? (wasm ? wasm.HwpDocument.createEmpty() : null);
     this.#onSave = onSave;
     this.#onReadFile = onReadFile;
+    this.#onCreatePageImage = onCreatePageImage;
     if (typeof version === 'string') this.#version = version;
   }
 
@@ -1506,6 +1514,54 @@ export class HwpCtrl {
   /** 규격 §8.4 — 문서가 담은 첫 컨트롤. `Next` 로 사슬을 탄다. */
   get HeadCtrl() {
     return this.#ctrlChain()[0] ?? null;
+  }
+
+  /**
+   * 규격 §8.3.9 — 쪽 하나를 그림 파일로 만든다.
+   *
+   * 실측한 계약(`20250130-hongbo`, 4쪽):
+   *
+   * | 건 것 | 답 |
+   * | --- | --- |
+   * | 인자 **정확히 둘**, 쪽 번호 0~3 | `true` — 파일이 실제로 생긴다 |
+   * | 쪽 번호 4·9(쪽수 밖) | `false` |
+   * | 쪽 번호 **음수** | **예외** |
+   * | 없는 폴더·빈 경로 | `false` |
+   * | 인자 하나·셋 | `false` |
+   *
+   * 쪽 번호는 **0부터**다. 한글은 확장자를 **`.bmp` 로 강제**하고 33×47 4bpp 미리보기를 쓴다
+   * (쪽마다 내용이 다르다 — 빈 그림이 아니다).
+   *
+   * **픽셀과 파일 갈래는 이 층이 약속하지 않는다.** 코어에서 그 쪽의 SVG 를 받아 호스트에
+   * 넘기고, 어떤 형식으로 앉힐지는 호스트가 정한다 — rhwp 는 원래 그렇게 생겼다(코어가 그리고
+   * 호스트가 옮긴다). 대조하는 것은 위 표의 **반환값**이다.
+   */
+  CreatePageImage(path, pageNo) {
+    if (arguments.length !== 2) return false;
+    const page = Number(pageNo);
+    if (!Number.isFinite(page) || page < 0) {
+      throw new Error('CreatePageImage: 쪽 번호가 음수다');
+    }
+    const target = String(path ?? '');
+    if (!target) return false;
+    if (typeof this.#onCreatePageImage !== 'function') {
+      console.warn('[hwpctrl] CreatePageImage: 호스트 그림 쓰기 고리가 없다');
+      return false;
+    }
+    let svg;
+    try {
+      if (page >= (this.#doc?.pageCount?.() ?? 0)) return false;
+      svg = this.#doc.renderPageSvg(page);
+    } catch (e) {
+      console.warn('[hwpctrl] CreatePageImage: 쪽을 못 그렸다:', e);
+      return false;
+    }
+    try {
+      return this.#onCreatePageImage({ path: target, pageNo: page, svg }) === true;
+    } catch (e) {
+      console.warn('[hwpctrl] CreatePageImage: 호스트가 못 썼다:', e);
+      return false;
+    }
   }
 
   /**

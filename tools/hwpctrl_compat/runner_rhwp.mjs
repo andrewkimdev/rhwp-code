@@ -131,7 +131,8 @@ async function loadImpl(impl, wasm) {
     // 신규 패키지는 **자기 손으로** 문서를 연다(규격의 `Open`). 하니스가 문서를 만들어
     // 넘겨 주면 그 API 가 대조에서 빠져 "구현했다"고 착각하게 된다.
     ownsOpen: true,
-    make: ({ wasm, onSave, onReadFile }) => mod.createHwpCtrl({ wasm, onSave, onReadFile }),
+    make: ({ wasm, onSave, onReadFile, onCreatePageImage }) =>
+      mod.createHwpCtrl({ wasm, onSave, onReadFile, onCreatePageImage }),
   };
 }
 
@@ -236,9 +237,16 @@ async function main() {
     // 규격이 **경로**를 받는 API(`InsertPicture`)를 위한 호스트 고리. 오라클은 바탕화면에서
     // 그 경로를 그대로 열므로 이쪽도 같은 경로를 읽어 준다.
     const onReadFile = (path) => new Uint8Array(readFileSync(path));
+    // `CreatePageImage` 는 코어가 그린 쪽 SVG 를 호스트에 넘긴다 — 픽셀로 앉히는 것은 호스트
+    // 일이다(studio 는 CanvasKit 으로 한다). 하니스에는 래스터라이저가 없으므로 그 SVG 를 그대로
+    // 쓴다. **파일 갈래는 대조 대상이 아니다** — 대조하는 것은 반환값이다.
+    const onCreatePageImage = ({ path, svg }) => {
+      writeFileSync(path, svg, 'utf-8');
+      return true;
+    };
 
     if (impl.ownsOpen) {
-      ctrl = impl.make({ wasm, onSave, onReadFile });
+      ctrl = impl.make({ wasm, onSave, onReadFile, onCreatePageImage });
       if (scenario.open) {
         const bytes = readFileSync(join(REPO, scenario.open));
         const opened = ctrl.Open(new Uint8Array(bytes), '', '');

@@ -161,9 +161,6 @@ MACHINE = {
 DATA_MISSING = {
     "HwpCtrl.method.LunarToSolar", "HwpCtrl.method.LunarToSolarBySet",
     "HwpCtrl.method.SolarToLunar", "HwpCtrl.method.SolarToLunarBySet",
-    # 쪽 그림 만들기 — 인자 **둘**이고 `true` 를 준다(셋 이상이면 false). rhwp 는 쪽을 그릴 수
-    # 있으니 막힌 것이 아니라 아직 안 이은 것이다.
-    "HwpCtrl.method.CreatePageImage",
 }
 
 

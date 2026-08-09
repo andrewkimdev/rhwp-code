@@ -4,10 +4,10 @@
   "oracleVersion": "한글2022 (설치본 COM)",
   "summary": {
     "total": 484,
-    "done": 307,
+    "done": 308,
     "byStatus": {
-      "verified": 305,
-      "unimplemented": 177,
+      "verified": 306,
+      "unimplemented": 176,
       "substituted": 2
     },
     "byUnit": {
@@ -17,8 +17,8 @@
         "unimplemented": 2
       },
       "method": {
-        "verified": 55,
-        "unimplemented": 33
+        "verified": 56,
+        "unimplemented": 32
       },
       "event": {
         "unimplemented": 3
@@ -1089,14 +1089,16 @@
       "name": "CreatePageImage",
       "arity": 3,
       "section": "8.3.4",
-      "status": "unimplemented",
+      "status": "verified",
       "notes": "",
       "legacyHwpctl": false,
       "specArityAmbiguous": true,
       "oracle": {
-        "scenarios": [],
+        "scenarios": [
+          "pG-pageimage"
+        ],
         "lastRun": null,
-        "diff": null
+        "diff": 0
       }
     },
     {
