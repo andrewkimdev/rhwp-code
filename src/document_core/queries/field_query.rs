@@ -1628,6 +1628,7 @@ pub(crate) fn char_idx_at_code_unit(para: &Paragraph, pos: usize) -> usize {
 /// 인라인 컨트롤이나 글자 앞에서 멈춘다. 컨트롤 하나는 8 코드 유닛이다.
 pub(crate) fn leading_anchor_pos(para: &Paragraph) -> usize {
     let mut skipped = 0usize;
+    let mut anchored_count = 0usize;
     for ctrl in &para.controls {
         let anchored = match ctrl {
             Control::Table(t) => !t.common.treat_as_char,
@@ -1644,6 +1645,27 @@ pub(crate) fn leading_anchor_pos(para: &Paragraph) -> usize {
             break;
         }
         skipped += 8;
+        anchored_count += 1;
+    }
+    // 컨트롤 개수 × 8 은 **개체들이 스트림에서 맞붙어 있을 때만** 맞는다. 자리차지 개체가
+    // 여럿인 문단은 개체 사이에 **공백 글자가 한 칸씩** 있어(한글 실측: 앵커가 16·25·34 로
+    // 8 이 아니라 9 씩 벌어진다) 개수 셈이 그만큼 앞질러 간다. `mix-shape-01` 에서 이 함수는
+    // 40 을 줬고 한글은 24 였다 — 캐럿이 문단 끝으로 밀려 `SelectCtrlFront` 가 아무 개체도
+    // 못 골랐다.
+    //
+    // 스트림에 글자가 있으면 그 **첫 글자 자리**가 답이다. 개수 셈이 그보다 앞서 나갈 때만
+    // 갈아끼운다 — 맞붙어 있는 문단에서는 두 값이 같아 아무것도 안 바뀐다.
+    //
+    // **0 은 안 믿는다.** 앞머리에 컨트롤이 있는데 첫 글자가 스트림 0 이라는 것은 대응표가
+    // 컨트롤을 안 담았다는 뜻이다 — 구역 나누기로 **새로 생긴 문단**이 그렇다(`char_offsets`
+    // 가 0 부터 다시 매겨진다). 그 문단에서는 개수 셈이 맞는 답이라 그대로 둔다.
+    if anchored_count > 0 {
+        if let Some(first_char) = para.char_offsets.first() {
+            let first_char = *first_char as usize;
+            if first_char > 0 && first_char < skipped {
+                skipped = first_char;
+            }
+        }
     }
     skipped.min((para.char_count as usize).saturating_sub(1))
 }
