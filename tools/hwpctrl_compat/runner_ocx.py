@@ -262,7 +262,8 @@ def run(scenario: dict, out_dir: Path, expect_version: str | None = None) -> dic
                 return result
 
         # 경로는 **플랫폼마다 다른 값**이라 시나리오가 이름으로 적고 러너가 푼다. 이 러너는
-        # Windows 에서만 도니 언제나 `win` 갈래다 — 오라클이 지금까지 쓴 경로 그대로다.
+        # Windows 에서만 도니 언제나 `win` 갈래다. `{repo}`·`{out}` 토큰은 현재 worktree와
+        # 격리 output으로 풀어 다른 Oracle host에서도 같은 fixture를 쓴다.
         path_key = platform_path_key(platform.system())
         for idx, call in enumerate(scenario.get("calls", [])):
             name, args = call[0], (call[1] if len(call) > 1 else [])

@@ -22,10 +22,10 @@
 
 ```jsonc
 {
-  "paths": {                       // 이름 → 플랫폼별 실제 경로
+  "paths": {                         // 이름 → 플랫폼별 실제 경로
     "src": {
-      "win":   "C:\\Users\\planet\\rhwp\\samples\\s1.jpg",  // 오라클이 실제로 쓴 경로 그대로
-      "posix": "{repo}/samples/s1.jpg"                      // {repo}·{out} 을 넓힌다
+      "win":   "{repo}\\samples\\s1.jpg", // 현재 worktree의 fixture
+      "posix": "{repo}/samples/s1.jpg"   // {repo}·{out} 토큰을 해석한다
     }
   },
   "calls": [

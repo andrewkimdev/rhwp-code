@@ -7,7 +7,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
-from pathlib import Path, PurePosixPath
+from pathlib import Path, PurePosixPath, PureWindowsPath
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
@@ -137,24 +137,36 @@ class HarnessContractTests(unittest.TestCase):
     def test_scenario_paths_resolve_per_platform(self) -> None:
         """Windows 오라클 경로와 Linux 경로를 갈라 놓는다 — 하나로 쓰면 Linux 에서 뜻이 달라진다."""
         definition = {
-            "paths": {"pic": {"win": "C:\\rhwp\\s1.jpg", "posix": "{repo}/samples/s1.jpg"},
-                      "out": {"win": "C:\\Temp\\a.bmp", "posix": "{out}/a.bmp"}}
+            "paths": {"pic": {"win": "{repo}\\samples\\s1.jpg", "posix": "{repo}/samples/s1.jpg"},
+                      "out": {"win": "{out}\\a.bmp", "posix": "{out}/a.bmp"}}
         }
         args = [{"$path": "pic"}, {"$path": "out"}, 0]
-        # POSIX 가지를 **Windows 에서 돌려도** 같은 값이 나와야 한다. `Path("/repo")` 는
-        # Windows 에서 `\repo` 로 찍혀 이 대조가 실행 기계에 따라 갈렸다 — 시나리오가 기계를
-        # 가정하면 안 된다는 이 테스트가 정작 기계를 가정하고 있었다.
-        repo, out_dir = PurePosixPath("/repo"), PurePosixPath("/out")
+        # 각 OS 갈래는 그 OS의 root type으로 넓힌다. contributor 개인 홈 경로를 적으면 다른
+        # Windows Oracle host에서 gate가 재현되지 않는다.
+        win_repo, win_out = PureWindowsPath(r"C:\repo"), PureWindowsPath(r"C:\out")
         self.assertEqual(
-            resolve_args(args, definition, platform_path_key("Windows"), repo, out_dir),
-            ["C:\\rhwp\\s1.jpg", "C:\\Temp\\a.bmp", 0],
+            resolve_args(args, definition, platform_path_key("Windows"), win_repo, win_out),
+            [r"C:\repo\samples\s1.jpg", r"C:\out\a.bmp", 0],
         )
+        repo, out_dir = PurePosixPath("/repo"), PurePosixPath("/out")
         self.assertEqual(
             resolve_args(args, definition, platform_path_key("Linux"), repo, out_dir),
             ["/repo/samples/s1.jpg", "/out/a.bmp", 0],
         )
         with self.assertRaises(ValueError):
             resolve_args([{"$path": "없음"}], definition, "posix", repo, out_dir)
+
+    def test_tracked_scenario_paths_do_not_depend_on_a_contributor_home(self) -> None:
+        for path in sorted((HERE / "scenarios").glob("*.json")):
+            definition = json.loads(path.read_text(encoding="utf-8"))
+            for name, variants in (definition.get("paths") or {}).items():
+                for platform_name in ("win", "posix"):
+                    value = variants[platform_name]
+                    self.assertTrue(
+                        "{repo}" in value or "{out}" in value,
+                        f"{path.name}:{name}:{platform_name} must use a portable root token",
+                    )
+                    self.assertNotIn("C:\\Users\\", value, f"{path.name}:{name}:{platform_name}")
 
     def test_both_sides_dying_is_not_a_match_unless_declared(self) -> None:
         """양쪽이 죽었다는 것만으로는 일치가 아니다 — `MissingApi` 를 막은 것과 같은 이유다."""

@@ -7,7 +7,7 @@
   "open": "samples/para-001.hwp",
   "paths": {
     "picture": {
-      "win": "C:\\Users\\planet\\rhwp\\samples\\s1.jpg",
+      "win": "{repo}\\samples\\s1.jpg",
       "posix": "{repo}/samples/s1.jpg"
     }
   },
