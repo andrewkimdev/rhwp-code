@@ -922,6 +922,8 @@ jobs:
           if [[ "${GITHUB_EVENT_NAME}" == "pull_request" ]] || [[ "${GITHUB_EVENT_NAME}" == "push" && "${GITHUB_REF}" == "refs/heads/devel" ]]; then
             echo "profile=release-test event=${GITHUB_EVENT_NAME} ref=${GITHUB_REF}"
             cargo test --profile release-test --features native-skia skia --lib --verbose
+            cargo test --profile release-test --features native-skia --test cli_exit_codes_native --verbose
+            cargo test --profile release-test --features native-skia --test issue_1144_native --verbose
             cargo test --profile release-test --features native-skia --test issue_2225_missing_picture_placeholder --verbose
             cargo test --profile release-test --features native-skia --test render_p37_direct_pdf_export --verbose
             cargo test --profile release-test --features native-skia --test issue_2083_hide_fill_page_background --verbose
@@ -930,6 +932,8 @@ jobs:
           else
             echo "profile=release event=${GITHUB_EVENT_NAME} ref=${GITHUB_REF}"
             cargo test --release --features native-skia skia --lib --verbose
+            cargo test --release --features native-skia --test cli_exit_codes_native --verbose
+            cargo test --release --features native-skia --test issue_1144_native --verbose
             cargo test --release --features native-skia --test issue_2225_missing_picture_placeholder --verbose
             cargo test --release --features native-skia --test render_p37_direct_pdf_export --verbose
             cargo test --release --features native-skia --test issue_2083_hide_fill_page_background --verbose
