@@ -5,6 +5,15 @@
 기대로 시간을 태우지 않는다.
 
     python tools/hwpctrl_compat/classify_remaining.py
+
+## 이 도구는 **입력이 있어야** 확정값을 낸다
+
+갈래 중 "안 끝남"·"대화상자" 는 Windows 에서 액션을 하나씩 걸어 본 **스윕 산출물**로만
+가린다. 그 파일들은 `output/` 아래에 생기고 Git 에 담기지 않는다. 없으면 그 항목들이 조용히
+"아직 안 잼" 으로 새어 **상한이 부풀어 오른다** — 같은 head 에서 계획서·README 는 312 인데
+스윕 없는 기계에서 돌리면 366 이 나왔다(#4274 리뷰의 세 번째 지적).
+
+그래서 입력을 먼저 점검하고, 없으면 그 숫자를 **확정값이라고 부르지 않는다.**
 """
 
 from __future__ import annotations
@@ -167,17 +176,27 @@ DATA_MISSING = {
 }
 
 
+HANG_DIALOGS = REPO / "output" / "poc" / "hwpctrl" / "hang_dialogs.tsv"
+
+
+def missing_inputs() -> list[str]:
+    """갈래를 가르는 데 필요한데 지금 없는 산출물. 있으면 빈 목록이다."""
+    absent = [str(path.relative_to(REPO)) for path in SWEEPS if not path.exists()]
+    if not HANG_DIALOGS.exists():
+        absent.append(str(HANG_DIALOGS.relative_to(REPO)))
+    return absent
+
+
 def dialog_titles() -> dict[str, str]:
     """대화상자를 띄우는 액션과 그 **제목** — 창을 열거해 받은 실측이다.
 
     창 클래스로는 문서 창과 대화상자를 못 가른다(둘 다 `HwndWrapper[Hwp.exe;;<GUID>]`).
     제목으로 갈라야 한다.
     """
-    path = REPO / "output" / "poc" / "hwpctrl" / "hang_dialogs.tsv"
-    if not path.exists():
+    if not HANG_DIALOGS.exists():
         return {}
     out: dict[str, str] = {}
-    for line in io.open(path, encoding="utf-8").read().splitlines()[1:]:
+    for line in io.open(HANG_DIALOGS, encoding="utf-8").read().splitlines()[1:]:
         parts = line.split("\t")
         if len(parts) >= 3 and parts[2].strip():
             out[parts[0]] = parts[2].split(" | ")[0]
@@ -288,6 +307,16 @@ def main() -> int:
             for j in range(0, len(names), 3):
                 print("      " + "  ".join(f"{n:<34}" for n in names[j : j + 3]))
     reachable = len(items) - blocked
+    absent = missing_inputs()
+    if absent:
+        # 스윕이 없으면 "안 끝남"·"대화상자" 를 못 가려 그 항목들이 "아직 안 잼" 으로 샌다.
+        # 그 상태로 나온 수는 상한이 아니라 **상한의 위쪽 한계**다. 확정값이라고 부르지 않는다.
+        print("\n입력 없음 — 아래 수는 확정값이 아니다. Windows 에서 스윕을 돌린 뒤 다시 세라.")
+        for path in absent:
+            print(f"  없음: {path}")
+        print(f"막힌 것 {blocked} 이상 → 상한은 **{reachable}/{len(items)} 이하**(확정 아님)")
+        print(f"지금 {len(done)}")
+        return 1
     print(f"\n구조적으로 막힌 것 {blocked} → **도달 가능한 상한 {reachable}/{len(items)}**")
     print(f"지금 {len(done)} — 상한까지 {reachable - len(done)} 남음")
     return 0
