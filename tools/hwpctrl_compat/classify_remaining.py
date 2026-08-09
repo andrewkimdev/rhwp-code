@@ -106,7 +106,9 @@ NO_WINDOW = {
     "Action.TableDistributeCellWidth", "Action.TableDistributeCellHeight",
     # 캐럿이 누름틀 안인데도 안 지워진다.
     "Action.DeleteField",
-    # 쪽 배경 그림은 절대 경로를 줘도 **false** 다. 성공하는 길을 못 찾았다.
+    # 쪽 배경 그림 — **성공하는 길을 못 찾았다**(계획서 §4.72). 인자는 둘 이상이어야 하는데
+    # (하나면 `필수 매개 변수`), 열넷 가지 인자 꼴·칸 블록·표 고름·jpg/png, 그리고 **한글이
+    # 스스로 만든 bmp** 까지 전부 `false` 다. 없는 파일도 같은 `false` 라 실패 이유조차 안 준다.
     "HwpCtrl.method.InsertBackgroundPicture",
     # 액션 바꿔치기 — `true` 를 주는데 바꾼 대로 안 돈다(`MoveDocEnd` 를 `MoveDocBegin` 으로
     # 바꿔도 문서 끝으로 간다). 반환 말고는 볼 것이 없다.
