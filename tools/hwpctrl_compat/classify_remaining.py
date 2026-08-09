@@ -84,6 +84,10 @@ NO_WINDOW = {
     # 폭·높이·자리도 안 변한다(뒤집기는 크기를 안 바꾸니 당연하다).
     "Action.ShapeObjHorzFlip", "Action.ShapeObjVertFlip",
     "Action.ShapeObjHorzFlipOrgState", "Action.ShapeObjVertFlipOrgState",
+    # 칸 블록(모드 3)을 잡고 걸어도 리스트가 그대로다 — 지워진 자취가 어디에도 안 남는다.
+    "Action.TableDeleteCell",
+    # 걸면 **한글이 죽는다**(COM 서버가 사라져 그 뒤 호출이 전부 RPC 오류). 정답지를 못 만든다.
+    "Action.TableStringToTable",
     # 캐럿이 누름틀 안인데도 안 지워진다.
     "Action.DeleteField",
 }

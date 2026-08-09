@@ -35,6 +35,8 @@ FORBIDDEN = {
     "FindDlg", "ReplaceDlg", "ShapeObjDialog", "TablePropertyDialog",
     "PictureInsertDialog", "Print", "PageSetup", "HeaderFooter", "DocSummaryInfo",
     "SpellingCheck", "Hyperlink", "InsertHyperlink", "ModifyHyperlink",
+    # 걸면 한글이 죽는다(COM 서버가 사라진다) — 스윕이 그 뒤 이름을 전부 잃는다.
+    "TableStringToTable",
 }
 
 
