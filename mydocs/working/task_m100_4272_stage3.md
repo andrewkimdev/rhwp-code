@@ -5,7 +5,7 @@
 - 기준 commit: `a7be7c0ac` (Stage 2 구현)
 - 작업 브랜치: `fix/issue-4272-nested-cell-text-selection`
 - 작성일: 2026-08-09 KST
-- 상태: 구현·전체 PR 검증·후속 결함 분리 완료, 원격 push 및 Open PR 생성 승인됨
+- 상태: 구현·전체 PR 검증·후속 결함 분리 완료, PR #4276 self-review 기록 준비
 
 ## 목표
 
@@ -154,7 +154,9 @@ cellzone 유효 BorderFill 누락, 셀 문단 ParaShape 기본값 덮어쓰기�
 
 ## 다음 승인 게이트
 
-#4272의 로컬 구현 후보와 전체 검증은 준비됐고, 작업지시자가 원격 push와 Open PR 생성을 승인했다.
-현재 정정 commit은 아직 `devel`에 통합되지 않았으므로 #4272 GitHub 이슈는 닫지 않는다. PR 생성
-뒤 reviewer 지정·검토 기록 게시와 merge는 프로젝트 절차의 다음 승인 게이트로 분리하고, merge 및
-`devel` 포함 확인 뒤 승인받아 이슈를 close한다.
+#4272의 code candidate `7da15f346`은 원격 source branch에 push했고
+[PR #4276](https://github.com/edwardkim/rhwp/pull/4276)을 `devel` 대상 Open PR로 생성했다.
+작업지시자 승인에 따라 maintainer self-review 기록과 대표 시각 asset을 같은 PR의 review-only 후속
+commit으로 반영한다. 현재 정정은 아직 `devel`에 통합되지 않았으므로 #4272 GitHub 이슈는 닫지 않는다.
+최신 head의 CI와 mergeability 확인, self-review `COMMENT` 게시와 merge는 별도 승인 게이트로 유지하고,
+merge 및 `devel` 포함 확인 뒤 승인받아 이슈를 close한다.
