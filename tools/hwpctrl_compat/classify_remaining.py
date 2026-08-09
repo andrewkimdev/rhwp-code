@@ -187,10 +187,16 @@ DIALOG_TITLES = dialog_titles()
 
 
 def sweep_kinds() -> dict[str, str]:
-    # 스윕이 아예 안 건 것들 — 이미 "안 끝남"으로 확인해 금지 목록에 넣은 이름이다.
-    from sweep_actions import FORBIDDEN
+    """스윕이 낸 갈래. **안 건 것을 `HANG` 으로 채우지 않는다.**
 
-    kinds: dict[str, str] = {name: "HANG" for name in FORBIDDEN}
+    예전에는 금지 목록의 이름을 전부 `HANG` 으로 채웠는데, 그 목록에는 재 보지도 않고 짐작으로
+    넣은 이름이 섞여 있었다. 그래서 39 개가 "안 끝남"으로 세어졌고 하나씩 걸어 보니 전부
+    멀쩡히 끝났다(계획서 §4.70). 이제 **실측으로 확인된 것만** 그렇게 센다.
+    """
+    from sweep_actions import CONFIRMED_HANG, KILLS_HANGUL
+
+    kinds: dict[str, str] = {name: "HANG" for name in CONFIRMED_HANG}
+    kinds.update({name: "KILLS" for name in KILLS_HANGUL})
     for path in SWEEPS:
         if not path.exists():
             continue

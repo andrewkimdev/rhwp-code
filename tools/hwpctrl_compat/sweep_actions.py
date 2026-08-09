@@ -28,16 +28,24 @@ REPO = HERE.parents[1]
 LEDGER = REPO / "npm" / "hwpctrl-ocx" / "spec" / "api_ledger.json"
 SAMPLE = "samples/para-001.hwp"
 
-# 이미 "안 끝남"으로 확인된 것들 — 다시 걸지 않는다(계획서 §4.32).
-FORBIDDEN = {
-    "PutBullet", "PutParaNumber", "PutOutlineNumber", "ParaNumberBullet",
-    "CharShapeHeight", "CharShapeWidth", "CharShapeSpacing",
-    "FindDlg", "ReplaceDlg", "ShapeObjDialog", "TablePropertyDialog",
-    "PictureInsertDialog", "Print", "PageSetup", "HeaderFooter", "DocSummaryInfo",
-    "SpellingCheck", "Hyperlink", "InsertHyperlink", "ModifyHyperlink",
-    # 걸면 한글이 죽는다(COM 서버가 사라진다) — 스윕이 그 뒤 이름을 전부 잃는다.
+# **한글을 죽이는** 이름들 — 걸면 COM 서버가 사라져 그 뒤 이름을 전부 잃는다. 실측으로
+# 확인된 것만 넣는다.
+#
+# 예전에는 여기에 "이름을 보니 대화상자겠지" 싶은 것들도 함께 넣어 두었고, 분류기가 이 목록을
+# **재 보지도 않고 `HANG` 으로** 채웠다. 그래서 `FindDlg`·`Close`·`SpellingCheck` 따위 39 개가
+# "안 끝남"으로 세어졌는데, 하나씩 걸어 보니 **전부 멀쩡히 끝난다**(계획서 §4.70). 짐작을
+# 목록에 넣으면 그 짐작이 지도가 된다.
+KILLS_HANGUL = {
     "TableStringToTable", "CellBorder", "CellBorderFill",
 }
+
+# 재 보고 "시한 안에 안 끝난다"가 확인된 것들.
+CONFIRMED_HANG = {
+    "PutBullet", "PutParaNumber", "PutOutlineNumber", "ParaNumberBullet",
+    "CharShapeHeight", "CharShapeWidth", "CharShapeSpacing",
+}
+
+FORBIDDEN = KILLS_HANGUL | CONFIRMED_HANG
 
 
 def remaining_actions() -> list[str]:
