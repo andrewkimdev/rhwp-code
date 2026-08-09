@@ -1659,7 +1659,19 @@ export class HwpCtrl {
     try {
       const raw = this.#doc.getCharIndexAtStreamPos?.(list, para, pos);
       const charOffset = parseJson(raw ?? '', { charIndex: 0 })?.charIndex ?? 0;
-      placedAt = this.#insertedLocation(this.#doc.createTable(0, para, charOffset, 5, 5), para);
+      // **글자처럼 넣어야 한다.** 보통 경로(`createTable`)는 표를 제 문단으로 떼어 내는데,
+      // 한글은 캐럿이 있던 문단에 그대로 앉힌다 — 같은 문단에 둘을 넣으면 오라클은 둘 다
+      // 문단 0 이라고 답한다(우리는 1·3 이었다). `createTableEx` 의 `treatAsChar` 가 문단을
+      // 안 쪼개는 인라인 경로다.
+      const opts = JSON.stringify({
+        sectionIdx: 0,
+        paraIdx: para,
+        charOffset,
+        rowCount: 5,
+        colCount: 5,
+        treatAsChar: true,
+      });
+      placedAt = this.#insertedLocation(this.#doc.createTableEx(opts), para);
     } catch (e) {
       console.warn('[hwpctrl] InsertCtrl 실패:', e);
       return null;

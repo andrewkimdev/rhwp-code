@@ -7,7 +7,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
@@ -141,7 +141,10 @@ class HarnessContractTests(unittest.TestCase):
                       "out": {"win": "C:\\Temp\\a.bmp", "posix": "{out}/a.bmp"}}
         }
         args = [{"$path": "pic"}, {"$path": "out"}, 0]
-        repo, out_dir = Path("/repo"), Path("/out")
+        # POSIX 가지를 **Windows 에서 돌려도** 같은 값이 나와야 한다. `Path("/repo")` 는
+        # Windows 에서 `\repo` 로 찍혀 이 대조가 실행 기계에 따라 갈렸다 — 시나리오가 기계를
+        # 가정하면 안 된다는 이 테스트가 정작 기계를 가정하고 있었다.
+        repo, out_dir = PurePosixPath("/repo"), PurePosixPath("/out")
         self.assertEqual(
             resolve_args(args, definition, platform_path_key("Windows"), repo, out_dir),
             ["C:\\rhwp\\s1.jpg", "C:\\Temp\\a.bmp", 0],
@@ -239,6 +242,12 @@ class HarnessContractTests(unittest.TestCase):
         actions = json.loads((spec_dir / "actions.json").read_text(encoding="utf-8"))["actions"]
         self.assertEqual(verify(api, sets, actions), [])
 
+
+if __name__ == "__main__":
+    # Windows 콘솔은 기본이 cp949 라, 검사 대상이 찍는 `—` 하나에 테스트가 통째로 죽었다
+    # (실패가 아니라 UnicodeEncodeError 였다). 저장소의 다른 스크립트와 같은 자리를 둔다.
+    sys.stdout.reconfigure(encoding="utf-8")
+    sys.stderr.reconfigure(encoding="utf-8")
 
 if __name__ == "__main__":
     unittest.main()
