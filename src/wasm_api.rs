@@ -5540,6 +5540,18 @@ impl HwpDocument {
             .map_err(|e| e.into())
     }
 
+    /// 스트림 자리를 글자 번호로 옮긴다 — 글자 번호를 받는 코어 API 에 넘길 때 쓴다.
+    #[wasm_bindgen(js_name = getCharIndexAtStreamPos)]
+    pub fn char_index_at_api(
+        &self,
+        list_id: u32,
+        para_in_list: u32,
+        pos: u32,
+    ) -> Result<String, JsValue> {
+        self.char_index_at(list_id, para_in_list as usize, pos as usize)
+            .map_err(|e| e.into())
+    }
+
     /// 쪽마다 캐럿이 설 수 있는 첫 자리 — 웹한글컨트롤 `Run("MovePage*")` 용.
     #[wasm_bindgen(js_name = getPageCaretStarts)]
     pub fn page_caret_starts_api(&self) -> Result<String, JsValue> {

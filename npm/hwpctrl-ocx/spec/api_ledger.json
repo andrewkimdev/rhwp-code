@@ -4,21 +4,21 @@
   "oracleVersion": "한글2022 (설치본 COM)",
   "summary": {
     "total": 484,
-    "done": 299,
+    "done": 303,
     "byStatus": {
-      "verified": 297,
-      "unimplemented": 185,
+      "verified": 301,
+      "unimplemented": 181,
       "substituted": 2
     },
     "byUnit": {
       "property": {
-        "verified": 25,
-        "unimplemented": 4,
-        "substituted": 2
+        "verified": 27,
+        "substituted": 2,
+        "unimplemented": 2
       },
       "method": {
-        "verified": 51,
-        "unimplemented": 37
+        "verified": 53,
+        "unimplemented": 35
       },
       "event": {
         "unimplemented": 3
@@ -765,14 +765,16 @@
       "name": "EngineProperties",
       "arity": 0,
       "section": "8.2.5",
-      "status": "unimplemented",
+      "status": "verified",
       "notes": "",
       "legacyHwpctl": false,
       "specArityAmbiguous": false,
       "oracle": {
-        "scenarios": [],
+        "scenarios": [
+          "p8-props"
+        ],
         "lastRun": null,
-        "diff": null
+        "diff": 0
       }
     },
     {
@@ -958,14 +960,16 @@
       "name": "ViewProperties",
       "arity": 0,
       "section": "8.2.15",
-      "status": "unimplemented",
+      "status": "verified",
       "notes": "",
       "legacyHwpctl": false,
       "specArityAmbiguous": false,
       "oracle": {
-        "scenarios": [],
+        "scenarios": [
+          "p8-props"
+        ],
         "lastRun": null,
-        "diff": null
+        "diff": 0
       }
     },
     {
@@ -1469,14 +1473,16 @@
       "name": "InsertCtrl",
       "arity": 2,
       "section": "8.3.24",
-      "status": "unimplemented",
+      "status": "verified",
       "notes": "",
       "legacyHwpctl": true,
       "specArityAmbiguous": false,
       "oracle": {
-        "scenarios": [],
+        "scenarios": [
+          "p8-insertctrl"
+        ],
         "lastRun": null,
-        "diff": null
+        "diff": 0
       }
     },
     {
@@ -1870,14 +1876,16 @@
       "name": "SetTextFile",
       "arity": 5,
       "section": "8.3.45",
-      "status": "unimplemented",
+      "status": "verified",
       "notes": "",
       "legacyHwpctl": false,
       "specArityAmbiguous": true,
       "oracle": {
-        "scenarios": [],
+        "scenarios": [
+          "p8-settextfile"
+        ],
         "lastRun": null,
-        "diff": null
+        "diff": 0
       }
     },
     {

@@ -572,7 +572,10 @@ const CTRL_ID_BY_KIND = { shape: 'gso', picture: 'gso', equation: 'eqed', table:
  * 같은 개체는 11(오라클 실측). `UserDesc` 는 사람이 읽는 이름이고 그리기는 갈래마다 다르다
  * ("사각형"·"타원").
  */
-class CtrlCode {
+// 규격이 부르는 이름은 `CtrlCode` 인데 컨트롤이 내보이는 **형 이름**은 `IDHwpCtrlCode` 다
+// (실측: `InsertCtrl` 이 돌려주는 객체의 형이 그렇다). 형 이름도 관측되는 표면이라 그쪽에
+// 맞추고, 규격 이름은 아래에서 별칭으로 남긴다.
+class IDHwpCtrlCode {
   #at;
   #index;
   #chain;
@@ -704,10 +707,20 @@ function ocxFieldOrder(fields) {
 export class ParameterSet {
   #setId;
   #items;
+  #countOverride;
 
-  constructor(setId, items = {}) {
+  /**
+   * `countOverride` 는 **이름을 못 밝힌 항목이 있는 셋**에만 쓴다.
+   *
+   * `ViewProperties`·`EngineProperties` 가 그렇다 — 한글은 `Count` 12 를 주는데 이름을 물어
+   * 값이 나온 것은 셋(`ZoomType`·`ZoomRatio`·`OptionFlag`)뿐이다. 후보 이름 70여 개를 훑어도
+   * 더 안 나왔고, 이 컨트롤에는 항목을 **열거하는 길이 없다**. 아는 것만 담고 개수는 실측값을
+   * 그대로 주는 것이, 모르는 이름을 지어내 채우는 것보다 정직하다.
+   */
+  constructor(setId, items = {}, countOverride = null) {
     this.#setId = String(setId ?? '');
     this.#items = { ...items };
+    this.#countOverride = countOverride;
   }
 
   /** 규격 §9 — 이 셋의 ID. */
@@ -717,7 +730,7 @@ export class ParameterSet {
 
   /** 규격 §9 — 담긴 항목 수. */
   get Count() {
-    return Object.keys(this.#items).length;
+    return this.#countOverride ?? Object.keys(this.#items).length;
   }
 
   /**
@@ -1098,6 +1111,36 @@ export class HwpCtrl {
    *
    * `option` 이 `saveblock` 이면 블록만 가져온다 — 블록이 없으면 한글은 아무것도 안 준다.
    */
+  /**
+   * 규격 §8.3.55 — 글을 문서에 **밀어 넣는다**. 반환은 **1** 이다(성공 여부가 아니라 1).
+   *
+   * 이름과 달리 캐럿 자리에 넣지 않는다 — **문서 맨 앞**에 붙인다(실측: 캐럿을 20 에 두고
+   * `가나다` 를 넣으면 본문이 `가나다오호라…` 가 되고, 다시 30 에서 `라마` 를 넣으면
+   * `라마가나다오호라…` 가 된다). 캐럿은 그 자리를 지키므로 **넣은 글자 수만큼 밀린다**
+   * (20 → 23, 30 → 32).
+   */
+  SetTextFile(text, format, option) {
+    const body = String(text ?? '');
+    if (!body) return 1;
+    try {
+      // `insertText` 의 셋째 인자는 **글자 번호**다(스트림 자리가 아니다) — 맨 앞은 0 이다.
+      // 앞머리 자리차지 뒤 자리(16)를 넘기면 글 한가운데에 꽂힌다.
+      this.#doc.insertText(0, 0, 0, body);
+    } catch (e) {
+      console.warn('[hwpctrl] SetTextFile 실패:', e);
+      return 1;
+    }
+    this.#listModel = null;
+    this.#ctrls = null;
+    this.#modified = true;
+    // 캐럿은 제자리인데 앞에 글자가 들어와 그만큼 밀린다.
+    const grew = [...body].length;
+    if (this.#cursor.list === 0 && this.#cursor.para === 0) {
+      this.#cursor = { ...this.#cursor, pos: this.#cursor.pos + grew };
+    }
+    return 1;
+  }
+
   GetTextFile(format, option) {
     if (String(option ?? '').includes('saveblock') && !this.#selection) return null;
     // 이어 붙이기와 CP949 밖 글자 escape 는 코어가 한다 — 인코딩 판정을 여기서 흉내 내면
@@ -1330,6 +1373,31 @@ export class HwpCtrl {
     return new ParameterSet('CharShape', parseJson(raw ?? '', {}) ?? {});
   }
 
+  /**
+   * 규격 §8.2 — 보기 상태. **이 층에는 창이 없어 고정이다.**
+   *
+   * 실측으로 이름이 밝혀진 항목은 셋뿐이다(`ZoomType` 5 · `ZoomRatio` 100 · `OptionFlag` 8192).
+   * `Count` 는 한글이 주는 12 를 그대로 준다 — 나머지 아홉은 이름을 못 밝혔고 열거할 길도 없다.
+   * 값은 창 없는 컨트롤의 기본 상태라 문서와 무관하다.
+   */
+  get ViewProperties() {
+    return new ParameterSet(
+      'ViewProperties',
+      { ZoomType: 5, ZoomRatio: 100, OptionFlag: 8192 },
+      12,
+    );
+  }
+
+  /**
+   * 규격 §8.2 — 엔진 상태. **항목 이름을 하나도 못 밝혔다.**
+   *
+   * `SetID` 와 `Count`(12)만 실측이라 그 둘만 답한다. 후보 이름 30여 개를 훑어도 값이 나온 것이
+   * 없다 — 지어내 채우지 않는다.
+   */
+  get EngineProperties() {
+    return new ParameterSet('EngineProperties', {}, 12);
+  }
+
   /** 규격 §8.2.11 — 캐럿이 놓인 문단의 문단 모양. */
   get ParaShape() {
     const raw = this.#doc?.getParaShapeSet?.(this.#cursor.list, this.#cursor.para);
@@ -1419,6 +1487,38 @@ export class HwpCtrl {
     return this.#ctrlChain()[0] ?? null;
   }
 
+  /**
+   * 규격 §8.3.24 — 캐럿 자리에 컨트롤을 끼운다. 반환은 **끼운 컨트롤**이다.
+   *
+   * 지금 다루는 것은 표(`tbl`)뿐이다. 빈 `Table` 셋을 주면 한글은 **5행 5열**을 넣는다(실측:
+   * 칸 리스트가 2~26 으로 25 개고, `TableColEnd` 가 6 · `TableColPageDown` 이 22 라 5×5 다).
+   * 캐럿은 컨트롤 한 칸만큼(**8**) 밀린다.
+   *
+   * 표의 크기는 대조하지 않는다 — 한글의 기본 폭·높이(30610 × 6410)는 표 만들기 쪽 규칙이라
+   * 이 API 의 계약이 아니다.
+   */
+  InsertCtrl(ctrlId, paramSet) {
+    if (String(ctrlId ?? '') !== 'tbl') {
+      console.warn(`[hwpctrl] InsertCtrl("${ctrlId}")는 아직 다루지 않는다`);
+      return null;
+    }
+    const { list, para, pos } = this.#cursor;
+    if (list !== 0) return null;
+    try {
+      const raw = this.#doc.getCharIndexAtStreamPos?.(list, para, pos);
+      const charOffset = parseJson(raw ?? '', { charIndex: 0 })?.charIndex ?? 0;
+      this.#doc.createTable(0, para, charOffset, 5, 5);
+    } catch (e) {
+      console.warn('[hwpctrl] InsertCtrl 실패:', e);
+      return null;
+    }
+    this.#listModel = null;
+    this.#ctrls = null;
+    this.#modified = true;
+    this.#cursor = { list, para, pos: pos + CONTROL_CODE_UNITS };
+    return this.#ctrlChain().find((c) => c.CtrlID === 'tbl') ?? null;
+  }
+
   /** 규격 §8.4 — 문서가 담은 마지막 컨트롤. */
   get LastCtrl() {
     const chain = this.#ctrlChain();
@@ -1500,7 +1600,7 @@ export class HwpCtrl {
     if (this.#ctrls) return this.#ctrls;
     const raw = parseJson(this.#doc?.getControls?.() ?? '', null);
     const items = Array.isArray(raw) ? raw : [];
-    this.#ctrls = items.map((it, i) => new CtrlCode(it, i, () => this.#ctrls));
+    this.#ctrls = items.map((it, i) => new IDHwpCtrlCode(it, i, () => this.#ctrls));
     return this.#ctrls;
   }
 

@@ -1160,6 +1160,23 @@ impl DocumentCore {
         Ok(format!("[{}]", out.join(",")))
     }
 
+    /// 스트림 자리를 **글자 번호**로 옮긴다 — 글자 번호를 받는 코어 API(`createTable` 따위)에
+    /// 커서 좌표를 넘길 때 쓴다. 둘을 헷갈리면 글 한가운데에 꽂힌다(`SetTextFile` 에서 겪었다).
+    pub fn char_index_at(
+        &self,
+        list_id: u32,
+        para_in_list: usize,
+        pos: usize,
+    ) -> Result<String, HwpError> {
+        let Some(para) = self.cursor_paragraph_ref(list_id, para_in_list) else {
+            return Ok("{\"charIndex\":0}".to_string());
+        };
+        Ok(format!(
+            "{{\"charIndex\":{}}}",
+            char_idx_at_stream_pos(para, pos)
+        ))
+    }
+
     /// 표의 어떤 **행에서 첫 칸**의 리스트 번호. 쪽을 넘어 이어지는 표의 시작 칸을 짚는다.
     fn first_cell_list_of_row(
         &self,

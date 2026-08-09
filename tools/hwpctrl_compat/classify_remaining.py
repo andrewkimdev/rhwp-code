@@ -32,6 +32,10 @@ ABSENT = {
     "HwpCtrl.method.GetTextBySet", "HwpCtrl.method.SaveDocument",
     "HwpCtrl.method.MoveToFieldEx", "HwpCtrl.method.OpenDocument",
     "ParameterSet.method.GetInterSection", "ParameterSet.DrawLayout",
+    # 이벤트 계열과 대화상자 띄우기 — 전부 `AttributeError`(계획서 §4.65).
+    "HwpCtrl.method.AddEventListener", "HwpCtrl.event.OnMouseLButtonDown",
+    "HwpCtrl.event.OnMouseLButtonUp", "HwpCtrl.event.OnScroll",
+    "Action.method.PopupDialog", "HwpCtrl.method.InsertDocument",
 }
 
 # 반환값 말고는 관측할 것이 없는 UI 계열.
@@ -89,6 +93,16 @@ NO_WINDOW = {
     "Action.TableDistributeCellWidth", "Action.TableDistributeCellHeight",
     # 캐럿이 누름틀 안인데도 안 지워진다.
     "Action.DeleteField",
+    # 그림 넣기 — 멀쩡한 파일을 줘도 아무 일도 안 한다(`InsertPicture` 는 null, 사슬도 그대로).
+    # 쪽 배경 그림은 멀쩡한 파일에도 **false** 다. 성공하는 길을 못 찾았다.
+    "HwpCtrl.method.InsertPicture", "HwpCtrl.method.InsertBackgroundPicture",
+    # 액션 바꿔치기 — `true` 를 주는데 바꾼 대로 안 돈다(`MoveDocEnd` 를 `MoveDocBegin` 으로
+    # 바꿔도 문서 끝으로 간다). 반환 말고는 볼 것이 없다.
+    "HwpCtrl.method.ReplaceAction",
+    # 개요 문자열 — 문서 셋에서 전부 빈 문자열이라 양성 사례를 못 찾았다.
+    "HwpCtrl.method.GetHeadingString",
+    # 캐럿 자리에 글을 넣는다는데 문자열도 셋도 조용히 아무 일도 안 한다.
+    "HwpCtrl.method.Insert",
 }
 
 # 세로 이동 — **숨은 x 닻**이 막는다(계획서 §4.63). `SetPos` 는 세로 이동이 딛는 x 를 안 바꾸고
