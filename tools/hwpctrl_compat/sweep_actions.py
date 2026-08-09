@@ -87,9 +87,28 @@ CONTEXTS = {
         ],
         "labels": ["캐럿", "모드", "고른개체", "폭", "높이", "잠금", "다음컨트롤"],
     },
+    # 셀 안이되 **칸 블록은 없는** 상태. 블록이 있어야 먹는 액션은 여기서도 무동작으로 보이므로
+    # `cellblock` 으로 한 번 더 돌려야 한다 — 맥락을 하나만 두면 또 빈 곳을 재게 된다.
+    #
+    # ⚠ `CellShape` 는 표 크기 조절 뒤에 **한 박자 늦게** 답한다(§4.47). 그래서 `TableResize*`
+    # 는 여기서 `NOOP` 으로 나오는데 그건 무동작이라는 뜻이 **아니다** — 관측창이 늦은 것이다.
+    # 그 계열은 표 `Properties` 로 봐야 값이 움직이고, 그마저도 읽을 때마다 달라 판정 불가다.
     "cell": {
         "sample": "samples/21868765_별표2_보건소_분장사무.hwp",
         "setup": [["SetPos", [3, 0, 0]]],
+        "reads": [
+            ["GetPos", []],
+            ["SelectionMode", []],
+            ["CellShape.Item", ["Width"]],
+            ["CellShape.Item", ["Height"]],
+            ["CellShape.Item", ["VertAlign"]],
+            ["HeadCtrl.Next.Next.CtrlID", []],
+        ],
+        "labels": ["캐럿", "모드", "칸폭", "칸높이", "세로정렬", "표컨트롤"],
+    },
+    "cellblock": {
+        "sample": "samples/21868765_별표2_보건소_분장사무.hwp",
+        "setup": [["SetPos", [3, 0, 0]], ["Run", ["TableCellBlock"]]],
         "reads": [
             ["GetPos", []],
             ["SelectionMode", []],
