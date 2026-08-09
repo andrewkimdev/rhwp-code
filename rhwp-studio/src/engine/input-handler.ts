@@ -6,7 +6,7 @@ import { CaretRenderer } from './caret-renderer';
 import { FieldMarkerRenderer } from './field-marker-renderer';
 import { SelectionRenderer } from './selection-renderer';
 import { CommandHistory } from './history';
-import { DeleteSelectionCommand, ApplyCharFormatCommand, ApplyParaFormatCommand, SnapshotCommand, SubmodeSnapshotCommand, SetFormValueCommand, TextMutationEffectAccumulator, IMMEDIATE_TEXT_MUTATION_EFFECTS } from './command';
+import { DeleteSelectionCommand, ApplyCharFormatCommand, ApplyParaFormatCommand, SnapshotCommand, SubmodeSnapshotCommand, SetFormValueCommand, TextMutationEffectAccumulator, IMMEDIATE_TEXT_MUTATION_EFFECTS, cellAxisPath, cellParaIndexOf } from './command';
 import type { OperationDescriptor, ParaFormatTarget, RefreshPolicy, TextMutationEffects, EditCommand, EditContext, FormValueTarget } from './command';
 import { selectCellIndicesInRange, paraFormatTargetsForCellBlock } from './cell-block-format';
 import type { SelectedCellBlock } from './cell-block-format';
@@ -43,6 +43,7 @@ import { isPageLocalTextEditCommand, type PageLocalTextEditOptions } from './inp
 import type { NavigationKeyInput } from './navigation-keymap';
 import { isPointNearBoxBorder } from './table-border-hit';
 import { DeferredPaginationRunner } from './deferred-pagination-runner';
+import { tableObjectClipboardTarget } from './table-object-clipboard-target';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 const DRAG_SCROLL_EDGE_PX = 48;
@@ -67,6 +68,23 @@ const DOCUMENT_PAGINATION_POST_FIRST_STEP_DELAY_MS = 25;
  * flush(undo/redo/navigation/blur/저장·인쇄)로 마감한다.
  */
 const DOCUMENT_PAGINATION_IDLE_FLUSH_PAGE_LIMIT = 30;
+
+/**
+ * 두 위치가 같은 셀 컨테이너에 있는지 전체 경로로 판정한다(#4272).
+ * 마지막 cellParaIndex는 컨테이너 안의 현재 문단 축이므로 달라도 같은 셀이다.
+ */
+function isSameSelectionCellContainer(a: DocumentPosition, b: DocumentPosition): boolean {
+  if (a.sectionIndex !== b.sectionIndex || a.parentParaIndex !== b.parentParaIndex) return false;
+  const left = cellAxisPath(a);
+  const right = cellAxisPath(b);
+  if (left.length !== right.length || left.length === 0) return false;
+  return left.every((entry, index) => {
+    const other = right[index];
+    return entry.controlIndex === other.controlIndex
+      && entry.cellIndex === other.cellIndex
+      && (index + 1 === left.length || entry.cellParaIndex === other.cellParaIndex);
+  });
+}
 
 type FormatCopyState = {
   charProps: Partial<CharProperties>;
@@ -3159,10 +3177,7 @@ export class InputHandler {
       const startInCell = start.parentParaIndex !== undefined;
       const endInCell = end.parentParaIndex !== undefined;
 
-      if (startInCell && endInCell &&
-          start.parentParaIndex === end.parentParaIndex &&
-          start.controlIndex === end.controlIndex &&
-          start.cellIndex === end.cellIndex) {
+      if (startInCell && endInCell && isSameSelectionCellContainer(start, end)) {
         // 같은 셀 내부 선택
         const pageHints = start.cursorRect && end.cursorRect
           ? {
@@ -3170,12 +3185,26 @@ export class InputHandler {
             endPageHint: end.cursorRect.pageIndex,
           }
           : undefined;
-        rects = this.wasm.getSelectionRectsInCell(
-          start.sectionIndex, start.parentParaIndex!, start.controlIndex!, start.cellIndex!,
-          start.cellParaIndex!, start.charOffset,
-          end.cellParaIndex!, end.charOffset,
-          pageHints,
-        );
+        const cellPath = cellAxisPath(start);
+        if (cellPath.length > 1) {
+          rects = this.wasm.getSelectionRectsInCellByPath(
+            start.sectionIndex,
+            start.parentParaIndex!,
+            JSON.stringify(cellPath),
+            cellParaIndexOf(start),
+            start.charOffset,
+            cellParaIndexOf(end),
+            end.charOffset,
+            pageHints,
+          );
+        } else {
+          rects = this.wasm.getSelectionRectsInCell(
+            start.sectionIndex, start.parentParaIndex!, start.controlIndex!, start.cellIndex!,
+            start.cellParaIndex!, start.charOffset,
+            end.cellParaIndex!, end.charOffset,
+            pageHints,
+          );
+        }
       } else if (!startInCell && !endInCell) {
         // 본문 선택
         rects = this.wasm.getSelectionRects(
@@ -4437,10 +4466,17 @@ export class InputHandler {
       const ref = this.cursor.getSelectedTableRef();
       if (ref) {
         try {
-          this.wasm.copyControl(ref.sec, ref.ppi, ref.ci);
+          const target = tableObjectClipboardTarget(ref);
+          this.wasm.copyControl(
+            ref.sec, ref.ppi, target.controlIndex, target.ownerCellPathJson,
+          );
           const text = this.wasm.getClipboardText() || '[표]';
           let html = '';
-          try { html = this.wasm.exportControlHtml(ref.sec, ref.ppi, ref.ci) || ''; } catch { /* 무시 */ }
+          try {
+            html = this.wasm.exportControlHtml(
+              ref.sec, ref.ppi, target.controlIndex, target.ownerCellPathJson,
+            ) || '';
+          } catch { /* 무시 */ }
           const markedHtml = _keyboard.prepareRhwpInternalClipboardHtml(this, html, text);
           _keyboard.writeTextHtmlToClipboard(text, markedHtml)
             .catch(() => navigator.clipboard.writeText(text).catch(() => {}));

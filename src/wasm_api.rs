@@ -5906,6 +5906,59 @@ impl HwpDocument {
         .map_err(|e| e.into())
     }
 
+    /// 전체 cellPath로 중첩 셀 선택 영역의 줄별 사각형을 반환한다(#4272).
+    ///
+    /// `path_json`의 마지막 엔트리는 선택 대상 셀을 지정하며, 시작·끝 문단 인덱스는
+    /// 별도 인자로 받아 여러 문단 선택도 같은 컨테이너 경로에서 처리한다.
+    #[wasm_bindgen(js_name = getSelectionRectsInCellByPath)]
+    pub fn get_selection_rects_in_cell_by_path(
+        &self,
+        section_idx: u32,
+        parent_para_idx: u32,
+        path_json: &str,
+        start_cell_para_idx: u32,
+        start_char_offset: u32,
+        end_cell_para_idx: u32,
+        end_char_offset: u32,
+    ) -> Result<String, JsValue> {
+        self.get_selection_rects_in_cell_by_path_native(
+            section_idx as usize,
+            parent_para_idx as usize,
+            path_json,
+            start_cell_para_idx as usize,
+            start_char_offset as usize,
+            end_cell_para_idx as usize,
+            end_char_offset as usize,
+            None,
+        )
+        .map_err(|e| e.into())
+    }
+
+    /// `getSelectionRectsInCellByPath`의 page hint options 변형(#4272).
+    ///
+    /// options JSON 키: `{ sectionIdx, parentParaIdx, path, startCellParaIdx,
+    /// startCharOffset, endCellParaIdx, endCharOffset, startPageHint?, endPageHint? }`.
+    /// `path`는 cellPath JSON 문자열이다.
+    #[wasm_bindgen(js_name = getSelectionRectsInCellByPathEx)]
+    pub fn get_selection_rects_in_cell_by_path_ex(
+        &self,
+        options_json: &str,
+    ) -> Result<String, JsValue> {
+        use crate::document_core::helpers::{json_str, json_u32};
+        let path_json = json_str(options_json, "path").unwrap_or_default();
+        self.get_selection_rects_in_cell_by_path_native(
+            json_u32(options_json, "sectionIdx").unwrap_or(0) as usize,
+            json_u32(options_json, "parentParaIdx").unwrap_or(0) as usize,
+            &path_json,
+            json_u32(options_json, "startCellParaIdx").unwrap_or(0) as usize,
+            json_u32(options_json, "startCharOffset").unwrap_or(0) as usize,
+            json_u32(options_json, "endCellParaIdx").unwrap_or(0) as usize,
+            json_u32(options_json, "endCharOffset").unwrap_or(0) as usize,
+            json_u32(options_json, "startPageHint").zip(json_u32(options_json, "endPageHint")),
+        )
+        .map_err(|e| e.into())
+    }
+
     /// 각주/미주 내부 선택 영역의 줄별 사각형을 반환한다.
     #[wasm_bindgen(js_name = getSelectionRectsInFootnote)]
     pub fn get_selection_rects_in_footnote(
@@ -7442,6 +7495,31 @@ impl HwpDocument {
         .map_err(|e| e.into())
     }
 
+    /// 전체 cellPath가 가리키는 중첩 셀의 선택 영역을 내부 클립보드에 복사한다(#4272).
+    #[wasm_bindgen(js_name = copySelectionInCellByPath)]
+    pub fn copy_selection_in_cell_by_path(
+        &mut self,
+        section_idx: u32,
+        parent_para_idx: u32,
+        path_json: &str,
+        start_cell_para_idx: u32,
+        start_char_offset: u32,
+        end_cell_para_idx: u32,
+        end_char_offset: u32,
+    ) -> Result<String, JsValue> {
+        let path = DocumentCore::parse_cell_path(path_json)?;
+        self.copy_selection_in_cell_by_path_native(
+            section_idx as usize,
+            parent_para_idx as usize,
+            &path,
+            start_cell_para_idx as usize,
+            start_char_offset as usize,
+            end_cell_para_idx as usize,
+            end_char_offset as usize,
+        )
+        .map_err(|e| e.into())
+    }
+
     /// 컨트롤 객체(표, 이미지, 도형)를 내부 클립보드에 복사한다.
     ///
     /// [Task #1161] `cell_path_json` 이 빈 문자열/`"[]"` 면 본문, 그 외에는 셀/글상자
@@ -7613,6 +7691,31 @@ impl HwpDocument {
             json_u32(options_json, "startCharOffset").unwrap_or(0) as usize,
             json_u32(options_json, "endCellParaIdx").unwrap_or(0) as usize,
             json_u32(options_json, "endCharOffset").unwrap_or(0) as usize,
+        )
+        .map_err(|e| e.into())
+    }
+
+    /// 전체 cellPath가 가리키는 중첩 셀 선택을 HTML로 변환한다(#4272).
+    #[wasm_bindgen(js_name = exportSelectionInCellHtmlByPath)]
+    pub fn export_selection_in_cell_html_by_path(
+        &self,
+        section_idx: u32,
+        parent_para_idx: u32,
+        path_json: &str,
+        start_cell_para_idx: u32,
+        start_char_offset: u32,
+        end_cell_para_idx: u32,
+        end_char_offset: u32,
+    ) -> Result<String, JsValue> {
+        let path = DocumentCore::parse_cell_path(path_json)?;
+        self.export_selection_in_cell_html_by_path_native(
+            section_idx as usize,
+            parent_para_idx as usize,
+            &path,
+            start_cell_para_idx as usize,
+            start_char_offset as usize,
+            end_cell_para_idx as usize,
+            end_char_offset as usize,
         )
         .map_err(|e| e.into())
     }
