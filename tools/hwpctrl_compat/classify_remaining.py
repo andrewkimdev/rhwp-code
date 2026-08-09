@@ -106,6 +106,9 @@ NO_WINDOW = {
     "Action.TableDistributeCellWidth", "Action.TableDistributeCellHeight",
     # 캐럿이 누름틀 안인데도 안 지워진다.
     "Action.DeleteField",
+    # 찾기·바꾸기·맞춤법 대화상자 — COM 으로 걸면 **조용히 아무 일도 안 한다**(계획서 §4.73).
+    # 몇 초에 끝나고, 한글을 보이게 띄워 창을 세어도 **문서 창 하나뿐**이라 대화상자가 안 뜬다.
+    "Action.FindDlg", "Action.ReplaceDlg", "Action.SpellingCheck",
     # 쪽 배경 그림 — **성공하는 길을 못 찾았다**(계획서 §4.72). 인자는 둘 이상이어야 하는데
     # (하나면 `필수 매개 변수`), 열넷 가지 인자 꼴·칸 블록·표 고름·jpg/png, 그리고 **한글이
     # 스스로 만든 bmp** 까지 전부 `false` 다. 없는 파일도 같은 `false` 라 실패 이유조차 안 준다.

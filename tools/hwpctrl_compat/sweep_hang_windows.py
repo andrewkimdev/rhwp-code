@@ -79,10 +79,13 @@ def main() -> int:
     ap.add_argument("--names", help="이 이름들만(쉼표로 구분)")
     args = ap.parse_args()
 
-    names = hang_actions()
+    # `--names` 는 **그 이름을 그대로** 본다. 예전에는 `HANG` 으로 알려진 것들만 걸러
+    # 봤는데, 그러면 "안 끝나는 줄 알았지만 아니었던" 이름의 창을 볼 수가 없다 — 갈래를
+    # 다시 매기려면 바로 그 이름들을 봐야 한다.
     if args.names:
-        want = {n.strip() for n in args.names.split(",") if n.strip()}
-        names = [n for n in names if n in want]
+        names = [n.strip() for n in args.names.split(",") if n.strip()]
+    else:
+        names = hang_actions()
     if args.limit:
         names = names[: args.limit]
     tmp = Path(tempfile.mkdtemp(prefix="hangwin-"))
