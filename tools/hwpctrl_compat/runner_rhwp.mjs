@@ -169,6 +169,26 @@ function resolvePath(ctrl, path) {
 }
 
 /**
+ * 인자 중 `{"$path": "이름"}` 을 **이 플랫폼의 실제 경로**로 바꾼다 — `scenario_spec.py` 의
+ * `resolve_args` 와 같은 규칙이다(규칙을 한쪽만 고치면 하니스 차이가 diff 로 샌다).
+ *
+ * 시나리오가 Windows 절대 경로를 박아 두면 Linux 에서는 그것이 "못 여는 경로"가 아니라
+ * **그냥 그런 이름의 상대 경로**가 된다. `C:\없는폴더xyz\a.bmp` 가 멀쩡히 만들어져 `false`
+ * 여야 할 자리가 `true` 가 됐고, 저장소 작업본에 그 이름의 파일까지 남았다(#4274 리뷰).
+ */
+function resolvePathArgs(args, scenario, outDir) {
+  const table = scenario.paths ?? {};
+  const key = process.platform === 'win32' ? 'win' : 'posix';
+  return args.map((a) => {
+    if (!a || typeof a !== 'object' || Array.isArray(a) || !('$path' in a)) return a;
+    const variants = table[a.$path];
+    if (!variants) throw new Error(`시나리오에 없는 경로 이름입니다: ${a.$path}`);
+    if (!(key in variants)) throw new Error(`경로 '${a.$path}' 에 '${key}' 갈래가 없습니다`);
+    return String(variants[key]).replaceAll('{repo}', REPO).replaceAll('{out}', outDir);
+  });
+}
+
+/**
  * 인자 중 `{"$obj": "경로"}` 를 **그 자리의 객체**로 바꾼다.
  *
  * 파라미터셋이나 `Ctrl` 을 인자로 받는 API 를 시나리오가 부를 수 있게 하는 규약이다.
@@ -262,7 +282,8 @@ async function main() {
       }
     }
 
-    for (const [name, callArgs = []] of scenario.calls ?? []) {
+    for (const [name, rawArgs = []] of scenario.calls ?? []) {
+      const callArgs = resolvePathArgs(rawArgs, scenario, outDir);
       const record = { call: name, args: callArgs };
       try {
         record.value = callOne(ctrl, name, callArgs);

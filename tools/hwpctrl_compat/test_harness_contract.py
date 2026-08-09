@@ -12,9 +12,10 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
-from compare import selected_oracle_paths
+from compare import classify, selected_oracle_paths
 from extract_spec import verify
 from oracle_version import matches_expected_version
+from scenario_spec import call_contract, platform_path_key, resolve_args
 from run_gate import (
     hwp_pids,
     new_hwp_pids,
@@ -101,6 +102,81 @@ class HarnessContractTests(unittest.TestCase):
                 encoding="utf-8",
             )
             self.assertEqual(validate_rhwp_output(scenario_path, root), "CALL_ERROR")
+
+    def _validate(self, calls: list, records: list) -> str:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "s.json").write_text(json.dumps({"id": "s", "calls": calls}), encoding="utf-8")
+            (root / "s.returns.json").write_text(
+                json.dumps({"calls": records, "fatal": None}), encoding="utf-8"
+            )
+            return validate_rhwp_output(root / "s.json", root)
+
+    def test_declared_exception_passes_only_when_it_dies_the_declared_way(self) -> None:
+        """일부러 죽는 호출을 공식 시나리오에 두려면 **미리 선언**해야 한다 (#4274 리뷰).
+
+        선언은 면제가 아니라 계약이다 — 안 죽어도, 딴 이유로 죽어도 실패다.
+        """
+        declared = [["Foo", [], {"expectError": {"rhwp": "죽어야 한다", "ocx": None}}]]
+        self.assertEqual(self._validate(declared, [{"call": "Foo", "error": "Error: 죽어야 한다"}]), "OK")
+        self.assertEqual(self._validate(declared, [{"call": "Foo", "value": 1}]), "EXPECT_DIFF")
+        self.assertEqual(self._validate(declared, [{"call": "Foo", "error": "Error: 딴 이유"}]), "CALL_ERROR")
+
+    def test_missing_api_never_satisfies_a_declared_exception(self) -> None:
+        """"아직 안 만들었다"가 예외 선언 뒤에 숨지 못하게 한다 — 리뷰가 막은 그 구멍이다."""
+        declared = [["Foo", [], {"expectError": {"rhwp": "죽어야 한다", "ocx": None}}]]
+        self.assertEqual(self._validate(declared, [{"call": "Foo", "error": "MissingApi: Foo"}]), "CALL_ERROR")
+        with self.assertRaises(ValueError):
+            call_contract(["Foo", [], {"expectError": {"rhwp": "MissingApi: Foo", "ocx": None}}])
+
+    def test_undeclared_error_still_fails_and_expected_value_is_checked(self) -> None:
+        self.assertEqual(self._validate([["Foo", []]], [{"call": "Foo", "error": "Error: x"}]), "CALL_ERROR")
+        self.assertEqual(self._validate([["Foo", [], {"expect": 4}]], [{"call": "Foo", "value": 5}]), "EXPECT_DIFF")
+        self.assertEqual(self._validate([["Foo", [], {"expect": 4}]], [{"call": "Foo", "value": 4}]), "OK")
+
+    def test_scenario_paths_resolve_per_platform(self) -> None:
+        """Windows 오라클 경로와 Linux 경로를 갈라 놓는다 — 하나로 쓰면 Linux 에서 뜻이 달라진다."""
+        definition = {
+            "paths": {"pic": {"win": "C:\\rhwp\\s1.jpg", "posix": "{repo}/samples/s1.jpg"},
+                      "out": {"win": "C:\\Temp\\a.bmp", "posix": "{out}/a.bmp"}}
+        }
+        args = [{"$path": "pic"}, {"$path": "out"}, 0]
+        repo, out_dir = Path("/repo"), Path("/out")
+        self.assertEqual(
+            resolve_args(args, definition, platform_path_key("Windows"), repo, out_dir),
+            ["C:\\rhwp\\s1.jpg", "C:\\Temp\\a.bmp", 0],
+        )
+        self.assertEqual(
+            resolve_args(args, definition, platform_path_key("Linux"), repo, out_dir),
+            ["/repo/samples/s1.jpg", "/out/a.bmp", 0],
+        )
+        with self.assertRaises(ValueError):
+            resolve_args([{"$path": "없음"}], definition, "posix", repo, out_dir)
+
+    def test_both_sides_dying_is_not_a_match_unless_declared(self) -> None:
+        """양쪽이 죽었다는 것만으로는 일치가 아니다 — `MissingApi` 를 막은 것과 같은 이유다."""
+        ocx = {"call": "Foo", "error": "com_error: ..."}
+        rhwp = {"call": "Foo", "error": "Error: 죽어야 한다"}
+        self.assertEqual(classify(ocx, rhwp, {})[0], "ERROR_UNDECLARED")
+        declared = {"expectError": {"rhwp": "죽어야 한다", "ocx": None}}
+        self.assertEqual(classify(ocx, rhwp, declared)[0], "MATCH")
+        # 오라클 문구를 재고 나면 그 문구까지 대조한다.
+        measured = {"expectError": {"rhwp": "죽어야 한다", "ocx": "딴 문구"}}
+        self.assertEqual(classify(ocx, rhwp, measured)[0], "EXPECT_DIFF")
+
+    def test_declared_return_value_is_checked_against_the_oracle_too(self) -> None:
+        """자체 검사(Linux)와 오라클 대조(Windows)가 **같은 한 값**을 본다."""
+        contract = {"expect": False}
+        self.assertEqual(classify({"call": "Foo", "value": False}, {"call": "Foo", "value": False}, contract)[0], "MATCH")
+        self.assertEqual(classify({"call": "Foo", "value": True}, {"call": "Foo", "value": True}, contract)[0], "EXPECT_DIFF")
+
+    def test_every_scenario_declares_a_well_formed_contract(self) -> None:
+        for path in sorted((HERE / "scenarios").glob("*.json")):
+            definition = json.loads(path.read_text(encoding="utf-8"))
+            for call in definition.get("calls", []):
+                call_contract(call)
+            for name, variants in (definition.get("paths") or {}).items():
+                self.assertEqual(set(variants), {"win", "posix"}, f"{path.name}:{name}")
 
     def test_compare_only_reads_explicitly_eligible_oracles(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

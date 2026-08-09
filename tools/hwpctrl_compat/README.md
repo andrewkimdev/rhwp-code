@@ -80,7 +80,7 @@ node tools/hwpctrl_compat/python_runner.mjs build_ledger.py --check   # CI 게�
   "saveAs": "field-read.hwp" }
 ```
 
-규칙 세 가지.
+규칙 다섯 가지.
 
 1. **`ledger` 를 반드시 적는다.** 원장은 시나리오 단위로 올라간다 — 선언이 없으면 무엇을
    검증했는지 알 수 없고, 그 실행은 진척으로 세지 않는다.
@@ -90,6 +90,36 @@ node tools/hwpctrl_compat/python_runner.mjs build_ledger.py --check   # CI 게�
 3. **객체가 돌아오면 점을 찍어 들어간다.** 서식(`CharShape`)·개체 속성은 ParameterSet
    **객체**로 오는데, 러너는 객체를 `{__type: …}` 으로 줄인다. `["CharShape.Item", ["Height"]]`
    처럼 적어야 값이 대조된다 — 안 그러면 빈 셋을 돌려주는 구현도 통과한다.
+4. **경로를 박지 않는다.** `paths` 에 이름으로 적고 인자에는 `{"$path": "이름"}` 을 쓴다.
+   Windows 절대 경로를 그대로 박으면 Linux 에서 그것은 "못 여는 경로"가 아니라 **그냥 그런
+   이름의 상대 경로**라, 없는 폴더를 재려던 자리가 성공하고 작업본에 쓰레기가 남는다.
+5. **일부러 죽는 호출은 미리 선언한다.** `expectError` 없이 죽으면 게이트는 붉어진다 —
+   그 규칙을 무르게 하면 진짜 오류도 함께 통과하기 때문이다.
+
+계약을 적는 자리는 호출의 **세 번째 칸**이다. 규칙 전문과 이유는
+[`scenario_spec.py`](scenario_spec.py) 가 갖는다.
+
+```jsonc
+{ "paths": {
+    "picture": { "win": "C:\\Users\\...\\s1.jpg", "posix": "{repo}/samples/s1.jpg" },
+    "out":     { "win": "C:\\Temp\\a.bmp",        "posix": "{out}/a.bmp" } },
+  "calls": [
+    ["InsertPicture",   [{"$path": "picture"}, true, 0]],
+    ["CreatePageImage", [{"$path": "out"}, 9], {"expect": false}],
+    ["SetCurFieldName", ["새이름"], {"expectError": {
+        "rhwp": "필수 매개 변수입니다",   // rhwp 오류가 이 문구를 담아야 한다
+        "ocx":  null,                     // 오라클 문구 미측정 — "죽는가"까지만 본다
+        "why":  "실물은 인자 넷을 다 요구한다(§4.54·§4.57)" }}]
+  ] }
+```
+
+- `expect` 는 Linux 자체 검사와 Windows 오라클 대조가 **같은 한 값**을 보게 한다. 경로가
+  플랫폼마다 갈리면 인자는 더 이상 공통 닻이 아니라, 이 자리가 유일한 닻이다.
+- `expectError` 는 면제가 아니라 계약이다. 안 죽어도 실패, 딴 문구로 죽어도 실패,
+  `MissingApi` 로 죽으면 선언했든 말든 실패다. 선언 없이 양쪽이 죽은 자리는 `MATCH` 가 아니라
+  `ERROR_UNDECLARED` 로 센다.
+- 오라클 문구를 안 쟀으면 `null` 로 **남겨 둔다.** 안 잰 것을 지어 적으면 그 초록이 거짓이 된다.
+  Windows 에서 재서 채우면 그때부터 문구까지 대조된다.
 
 `ledger` 를 고를 때는 **그 시나리오가 증거가 되는 항목만** 적는다. 축이 섞이면 무관한 실패가
 이미 증명된 API 를 영원히 막는다(`RenameField` 가 `MovePos` 부재에 막혀 있었다).

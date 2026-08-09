@@ -28,12 +28,14 @@ import argparse
 import io
 import json
 import os
+import platform
 import re
 import sys
 import traceback
 from pathlib import Path
 
 from oracle_version import matches_expected_version
+from scenario_spec import platform_path_key, resolve_args as resolve_arg_paths
 
 REPO = Path(__file__).resolve().parents[2]
 
@@ -251,8 +253,12 @@ def run(scenario: dict, out_dir: Path, expect_version: str | None = None) -> dic
                 result["rejected"] = f"읽기 전용으로 열렸다(EditMode {mode})"
                 return result
 
+        # 경로는 **플랫폼마다 다른 값**이라 시나리오가 이름으로 적고 러너가 푼다. 이 러너는
+        # Windows 에서만 도니 언제나 `win` 갈래다 — 오라클이 지금까지 쓴 경로 그대로다.
+        path_key = platform_path_key(platform.system())
         for idx, call in enumerate(scenario.get("calls", [])):
             name, args = call[0], (call[1] if len(call) > 1 else [])
+            args = resolve_arg_paths(args, scenario, path_key, REPO, out_dir)
             record = {"call": name, "args": args}
             try:
                 record["value"] = call_one(com, name, args)

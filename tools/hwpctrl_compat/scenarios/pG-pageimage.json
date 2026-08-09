@@ -5,66 +5,137 @@
     "HwpCtrl.method.CreatePageImage"
   ],
   "open": "samples/20250130-hongbo.hwp",
+  "paths": {
+    "page1": {
+      "win": "C:\\Users\\planet\\AppData\\Local\\Temp\\claude\\pi1.bmp",
+      "posix": "{out}/pG-pi1.bmp"
+    },
+    "page2": {
+      "win": "C:\\Users\\planet\\AppData\\Local\\Temp\\claude\\pi2.bmp",
+      "posix": "{out}/pG-pi2.bmp"
+    },
+    "page3": {
+      "win": "C:\\Users\\planet\\AppData\\Local\\Temp\\claude\\pi3.bmp",
+      "posix": "{out}/pG-pi3.bmp"
+    },
+    "page4": {
+      "win": "C:\\Users\\planet\\AppData\\Local\\Temp\\claude\\pi4.bmp",
+      "posix": "{out}/pG-pi4.bmp"
+    },
+    "page5": {
+      "win": "C:\\Users\\planet\\AppData\\Local\\Temp\\claude\\pi5.bmp",
+      "posix": "{out}/pG-pi5.bmp"
+    },
+    "page6": {
+      "win": "C:\\Users\\planet\\AppData\\Local\\Temp\\claude\\pi6.bmp",
+      "posix": "{out}/pG-pi6.bmp"
+    },
+    "missingDirectory": {
+      "win": "C:\\없는폴더xyz\\a.bmp",
+      "posix": "{out}/없는폴더xyz/a.bmp"
+    }
+  },
   "calls": [
     [
       "PageCount",
-      []
+      [],
+      {
+        "expect": 4
+      }
     ],
     [
       "CreatePageImage",
       [
-        "C:\\Users\\planet\\AppData\\Local\\Temp\\claude\\pi1.bmp",
+        {
+          "$path": "page1"
+        },
         0
-      ]
+      ],
+      {
+        "expect": true
+      }
     ],
     [
       "CreatePageImage",
       [
-        "C:\\Users\\planet\\AppData\\Local\\Temp\\claude\\pi2.bmp",
+        {
+          "$path": "page2"
+        },
         3
-      ]
+      ],
+      {
+        "expect": true
+      }
     ],
     [
       "CreatePageImage",
       [
-        "C:\\Users\\planet\\AppData\\Local\\Temp\\claude\\pi3.bmp",
+        {
+          "$path": "page3"
+        },
         4
-      ]
+      ],
+      {
+        "expect": false
+      }
     ],
     [
       "CreatePageImage",
       [
-        "C:\\Users\\planet\\AppData\\Local\\Temp\\claude\\pi4.bmp",
+        {
+          "$path": "page4"
+        },
         9
-      ]
+      ],
+      {
+        "expect": false
+      }
     ],
     [
       "CreatePageImage",
       [
-        "C:\\없는폴더xyz\\a.bmp",
+        {
+          "$path": "missingDirectory"
+        },
         0
-      ]
+      ],
+      {
+        "expect": false
+      }
     ],
     [
       "CreatePageImage",
       [
         "",
         0
-      ]
+      ],
+      {
+        "expect": false
+      }
     ],
     [
       "CreatePageImage",
       [
-        "C:\\Users\\planet\\AppData\\Local\\Temp\\claude\\pi5.bmp",
+        {
+          "$path": "page5"
+        },
         0,
         0
-      ]
+      ],
+      {
+        "expect": false
+      }
     ],
     [
       "CreatePageImage",
       [
-        "C:\\Users\\planet\\AppData\\Local\\Temp\\claude\\pi6.bmp"
-      ]
+        {
+          "$path": "page6"
+        }
+      ],
+      {
+        "expect": false
+      }
     ]
   ]
 }

@@ -18,7 +18,11 @@
     ["CreateSet(\"CharShape\").Item", ["Height"]],
     ["CreateSet(\"CharShape\").Count", []],
     ["CreateSet(\"CharShape\").RemoveItem", ["Height"]],
-    ["CreateSet(\"CharShape\").RemoveAll", []],
+    ["CreateSet(\"CharShape\").RemoveAll", [], {"expectError": {
+      "rhwp": "필수 매개 변수입니다",
+      "ocx": null,
+      "why": "규격에 없는 인자를 하나 요구한다 — 없이 부르면 죽는다(계획서 §4.57). 오라클 오류 문구는 아직 안 쟀다"
+    }}],
     ["CreateSet(\"CharShape\").RemoveAll", [0]],
     ["CreateSet(\"CharShape\").RemoveAll", [1]],
     ["CreateSet(\"CharShape\").Count", []],
@@ -32,6 +36,10 @@
     ["CreateSet(\"CharShape\").CreateItemArray(\"Items\", 3).Item", [2]],
     ["CreateSet(\"CharShape\").CreateItemArray(\"Items\", 3).SetItem", [0, {"$obj": "CreateSet(\"CharShape\")"}]],
     ["CreateSet(\"CharShape\").CreateItemArray(\"Items\", 3).Copy", [{"$obj": "CreateSet(\"CharShape\").CreateItemArray(\"Items\", 3)"}]],
-    ["CreateSet(\"CharShape\").CreateItemArray(\"Items\", 3).Clone", []]
+    ["CreateSet(\"CharShape\").CreateItemArray(\"Items\", 3).Clone", [], {"expectError": {
+      "rhwp": "서버에서 예외 오류가 발생했습니다",
+      "ocx": null,
+      "why": "배열의 Clone 만 죽는다 — 셋 쪽 Clone 은 멀쩡하다(계획서 §4.57). 오라클 오류 문구는 아직 안 쟀다"
+    }}]
   ]
 }
