@@ -519,6 +519,10 @@ const ACTIONS = {
   TableCellBlockExtend: { kind: 'tableBlockExtend', abs: false },
   TableCellBlockExtendAbs: { kind: 'tableBlockExtend', abs: true },
 
+  // 이름과 달리 쪽과 무관하다 — 같은 열의 첫 칸·마지막 칸으로 간다(실측).
+  TableColPageUp: { kind: 'tableColEdge', to: 'first' },
+  TableColPageDown: { kind: 'tableColEdge', to: 'last' },
+
   TableCellBlock: { kind: 'tableBlock', span: 'cell' },
   TableCellBlockRow: { kind: 'tableBlock', span: 'row' },
   TableCellBlockCol: { kind: 'tableBlock', span: 'col' },
@@ -1925,7 +1929,8 @@ export class HwpCtrl {
     if (
       action.kind === 'tableMove' ||
       action.kind === 'tableBlock' ||
-      action.kind === 'tableBlockExtend'
+      action.kind === 'tableBlockExtend' ||
+      action.kind === 'tableColEdge'
     ) {
       const done = this.#runTableAction(action);
       if (done && action.kind === 'tableMove') this.#modified = this.#modified || false;
@@ -2560,6 +2565,17 @@ export class HwpCtrl {
       const to = !action.abs && alreadyExtending ? siblings[siblings.length - 1] : here;
       this.#tableBlock = { from: here, to };
       this.#cursor = { list: to.listId, para: 0, pos: 0 };
+      return true;
+    }
+
+    if (action.kind === 'tableColEdge') {
+      // 이름은 `ColPage` 인데 쪽과 무관하다 — **같은 열의 첫 칸·마지막 칸**으로 간다(실측:
+      // 147행 3열 표에서 0행 1열 → 146행 1열, 두 번째로 걸어도 제자리). 조판이 필요 없다.
+      const inCol = siblings.filter((c) => c.col === here.col);
+      const target = action.to === 'last' ? inCol[inCol.length - 1] : inCol[0];
+      if (!target || target === here) return true;
+      this.#clearSelection();
+      this.#cursor = { list: target.listId, para: 0, pos: 0 };
       return true;
     }
 
