@@ -69,6 +69,26 @@ MACHINE = {
 }
 
 
+def dialog_titles() -> dict[str, str]:
+    """대화상자를 띄우는 액션과 그 **제목** — 창을 열거해 받은 실측이다.
+
+    창 클래스로는 문서 창과 대화상자를 못 가른다(둘 다 `HwndWrapper[Hwp.exe;;<GUID>]`).
+    제목으로 갈라야 한다.
+    """
+    path = REPO / "output" / "poc" / "hwpctrl" / "hang_dialogs.tsv"
+    if not path.exists():
+        return {}
+    out: dict[str, str] = {}
+    for line in io.open(path, encoding="utf-8").read().splitlines()[1:]:
+        parts = line.split("\t")
+        if len(parts) >= 3 and parts[2].strip():
+            out[parts[0]] = parts[2].split(" | ")[0]
+    return out
+
+
+DIALOG_TITLES = dialog_titles()
+
+
 def sweep_kinds() -> dict[str, str]:
     # 스윕이 아예 안 건 것들 — 이미 "안 끝남"으로 확인해 금지 목록에 넣은 이름이다.
     from sweep_actions import FORBIDDEN
@@ -120,8 +140,10 @@ def main() -> int:
             key = "머신 의존"
         elif ident in LAYOUT:
             key = "조판 의존"
+        elif action and action in DIALOG_TITLES:
+            key = f"대화상자({DIALOG_TITLES[action]})" if False else "대화상자"
         elif action and kinds.get(action) == "HANG":
-            key = "안 끝나는 호출"
+            key = "안 끝남(대화상자 없음)"
         elif action and kinds.get(action) in ("CHANGED", "MOVED"):
             key = "관측됨 — 다음 후보"
         elif action and kinds.get(action) == "NOOP":
@@ -134,7 +156,14 @@ def main() -> int:
     blocked = 0
     for key in sorted(buckets, key=lambda k: -len(buckets[k])):
         names = buckets[key]
-        if key in ("없는 API", "UI 전용(관측 불가)", "머신 의존", "안 끝나는 호출"):
+        # 구조적으로 막힌 갈래 — 이 하니스로는 영원히 못 올린다.
+        if key in (
+            "없는 API",
+            "UI 전용(관측 불가)",
+            "머신 의존",
+            "대화상자",
+            "안 끝남(대화상자 없음)",
+        ):
             blocked += len(names)
         print(f"  {key:<22} {len(names):>4}")
         if key in ("관측됨 — 다음 후보", "아직 안 잼"):
