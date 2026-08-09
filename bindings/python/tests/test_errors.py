@@ -137,6 +137,13 @@ def test_timeout_error_is_named_rhwp_timeout_error() -> None:
     assert not issubclass(RhwpTimeoutError, builtins.TimeoutError)
 
 
+def test_timeout_error_compatibility_alias_preserves_existing_handlers() -> None:
+    """이전 공개 이름도 같은 rhwp 예외를 잡되, 새 이름을 표준으로 쓴다."""
+    import rhwp
+
+    assert rhwp.TimeoutError is RhwpTimeoutError
+
+
 # ── D-8: UsageError.next_call ────────────────────────────────────────────
 
 

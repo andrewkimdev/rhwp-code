@@ -99,6 +99,7 @@ from .errors import (
     RhwpRuntimeError,
     SessionClosedError,
     RhwpTimeoutError,
+    TimeoutError,
     UsageError,
     VerdictFailed,
     is_known_exit_code,
@@ -207,6 +208,7 @@ __all__ = [
     "ProtocolError",
     "SessionClosedError",
     "RhwpTimeoutError",
+    "TimeoutError",
     # 종료 코드 사전
     "EXIT_OK",
     "EXIT_RUNTIME",

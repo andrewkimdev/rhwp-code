@@ -292,7 +292,7 @@ with rhwp.open("큰문서.hwp") as doc:   # 한 번만 파싱
     doc.info(); doc.fields(); doc.tables()
 ```
 
-### `TimeoutError: 제한 시간 300초를 초과했습니다`
+### `RhwpTimeoutError: 제한 시간 300초를 초과했습니다`
 
 대형 문서 렌더·변환이 오래 걸린다.
 

@@ -27,6 +27,7 @@ __all__ = [
     "ProtocolError",
     "SessionClosedError",
     "RhwpTimeoutError",
+    "TimeoutError",
     "EXIT_OK",
     "EXIT_RUNTIME",
     "EXIT_USAGE",
@@ -177,6 +178,11 @@ class RhwpTimeoutError(RhwpError):
     TimeoutError` 를 쓰는 코드가 rhwp 예외인지 표준 라이브러리 예외인지 한눈에
     구분 못 하게 만드는 대가가 이름 일관성보다 컸다.
     """
+
+
+# 기존 공개 API를 쓰던 호출자가 예외 처리만으로 깨지지 않게 한다. 새 코드는
+# 내장 이름과 구별되는 RhwpTimeoutError를 사용한다.
+TimeoutError = RhwpTimeoutError  # noqa: A001
 
 
 def _quote(arg: str) -> str:
