@@ -1688,7 +1688,7 @@ impl DocumentCore {
                         MAX_NEST_DEPTH
                     );
                 }
-                self.table_to_html(table, depth)
+                self.table_to_html_at_depth(table, depth)
             }
             Control::Picture(pic) => self.picture_to_html(pic),
             other => format!(
@@ -1698,11 +1698,19 @@ impl DocumentCore {
         }
     }
 
-    /// Table 컨트롤을 HTML <table>로 변환한다.
+    /// 최상위 Table 컨트롤을 HTML <table>로 변환한다.
+    ///
+    /// 재귀 깊이는 내부 구현에서만 관리해, 기존 최상위 변환 진입점의 계약을
+    /// 유지한다.
+    pub(crate) fn table_to_html(&self, table: &crate::model::table::Table) -> String {
+        self.table_to_html_at_depth(table, 0)
+    }
+
+    /// Table 컨트롤을 현재 중첩 깊이의 HTML <table>로 변환한다.
     /// `depth`는 이 표 자체의 중첩 깊이(0 = 최상위) — 셀 안 문단의 컨트롤을
     /// 처리할 때는 `depth + 1`을 넘겨, 그 컨트롤이 표이면 `control_to_html`이
     /// 상한을 검사한 뒤 그 값으로 재귀한다.
-    pub(crate) fn table_to_html(&self, table: &crate::model::table::Table, depth: usize) -> String {
+    fn table_to_html_at_depth(&self, table: &crate::model::table::Table, depth: usize) -> String {
         use crate::renderer::style_resolver::ResolvedBorderStyle;
 
         let mut html = String::from(
