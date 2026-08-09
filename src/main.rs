@@ -15582,16 +15582,43 @@ fn cmd_replay(args: &[String]) -> i32 {
         // [#4401] --parent 가 있으면 부모 캡슐 파일의 SHA-256 을 내장해 계보
         // 링크를 만든다 — 부모가 나중에 변조되면 lineage 가 이 해시로 폭로한다.
         let parent_link = match parent_path.as_deref() {
-            Some(pp) => match fs::read(pp) {
-                Ok(bytes) => serde_json::json!({
-                    "capsule": pp,
+            Some(pp) => {
+                let parent_abs = match fs::canonicalize(pp) {
+                    Ok(path) => path,
+                    Err(e) => {
+                        eprintln!("오류: 부모 캡슐을 읽을 수 없습니다 - {pp}: {e}");
+                        return EXIT_RUNTIME;
+                    }
+                };
+                let bytes = match fs::read(&parent_abs) {
+                    Ok(bytes) => bytes,
+                    Err(e) => {
+                        eprintln!("오류: 부모 캡슐을 읽을 수 없습니다 - {pp}: {e}");
+                        return EXIT_RUNTIME;
+                    }
+                };
+                let capsule_dir = std::path::Path::new(cp)
+                    .parent()
+                    .unwrap_or(std::path::Path::new("."));
+                let capsule_dir_abs = match fs::canonicalize(capsule_dir) {
+                    Ok(path) => path,
+                    Err(e) => {
+                        eprintln!(
+                            "오류: 캡슐 폴더를 확인할 수 없습니다 - {}: {e}",
+                            capsule_dir.display()
+                        );
+                        return EXIT_RUNTIME;
+                    }
+                };
+                let stored_parent = parent_abs
+                    .strip_prefix(&capsule_dir_abs)
+                    .map(std::path::PathBuf::from)
+                    .unwrap_or(parent_abs);
+                serde_json::json!({
+                    "capsule": stored_parent.to_string_lossy(),
                     "sha256": replay_sha256_hex(&bytes),
-                }),
-                Err(e) => {
-                    eprintln!("오류: 부모 캡슐을 읽을 수 없습니다 - {pp}: {e}");
-                    return EXIT_RUNTIME;
-                }
-            },
+                })
+            }
             None => serde_json::Value::Null,
         };
         let capsule = serde_json::json!({
@@ -15727,20 +15754,64 @@ fn cmd_lineage(args: &[String]) -> i32 {
             );
             break;
         }
-        let input_sha = capsule["receipt"]["inputSha256"]
+        let Some(input_sha) = capsule["receipt"]["inputSha256"]
             .as_str()
-            .unwrap_or_default()
-            .to_string();
-        let output_sha = capsule["receipt"]["outputSha256"]
+            .filter(|value| is_sha256_hex(value))
+            .map(str::to_string)
+        else {
+            valid = false;
+            broken_at = Some(name.clone());
+            links.push(serde_json::json!({
+                "capsule": name,
+                "error": "receipt.inputSha256 가 없거나 64자리 16진이 아님",
+            }));
+            break;
+        };
+        let Some(output_sha) = capsule["receipt"]["outputSha256"]
             .as_str()
-            .unwrap_or_default()
-            .to_string();
+            .filter(|value| is_sha256_hex(value))
+            .map(str::to_string)
+        else {
+            valid = false;
+            broken_at = Some(name.clone());
+            links.push(serde_json::json!({
+                "capsule": name,
+                "error": "receipt.outputSha256 가 없거나 64자리 16진이 아님",
+            }));
+            break;
+        };
+        let parent = &capsule["parent"];
+        let parent_link = if parent.is_null() {
+            None
+        } else {
+            let Some(pp) = parent["capsule"].as_str() else {
+                valid = false;
+                broken_at = Some(name.clone());
+                links.push(serde_json::json!({ "capsule": name, "error": "parent.capsule 없음" }));
+                break;
+            };
+            let Some(parent_sha) = parent["sha256"]
+                .as_str()
+                .filter(|value| is_sha256_hex(value))
+            else {
+                valid = false;
+                broken_at = Some(name.clone());
+                links.push(serde_json::json!({
+                    "capsule": name,
+                    "error": "parent.sha256 가 없거나 64자리 16진이 아님",
+                }));
+                break;
+            };
+            Some((pp.to_string(), parent_sha.to_string()))
+        };
         let parent_ok = recorded_parent_sha.as_deref().map(|r| r == file_sha);
         let lineage_ok = child_input_sha.as_deref().map(|ci| output_sha == ci);
         let reproduced = if deep {
             let mut plan = capsule["plan"].clone();
             match replay_execute_to_temp(&mut plan, &format!("lineage{guard}")) {
-                Ok((actual, _, _)) => Some(actual == output_sha),
+                Ok((actual, _, actual_input)) => {
+                    Some(actual == output_sha && actual_input == input_sha)
+                }
                 Err(_) => Some(false),
             }
         } else {
@@ -15759,16 +15830,10 @@ fn cmd_lineage(args: &[String]) -> i32 {
             broken_at = Some(name);
             break;
         }
-        let parent = &capsule["parent"];
-        if parent.is_null() {
-            break;
-        }
-        let Some(pp) = parent["capsule"].as_str() else {
-            valid = false;
-            broken_at = Some(name);
+        let Some((pp, parent_sha)) = parent_link else {
             break;
         };
-        recorded_parent_sha = parent["sha256"].as_str().map(str::to_string);
+        recorded_parent_sha = Some(parent_sha);
         child_input_sha = Some(input_sha);
         let pp_path = std::path::PathBuf::from(pp);
         current = if pp_path.is_absolute() {
