@@ -36,18 +36,25 @@ ABSENT = {
     "HwpCtrl.method.AddEventListener", "HwpCtrl.event.OnMouseLButtonDown",
     "HwpCtrl.event.OnMouseLButtonUp", "HwpCtrl.event.OnScroll",
     "Action.method.PopupDialog", "HwpCtrl.method.InsertDocument",
+    # `UI 전용` 으로 세던 것들인데 재 보니 **아예 없다**(계획서 §4.69). 딱지가 틀렸었다.
+    "HwpCtrl.method.ShowCaret", "HwpCtrl.method.ShowRibbon", "HwpCtrl.method.ShowStatusBar",
+    "HwpCtrl.method.ShowToolBar", "HwpCtrl.method.ShowHorizontalScroll",
+    "HwpCtrl.method.ShowVerticalScroll", "HwpCtrl.method.SetToolBar",
+    "HwpCtrl.method.IsSpellCheckCompleted", "HwpCtrl.method.CreatePageImageEx",
 }
 
-# 반환값 말고는 관측할 것이 없는 UI 계열.
+# 창·기계에 달려 관측이 성립하지 않는 것들 — **실측으로** 이유를 붙였다(계획서 §4.69).
 UI_ONLY = {
-    "HwpCtrl.method.SetToolBar", "HwpCtrl.method.ShowCaret", "HwpCtrl.method.ShowRibbon",
-    "HwpCtrl.method.ShowStatusBar", "HwpCtrl.method.ShowToolBar",
-    "HwpCtrl.method.ShowHorizontalScroll", "HwpCtrl.method.ShowVerticalScroll",
-    "HwpCtrl.method.GetMousePos", "HwpCtrl.method.PrintDocument",
-    "HwpCtrl.method.IsSpellCheckCompleted", "HwpCtrl.method.CreatePageImage",
-    "HwpCtrl.method.CreatePageImageEx",
-    "Action.ViewZoomNormal", "Action.ViewZoomFitPage", "Action.ViewZoomFitWidth",
+    # 물리 마우스 자리를 준다(`MousePos` 셋의 `X`·`Y` 가 1743332·1539150 따위) — 부를 때마다
+    # 다르고 이 층에는 마우스가 없다.
+    "HwpCtrl.method.GetMousePos",
+    # 화면 크기가 정한다: 쪽 맞춤 **37%**, 폭 맞춤 **139%**(창 크기·DPI 에 달렸다).
+    # `ViewZoomNormal` 만 100 으로 상수인데, 셋을 가르려면 나머지 둘이 필요하다.
+    "Action.ViewZoomFitPage", "Action.ViewZoomFitWidth", "Action.ViewZoomNormal",
+    # 덮어쓰기 토글은 `KeyIndicator` 의 `over` 를 1↔0 으로 뒤집는 것으로만 보이는데,
+    # 그 API 는 `pos` 때문에 통째로 못 올린다(§4.67).
     "Action.ToggleOverwrite",
+    "HwpCtrl.method.PrintDocument",
 }
 
 # **글자 폭(advance)이 한글과 같아야** 잴 수 있는 것들 — 조판 정밀도가 아니라 글꼴 계측이다
@@ -153,6 +160,9 @@ MACHINE = {
 DATA_MISSING = {
     "HwpCtrl.method.LunarToSolar", "HwpCtrl.method.LunarToSolarBySet",
     "HwpCtrl.method.SolarToLunar", "HwpCtrl.method.SolarToLunarBySet",
+    # 쪽 그림 만들기 — 인자 **둘**이고 `true` 를 준다(셋 이상이면 false). rhwp 는 쪽을 그릴 수
+    # 있으니 막힌 것이 아니라 아직 안 이은 것이다.
+    "HwpCtrl.method.CreatePageImage",
 }
 
 
