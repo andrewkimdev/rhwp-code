@@ -95,6 +95,11 @@ NO_WINDOW = {
 # **맥락을 API 로 만들 수 없는** 것들 — 맞추기는 개체를 여럿 골라야 먹는데, `SelectAll` 은
 # 개체 선택을 버리고(모드 4→1) `SelectCtrl` 은 COM 에 아예 없다. 여럿 고르기는 마우스의 일이다.
 UNBUILDABLE_CONTEXT = {
+    # 화면·스크롤 이동 — OCX 의 **뷰포트**가 정하는 값이다. 이 층에는 보이는 창이 없어
+    # 만들 수 있는 맥락이 아니다(계획서 §4.62).
+    "Action.MoveViewBegin", "Action.MoveViewEnd", "Action.MoveViewUp", "Action.MoveViewDown",
+    "Action.MoveScrollUp", "Action.MoveScrollDown", "Action.MoveScrollNext", "Action.MoveScrollPrev",
+    "Action.MoveSelViewUp", "Action.MoveSelViewDown",
     "Action.ShapeObjAlignLeft", "Action.ShapeObjAlignRight", "Action.ShapeObjAlignTop",
     "Action.ShapeObjAlignBottom", "Action.ShapeObjAlignCenter", "Action.ShapeObjAlignMiddle",
     "Action.ShapeObjAlignWidth", "Action.ShapeObjAlignHeight", "Action.ShapeObjAlignSize",

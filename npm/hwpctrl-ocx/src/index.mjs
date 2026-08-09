@@ -328,6 +328,8 @@ const ACTIONS = {
   // 탐색이라(실측: 셀 10 → 15 → 20) 아직 다루지 않는다.
   MoveLineBegin: { kind: 'move', moveID: MOVE.START_OF_LINE },
   MoveLineEnd: { kind: 'move', moveID: MOVE.END_OF_LINE },
+  MoveSelLineBegin: { kind: 'move', moveID: MOVE.START_OF_LINE, sel: true },
+  MoveSelLineEnd: { kind: 'move', moveID: MOVE.END_OF_LINE, sel: true },
 
   // 단어 이동. 단어는 공백으로 나뉜 덩어리이고 누름틀이 그 자체로 경계를 만든다.
   MoveNextWord: { kind: 'move', moveID: MOVE.NEXT_WORD },
@@ -449,14 +451,16 @@ const ACTIONS = {
   // ── 지우기 ──
   //
   // 블록이 있으면 넷 다 블록을 지운다. 없으면 저마다 다른 범위다(전부 실측).
-  // `DeleteLine`·`DeleteLineEnd` 는 여기 없다 — "줄"은 조판이 정하는 것이라 파일만
-  // 보고는 알 수 없다(§4.18 과 같은 이유).
   // 블록을 지운다. 블록이 없을 때는 안 재 봤다 — 시나리오도 블록이 있는 경우만 건다.
   Erase: { kind: 'delete', to: 'blockOnly' },
   Delete: { kind: 'delete', to: 'nextChar' },
   DeleteBack: { kind: 'delete', to: 'prevChar' },
   DeleteWord: { kind: 'delete', to: 'nextWord' },
   DeleteWordBack: { kind: 'delete', to: 'prevWord' },
+  // 줄 단위 지우기. "줄"은 조판이 정하지만 그 나눔은 **파일이 들고 있고**(`LineSeg`) 한글이
+  // 답하는 값과 같다 — 캐럿에서 줄 끝까지(실측 46자)와 줄 통째로.
+  DeleteLineEnd: { kind: 'delete', to: 'lineEnd' },
+  DeleteLine: { kind: 'delete', to: 'wholeLine' },
 
   // ── 표 셀 이동 ──
   //
@@ -1692,7 +1696,13 @@ export class HwpCtrl {
           null,
         );
         const bounds = this.#paraBounds(this.#cursor.list, this.#cursor.para);
-        const lines = Array.isArray(starts) && starts.length ? starts : [bounds.start];
+        // 저장된 줄 시작을 **문단이 시작할 수 있는 자리로 자른다.** 첫 줄의 `text_start` 는
+        // 0 인데 캐럿은 앞머리 자리차지 뒤(구역·단 정의가 있으면 16)에 선다 — 자르지 않으면
+        // `MoveLineBegin` 만 0 을 준다(한글은 16). 둘째 줄부터는 자르는 일이 없다.
+        const lines =
+          Array.isArray(starts) && starts.length
+            ? starts.map((s) => Math.max(s, bounds.start))
+            : [bounds.start];
         const pos = this.#cursor.pos;
         this.#cursor = {
           ...this.#cursor,
@@ -2482,6 +2492,21 @@ export class HwpCtrl {
     if (to === 'blockOnly') return [pos, pos]; // 블록이 없으면 지울 것이 없다
     if (to === 'nextChar') return [pos, this.#stepCaret(1)];
     if (to === 'prevChar') return [this.#stepCaret(-1), pos];
+    if (to === 'lineEnd' || to === 'wholeLine') {
+      // 줄 나눔은 파일이 들고 있다(`LineSeg`) — `MoveLineBegin`/`End` 와 같은 눈금을 쓴다.
+      const starts = parseJson(
+        this.#doc?.getLineStarts?.(this.#cursor.list, this.#cursor.para) ?? '',
+        null,
+      );
+      const bounds = this.#paraBounds(this.#cursor.list, this.#cursor.para);
+      const lines =
+        Array.isArray(starts) && starts.length
+          ? starts.map((s) => Math.max(s, bounds.start))
+          : [bounds.start];
+      const begin = lines.filter((s) => s <= pos).pop() ?? lines[0];
+      const end = lines.find((s) => s > pos) ?? bounds.end;
+      return to === 'lineEnd' ? [pos, end] : [begin, end];
+    }
     if (to === 'nextWord') {
       const starts = this.#wordStarts();
       const next = starts.find((s) => s > pos);
