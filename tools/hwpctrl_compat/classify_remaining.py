@@ -80,6 +80,10 @@ NO_WINDOW = {
     "Action.TableResizeExRight", "Action.TableResizeExUp",
     "Action.TableResizeLineDown", "Action.TableResizeLineLeft",
     "Action.TableResizeLineRight", "Action.TableResizeLineUp",
+    # 뒤집기 — 개체 속성 36항목에 `HorzFlip`·`VertFlip`·`Flip` 어느 이름으로도 값이 없고
+    # 폭·높이·자리도 안 변한다(뒤집기는 크기를 안 바꾸니 당연하다).
+    "Action.ShapeObjHorzFlip", "Action.ShapeObjVertFlip",
+    "Action.ShapeObjHorzFlipOrgState", "Action.ShapeObjVertFlipOrgState",
     # 캐럿이 누름틀 안인데도 안 지워진다.
     "Action.DeleteField",
 }
