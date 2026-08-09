@@ -3053,6 +3053,7 @@ impl DocumentCore {
             start_cut,
             end_cut,
             is_block_split,
+            row_cursor_is_nested,
         }) = col.items.first()
         else {
             return Ok(Unsupported);
@@ -3292,6 +3293,7 @@ impl DocumentCore {
             start_cut,
             end_cut,
             *is_block_split,
+            *row_cursor_is_nested,
             pt_margin_left,
             pt_margin_right,
             pt_mt,
@@ -6340,6 +6342,7 @@ mod tests {
                         start_cut,
                         end_cut,
                         is_block_split,
+                        ..
                     } = item
                     {
                         if *para_index == host_pi && *control_index == host_ci {

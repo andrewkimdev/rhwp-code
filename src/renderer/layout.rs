@@ -6868,6 +6868,7 @@ impl LayoutEngine {
                 start_cut,
                 end_cut,
                 is_block_split,
+                row_cursor_is_nested,
             } => {
                 y_offset = self.layout_partial_table_item(
                     tree,
@@ -6881,6 +6882,7 @@ impl LayoutEngine {
                     start_cut,
                     end_cut,
                     *is_block_split,
+                    *row_cursor_is_nested,
                     &ctx,
                     y_offset,
                 );
@@ -8417,6 +8419,7 @@ impl LayoutEngine {
         start_cut: &[usize],
         end_cut: &[usize],
         is_block_split: bool,
+        row_cursor_is_nested: bool,
         ctx: &ColumnItemCtx,
         mut y_offset: f64,
     ) -> f64 {
@@ -8598,6 +8601,7 @@ impl LayoutEngine {
             start_cut,
             end_cut,
             is_block_split,
+            row_cursor_is_nested,
             pt_margin_left,
             pt_margin_right,
             pt_mt,
