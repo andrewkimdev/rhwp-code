@@ -47,20 +47,11 @@ rhwp changes that. Built with Rust and compiled to WebAssembly, it renders HWP d
 
 Build the skeleton solo, grow the muscle together, complete it as a public good.
 
-```
-0.5 ──── 1.0 ──── 2.0 ──── 3.0
-Foundation  Typeset   Collab    Complete
-```
+The current phase is **v0.8.2 — systematizing the v1.0 typesetting engine**. The canonical
+[project roadmap](ROADMAP.md) maintains the evidence, entry gates, definitions of done, and the relationship
+to the detailed AI-agent roadmap. It is maintained in Korean to keep one source of truth.
 
-| Phase | Direction | Strategy |
-|-------|-----------|----------|
-| **0.5 → 1.0** | Systematize the typesetting engine on a read/write foundation | Build core architecture solo, keep it solid |
-| **1.0 → 2.0** | Open community participation on top of an AI-driven typesetting pipeline | Lower the barrier to contribution |
-| **2.0 → 3.0** | Let community-built features elevate rhwp to a public asset | Reach parity with Hancom |
-
-> The reason for completing the skeleton alone through v0.5.0 is simple — when the community arrives, the core architecture must already be solid so that direction does not drift.
-
-## Milestones
+## Current Milestone
 
 ### v0.5.0 ~ v0.8.x — Foundation (current)
 
