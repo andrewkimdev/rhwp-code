@@ -16,7 +16,7 @@ use crate::error::HwpError;
 use crate::model::control::{AutoNumber, AutoNumberType, Control};
 use crate::model::page::ColumnDef;
 use crate::model::paragraph::{ColumnBreakType, Paragraph};
-use crate::model::shape::{Caption, ShapeObject};
+use crate::model::shape::{Caption, ShapeObject, TextBox};
 use crate::model::style::{Alignment, HeadType, LineSpacingType, UnderlineType};
 
 /// 언어 일곱 갈래 — 항목 이름 접미사 순서가 모델 배열 순서와 같다.
@@ -1047,6 +1047,52 @@ impl DocumentCore {
         c.vertical_offset = (c.vertical_offset as i64 + dy as i64).max(0) as u32;
         section.raw_stream = None;
         Ok(r#"{"ok":true,"moved":true}"#.to_string())
+    }
+
+    /// 글상자 붙이기·떼기 — 웹한글컨트롤 `Run("ShapeObjAttach/DetachTextBox")`.
+    ///
+    /// 캡션과 달리 **빈 채로 생긴다**(붙이면 캐럿이 `list 2, para 0, pos 0`). 떼면 그 리스트가
+    /// 사라져서 `SetPos(2,0,0)` 이 본문으로 되돌아간다 — 그 되돌아감이 판별자다.
+    pub fn set_text_box_at(
+        &mut self,
+        para_in_list: usize,
+        control_index: usize,
+        attach: bool,
+    ) -> Result<String, HwpError> {
+        let (sec, para_idx) = root_para_location(self, para_in_list)
+            .ok_or_else(|| HwpError::InvalidField(format!("본문 문단 {} 없음", para_in_list)))?;
+        let section = self
+            .document
+            .sections
+            .get_mut(sec)
+            .ok_or_else(|| HwpError::InvalidField(format!("구역 {} 없음", sec)))?;
+        let para = section
+            .paragraphs
+            .get_mut(para_idx)
+            .ok_or_else(|| HwpError::InvalidField(format!("문단 {} 없음", para_idx)))?;
+        let Some(Control::Shape(shape)) = para.controls.get_mut(control_index) else {
+            return Ok(r#"{"ok":false,"reason":"그리기 개체가 아니다"}"#.to_string());
+        };
+        let Some(drawing) = shape.drawing_mut() else {
+            return Ok(r#"{"ok":false,"reason":"글상자를 담을 수 없는 개체다"}"#.to_string());
+        };
+        let changed = if attach {
+            if drawing.text_box.is_some() {
+                false
+            } else {
+                drawing.text_box = Some(TextBox {
+                    paragraphs: vec![Paragraph::new_empty()],
+                    ..Default::default()
+                });
+                true
+            }
+        } else {
+            drawing.text_box.take().is_some()
+        };
+        if changed {
+            section.raw_stream = None;
+        }
+        Ok(format!("{{\"ok\":{}}}", changed))
     }
 
     /// 캡션 붙이기 — 웹한글컨트롤 `Run("ShapeObjAttachCaption")`.

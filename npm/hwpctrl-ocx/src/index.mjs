@@ -401,6 +401,10 @@ const ACTIONS = {
   ShapeObjAttachCaption: { kind: 'objectCaption', attach: true },
   ShapeObjDetachCaption: { kind: 'objectCaption', attach: false },
 
+  // 글상자는 캡션과 달리 **빈 채로** 생긴다 — 붙이면 캐럿이 그 안 자리 0 에 선다.
+  ShapeObjAttachTextBox: { kind: 'objectTextBox', attach: true },
+  ShapeObjDetachTextBox: { kind: 'objectTextBox', attach: false },
+
   // 묶음 풀기 — 사슬이 통째로 달라져서 보인다. `그리기` 하나가 자식 개체 여럿으로 풀린다
   // (실측: 그리기 → 그림·그림·그림). 앞뒤 순서·뒤집기와 달리 이 계열은 관측창이 있다.
   ShapeObjUngroup: { kind: 'objectUngroup' },
@@ -1954,6 +1958,36 @@ export class HwpCtrl {
       callback?.(null, ok, callbackUserData);
       return;
     }
+    if (action.kind === 'objectTextBox') {
+      const here = this.#selectedObject;
+      let ok = false;
+      if (here) {
+        try {
+          const raw = this.#doc.setTextBoxAt(here.para, here.controlIndex, action.attach);
+          ok = parseJson(raw, { ok: false }).ok === true;
+        } catch (e) {
+          console.warn(`[hwpctrl] Run("${actionID}") 실패:`, e);
+        }
+      }
+      if (ok) {
+        this.#listModel = null;
+        this.#ctrls = null;
+        this.#modified = true;
+        if (action.attach) {
+          // 붙이면 캐럿이 **글상자 안**으로 들어간다(빈 채라 자리 0). 리스트 번호는 표에서 찾는다.
+          const list = (this.#cursorModel().lists ?? []).find(
+            (l) => l.hostPara === here.para && l.controlIndex === here.controlIndex && !l.isCell,
+          );
+          if (list) {
+            this.#clearSelection();
+            this.#cursor = { list: list.listId, para: 0, pos: 0 };
+          }
+        }
+        // 떼기는 고르기를 안 푼다 — 캡션과 같다.
+      }
+      callback?.(null, ok, callbackUserData);
+      return;
+    }
     if (action.kind === 'objectCaption') {
       const here = this.#selectedObject;
       let ok = false;
@@ -2315,6 +2349,16 @@ export class HwpCtrl {
         (c) => c.location.para === here.para && c.location.controlIndex === here.controlIndex,
       );
       target = at >= 0 ? eligible[at + 1] : undefined;
+    } else if (this.#cursor.list !== 0) {
+      // **자식 리스트 안에서 부르면 그 리스트를 담은 개체**를 고른다(실측: 글상자 안에서
+      // `SelectCtrlFront` 를 걸면 그 사각형이 잡힌다). 본문 자리로 되짚으면 엉뚱한 개체를
+      // 고르게 된다 — 캐럿의 문단·자리가 본문 것이 아니기 때문이다.
+      const host = (this.#cursorModel().lists ?? []).find((l) => l.listId === this.#cursor.list);
+      target = host
+        ? eligible.find(
+            (c) => c.location.para === host.hostPara && c.location.controlIndex === host.controlIndex,
+          )
+        : undefined;
     } else {
       const { para, pos } = this.#cursor;
       target = eligible.find((c) => {

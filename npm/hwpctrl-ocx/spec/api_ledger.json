@@ -4,10 +4,10 @@
   "oracleVersion": "한글2022 (설치본 COM)",
   "summary": {
     "total": 484,
-    "done": 283,
+    "done": 285,
     "byStatus": {
-      "verified": 281,
-      "unimplemented": 201,
+      "verified": 283,
+      "unimplemented": 199,
       "substituted": 2
     },
     "byUnit": {
@@ -24,8 +24,8 @@
         "unimplemented": 3
       },
       "action": {
-        "unimplemented": 156,
-        "verified": 156
+        "unimplemented": 154,
+        "verified": 158
       },
       "parameterSet": {
         "verified": 49,
@@ -6184,13 +6184,15 @@
       "name": "ShapeObjAttachTextBox",
       "parameterSetId": null,
       "requiresExternalSet": false,
-      "status": "unimplemented",
+      "status": "verified",
       "notes": "",
       "legacyHwpctl": false,
       "oracle": {
-        "scenarios": [],
+        "scenarios": [
+          "p5-textbox"
+        ],
         "lastRun": null,
-        "diff": null
+        "diff": 0
       }
     },
     {
@@ -6282,13 +6284,15 @@
       "name": "ShapeObjDetachTextBox",
       "parameterSetId": null,
       "requiresExternalSet": false,
-      "status": "unimplemented",
+      "status": "verified",
       "notes": "",
       "legacyHwpctl": false,
       "oracle": {
-        "scenarios": [],
+        "scenarios": [
+          "p5-textbox"
+        ],
         "lastRun": null,
-        "diff": null
+        "diff": 0
       }
     },
     {
