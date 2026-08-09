@@ -15383,10 +15383,13 @@ fn validated_capsule_plan(capsule: &serde_json::Value) -> Result<(serde_json::Va
         .ok_or_else(|| "receipt.steps 가 음이 아닌 정수가 아님".to_string())?;
     let plan_steps = plan["steps"]
         .as_array()
-        .ok_or_else(|| "planText.steps 가 배열이 아님".to_string())?
+        .ok_or_else(|| "planText.steps/plan.steps 가 배열이 아님".to_string())?
         .len() as u64;
     if steps != plan_steps {
-        return Err("receipt.steps 와 planText.steps 길이 불일치".to_string());
+        return Err(
+            "receipt.steps 와 planText.steps 길이 불일치 (plan.steps 길이와 receipt.steps 불일치)"
+                .to_string(),
+        );
     }
     Ok((plan, steps))
 }

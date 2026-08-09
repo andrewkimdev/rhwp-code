@@ -194,6 +194,10 @@ fn output_neutral_plan_and_receipt_step_tampering_are_caught() {
         .as_str()
         .unwrap_or_default()
         .contains("receipt.steps 와 planText.steps"));
+    assert!(failure_for("steps.capsule.json")["error"]
+        .as_str()
+        .unwrap_or_default()
+        .contains("plan.steps 길이와 receipt.steps"));
     let _ = std::fs::remove_dir_all(&dir);
 }
 
