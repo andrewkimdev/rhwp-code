@@ -23,7 +23,7 @@ rhwp 를 도구로 부리는 AI 에이전트·스크립트가 **첫 번째로 �
 | 바이너리 | `rhwp v0.8.2` (release 빌드, `native-skia` 미포함) |
 | 측정일 | 2026-08-10 |
 | 자기서술 출처 | `rhwp capabilities` · `rhwp capabilities --mcp` · `mcp-serve` 의 `tools/list` |
-| 표면 규모 | CLI 명령 **71개**(그중 `--json` 계약 **40개**, batch 축 **8개**) · MCP 도구 **65개**(무상태 49 + 세션 전용 16) |
+| 표면 규모 | CLI 명령 **71개**(그중 `--json` 계약 **40개**, batch 축 **9개**) · MCP 도구 **65개**(무상태 49 + 세션 전용 16) |
 | 봉투 필드 | `capabilities.commands[].recordFields` 합집합 **185개** · §2 전수 사전 **188개**(`recordFields` 밖 실측 필드 `assertions`·`docId`·`preview` 포함) |
 | 표본 | `samples/` tracked 파일 **781개** 중 실측한 것만 §7 에 적었다 |
 
@@ -875,7 +875,7 @@ exit 3 ↔ `isError:false` + `identical:false`. 상세는
 | `query` | 13 | `info`·`digest`·`replay`·`lineage`·`audit`·`capabilities`·`export-provenance-map`·`export-agent-manifest`·`search`·`extract-data`·`fields`·`explain`·`inspect` |
 | `export` | 20 | `export-text`·`export-structure`·`export-ir-schema`·`export-plan-schema`·`export-svg`·`export-png`·`export-pdf`·`export-markdown`·`export-hwpx`·`export-hml`·`export-doclang`·`export-capabilities-schema`·`export-ontology`·`export-tables`·`table-to-csv`·`extract-pages`·`export-render-tree`·`convert`·`build-from-ingest`·`thumbnail` |
 | `edit` | 3 | `run`·`csv-to-table`·`edit`(6개 하위 명령) |
-| `batch` | 2 | `batch`(8축)·`scan` |
+| `batch` | 2 | `batch`(9축)·`scan` |
 | `serve` | 1 | `mcp-serve` |
 | `diagnostic` | 27 | `dump`·`dump-pages`·`dump-extents`·`dump-note-shape`·`dump-endnote-lines`·`dump-records`·`diag`·`ir-diff`·`verify`·`render-diff`·`hwpx-roundtrip`·`hwp5-roundtrip`·`measure-width`·`core-pages`·`bench`·`hwp5-inventory`·`hwp5-inventory-diff`·`hwp5-contract-analyze`·`hwp5-contract-probe`·`hwp5-ctrl-data-trace`·`hwp5-table-probe`·`hwp5-mel-personnel-probe`·`hwp5-borderfill-diagonal-probe`·`hwp5-first-para-control-probe`·`hwp5-anchor-trace`·`hwp5-cell-header-probe`·`hwp5-char-shape-audit` |
 | `internal` | 5 | `test-shape`·`test-caption`·`test-field`·`gen-table`·`gen-pua` |
@@ -889,8 +889,9 @@ exit 3 ↔ `isError:false` + `identical:false`. 상세는
 `convert`·`build-from-ingest`·`thumbnail`·`edit`·`batch`·`scan`·`dump-pages`·
 `ir-diff`·`verify`·`render-diff`.
 
-**batch 로도 도는 축 8개** — `export-text`·`info`·`export-structure`·`export-tables`·
-`fields`·`search`·`convert`·`fill`. 이 중 파일을 쓰는 축은 `convert`·`fill` 둘뿐이고,
+**batch 로도 도는 축 9개** — `export-text`·`info`·`export-structure`·`export-tables`·
+`fields`·`search`·`extract-data`·`convert`·`fill`. 이 중 파일을 쓰는 축은
+`convert`·`fill` 둘뿐이고,
 `convert` 는 MCP 에 노출하지 않는다(CLI 전용).
 
 **`edit` 하위 6개** — `fill-fields`·`replace-text`·`set-cell`·`insert-image`·
