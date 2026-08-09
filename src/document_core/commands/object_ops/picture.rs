@@ -1622,12 +1622,17 @@ impl DocumentCore {
                     section.raw_stream = None;
                     let target_para =
                         Self::resolve_cell_paragraph_mut(section, para_idx, cell_path)?;
-                    // [#4347] 이 경로는 자취가 **필요 없다**(실측). 글자 없는 표 문단에서는
-                    // `control_text_positions()` 의 폴백 셈(`ci × 8`)이 곧 정답이라 갭이 없어도
-                    // 자리가 맞는다 — 셀에 그림을 넣으면 `표@0 그림@8` 로 나온다.
-                    let new_ctrl_idx = target_para.controls.len();
-                    target_para.controls.push(Control::Picture(Box::new(pic)));
-                    target_para.ctrl_data_records.push(None);
+                    // [#4347] **글상자 문단은 글자를 담는다.** 표 문단(글자 없음)과 달리 여기서는
+                    // 갭이 없으면 자리가 어긋난다 — 글자 일곱 개짜리 글상자의 자리 3 에 그림을
+                    // 넣어도 스트림 대응이 그대로였고(4→4), 캐럿이 설 수 있는 첫 자리가 0 에서
+                    // 7 로 튀었다. 본문 문단과 같은 자취를 남긴다.
+                    let new_ctrl_idx = Self::control_insert_index(target_para, char_offset);
+                    target_para.align_ctrl_data_records();
+                    target_para
+                        .controls
+                        .insert(new_ctrl_idx, Control::Picture(Box::new(pic)));
+                    target_para.ctrl_data_records.insert(new_ctrl_idx, None);
+                    target_para.shift_for_inline_control_insert(char_offset);
                     target_para.control_mask |= 0x00000800;
                     let logical_positions =
                         crate::document_core::helpers::find_logical_control_positions(target_para);
@@ -4187,6 +4192,80 @@ mod issue_4347_insert_leaves_coordinate_trace {
             0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00,
             0x00, 0x1F, 0x15, 0xC4, 0x89,
         ]
+    }
+
+    /// 글상자 문단은 **글자를 담는다** — 표 문단(글자 없음)과 달리 갭이 없으면 자리가 어긋난다.
+    #[test]
+    fn inserted_picture_in_a_textbox_keeps_its_place_too() {
+        let mut core = DocumentCore::new_empty();
+        let mut doc = Document::default();
+        doc.sections.push(Section {
+            paragraphs: vec![Paragraph::default()],
+            ..Default::default()
+        });
+        core.set_document(doc);
+        // 글상자를 만들고 그 안에 글자 일곱을 넣는다.
+        let made = core
+            .create_shape_control_native(
+                0,
+                0,
+                0,
+                20000,
+                10000,
+                0,
+                0,
+                true,
+                "square",
+                "textbox",
+                false,
+                false,
+                &[],
+            )
+            .expect("글상자");
+        let ctrl_idx =
+            crate::document_core::helpers::json_u32(&made, "controlIdx").unwrap() as usize;
+        core.insert_text_in_cell_native(0, 0, ctrl_idx, 0, 0, 0, "가나다라마바사")
+            .expect("글상자에 글");
+
+        core.insert_picture_native(
+            0,
+            0,
+            3,
+            &[(ctrl_idx, 0, 0)],
+            &png(),
+            100,
+            100,
+            1,
+            1,
+            "png",
+            "",
+            None,
+            None,
+        )
+        .expect("글상자 안 그림");
+
+        let shape = match &core.document.sections[0].paragraphs[0].controls[ctrl_idx] {
+            Control::Shape(s) => s,
+            other => panic!("글상자가 아니다: {:?}", other),
+        };
+        let tb = shape
+            .drawing()
+            .and_then(|d| d.text_box.as_ref())
+            .expect("글상자 안");
+        let para = &tb.paragraphs[0];
+        assert_eq!(
+            para.char_offsets[2], 2,
+            "넣은 자리 앞 글자는 그대로여야 한다"
+        );
+        assert_eq!(
+            para.char_offsets[3], 11,
+            "넣은 자리 뒤 글자는 컨트롤 몫 8칸만큼 밀려야 한다"
+        );
+        assert_eq!(
+            para.control_text_positions().first().copied(),
+            Some(3),
+            "그림은 넣은 글자 자리에 있어야 한다"
+        );
     }
 
     #[test]
