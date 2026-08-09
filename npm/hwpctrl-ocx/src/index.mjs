@@ -627,7 +627,10 @@ class IDHwpCtrlCode {
    * `attr` 비트를 풀어야 하는 항목(`TextWrap`·`VertRelTo` …)은 아직 안 넣는다.
    */
   get Properties() {
-    return new ParameterSet('Ctrl', this.#at.props ?? {});
+    // 속성 셋의 이름은 **컨트롤 갈래마다 다르다**(실측: 표는 `Table`, 그리기·그림은
+    // `ShapeObject`). 나머지 갈래는 아직 안 쟀으므로 예전 이름을 그대로 둔다.
+    const byKind = { tbl: 'Table', gso: 'ShapeObject' };
+    return new ParameterSet(byKind[this.#at.ctrlId] ?? 'Ctrl', this.#at.props ?? {});
   }
 
   /** 이 컨트롤이 문서 어디에 있는지 — `DeleteCtrl` 이 쓰는 내부 값이다(규격 API 아님). */
@@ -918,6 +921,12 @@ export class HwpCtrl {
   #wasm;
   #doc;
   #onSave;
+  /**
+   * 호스트의 **파일 읽기** 고리. `InsertPicture` 처럼 규격이 **경로**를 받는 API 에 필요하다 —
+   * OCX 는 바탕화면에서 돌아 경로가 곧 파일이지만 이 층은 브라우저에서도 돌아 파일을 못 연다.
+   * 없으면 그 API 는 아무 일도 하지 않는다(거짓말하지 않는다).
+   */
+  #onReadFile;
   #cursor = { list: 0, para: 0, pos: 0 };
   /** 리스트 표 캐시 — 문서를 새로 열 때 버린다. */
   #listModel = null;
@@ -955,10 +964,11 @@ export class HwpCtrl {
   #version = PACKAGE_VERSION;
   #listeners = new Map();
 
-  constructor({ wasm, doc, onSave, version } = {}) {
+  constructor({ wasm, doc, onSave, onReadFile, version } = {}) {
     this.#wasm = wasm;
     this.#doc = doc ?? (wasm ? wasm.HwpDocument.createEmpty() : null);
     this.#onSave = onSave;
+    this.#onReadFile = onReadFile;
     if (typeof version === 'string') this.#version = version;
   }
 
@@ -1496,6 +1506,81 @@ export class HwpCtrl {
   /** 규격 §8.4 — 문서가 담은 첫 컨트롤. `Next` 로 사슬을 탄다. */
   get HeadCtrl() {
     return this.#ctrlChain()[0] ?? null;
+  }
+
+  /**
+   * 규격 §8.3.23 — 캐럿 자리에 그림을 넣는다. 반환은 **넣은 컨트롤**이다.
+   *
+   * **경로는 절대 경로여야 한다.** 상대 경로를 주면 한글이 조용히 아무 일도 안 한다 —
+   * `Open` 이 상대 경로로 되니 여기도 될 것이라 여겼다가 "무동작"으로 잘못 적었었다(§4.71).
+   *
+   * 실측한 계약: 컨트롤은 `gso`/`그림` 이고 속성 셋은 `ShapeObject`(항목 33)다. 크기는
+   * **1픽셀 = 75 HWPUNIT**(96 DPI)로 앉는다 — 164×152 인 jpg 이 12300×11400 이다. 배치는
+   * **글자처럼**(`TreatAsChar` 1)이고 앵커는 넣은 자리 그대로이며 캐럿은 **8** 밀린다.
+   *
+   * 파일은 호스트가 읽어 준다(`onReadFile`). 그 고리가 없으면 아무 일도 하지 않는다 — 이 층은
+   * 브라우저에서도 돌아 스스로 파일을 열 수 없기 때문이다.
+   */
+  InsertPicture(path, embed = true, sizeOption = 0) {
+    if (typeof this.#onReadFile !== 'function') {
+      console.warn('[hwpctrl] InsertPicture: 호스트 파일 읽기 고리(onReadFile)가 없다');
+      return null;
+    }
+    const { list, para, pos } = this.#cursor;
+    if (list !== 0) return null;
+    let bytes;
+    try {
+      bytes = this.#onReadFile(String(path ?? ''));
+    } catch (e) {
+      console.warn('[hwpctrl] InsertPicture: 파일을 못 읽었다:', e);
+      return null;
+    }
+    if (!bytes || !bytes.length) return null;
+    const size = imagePixelSize(bytes);
+    if (!size || !size.width || !size.height) {
+      console.warn('[hwpctrl] InsertPicture: 그림 크기를 못 읽었다');
+      return null;
+    }
+    const ext = String(path).slice(String(path).lastIndexOf('.') + 1).toLowerCase();
+    try {
+      const raw = this.#doc.getCharIndexAtStreamPos?.(list, para, pos);
+      const charOffset = parseJson(raw ?? '', { charIndex: 0 })?.charIndex ?? 0;
+      this.#doc.insertPicture(
+        0,
+        para,
+        charOffset,
+        '[]',
+        bytes,
+        size.width * HWPUNIT_PER_PIXEL,
+        size.height * HWPUNIT_PER_PIXEL,
+        size.width,
+        size.height,
+        ext,
+        '',
+      );
+    } catch (e) {
+      console.warn('[hwpctrl] InsertPicture 실패:', e);
+      return null;
+    }
+    this.#ctrls = null;
+    // 코어는 그림을 **자리차지**로 넣는데(studio 는 끌어다 놓으므로 그쪽이 맞다) 한글의
+    // `InsertPicture` 는 **글자처럼** 앉힌다(실측 `TreatAsChar` 1). 코어 기본값을 바꾸면
+    // studio 가 달라지므로 여기서 넣은 그 컨트롤만 되돌린다.
+    const placed = this.#ctrlChain().find(
+      (c) => c.location.para === para && c.UserDesc === '그림',
+    );
+    if (placed) {
+      try {
+        this.#doc.setPictureProperties(0, para, placed.location.controlIndex, '{"treatAsChar":true}');
+      } catch (e) {
+        console.warn('[hwpctrl] InsertPicture: 글자처럼으로 못 돌렸다:', e);
+      }
+    }
+    this.#listModel = null;
+    this.#ctrls = null;
+    this.#modified = true;
+    this.#cursor = { list, para, pos: pos + CONTROL_CODE_UNITS };
+    return this.#ctrlChain().find((c) => c.location.para === para && c.UserDesc === '그림') ?? null;
   }
 
   /**
@@ -3287,6 +3372,55 @@ export class HwpCtrl {
 }
 
 /** 하니스·호스트 공통 진입점. */
+
+/**
+ * 그림 파일의 **본디 픽셀 크기**를 머리말에서 읽는다. JPEG·PNG·GIF·BMP 만 본다.
+ *
+ * 왜 필요한가: 한글은 넣은 그림을 **1픽셀 = 75 HWPUNIT**(96 DPI)로 앉힌다(실측: 164×152 인
+ * jpg 이 12300×11400). 그 수를 맞추려면 픽셀 크기를 알아야 하는데, 코어의 `insertPicture` 는
+ * 크기를 받기만 하고 스스로 재지 않는다.
+ */
+function imagePixelSize(bytes) {
+  const b = bytes;
+  if (!b || b.length < 24) return null;
+  // PNG: IHDR 의 폭·높이(빅엔디언 4바이트씩)
+  if (b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47) {
+    const rd = (o) => (b[o] << 24) | (b[o + 1] << 16) | (b[o + 2] << 8) | b[o + 3];
+    return { width: rd(16) >>> 0, height: rd(20) >>> 0 };
+  }
+  // GIF: 논리 화면 크기(리틀엔디언 2바이트씩)
+  if (b[0] === 0x47 && b[1] === 0x49 && b[2] === 0x46) {
+    return { width: b[6] | (b[7] << 8), height: b[8] | (b[9] << 8) };
+  }
+  // BMP: DIB 머리말의 폭·높이(리틀엔디언 4바이트, 높이는 음수일 수 있다)
+  if (b[0] === 0x42 && b[1] === 0x4d) {
+    const rd = (o) => (b[o] | (b[o + 1] << 8) | (b[o + 2] << 16) | (b[o + 3] << 24)) | 0;
+    return { width: Math.abs(rd(18)), height: Math.abs(rd(22)) };
+  }
+  // JPEG: SOF 표식(0xC0~0xCF 중 0xC4·0xC8·0xCC 는 아니다)에서 읽는다.
+  if (b[0] === 0xff && b[1] === 0xd8) {
+    let i = 2;
+    while (i + 9 < b.length) {
+      if (b[i] !== 0xff) { i += 1; continue; }
+      const marker = b[i + 1];
+      if (marker === 0xd8 || marker === 0xd9 || marker === 0x01 || (marker >= 0xd0 && marker <= 0xd7)) {
+        i += 2;
+        continue;
+      }
+      const len = (b[i + 2] << 8) | b[i + 3];
+      if (marker >= 0xc0 && marker <= 0xcf && marker !== 0xc4 && marker !== 0xc8 && marker !== 0xcc) {
+        return { height: (b[i + 5] << 8) | b[i + 6], width: (b[i + 7] << 8) | b[i + 8] };
+      }
+      if (len <= 0) return null;
+      i += 2 + len;
+    }
+  }
+  return null;
+}
+
+/** 한글이 그림을 앉히는 자 — 1픽셀에 이만큼이다(96 DPI, 실측). */
+const HWPUNIT_PER_PIXEL = 75;
+
 export function createHwpCtrl(options = {}) {
   return new HwpCtrl(options);
 }

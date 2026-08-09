@@ -139,7 +139,11 @@ fn collect_controls(
         let mut seen = control_positions.clone();
         seen.sort_unstable();
         let has_dup = seen.windows(2).any(|w| w[0] == w[1]);
-        if has_dup && !para.char_offsets.is_empty() {
+        // **첫 글자 자리가 0 이면 대응표를 못 믿는다** — 앞머리에 컨트롤이 있는데 0 이라는 것은
+        // 그 표가 컨트롤을 안 담았다는 뜻이다(`leading_anchor_pos` 와 같은 단서). 그때 이 되짚기를
+        // 쓰면 자리가 통째로 어긋난다(그림을 넣은 문단에서 앵커가 20 대신 406 으로 나왔다).
+        let offsets_trustworthy = para.char_offsets.first().is_some_and(|o| *o > 0);
+        if has_dup && offsets_trustworthy {
             let mut out = Vec::with_capacity(para.controls.len());
             let mut p = 0usize;
             let mut chars = para.char_offsets.iter().peekable();

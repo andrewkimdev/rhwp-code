@@ -14,7 +14,11 @@
  * - `legacy`  — 기존 `rhwp-studio/src/hwpctl/` 층. **P0 자체 검증 전용**이다.
  *               하니스가 "이미 아는 차이"를 실제로 잡아내는지 보는 데 쓴다.
  * - `<경로>`  — 신규 패키지의 엔트리(ESM). P1 부터 이쪽을 쓴다.
- *               `createHwpCtrl({ wasm, onSave })` 를 export 하면 된다.
+ *               `createHwpCtrl({ wasm, onSave, onReadFile })` 를 export 하면 된다.
+ *
+ * `onReadFile` 은 규격이 **경로**를 받는 API(`InsertPicture`)를 위한 호스트 고리다. 바탕화면
+ * 컨트롤은 경로가 곧 파일이지만 이 층은 브라우저에서도 돌아 스스로 못 연다 — 하니스는 node 의
+ * 파일 읽기를 그대로 준다.
  *
  * ## 대조가 성립하려면
  *
@@ -127,7 +131,7 @@ async function loadImpl(impl, wasm) {
     // 신규 패키지는 **자기 손으로** 문서를 연다(규격의 `Open`). 하니스가 문서를 만들어
     // 넘겨 주면 그 API 가 대조에서 빠져 "구현했다"고 착각하게 된다.
     ownsOpen: true,
-    make: ({ wasm, onSave }) => mod.createHwpCtrl({ wasm, onSave }),
+    make: ({ wasm, onSave, onReadFile }) => mod.createHwpCtrl({ wasm, onSave, onReadFile }),
   };
 }
 
@@ -229,9 +233,12 @@ async function main() {
     const onSave = (bytes) => {
       savedBytes = bytes;
     };
+    // 규격이 **경로**를 받는 API(`InsertPicture`)를 위한 호스트 고리. 오라클은 바탕화면에서
+    // 그 경로를 그대로 열므로 이쪽도 같은 경로를 읽어 준다.
+    const onReadFile = (path) => new Uint8Array(readFileSync(path));
 
     if (impl.ownsOpen) {
-      ctrl = impl.make({ wasm, onSave });
+      ctrl = impl.make({ wasm, onSave, onReadFile });
       if (scenario.open) {
         const bytes = readFileSync(join(REPO, scenario.open));
         const opened = ctrl.Open(new Uint8Array(bytes), '', '');

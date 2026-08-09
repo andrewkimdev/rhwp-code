@@ -4,10 +4,10 @@
   "oracleVersion": "한글2022 (설치본 COM)",
   "summary": {
     "total": 484,
-    "done": 306,
+    "done": 307,
     "byStatus": {
-      "verified": 304,
-      "unimplemented": 178,
+      "verified": 305,
+      "unimplemented": 177,
       "substituted": 2
     },
     "byUnit": {
@@ -17,8 +17,8 @@
         "unimplemented": 2
       },
       "method": {
-        "verified": 54,
-        "unimplemented": 34
+        "verified": 55,
+        "unimplemented": 33
       },
       "event": {
         "unimplemented": 3
@@ -1492,14 +1492,16 @@
       "name": "InsertPicture",
       "arity": 9,
       "section": "8.3.25",
-      "status": "unimplemented",
+      "status": "verified",
       "notes": "",
       "legacyHwpctl": false,
       "specArityAmbiguous": true,
       "oracle": {
-        "scenarios": [],
+        "scenarios": [
+          "pF-insertpicture"
+        ],
         "lastRun": null,
-        "diff": null
+        "diff": 0
       }
     },
     {

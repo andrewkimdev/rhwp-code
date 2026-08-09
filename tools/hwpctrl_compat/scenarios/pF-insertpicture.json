@@ -1,0 +1,80 @@
+{
+  "id": "pF-insertpicture",
+  "title": "그림 넣기 — 절대 경로, 1픽셀 75 HWPUNIT, 글자처럼",
+  "ledger": [
+    "HwpCtrl.method.InsertPicture"
+  ],
+  "open": "samples/para-001.hwp",
+  "calls": [
+    [
+      "SetPos",
+      [
+        0,
+        5,
+        3
+      ]
+    ],
+    [
+      "GetPos",
+      []
+    ],
+    [
+      "InsertPicture",
+      [
+        "C:\\Users\\planet\\rhwp\\samples\\s1.jpg",
+        true,
+        0
+      ]
+    ],
+    [
+      "GetPos",
+      []
+    ],
+    [
+      "HeadCtrl.Next.Next.CtrlID",
+      []
+    ],
+    [
+      "HeadCtrl.Next.Next.UserDesc",
+      []
+    ],
+    [
+      "HeadCtrl.Next.Next.Properties.SetID",
+      []
+    ],
+    [
+      "HeadCtrl.Next.Next.Properties.Item",
+      [
+        "Width"
+      ]
+    ],
+    [
+      "HeadCtrl.Next.Next.Properties.Item",
+      [
+        "Height"
+      ]
+    ],
+    [
+      "HeadCtrl.Next.Next.Properties.Item",
+      [
+        "TreatAsChar"
+      ]
+    ],
+    [
+      "HeadCtrl.Next.Next.GetAnchorPos(0).Item",
+      [
+        "Para"
+      ]
+    ],
+    [
+      "HeadCtrl.Next.Next.GetAnchorPos(0).Item",
+      [
+        "Pos"
+      ]
+    ],
+    [
+      "SelectionMode",
+      []
+    ]
+  ]
+}
