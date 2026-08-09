@@ -31,11 +31,18 @@ WORKER_MARKER = "  # [#2393] 기본 테스트 병렬화"
 #   게이트가 아니다. Rust 비코드 영역을 같은 길이의 공백으로 가린 뒤 최상위
 #   inner attribute 만 찾는다.
 _INNER_CFG_OPEN = re.compile(r"#!\[\s*cfg\s*\(")
+_OUTER_CFG_OPEN = re.compile(r"#\s*\[\s*cfg\s*\(")
 _RAW_STRING_OPEN = re.compile(r'(?:br|rb|r)(?P<hashes>#{0,255})"')
 _CFG_TOKEN = re.compile(
     r'\s*(?:(?P<ident>[A-Za-z_][A-Za-z0-9_]*)|'
     r'(?P<string>"(?:\\.|[^"\\])*")|(?P<punct>[(),=]))'
 )
+_OUTER_ATTR_FUNCTION = re.compile(
+    r"(?m)^(?P<attrs>(?:[ \t]*#\s*\[[^]]*\]\s*)+)"
+    r"(?:(?:pub(?:\([^)]*\))?)\s+)?(?:async\s+)?(?:unsafe\s+)?fn\s+"
+    r"(?P<name>[A-Za-z_][A-Za-z0-9_]*)"
+)
+_TEST_ATTRIBUTE = re.compile(r"#\s*\[\s*test\s*\]")
 
 
 def _mask_rust_non_code(source: str) -> str:
@@ -102,32 +109,44 @@ def _mask_rust_non_code(source: str) -> str:
     return "".join(masked)
 
 
-def _inner_cfg_predicates(source: str) -> list[str]:
-    """crate 최상위 `#![cfg(...)]` 술어를 괄호 균형으로 잘라낸다."""
-    code = _mask_rust_non_code(source)
-    brace_depth = []
+def _brace_depths(code: str) -> list[int]:
+    depths = []
     depth = 0
     for char in code:
-        brace_depth.append(depth)
+        depths.append(depth)
         if char == "{":
             depth += 1
         elif char == "}" and depth > 0:
             depth -= 1
+    return depths
+
+
+def _cfg_predicate_at(source: str, code: str, opened: re.Match[str]) -> str | None:
+    depth = 1
+    index = opened.end()
+    while index < len(code) and depth > 0:
+        if code[index] == "(":
+            depth += 1
+        elif code[index] == ")":
+            depth -= 1
+        index += 1
+    if depth != 0:
+        return None
+    return source[opened.end():index - 1]
+
+
+def _inner_cfg_predicates(source: str) -> list[str]:
+    """crate 최상위 `#![cfg(...)]` 술어를 괄호 균형으로 잘라낸다."""
+    code = _mask_rust_non_code(source)
+    brace_depth = _brace_depths(code)
 
     predicates = []
     for opened in _INNER_CFG_OPEN.finditer(code):
         if brace_depth[opened.start()] != 0:
             continue
-        depth = 1
-        index = opened.end()
-        while index < len(code) and depth > 0:
-            if code[index] == "(":
-                depth += 1
-            elif code[index] == ")":
-                depth -= 1
-            index += 1
-        if depth == 0:
-            predicates.append(source[opened.end():index - 1])
+        predicate = _cfg_predicate_at(source, code, opened)
+        if predicate is not None:
+            predicates.append(predicate)
     return predicates
 
 
@@ -243,6 +262,61 @@ def file_gated_native_skia_tests() -> list[str]:
         for path in TESTS_DIR.glob("*.rs")
         if source_is_file_gated_native_skia(path.read_text(encoding="utf-8"))
     )
+
+
+def _function_gated_native_skia_test_names(source: str) -> list[str]:
+    """혼합 crate의 최상위 함수 단위 native-skia test 이름을 찾는다."""
+    if source_is_file_gated_native_skia(source):
+        return []
+
+    code = _mask_rust_non_code(source)
+    brace_depth = _brace_depths(code)
+    names = []
+    for function in _OUTER_ATTR_FUNCTION.finditer(code):
+        if brace_depth[function.start()] != 0:
+            continue
+        attributes = function.group("attrs")
+        if not _TEST_ATTRIBUTE.search(attributes):
+            continue
+
+        predicates = []
+        for opened in _OUTER_CFG_OPEN.finditer(
+            code,
+            function.start("attrs"),
+            function.end("attrs"),
+        ):
+            predicate = _cfg_predicate_at(source, code, opened)
+            if predicate is not None:
+                predicates.append(predicate)
+        if any(_requires_native_skia_enabled(predicate) for predicate in predicates):
+            names.append(function.group("name"))
+    return names
+
+
+def function_gated_native_skia_tests() -> list[str]:
+    """`tests/*.rs`의 혼합 crate 함수 게이트 목록을 `stem::fn`으로 반환한다."""
+    found = []
+    for path in TESTS_DIR.glob("*.rs"):
+        source = path.read_text(encoding="utf-8")
+        found.extend(
+            f"{path.stem}::{name}"
+            for name in _function_gated_native_skia_test_names(source)
+        )
+    return sorted(found)
+
+
+def file_gated_native_skia_support_files() -> list[str]:
+    """파일 게이트 target의 `#[path]` support를 저장소 상대 경로로 반환한다."""
+    repo_root = TESTS_DIR.parent.resolve()
+    found = set()
+    for path in TESTS_DIR.glob("*.rs"):
+        source = path.read_text(encoding="utf-8")
+        if not source_is_file_gated_native_skia(source):
+            continue
+        for relative in re.findall(r'#\[\s*path\s*=\s*"([^"]+)"\s*\]', source):
+            resolved = (path.parent / relative).resolve()
+            found.add(resolved.relative_to(repo_root).as_posix())
+    return sorted(found)
 
 
 class CiImpactWorkflowTests(unittest.TestCase):
@@ -458,6 +532,8 @@ class CiImpactWorkflowTests(unittest.TestCase):
         """
         found = file_gated_native_skia_tests()
         for expected in [
+            "cli_exit_codes_native",
+            "issue_1144_native",
             "issue_2083_hide_fill_page_background",
             "issue_2292_chart_png_clip",
             "issue_2293_chart_png_text",
@@ -467,6 +543,57 @@ class CiImpactWorkflowTests(unittest.TestCase):
         # 함수 게이트 파일은 이 부류가 아니다 — 별도 축(#4132)이다.
         self.assertNotIn("issue_2225_missing_picture_placeholder", found)
         self.assertNotIn("cli_exit_codes", found)
+
+    def test_only_documented_mixed_function_gate_remains(self) -> None:
+        """[#4132] 새 함수 게이트 test를 파일 규약 밖의 예외로 만들지 않는다."""
+        self.assertEqual(
+            function_gated_native_skia_tests(),
+            [
+                "issue_2225_missing_picture_placeholder::"
+                "issue_2225_export_png_defaults_to_print_equivalent_skia_profile",
+            ],
+        )
+
+    def test_file_gated_native_skia_support_files_are_classifier_inputs(self) -> None:
+        """[#4132] target이 공유하는 helper 변경도 Native job을 선택해야 한다."""
+        support_files = file_gated_native_skia_support_files()
+        for expected in [
+            "tests/support/cli_exit_code_support.rs",
+            "tests/support/issue_1144_support.rs",
+        ]:
+            self.assertIn(expected, support_files)
+
+        classifier = CLASSIFIER_PATH.read_text(encoding="utf-8")
+        missing = [
+            path for path in support_files if f"'{path}'" not in classifier
+        ]
+        self.assertEqual(
+            missing,
+            [],
+            "file-gated native-skia target의 #[path] support가 classifier 소유 목록에 없다",
+        )
+
+    def test_function_gate_discovery_rejects_non_tests_and_false_cfgs(self) -> None:
+        detected = [
+            '#[cfg(feature = "native-skia")]\n#[test]\nfn native_test() {}',
+            '#[test]\n#[cfg(all(unix, feature = "native-skia"))]\nfn native_test() {}',
+        ]
+        rejected = [
+            '#[cfg(not(feature = "native-skia"))]\n#[test]\nfn opposite() {}',
+            '#[cfg(any(feature = "native-skia", unix))]\n#[test]\nfn optional() {}',
+            '#[cfg(feature = "native-skia")]\nfn helper() {}',
+            'const S: &str = r#"#[cfg(feature = "native-skia")] #[test] fn quoted() {}"#;',
+            'fn nested() { #[cfg(feature = "native-skia")] #[test] fn inner() {} }',
+        ]
+        for source in detected:
+            with self.subTest(detected=source):
+                self.assertEqual(
+                    _function_gated_native_skia_test_names(source),
+                    ["native_test"],
+                )
+        for source in rejected:
+            with self.subTest(rejected=source):
+                self.assertEqual(_function_gated_native_skia_test_names(source), [])
 
     def test_discovery_rejects_negated_gates_and_quoted_attributes(self) -> None:
         """[PR #4170 리뷰] 발견 패턴의 **반대 방향** 오탐도 막는다.
