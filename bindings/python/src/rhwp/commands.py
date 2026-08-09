@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Union
 
 from ._process import DEFAULT_TIMEOUT, run_json, run_ndjson
+from .errors import EXIT_USAGE, UsageError
 from .models import Envelope
 
 __all__ = [
@@ -39,6 +40,7 @@ __all__ = [
     "export_plan_schema",
     "export_agent_manifest",
     "ir_diff",
+    "render_diff",
     "thumbnail",
     "extract_pages",
     "build_from_ingest",
@@ -74,14 +76,41 @@ def info(path: PathLike, *, timeout: Optional[float] = DEFAULT_TIMEOUT) -> Envel
     return Envelope(run_json(["info", path, "--json"], timeout=timeout))
 
 
-def export_text(path: PathLike, *, timeout: Optional[float] = DEFAULT_TIMEOUT) -> Envelope:
-    """쪽별 평문 추출."""
-    return Envelope(run_json(["export-text", path, "--json"], timeout=timeout))
+def export_text(
+    path: PathLike,
+    *,
+    page: Optional[int] = None,
+    max_chars: Optional[int] = None,
+    timeout: Optional[float] = DEFAULT_TIMEOUT,
+) -> Envelope:
+    """쪽별 평문 추출.
+
+    [트랙 G R61 D-12] ``page``/``max_chars`` 는 CLI 에 있었지만 이 래퍼에는
+    없었다(Node 바인딩엔 있었음). ``page`` 로 특정 쪽만, ``max_chars`` 로
+    쪽당 상한을 준다(기본은 무제한 — #3787 S7).
+    """
+    args: List[Any] = ["export-text", path]
+    _flag(args, "-p", page)
+    _flag(args, "--max-chars", max_chars)
+    args.append("--json")
+    return Envelope(run_json(args, timeout=timeout))
 
 
-def export_structure(path: PathLike, *, timeout: Optional[float] = DEFAULT_TIMEOUT) -> Envelope:
-    """문서 구조(제목 계층·절)."""
-    return Envelope(run_json(["export-structure", path, "--json"], timeout=timeout))
+def export_structure(
+    path: PathLike,
+    *,
+    mode: Optional[str] = None,
+    timeout: Optional[float] = DEFAULT_TIMEOUT,
+) -> Envelope:
+    """문서 구조(제목 계층·절).
+
+    [트랙 G R61 D-12] ``mode``(``auto``/``outline``/``clause``)가 CLI 에 있었지만
+    이 래퍼에는 없었다.
+    """
+    args: List[Any] = ["export-structure", path]
+    _flag(args, "--mode", mode)
+    args.append("--json")
+    return Envelope(run_json(args, timeout=timeout))
 
 
 def export_tables(path: PathLike, *, timeout: Optional[float] = DEFAULT_TIMEOUT) -> Envelope:
@@ -140,12 +169,17 @@ def digest(
     *,
     sections: bool = False,
     pages: Optional[str] = None,
+    max_chars: Optional[int] = None,
     timeout: Optional[float] = DEFAULT_TIMEOUT,
 ) -> Envelope:
-    """요약용 청킹 — 주소를 보존한 절 단위 또는 쪽 범위 창."""
+    """요약용 청킹 — 주소를 보존한 절 단위 또는 쪽 범위 창.
+
+    [트랙 G R61 D-12] ``max_chars``가 CLI 에 있었지만 이 래퍼에는 없었다.
+    """
     args: List[Any] = ["digest", path]
     _switch(args, "--sections", sections)
     _flag(args, "--pages", pages)
+    _flag(args, "--max-chars", max_chars)
     args.append("--json")
     return Envelope(run_json(args, timeout=timeout))
 
@@ -392,11 +426,15 @@ def export_hwpx(
 ) -> Envelope:
     """HWP → HWPX 변환.
 
+    ``out`` 은 CLI 의 **위치 인자**다(``export-hwpx <입력> [출력] ...`` — 플래그가
+    아니다). 생략하면 CLI 가 자체 기본 경로를 쓴다.
+
     ``verify=True`` 면 봉투에 ``verify.identical`` 이 담긴다. 판정 실패(exit 3)는
     기본적으로 예외가 아니다 — 봉투를 읽어 판단하라.
     """
     args: List[Any] = ["export-hwpx", path]
-    _flag(args, "-o", out)
+    if out is not None:
+        args.append(out)
     _switch(args, "--verify", verify)
     _switch(args, "--verify-pages", verify_pages)
     args.append("--json")
@@ -411,19 +449,71 @@ def convert(
     raise_on_verdict: bool = False,
     timeout: Optional[float] = DEFAULT_TIMEOUT,
 ) -> Envelope:
-    """HWPX → HWP 변환."""
-    args: List[Any] = ["convert", path]
-    _flag(args, "-o", out)
+    """HWPX → HWP 변환.
+
+    ``out`` 은 CLI 의 **위치 인자**이고(``convert <입력> <출력> ...``), 여기서는
+    **필수**다 — 기본 산출 경로가 없어서, 빠뜨리면 CLI 가 사용법 오류로 끝난다.
+    프로세스를 띄우기 전에 여기서 같은 판정을 내려 무엇이 빠졌는지 이름으로
+    알린다(Node 바인딩의 ``convert`` 와 같은 계약).
+
+    Raises:
+        UsageError: ``out`` 을 주지 않았을 때.
+    """
+    if out is None:
+        raise UsageError(
+            "convert 는 산출 경로가 필요합니다 — out 인자를 지정하세요",
+            argv=["convert", str(path), "--json"],
+            exit_code=EXIT_USAGE,
+        )
+    args: List[Any] = ["convert", path, out]
     _switch(args, "--verify", verify)
     args.append("--json")
     return Envelope(run_json(args, timeout=timeout, raise_on_verdict=raise_on_verdict))
 
 
 def ir_diff(
-    a: PathLike, b: PathLike, *, timeout: Optional[float] = DEFAULT_TIMEOUT
+    a: PathLike,
+    b: PathLike,
+    *,
+    section: Optional[int] = None,
+    paragraph: Optional[int] = None,
+    timeout: Optional[float] = DEFAULT_TIMEOUT,
 ) -> Envelope:
-    """두 문서의 IR 차이 — 무엇이 달라졌는지 범주별로."""
-    return Envelope(run_json(["ir-diff", a, b, "--json"], timeout=timeout))
+    """두 문서의 IR 차이 — 무엇이 달라졌는지 범주별로.
+
+    [트랙 G R61 D-12] ``section``/``paragraph``(``-s``/``-p`` — 특정 구역·
+    문단으로 좁혀서 비교)가 CLI 에 있었지만 이 래퍼에는 없었다.
+    """
+    args: List[Any] = ["ir-diff", a, b]
+    _flag(args, "-s", section)
+    _flag(args, "-p", paragraph)
+    args.append("--json")
+    return Envelope(run_json(args, timeout=timeout))
+
+
+def render_diff(
+    path: PathLike,
+    path_b: Optional[PathLike] = None,
+    *,
+    via: Optional[str] = None,
+    page: Optional[int] = None,
+    max_disp: Optional[float] = None,
+    raise_on_verdict: bool = False,
+    timeout: Optional[float] = DEFAULT_TIMEOUT,
+) -> Envelope:
+    """시각 회귀 판정 — 페이지별 렌더 결과를 자기 왕복(1건) 또는 전/후(2건) 비교한다.
+
+    ``path_b`` 생략 시 ``path`` 를 자기 자신과 렌더 왕복 비교(회귀 도구 자체
+    검증). 판정 실패(exit 3)는 기본적으로 예외가 아니다 — 봉투를 읽어 판단하라.
+    """
+    args: List[Any] = ["render-diff", path]
+    if path_b is not None:
+        args.append(path_b)
+    _flag(args, "--via", via)
+    _flag(args, "-p", page)
+    _flag(args, "--max-disp", max_disp)
+    args.append("--json")
+    return Envelope(run_json(args, timeout=timeout, raise_on_verdict=raise_on_verdict))
 
 
 # ── 편집 ────────────────────────────────────────────────────────────────

@@ -67,6 +67,10 @@ pub fn run(args: &[String]) -> i32 {
     // [#3629] 직무 프로필: tools/list 자체를 역할 세트로 필터 — 호스트 설정 한 줄로
     // '행정서식 전용 서버'를 등록한다. 단일 출처는 agent_profiles::PROFILES.
     let mut profile: Option<&'static crate::agent_profiles::AgentProfile> = None;
+    // [트랙 H R80] 옵트인 관측성 1단계 — 기본은 꺼짐, 문서 내용·경로·인자 값은
+    // 절대 수집하지 않는다(mydocs/tech/agent_architecture/observability_contract.md
+    // §3). 도구명별 호출 수·오류 수만 센다.
+    let mut stats = false;
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
@@ -86,6 +90,7 @@ pub fn run(args: &[String]) -> i32 {
                     }
                 }
             }
+            "--stats" => stats = true,
             other => {
                 eprintln!("알 수 없는 옵션: {other}");
                 return crate::EXIT_USAGE;
@@ -112,6 +117,11 @@ pub fn run(args: &[String]) -> i32 {
         Some(p) => crate::agent_profiles::allows_session_tool(p, name),
     };
     let mut sessions = Sessions::new();
+    // 도구명 → (호출 수, 오류 수). 키는 서버가 정의한 유한 집합(도구명) 또는
+    // 고정된 미지 버킷뿐이고 값은 정수 계수뿐이다. 호출자가 보낸 임의 문자열을
+    // 키로 쓰면 --stats가 고유한 가짜 도구명으로 메모리를 소진할 수 있다.
+    let mut call_stats: std::collections::HashMap<String, (u64, u64)> =
+        std::collections::HashMap::new();
 
     for line in stdin.lock().lines() {
         let line = match line {
@@ -203,7 +213,24 @@ pub fn run(args: &[String]) -> i32 {
                 }),
             ),
             "tools/call" => {
-                match handle_tool_call(&params, &tool_defs, &session_allows, &mut sessions) {
+                let result = handle_tool_call(&params, &tool_defs, &session_allows, &mut sessions);
+                if stats {
+                    // 통계 키는 서버가 제공하는 도구명만 쓴다. 임의/누락 이름은
+                    // 고정 버킷으로 합쳐 문서 내용·경로·인자 값뿐 아니라 호출자
+                    // 입력 자체도 통계 상태와 stderr에 남기지 않는다.
+                    let tool_name = stats_tool_name(&params, &tool_defs, &session_allows)
+                        .unwrap_or("(알 수 없는 도구)");
+                    let is_error = match &result {
+                        Err(_) => true,
+                        Ok(v) => v.get("isError").and_then(|b| b.as_bool()).unwrap_or(false),
+                    };
+                    let entry = call_stats.entry(tool_name.to_string()).or_insert((0, 0));
+                    entry.0 += 1;
+                    if is_error {
+                        entry.1 += 1;
+                    }
+                }
+                match result {
                     Ok(result) => ok_response(id, result),
                     Err(e) => error_response(id, INVALID_PARAMS, &e),
                 }
@@ -225,7 +252,63 @@ pub fn run(args: &[String]) -> i32 {
         };
         write_msg(&stdout, &response);
     }
+    if stats {
+        write_stats_summary(&call_stats);
+    }
     crate::EXIT_OK
+}
+
+/// [트랙 H R80 1단계] 도구명별 호출 수·오류 수를 stderr 로 한 번 요약한다.
+///
+/// stdout 은 JSON-RPC 프로토콜 전용이라(INV-04) 통계는 여기로만 나간다. 문서
+/// 내용·경로·인자 값·오류 메시지 원문은 이 함수에도, `call_stats` 자체에도
+/// 들어오지 않는다 — 애초에 도구명과 정수 계수만 쌓았기 때문이다.
+fn write_stats_summary(call_stats: &std::collections::HashMap<String, (u64, u64)>) {
+    if call_stats.is_empty() {
+        eprintln!("mcp-serve --stats: 도구 호출 없음");
+        return;
+    }
+    let mut names: Vec<&String> = call_stats.keys().collect();
+    names.sort();
+    eprintln!("mcp-serve --stats: 도구별 호출 수/오류 수");
+    for name in names {
+        let (calls, errors) = call_stats[name];
+        eprintln!("  {name}: {calls}회 호출, 오류 {errors}건");
+    }
+}
+
+/// 통계에 쓸 도구명을 서버의 유한 선언 집합으로 정규화한다.
+///
+/// 세션 도구는 match의 문자열 리터럴을, 무상태 도구는 `tool_defs`가 보유한 이름을
+/// 반환한다. 따라서 반환값은 호출자의 JSON 문자열을 보관하지 않는다.
+fn stats_tool_name<'a>(
+    params: &serde_json::Value,
+    tool_defs: &'a [serde_json::Value],
+    session_allows: &dyn Fn(&str) -> bool,
+) -> Option<&'a str> {
+    let requested = params.get("name")?.as_str()?;
+    let session_name = match requested {
+        "hwp_open" => Some("hwp_open"),
+        "hwp_doc_text" => Some("hwp_doc_text"),
+        "hwp_doc_info" => Some("hwp_doc_info"),
+        "hwp_doc_fields" => Some("hwp_doc_fields"),
+        "hwp_doc_tables" => Some("hwp_doc_tables"),
+        "hwp_doc_render_page" => Some("hwp_doc_render_page"),
+        "hwp_doc_search" => Some("hwp_doc_search"),
+        "hwp_doc_replace_text" => Some("hwp_doc_replace_text"),
+        "hwp_doc_set_cell" => Some("hwp_doc_set_cell"),
+        "hwp_doc_fill_fields" => Some("hwp_doc_fill_fields"),
+        "hwp_doc_save" => Some("hwp_doc_save"),
+        "hwp_close" => Some("hwp_close"),
+        _ => None,
+    };
+    if let Some(name) = session_name {
+        return session_allows(name).then_some(name);
+    }
+    tool_defs.iter().find_map(|def| {
+        let name = def["name"].as_str()?;
+        (name == requested).then_some(name)
+    })
 }
 
 fn write_msg(stdout: &std::io::Stdout, msg: &serde_json::Value) {
