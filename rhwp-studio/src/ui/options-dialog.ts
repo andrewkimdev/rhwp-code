@@ -24,6 +24,7 @@ export class OptionsDialog extends ModalDialog {
   private idleSaveEnabledCheck!: HTMLInputElement;
   private idleDelayInput!: HTMLInputElement;
   private pdfPrintGuidanceCheck!: HTMLInputElement;
+  private backendUrlInput!: HTMLInputElement;
 
   constructor(private readonly eventBus?: EventBus) {
     super('환경 설정', 480);
@@ -49,6 +50,12 @@ export class OptionsDialog extends ModalDialog {
     fileTab.dataset.tab = 'file';
     tabs.appendChild(fileTab);
 
+    const templateTab = document.createElement('button');
+    templateTab.className = 'dialog-tab';
+    templateTab.textContent = '템플릿 검증';
+    templateTab.dataset.tab = 'template';
+    tabs.appendChild(templateTab);
+
     body.appendChild(tabs);
 
     // 글꼴 탭 패널
@@ -61,6 +68,11 @@ export class OptionsDialog extends ModalDialog {
     filePanel.className = 'dialog-tab-panel opt-tab-panel';
     filePanel.dataset.tab = 'file';
     body.appendChild(filePanel);
+
+    const templatePanel = this.createTemplateValidatorPanel();
+    templatePanel.className = 'dialog-tab-panel opt-tab-panel';
+    templatePanel.dataset.tab = 'template';
+    body.appendChild(templatePanel);
 
     // 탭 클릭 이벤트 (향후 탭 추가 대비)
     tabs.addEventListener('click', (e) => {
@@ -331,6 +343,45 @@ export class OptionsDialog extends ModalDialog {
     return panel;
   }
 
+  private createTemplateValidatorPanel(): HTMLElement {
+    const panel = document.createElement('div');
+    const settings = userSettings.getTemplateValidatorSettings();
+
+    const section = document.createElement('div');
+    section.className = 'dialog-section';
+
+    const title = document.createElement('div');
+    title.className = 'dialog-section-title';
+    title.textContent = 'hwpx-template-engine 서버';
+    section.appendChild(title);
+
+    const desc = document.createElement('p');
+    desc.className = 'opt-desc';
+    desc.textContent = '도구 > 템플릿 검증 / 샘플 템플릿 열기가 호출할 hwpx-template-engine 서버 주소입니다.';
+    section.appendChild(desc);
+
+    const row = document.createElement('div');
+    row.className = 'dialog-row opt-row';
+
+    const label = document.createElement('label');
+    label.htmlFor = 'opt-template-backend-url';
+    label.textContent = '서버 URL';
+
+    this.backendUrlInput = document.createElement('input');
+    this.backendUrlInput.type = 'text';
+    this.backendUrlInput.id = 'opt-template-backend-url';
+    this.backendUrlInput.className = 'dialog-input opt-backend-url-input';
+    this.backendUrlInput.placeholder = 'http://localhost:8080';
+    this.backendUrlInput.value = settings.backendUrl;
+
+    row.appendChild(label);
+    row.appendChild(this.backendUrlInput);
+    section.appendChild(row);
+    panel.appendChild(section);
+
+    return panel;
+  }
+
   protected onConfirm(): void {
     const count = Math.min(5, Math.max(1, parseInt(this.recentCountInput.value) || 3));
     userSettings.updateFontSettings({
@@ -344,6 +395,7 @@ export class OptionsDialog extends ModalDialog {
       idleDelaySeconds: clampInteger(this.idleDelayInput.value, 10, 5, 600),
     });
     userSettings.setShowPdfPrintGuidance(this.pdfPrintGuidanceCheck.checked);
+    userSettings.setTemplateValidatorBackendUrl(this.backendUrlInput.value);
     this.eventBus?.emit('autosave-settings-changed', { source: 'options-dialog' });
   }
 }
