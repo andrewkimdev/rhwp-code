@@ -15255,23 +15255,46 @@ fn replay_sha256_hex(bytes: &[u8]) -> String {
 }
 
 /// [#4393] replay·audit 공용 실행 코어 — 계획을 **임시 산출**로 실행해 (산출
-/// SHA-256, step 수)를 얻는다. 임시 파일은 성공·실패 모두 정리한다. 계획의
-/// output 은 이 함수가 임시 경로로 덮어쓴다(호출자는 필요 시 사전 clone).
+/// SHA-256, step 수, 입력 SHA-256)를 얻는다. 임시 파일은 성공·실패 모두
+/// 정리한다. 계획의 output 은 이 함수가 임시 경로로 덮어쓴다(호출자는 필요 시
+/// 사전 clone).
 fn replay_execute_to_temp(
     plan: &mut serde_json::Value,
     tag: &str,
-) -> Result<(String, usize), (String, i32)> {
+) -> Result<(String, usize, String), (String, i32)> {
+    let Some(input) = plan["input"].as_str() else {
+        return Err(("계획에 input 이 필요합니다".to_string(), EXIT_USAGE));
+    };
+    let input_bytes = fs::read(input).map_err(|e| {
+        (
+            format!("입력을 읽을 수 없습니다 - {input}: {e}"),
+            EXIT_RUNTIME,
+        )
+    })?;
+    let input_sha = replay_sha256_hex(&input_bytes);
+    let scratch = replay_scratch_dir(tag).map_err(|e| {
+        (
+            format!("재실행 전용 임시 폴더를 만들 수 없습니다 - {e}"),
+            EXIT_RUNTIME,
+        )
+    })?;
     let ext = plan["output"]
         .as_str()
         .and_then(|o| std::path::Path::new(o).extension().and_then(|e| e.to_str()))
         .unwrap_or("hwp")
         .to_string();
-    let temp_out =
-        std::env::temp_dir().join(format!("rhwp-replay-{}-{tag}.{ext}", std::process::id()));
+    let temp_out = scratch.0.join(format!("output.{ext}"));
     plan["output"] = serde_json::json!(temp_out.to_string_lossy());
-    let (engine_env, engine_code) = run_plan_engine(plan);
+    let (engine_env, engine_code) =
+        with_replay_input_snapshot(plan, &input_bytes, &scratch.0, run_plan_engine).map_err(
+            |e| {
+                (
+                    format!("재실행 입력 스냅샷을 만들 수 없습니다 - {e}"),
+                    EXIT_RUNTIME,
+                )
+            },
+        )?;
     if engine_code != 0 {
-        let _ = fs::remove_file(&temp_out);
         return Err((
             format!("계획 재실행 실패 (engine exit {engine_code})"),
             engine_code,
@@ -15280,16 +15303,14 @@ fn replay_execute_to_temp(
     let bytes = match fs::read(&temp_out) {
         Ok(b) => b,
         Err(e) => {
-            let _ = fs::remove_file(&temp_out);
             return Err((
                 format!("재실행 산출을 읽을 수 없습니다 - {e}"),
                 EXIT_RUNTIME,
             ));
         }
     };
-    let _ = fs::remove_file(&temp_out);
     let steps = engine_env["steps"].as_array().map(|s| s.len()).unwrap_or(0);
-    Ok((replay_sha256_hex(&bytes), steps))
+    Ok((replay_sha256_hex(&bytes), steps, input_sha))
 }
 
 fn cmd_replay(args: &[String]) -> i32 {
@@ -15374,67 +15395,24 @@ fn cmd_replay(args: &[String]) -> i32 {
         eprintln!("오류: 계획에 input 이 필요합니다.");
         return EXIT_USAGE;
     };
-    let input_bytes = match fs::read(&input) {
-        Ok(b) => b,
-        Err(e) => {
-            eprintln!("오류: 입력을 읽을 수 없습니다 - {input}: {e}");
-            return EXIT_RUNTIME;
-        }
-    };
-    let input_sha = sha256_hex(&input_bytes);
     let plan_original = plan.clone();
-    // 산출 형식은 계획의 output 확장자가 정한다 — 임시 경로도 같은 확장자를 쓴다.
-    let ext = plan["output"]
-        .as_str()
-        .and_then(|o| std::path::Path::new(o).extension().and_then(|e| e.to_str()))
-        .unwrap_or("hwp")
-        .to_string();
-    let scratch = match replay_scratch_dir(&plan_sha[..12]) {
-        Ok(scratch) => scratch,
-        Err(e) => {
-            eprintln!("오류: 재실행 전용 임시 폴더를 만들 수 없습니다 - {e}");
-            return EXIT_RUNTIME;
-        }
-    };
-    let temp_out = scratch.0.join(format!("output.{ext}"));
-    plan["output"] = serde_json::json!(temp_out.to_string_lossy());
-
-    // 영수증의 inputSha256 과 엔진이 소비하는 바이트는 반드시 같은 스냅샷이어야
-    // 한다. 원 경로를 다시 열면 두 읽기 사이의 교체가 다른 입력으로 서명된다.
-    let (engine_env, engine_code) =
-        match with_replay_input_snapshot(&mut plan, &input_bytes, &scratch.0, run_plan_engine) {
-            Ok(result) => result,
-            Err(e) => {
-                eprintln!("오류: 재실행 입력 스냅샷을 만들 수 없습니다 - {e}");
-                return EXIT_RUNTIME;
+    let (output_sha, steps, input_sha) = match replay_execute_to_temp(&mut plan, &plan_sha[..12]) {
+        Ok(v) => v,
+        Err((msg, code)) => {
+            if json_mode {
+                println!(
+                    "{}",
+                    provenance::marked(
+                        serde_json::json!({ "schemaVersion": "1.0", "error": msg }),
+                        "replay",
+                    )
+                );
+            } else {
+                eprintln!("{msg} — 영수증 없음");
             }
-        };
-    if engine_code != 0 {
-        if json_mode {
-            println!(
-                "{}",
-                provenance::marked(
-                    serde_json::json!({
-                        "schemaVersion": "1.0",
-                        "error": format!("계획 재실행 실패 (engine exit {engine_code}) — 영수증을 발급하지 않습니다"),
-                        "engine": engine_env,
-                    }),
-                    "replay",
-                )
-            );
-        } else {
-            eprintln!("재실행 실패 (exit {engine_code}) — 영수증 없음");
-        }
-        return engine_code;
-    }
-    let output_sha = match fs::read(&temp_out) {
-        Ok(b) => sha256_hex(&b),
-        Err(e) => {
-            eprintln!("오류: 재실행 산출을 읽을 수 없습니다 - {e}");
-            return EXIT_RUNTIME;
+            return code;
         }
     };
-    let steps = engine_env["steps"].as_array().map(|s| s.len()).unwrap_or(0);
     let reproduced = expected.as_deref().map(|e| e == output_sha);
     let envelope = provenance::marked(
         serde_json::json!({
@@ -15629,14 +15607,25 @@ fn cmd_audit(args: &[String]) -> i32 {
             failed.push(fail("receipt.outputSha256 없음".into()));
             continue;
         };
+        let Some(expected_input) = capsule["receipt"]["inputSha256"].as_str() else {
+            failed.push(fail("receipt.inputSha256 없음".into()));
+            continue;
+        };
         let mut plan = capsule["plan"].clone();
         if !plan.is_object() {
             failed.push(fail("plan 없음".into()));
             continue;
         }
         match replay_execute_to_temp(&mut plan, &format!("audit{idx}")) {
-            Ok((actual, _steps)) => {
-                if actual == expected {
+            Ok((actual, _steps, actual_input)) => {
+                if actual_input != expected_input {
+                    failed.push(serde_json::json!({
+                        "capsule": name,
+                        "kind": "inputSha256",
+                        "expected": expected_input,
+                        "actual": actual_input,
+                    }));
+                } else if actual == expected {
                     reproduced_count += 1;
                 } else {
                     failed.push(serde_json::json!({
