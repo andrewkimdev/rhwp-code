@@ -48,9 +48,9 @@ if plan.check().ok:      # 디스크 무변경 검사
 
 from __future__ import annotations
 
-from ._binary import ENV_VAR, clear_cache, find_binary
+from ._binary import BUNDLED_DIR, ENV_VAR, binary_name, clear_cache, find_binary
 from ._naming import to_camel, to_snake
-from ._process import CompletedRun, run_json, run_ndjson, run_raw
+from ._process import CompletedRun, iter_ndjson, run_json, run_ndjson, run_raw
 from .commands import (
     batch,
     build_from_ingest,
@@ -101,8 +101,10 @@ from .errors import (
     RhwpTimeoutError,
     UsageError,
     VerdictFailed,
+    is_known_exit_code,
+    raise_for_exit,
 )
-from .models import Envelope, VerifyReport
+from .models import Envelope, VerifyPagesReport, VerifyReport
 from .plan import Plan, PlanResult, run_plan
 from .schema import (
     FieldDef,
@@ -127,6 +129,8 @@ __all__ = [
     "ENV_VAR",
     "find_binary",
     "clear_cache",
+    "binary_name",
+    "BUNDLED_DIR",
     # 1층 — 조회
     "info",
     "export_text",
@@ -185,10 +189,12 @@ __all__ = [
     # 모델
     "Envelope",
     "VerifyReport",
+    "VerifyPagesReport",
     # 저수준
     "run_json",
     "run_ndjson",
     "run_raw",
+    "iter_ndjson",
     "CompletedRun",
     "to_snake",
     "to_camel",
@@ -207,4 +213,6 @@ __all__ = [
     "EXIT_USAGE",
     "EXIT_VERIFY",
     "EXIT_VERIFY_PAGES",
+    "raise_for_exit",
+    "is_known_exit_code",
 ]
