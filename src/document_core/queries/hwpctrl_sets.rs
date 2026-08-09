@@ -393,14 +393,19 @@ fn control_props_json(ctrl: &Control) -> String {
     let Some(c) = common else {
         return "{}".to_string();
     };
+    // 자리(`*Offset`)도 낸다 — 옮기기 액션의 유일한 관측창이다. 오라클의 이 셋은 32항목이라
+    // 여기 있는 것은 그중 확인한 것뿐이다.
     format!(
-        "{{\"Lock\":{},\"TreatAsChar\":{},\"AllowOverlap\":{},\"TextWrap\":{},\"Width\":{},\"Height\":{}}}",
+        "{{\"Lock\":{},\"TreatAsChar\":{},\"AllowOverlap\":{},\"TextWrap\":{},\
+         \"Width\":{},\"Height\":{},\"HorzOffset\":{},\"VertOffset\":{}}}",
         u8::from(c.locked),
         u8::from(c.treat_as_char),
         u8::from(c.allow_overlap),
         (c.attr >> 21) & 0x03,
         c.width,
         c.height,
+        c.horizontal_offset,
+        c.vertical_offset,
     )
 }
 
@@ -959,6 +964,54 @@ impl DocumentCore {
         c.height = (c.height as i64 + d_height as i64).max(0) as u32;
         section.raw_stream = None;
         Ok(r#"{"ok":true}"#.to_string())
+    }
+
+    /// 개체를 한 걸음 옮긴다 — 웹한글컨트롤 `Run("ShapeObjMove*")`.
+    ///
+    /// 걸음은 **56 HWPUNIT**(≈0.2mm)로 일정하고 결정적이다(실측: 23040 → 23096 → 23152,
+    /// 되돌리면 그대로 되짚는다). 크기 조절의 걸음(283)과 **다르다** — 같은 개체 액션이라고
+    /// 같은 걸음일 것이라 넘겨짚으면 틀린다.
+    ///
+    /// **글자처럼 배치인 개체는 안 움직인다**(실측). 자리를 문단 흐름이 잡기 때문이다.
+    pub fn move_control_at(
+        &mut self,
+        para_in_list: usize,
+        control_index: usize,
+        dx: i32,
+        dy: i32,
+    ) -> Result<String, HwpError> {
+        let (sec, para_idx) = root_para_location(self, para_in_list)
+            .ok_or_else(|| HwpError::InvalidField(format!("본문 문단 {} 없음", para_in_list)))?;
+        let section = self
+            .document
+            .sections
+            .get_mut(sec)
+            .ok_or_else(|| HwpError::InvalidField(format!("구역 {} 없음", sec)))?;
+        let para = section
+            .paragraphs
+            .get_mut(para_idx)
+            .ok_or_else(|| HwpError::InvalidField(format!("문단 {} 없음", para_idx)))?;
+        let ctrl = para
+            .controls
+            .get_mut(control_index)
+            .ok_or_else(|| HwpError::InvalidField(format!("컨트롤 {} 없음", control_index)))?;
+        let common = match ctrl {
+            Control::Table(t) => Some(&mut t.common),
+            Control::Shape(s) => Some(s.common_mut()),
+            Control::Picture(p) => Some(&mut p.common),
+            _ => None,
+        };
+        let Some(c) = common else {
+            return Ok(r#"{"ok":false,"reason":"자리를 가진 개체가 아니다"}"#.to_string());
+        };
+        if c.treat_as_char {
+            // 글자처럼 배치는 문단 흐름이 자리를 잡는다 — 옮겨지지 않는다.
+            return Ok(r#"{"ok":true,"moved":false}"#.to_string());
+        }
+        c.horizontal_offset = (c.horizontal_offset as i64 + dx as i64).max(0) as u32;
+        c.vertical_offset = (c.vertical_offset as i64 + dy as i64).max(0) as u32;
+        section.raw_stream = None;
+        Ok(r#"{"ok":true,"moved":true}"#.to_string())
     }
 
     /// 나누기 — 웹한글컨트롤 `Run("BreakPage"·"BreakColumn"·"BreakColDef"·"BreakSection")`.

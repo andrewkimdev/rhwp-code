@@ -109,6 +109,23 @@ CONTEXTS = {
         ],
         "labels": ["캐럿", "모드", "고른개체", "이름", "폭", "높이", "배치", "잠금"],
     },
+    # **자리차지** 그리기 개체를 고른 상태. `drawing` 맥락의 개체는 **글자처럼** 배치라
+    # 옮기기가 안 먹는다 — 배치까지 맞춰야 그 계열이 보인다. 관측창에 위치 항목을 넣는다.
+    "floating": {
+        "sample": "samples/shape-group-02.hwp",
+        "setup": [["SetPos", [0, 0, 0]], ["Run", ["SelectCtrlFront"]]],
+        "reads": [
+            ["GetPos", []],
+            ["SelectionMode", []],
+            ["CurSelectedCtrl.CtrlID", []],
+            ["HeadCtrl.Next.Next.Properties.Item", ["HorzOffset"]],
+            ["HeadCtrl.Next.Next.Properties.Item", ["VertOffset"]],
+            ["HeadCtrl.Next.Next.Properties.Item", ["Width"]],
+            ["HeadCtrl.Next.Next.Properties.Item", ["Height"]],
+            ["HeadCtrl.Next.Next.Properties.Item", ["TextWrap"]],
+        ],
+        "labels": ["캐럿", "모드", "고른개체", "가로자리", "세로자리", "폭", "높이", "배치"],
+    },
     # 셀 안이되 **칸 블록은 없는** 상태. 블록이 있어야 먹는 액션은 여기서도 무동작으로 보이므로
     # `cellblock` 으로 한 번 더 돌려야 한다 — 맥락을 하나만 두면 또 빈 곳을 재게 된다.
     #

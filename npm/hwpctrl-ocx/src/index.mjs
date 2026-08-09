@@ -355,6 +355,13 @@ const ACTIONS = {
   // — 캐럿은 그 개체 자리에 남는다(실측: 0/0/16 그대로).
   // 크기 조절 — 걸음은 **283 HWPUNIT**(≈1mm)로 일정하고 결정적이다(실측). 방향 이름이
   // **가장자리를 미는 쪽**이라 `Left`·`Up` 은 줄인다. 표의 크기 조절과 달리 판정이 된다.
+  // 옮기기 걸음은 **56 HWPUNIT**(≈0.2mm)다 — 크기 조절의 283 과 **다르다**. 같은 개체
+  // 액션이라고 같은 걸음일 것이라 넘겨짚으면 틀린다. 글자처럼 배치는 안 움직인다.
+  ShapeObjMoveRight: { kind: 'objectMoveBy', dx: 56, dy: 0 },
+  ShapeObjMoveLeft: { kind: 'objectMoveBy', dx: -56, dy: 0 },
+  ShapeObjMoveDown: { kind: 'objectMoveBy', dx: 0, dy: 56 },
+  ShapeObjMoveUp: { kind: 'objectMoveBy', dx: 0, dy: -56 },
+
   ShapeObjResizeRight: { kind: 'objectResize', dw: 283, dh: 0 },
   ShapeObjResizeLeft: { kind: 'objectResize', dw: -283, dh: 0 },
   ShapeObjResizeDown: { kind: 'objectResize', dw: 0, dh: 283 },
@@ -1810,12 +1817,15 @@ export class HwpCtrl {
       callback?.(null, ok, callbackUserData);
       return;
     }
-    if (action.kind === 'objectResize') {
+    if (action.kind === 'objectResize' || action.kind === 'objectMoveBy') {
       const here = this.#selectedObject;
       let ok = false;
       if (here) {
         try {
-          const raw = this.#doc.resizeControlAt(here.para, here.controlIndex, action.dw, action.dh);
+          const raw =
+            action.kind === 'objectResize'
+              ? this.#doc.resizeControlAt(here.para, here.controlIndex, action.dw, action.dh)
+              : this.#doc.moveControlAt(here.para, here.controlIndex, action.dx, action.dy);
           ok = parseJson(raw, { ok: false }).ok !== false;
         } catch (e) {
           console.warn(`[hwpctrl] Run("${actionID}") 실패:`, e);
