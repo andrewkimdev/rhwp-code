@@ -132,8 +132,10 @@ close, 관련 issue 상태 확인을 후속 처리한다. 의도적인 red-test 
   `devel` 대상 Open PR로 생성했다.
 - code·검증 기록 head `caceebd36cc72f4cb3771fdb249d786088658ac7`의 최초
   GitHub CI, CodeQL, Canvas visual diff, Native Skia와 Build & Test가 모두 성공했다.
-- reviewer `jangster77`을 지정했고, 1차 트리야지로 assignee `edwardkim`,
-  milestone `v1.0.0`, 변경 범위 기반 기존 label을 적용했다.
+- 최초 reviewer `jangster77` 지정 뒤 작업지시자가 maintainer self-review로 전환했다.
+  작성자 본인에게 reviewer request나 `APPROVE`를 만들지 않고 최신 head에
+  `COMMENTED` self-review를 남긴다. 1차 트리야지는 assignee `edwardkim`, milestone
+  `v1.0.0`, 변경 범위 기반 기존 label로 유지한다.
 - 이 번호 기반 review·오늘할일 trailing commit이 새 head를 만들므로, merge 조건은
-  그 최신 head의 required checks 성공·mergeability 재확인·reviewer 판단·작업지시자
-  merge 승인이다.
+  그 최신 head의 required checks 성공·mergeability 재확인·`COMMENTED` self-review·
+  작업지시자 merge 승인이다.

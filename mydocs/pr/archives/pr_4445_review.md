@@ -23,7 +23,7 @@ modifiers: intake_and_review.md, local_validation.md,
 | code·검증 기록 head | `caceebd36cc72f4cb3771fdb249d786088658ac7` |
 | 규모 | 93 files, +7,000/-481, 원 PR 20건과 메인테이너 보정 |
 | 상태 | Open, non-Draft, `MERGEABLE/CLEAN` |
-| reviewer | @jangster77 요청 완료 |
+| review 방식 | 작업지시자 승인 maintainer self-review. 작성자 본인 request·`APPROVE` 대신 최신 head에 `COMMENTED` review 게시 |
 | 트리야지 | assignee @edwardkim, milestone `v1.0.0`, labels `bug`, `api`, `hwp5`, `hwpx`, `layout`, `rendering`, `roundtrip`, `serialization`, `table`, `test` |
 
 ## 변경 범위와 provenance
@@ -66,7 +66,7 @@ modifiers: intake_and_review.md, local_validation.md,
 
 ## 최종 권고
 
-**최신 review head CI와 reviewer 판단을 조건으로 #4445 merge 권고.** 로컬 전체·focused·
-WASM·시각 검증과 최초 GitHub 전체 CI가 통과했고, 누적 충돌 해소도 승인된 의미를 보존한다.
-merge 직전에는 최신 head SHA, mergeability, required checks와 작업지시자 승인을 다시
-확인한다.
+**최신 review head CI와 `COMMENTED` self-review를 조건으로 #4445 merge 권고.** 로컬
+전체·focused·WASM·시각 검증과 최초 GitHub 전체 CI가 통과했고, 누적 충돌 해소도
+승인된 의미를 보존한다. merge 직전에는 최신 head SHA, mergeability, required checks와
+작업지시자 승인을 다시 확인한다.
