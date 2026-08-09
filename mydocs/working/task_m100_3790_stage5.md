@@ -4,7 +4,7 @@
 - **브랜치**: `issue-3790-stage5a-codeql-safety`
 - **worktree**: `tmp/issue-3790-stage5a-codeql`
 - **기준**: `upstream/devel` `e48fe86947fb` (#4310·#4317 merge 포함)
-- **상태**: Draft PR #4341 no-prebuild 최종 전환·focused 검증 완료, 최종 CI 재실행 대기
+- **상태**: Draft PR #4341 최종 CI·GHAS·분석 기록·metadata 반영 완료, review gate 대기
 
 ## 재개와 보존 경계
 
@@ -211,5 +211,40 @@ PR #4341의 측정 구성은 그대로 merge하지 않고, blocking check identi
   통과했다. 연관 Python workflow 계약 74/74, classifier Node 테스트 28/28, `actionlint`,
   `git diff --check`도 통과했다.
 
-최종 PR CI에서 기존 세 Analyze job과 GHAS `CodeQL` check가 성공하고 Rust duration이 보정 shadow와
-같은 범위인지 확인하면 Stage 5A를 merge 가능한 상태로 판정한다.
+최종 PR CI에서 기존 세 Analyze job과 GHAS `CodeQL` check가 성공했고, 아래 실측으로 Stage 5A
+코드·CI gate를 통과로 판정했다.
+
+## PR #4341 최종 CI 판정
+
+- **candidate**: `c2674bd336a26448d1673f7f70389cb8fc2a0ce8`
+- **CodeQL run**: [31314188222](https://github.com/edwardkim/rhwp/actions/runs/31314188222)
+- **CI run**: [31314188326](https://github.com/edwardkim/rhwp/actions/runs/31314188326)
+- **PR 상태**: `MERGEABLE / CLEAN`, 모든 check 성공, Draft, review 없음
+
+### 최종 Rust 시간
+
+| 구간 | 보정 blocking | 보정 shadow | 최종 blocking |
+| --- | ---: | ---: | ---: |
+| 전체 job | 701초 | 642초 | 542초 |
+| checkout | 36초 | 37초 | 38초 |
+| CodeQL init | 15초 | 15초 | 15초 |
+| Rust toolchain | 1초 | 1초 | 1초 |
+| cargo cache + 수동 build | 60초 | 0초 | 0초 |
+| analyze | 582초 | 579초 | 480초 |
+
+최종 job은 보정 blocking보다 159초(22.7%) 짧고, 같은 기본 build mode의 보정 shadow보다도 100초
+짧았다. 그러나 analyze 자체가 shadow보다 99초 짧아 runner·CodeQL 실행 편차가 섞였다. 구현에 귀속할
+보수적 효과는 같은 run A/B에서 수동 cache·build 60초를 제거해 확인한 59초(8.4%)다.
+
+### 보안·운영 gate
+
+- `Analyze (javascript-typescript)`, `Analyze (python)`, `Analyze (rust)`와 별도 GHAS `CodeQL` check가
+  모두 성공했다.
+- 최종 Rust는 CodeQL CLI 2.26.2, 기본 build mode,
+  `database trace-command --index-traceless-dbs`, 내부 `rust/tools/autobuild.sh`를 사용했다.
+- `Analyze (rust)`와 GHAS `CodeQL` annotation은 모두 0건이다.
+- Rust Code Scanning analysis `1591906480`은 `12:57:08Z`에 25개 규칙·결과 0건으로 처리됐다.
+- canary용 Actions artifact는 0개라 shadow·raw SARIF 정리가 확인됐다.
+
+Stage 5A 코드·CI gate는 통과다. PR #4341 제목·본문도 최종 no-prebuild 동작과 canary 근거로 보정했다.
+Draft 상태는 유지하고 이후 review 요청은 작업지시자 gate로 남긴다.

@@ -9,7 +9,8 @@
   보안 check 재사용과 Rust no-build shadow를 구현하고 focused 검증을 통과했다. Draft PR #4341의
   1차 원격 canary 분석 뒤 raw blocking SARIF·동일 권한·기본 build mode의 no-prebuild shadow로
   보정하고 원격 동등성 gate를 통과했다. 수동 cache·prebuild와 측정 요소를 제거한 최종 구성도 focused
-  검증을 통과했으며 다음 gate는 최종 PR CI다.
+  검증과 최종 PR CI·GHAS를 통과했다. 분석 기록과 최종 no-prebuild PR metadata를 반영했으며 Draft
+  review gate는 작업지시자가 진행한다.
 
 ## Stage 1 — shadow classifier
 
@@ -192,6 +193,20 @@ Stage 3 merge 직후 frontend-only canary PR #3951에서 unit/package/render 진
 - 최종 계약은 수동 cache·build와 측정 요소가 다시 들어오면 실패하도록 고정했다. TDD RED 2건을 확인한
   뒤 Stage 5A 6/6, 연관 Python workflow 계약 74/74, classifier 28/28, `actionlint`,
   `git diff --check`가 통과했다.
+
+### Stage 5A 최종 CI 판정
+
+- candidate `c2674bd336a26448d1673f7f70389cb8fc2a0ce8`의 CodeQL run `31314188222`와 CI run
+  `31314188326`이 모두 성공했다. PR은 `MERGEABLE / CLEAN`이고 실패 check는 0건이다.
+- 최종 `Analyze (rust)` job은 542초, analyze 단계는 480초다. 보정 blocking 701초보다 159초,
+  같은 기본 build mode의 보정 shadow 642초보다 100초 짧지만 analyze 자체도 99초 변동했으므로 전부를
+  구현 효과로 귀속하지 않는다. 같은 run A/B에서 확인한 보수적 절감은 59초(8.4%)다.
+- CodeQL CLI 2.26.2, `database trace-command --index-traceless-dbs`, Rust 내부 `autobuild.sh`가 유지됐다.
+  `Analyze (rust)`와 GHAS `CodeQL` annotation은 0건이고 임시 Actions artifact도 0개다.
+- Rust Code Scanning analysis `1591906480`은 25개 규칙, 결과 0건으로 최종 처리됐다. 세 Analyze job과
+  별도 GHAS `CodeQL` check가 모두 성공했으므로 Stage 5A 코드·CI gate는 통과다.
+- PR #4341 제목·본문을 최종 no-prebuild 동작과 canary 근거로 보정했다. Draft 상태는 유지하고 이후
+  review 요청은 작업지시자 gate로 남긴다.
 
 ## Stage 5B 이후
 
