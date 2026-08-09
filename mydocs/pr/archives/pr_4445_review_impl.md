@@ -1,6 +1,6 @@
 ---
 kind: review-implementation
-status: active
+status: completed
 canonical: mydocs/manual/pr_review_workflow.md
 last_verified: 2026-08-10
 ---
@@ -139,3 +139,11 @@ close, 관련 issue 상태 확인을 후속 처리한다. 의도적인 red-test 
 - 이 번호 기반 review·오늘할일 trailing commit이 새 head를 만들므로, merge 조건은
   그 최신 head의 required checks 성공·mergeability 재확인·`COMMENTED` self-review·
   작업지시자 merge 승인이다.
+
+## 통합 완료
+
+- 최종 head `02caa3e03d7edd2716a598b54cbabfab0b833175`의 review-only
+  fast-pass와 `COMMENTED` self-review를 확인했다.
+- 작업지시자 승인 뒤 [PR #4445](https://github.com/edwardkim/rhwp/pull/4445)를
+  `baf6ef7ff13ebbb782277b8391b81b81f1250a5f`로 `devel`에 merge했다.
+- 원 PR·issue 후속 처리와 정확한 review branch 정리는 merge 뒤 절차로 분리한다.

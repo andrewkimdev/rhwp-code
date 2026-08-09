@@ -1,6 +1,6 @@
 ---
 kind: pr_review
-status: active
+status: completed
 canonical: mydocs/manual/pr_review_workflow.md
 last_verified: 2026-08-10
 ---
@@ -33,7 +33,7 @@ modifiers: intake_and_review.md, local_validation.md,
 #4419, #4420, #4421, #4425, #4426, #4434를 검토 순서대로 누적한다.
 원 commit과 author 정보를 보존했다. 의도적인 red-test Draft #4315는 포함하지 않는다.
 
-원 PR별 head·변경 범위·수용 근거는 active review 문서에, 적용 SHA·충돌·검증의
+원 PR별 head·변경 범위·수용 근거는 archive review 문서에, 적용 SHA·충돌·검증의
 전체 대응표는 [통합 구현 기록](pr_4445_review_impl.md)에 보존한다.
 
 ## 통합 판단
@@ -70,3 +70,12 @@ modifiers: intake_and_review.md, local_validation.md,
 전체·focused·WASM·시각 검증과 최초 GitHub 전체 CI가 통과했고, 누적 충돌 해소도
 승인된 의미를 보존한다. merge 직전에는 최신 head SHA, mergeability, required checks와
 작업지시자 승인을 다시 확인한다.
+
+## 병합 결과
+
+- 최신 review head `02caa3e03d7edd2716a598b54cbabfab0b833175`의 fast-pass는
+  성공 5, 정책 skip 15, 실패·대기 0으로 완료됐다.
+- 작업지시자 승인 뒤 2026-08-10 [PR #4445](https://github.com/edwardkim/rhwp/pull/4445)를
+  merge commit `baf6ef7ff13ebbb782277b8391b81b81f1250a5f`로 `devel`에 통합했다.
+- 원 PR 20건과 관련 issue는 이 merge commit과 검증 결과를 근거로 후속 comment·close
+  상태를 각각 확인한다. #4315는 후속 대상에서 제외한다.
