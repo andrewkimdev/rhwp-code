@@ -18,6 +18,7 @@ from oracle_version import matches_expected_version
 from run_package_gate import gate_command
 from scenario_spec import call_contract, platform_path_key, resolve_args
 from run_gate import (
+    cleanup_and_wait_for_hwp_exit,
     hwp_pids,
     new_hwp_pids,
     oracle_mode,
@@ -252,6 +253,17 @@ class HarnessContractTests(unittest.TestCase):
         with patch("run_gate.new_hwp_pids", side_effect=[{"202"}, set()]), patch("run_gate.time.sleep") as sleep:
             self.assertEqual(wait_for_hwp_exit({"101"}, 10.0), set())
         sleep.assert_called_once()
+
+    def test_forced_cleanup_also_waits_for_hancom_exit(self) -> None:
+        from unittest.mock import patch
+
+        with (
+            patch("run_gate.cleanup_spawned_hwp") as cleanup,
+            patch("run_gate.wait_for_hwp_exit", return_value=set()) as wait,
+        ):
+            self.assertEqual(cleanup_and_wait_for_hwp_exit({"101"}, 10.0), set())
+        cleanup.assert_called_once_with({"101"})
+        wait.assert_called_once_with({"101"}, 10.0)
 
     def test_tracked_spec_keeps_all_declared_parameter_set_items(self) -> None:
         spec_dir = HERE.parents[1] / "npm" / "hwpctrl-ocx" / "spec"

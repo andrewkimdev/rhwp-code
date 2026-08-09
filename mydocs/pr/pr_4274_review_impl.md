@@ -47,6 +47,28 @@ Windows에서 이 값을 그대로 COM Oracle에 전달하므로, 다른 Windows
   `--cleanup-spawned`를 전달한다. baseline에 있던 사용자 Hancom 프로세스는 기존처럼
   `OCCUPIED`로 거부하며 종료하지 않는다. Linux/macOS는 이전과 동일한 WASM self-check다.
 
+## 3차 결과 및 보정 (Windows package gate, 2026-08-09)
+
+- 실제 `npm --prefix npm/hwpctrl-ocx run gate`에서 `p4-setmutate` 뒤 Hwp 종료가 비동기여서,
+  `taskkill` 직후의 즉시 PID 재조회가 `OK/LEFTOVER`를 만들고 다음 일곱 시나리오를
+  `OCCUPIED`로 건너뛰는 것을 재현했다.
+- 정리 경로도 `wait_for_hwp_exit`로 재확인하도록 고친다. 정리 대상은 실행 전 baseline에 없던
+  PID로 한정하며, 새 단위 계약은 `taskkill` 뒤 대기 호출을 고정한다.
+
+## 4차 결과 및 보정 (CI shard 2, 2026-08-09)
+
+- 최신 contributor head의 CI shard 2는 `issue_2027_picture_wrap_toggle_loss::
+  tac_roundtrip_preserves_anchor_line_segs`에서 실패했다. 새 본문 그림 경로는 `char_offsets`만
+  8-unit 이동시키고 기존 `line_segs.text_start`는 그대로 뒀다. floating 상태의 저장 줄 좌표는
+  83인데 TAC off 재리플로우는 이동된 문자 좌표로 91을 산출해 왕복 정합이 깨졌다.
+- 컨트롤은 문단 스트림에서 8칸을 차지하므로 `char_count` 증분은 유지한다. 대신 공용
+  `shift_for_inline_control_insert`가 글자모양·범위 태그와 같이 `line_segs.text_start`도
+  이동하도록 보정한다. 새 단위 테스트가 이 공용 계약을 고정하며, 그림 앵커 회귀는 기존 갭과
+  control position 검증으로 계속 보호한다.
+- 보정 후 `issue_2027_picture_wrap_toggle_loss::tac_roundtrip_preserves_anchor_line_segs`,
+  `issue_4347_insert_leaves_coordinate_trace`의 본문·글상자 2건, 그리고
+  `test_inline_control_insert_line_segs_shift`가 모두 통과했다.
+
 ## 경계와 rollback
 
 - HwpCtrl API 구현·원장 완료 수·Oracle 반환 계약은 수정하지 않는다.

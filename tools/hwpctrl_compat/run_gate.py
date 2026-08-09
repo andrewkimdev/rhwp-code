@@ -79,6 +79,16 @@ def wait_for_hwp_exit(baseline: set[str], settle_seconds: float, poll_seconds: f
     return leftovers
 
 
+def cleanup_and_wait_for_hwp_exit(baseline: set[str], settle_seconds: float) -> set[str]:
+    """명시적 강제 종료 뒤에도 PID가 사라질 때까지 기다린다.
+
+    ``taskkill``은 요청을 수락한 직후 반환할 수 있다. 곧바로 PID를 다시 읽으면 아직 종료 중인
+    ``Hwp.exe``를 LEFTOVER로 오인하고 다음 시나리오를 OCCUPIED로 건너뛴다.
+    """
+    cleanup_spawned_hwp(baseline)
+    return wait_for_hwp_exit(baseline, settle_seconds)
+
+
 def stored_oracle_status(path: Path, expect_version: str | None) -> str:
     """`--skip-ocx`가 읽을 기존 정답지가 현재 오라클인지 판정한다."""
     if not path.exists():
@@ -296,8 +306,7 @@ def main() -> int:
             finally:
                 leftovers = wait_for_hwp_exit(baseline, args.quit_settle_seconds)
                 if leftovers and args.cleanup_spawned:
-                    cleanup_spawned_hwp(baseline)
-                    leftovers = new_hwp_pids(baseline)
+                    leftovers = cleanup_and_wait_for_hwp_exit(baseline, args.quit_settle_seconds)
                 if leftovers:
                     status[name] = f"{status.get(name, 'ERR')}/LEFTOVER"
                     print(f"  오라클 {name}: 남은 한글 PID {', '.join(sorted(leftovers))} — 자동 종료하지 않음")
