@@ -1598,21 +1598,25 @@ export class HwpCtrl {
       return null;
     }
     const ext = String(path).slice(String(path).lastIndexOf('.') + 1).toLowerCase();
+    let placedAt;
     try {
       const raw = this.#doc.getCharIndexAtStreamPos?.(list, para, pos);
       const charOffset = parseJson(raw ?? '', { charIndex: 0 })?.charIndex ?? 0;
-      this.#doc.insertPicture(
-        0,
+      placedAt = this.#insertedLocation(
+        this.#doc.insertPicture(
+          0,
+          para,
+          charOffset,
+          '[]',
+          bytes,
+          size.width * HWPUNIT_PER_PIXEL,
+          size.height * HWPUNIT_PER_PIXEL,
+          size.width,
+          size.height,
+          ext,
+          '',
+        ),
         para,
-        charOffset,
-        '[]',
-        bytes,
-        size.width * HWPUNIT_PER_PIXEL,
-        size.height * HWPUNIT_PER_PIXEL,
-        size.width,
-        size.height,
-        ext,
-        '',
       );
     } catch (e) {
       console.warn('[hwpctrl] InsertPicture 실패:', e);
@@ -1622,21 +1626,16 @@ export class HwpCtrl {
     // 코어는 그림을 **자리차지**로 넣는데(studio 는 끌어다 놓으므로 그쪽이 맞다) 한글의
     // `InsertPicture` 는 **글자처럼** 앉힌다(실측 `TreatAsChar` 1). 코어 기본값을 바꾸면
     // studio 가 달라지므로 여기서 넣은 그 컨트롤만 되돌린다.
-    const placed = this.#ctrlChain().find(
-      (c) => c.location.para === para && c.UserDesc === '그림',
-    );
-    if (placed) {
-      try {
-        this.#doc.setPictureProperties(0, para, placed.location.controlIndex, '{"treatAsChar":true}');
-      } catch (e) {
-        console.warn('[hwpctrl] InsertPicture: 글자처럼으로 못 돌렸다:', e);
-      }
+    try {
+      this.#doc.setPictureProperties(0, placedAt.para, placedAt.controlIndex, '{"treatAsChar":true}');
+    } catch (e) {
+      console.warn('[hwpctrl] InsertPicture: 글자처럼으로 못 돌렸다:', e);
     }
     this.#listModel = null;
     this.#ctrls = null;
     this.#modified = true;
     this.#cursor = { list, para, pos: pos + CONTROL_CODE_UNITS };
-    return this.#ctrlChain().find((c) => c.location.para === para && c.UserDesc === '그림') ?? null;
+    return this.#ctrlAt(placedAt);
   }
 
   /**
@@ -1656,10 +1655,11 @@ export class HwpCtrl {
     }
     const { list, para, pos } = this.#cursor;
     if (list !== 0) return null;
+    let placedAt;
     try {
       const raw = this.#doc.getCharIndexAtStreamPos?.(list, para, pos);
       const charOffset = parseJson(raw ?? '', { charIndex: 0 })?.charIndex ?? 0;
-      this.#doc.createTable(0, para, charOffset, 5, 5);
+      placedAt = this.#insertedLocation(this.#doc.createTable(0, para, charOffset, 5, 5), para);
     } catch (e) {
       console.warn('[hwpctrl] InsertCtrl 실패:', e);
       return null;
@@ -1668,7 +1668,7 @@ export class HwpCtrl {
     this.#ctrls = null;
     this.#modified = true;
     this.#cursor = { list, para, pos: pos + CONTROL_CODE_UNITS };
-    return this.#ctrlChain().find((c) => c.CtrlID === 'tbl') ?? null;
+    return this.#ctrlAt(placedAt);
   }
 
   /** 규격 §8.4 — 문서가 담은 마지막 컨트롤. */
@@ -1745,6 +1745,38 @@ export class HwpCtrl {
     const raw = parseJson(this.#doc?.getSectionStarts?.() ?? '', null);
     this.#sections = Array.isArray(raw) ? raw : [0];
     return this.#sections;
+  }
+
+  /**
+   * 방금 끼운 컨트롤의 자리 — 코어가 삽입 결과로 준 `paraIdx`·`controlIdx` 를 읽는다.
+   *
+   * 예전에는 "그 문단의 첫 그림"·"문서의 첫 표"를 찾았다. 처음 넣을 때는 맞지만 **두 번째부터
+   * 틀린다** — 같은 문단에 두 번 넣으면 둘 다 첫 그림을 가리켜, 실제로 생긴 둘째 그림은
+   * 글자처럼 되돌리기에서 빠지고 반환값도 남의 것이 됐다(#4274 리뷰). 코어가 이미 정확한
+   * 자리를 돌려주고 있었으므로 그것을 쓴다.
+   */
+  #insertedLocation(raw, fallbackPara) {
+    const placed = parseJson(raw ?? '', null);
+    if (!placed || typeof placed.controlIdx !== 'number') {
+      throw new Error('삽입 결과에 컨트롤 자리가 없다');
+    }
+    return {
+      list: 0,
+      para: typeof placed.paraIdx === 'number' ? placed.paraIdx : fallbackPara,
+      controlIndex: placed.controlIdx,
+    };
+  }
+
+  /** 자리로 컨트롤 사슬에서 그 컨트롤을 짚는다. */
+  #ctrlAt({ list, para, controlIndex }) {
+    return (
+      this.#ctrlChain().find(
+        (c) =>
+          c.location.list === list &&
+          c.location.para === para &&
+          c.location.controlIndex === controlIndex,
+      ) ?? null
+    );
   }
 
   /** 컨트롤 사슬 — 코어가 문서 순서로 준다. 문서가 바뀌면 다시 만든다. */
