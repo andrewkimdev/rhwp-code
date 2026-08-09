@@ -593,7 +593,12 @@ fn parse_paragraph(
                     }
                     b"tab" => {
                         text_parts.push("\t".to_string());
-                        para.tab_extended.push(parse_tab_extension(ce));
+                        // "데이터 없음" 마커(width=0, #4403)는 tab_extended 에 싣지 않는다 —
+                        // 렌더러가 TabDef 기준으로 다시 계산하도록 원본처럼 비워 둔다.
+                        let ext = parse_tab_extension(ce);
+                        if !is_tab_no_data_marker(&ext) {
+                            para.tab_extended.push(ext);
+                        }
                     }
                     b"lineseg" => {
                         // 단독 lineseg (linesegarray 밖에 나올 경우)
@@ -1401,7 +1406,7 @@ fn parse_col_pr(e: &quick_xml::events::BytesStart) -> ColumnDef {
     cd
 }
 
-/// <hp:colPr> 요소의 속성과 자식 <hp:colLine> 파싱 → ColumnDef
+/// <hp:colPr> 요소의 속성과 자식 <hp:colLine>/<hp:colSz> 파싱 → ColumnDef
 fn parse_col_pr_with_children(
     e: &quick_xml::events::BytesStart,
     reader: &mut Reader<&[u8]>,
@@ -1414,6 +1419,7 @@ fn parse_col_pr_with_children(
                 let cname = ce.name();
                 match local_name(cname.as_ref()) {
                     b"colLine" => parse_col_line(ce, &mut cd),
+                    b"colSz" => parse_col_sz(ce, &mut cd),
                     _ => {}
                 }
             }
@@ -1424,6 +1430,10 @@ fn parse_col_pr_with_children(
                     b"colLine" => {
                         parse_col_line(ce, &mut cd);
                         skip_element(reader, b"colLine")?;
+                    }
+                    b"colSz" => {
+                        parse_col_sz(ce, &mut cd);
+                        skip_element(reader, b"colSz")?;
                     }
                     _ => {
                         let tag = local.to_vec();
@@ -1453,6 +1463,66 @@ fn parse_col_line(e: &quick_xml::events::BytesStart, cd: &mut ColumnDef) {
             b"color" => cd.separator_color = parse_color(&attr),
             _ => {}
         }
+    }
+}
+
+/// <hp:colSz width="..." gap="..."/> 파싱 → ColumnDef.widths/gaps (#4387).
+///
+/// `sameSz="false"` 일 때 단 개수만큼(최대 255) 반복되는 요소로, 단별 절대
+/// HWPUNIT 너비·뒤 간격을 담는다 (`mydocs/manual/OWPML SCHEMA/ParaList XML
+/// schema.xml:1415` ColumnDefType). HWPX 는 절대값이므로 `proportional_widths`
+/// 는 건드리지 않는다 — `ColumnDef::default()` 의 `false` 가 이미 정답이다
+/// (HWP 5.0 바이너리 파서(body_text.rs)만 비례값이라 true 로 켠다).
+///
+/// [#4387 후속] 스키마상 `width` 는 `xs:positiveInteger`(상한 없음)인데
+/// `ColumnDef.widths/gaps: Vec<HwpUnit16>` 은 i16(최대 32767 HWPUNIT ≈
+/// 115.6mm)이다. A3 등 큰 용지나 비대칭 다단(예: 35000+13000)처럼 실측치가
+/// i16 범위를 넘으면 공용 `parse_i16`(무경고 0-폴백)이 조용히 0으로 떨어뜨려
+/// 단이 통째로 사라진다 — IR 폭 확장은 HWP5 바이너리 경로까지 파급이 커
+/// 이번 범위를 넘으므로, 대신 saturating 클램프로 "조용한 소실/부호反전"을
+/// "포화값으로 잘림 + 경고"로 좁힌다. 근본 해결(IR 타입 확장)은 별도 이슈로
+/// 추적한다.
+fn parse_col_sz(e: &quick_xml::events::BytesStart, cd: &mut ColumnDef) {
+    let mut width: HwpUnit16 = 0;
+    let mut gap: HwpUnit16 = 0;
+    for attr in e.attributes().flatten() {
+        match attr.key.as_ref() {
+            b"width" => width = parse_hwpunit16_saturating(&attr, "colSz@width"),
+            // gap 은 스키마상 xs:nonNegativeInteger — 음수 폴백 없이 0 이상만 허용.
+            b"gap" => gap = parse_hwpunit16_saturating(&attr, "colSz@gap").max(0),
+            _ => {}
+        }
+    }
+    cd.widths.push(width);
+    cd.gaps.push(gap);
+}
+
+/// XML 정수 속성을 `HwpUnit16`(i16)로 saturating 변환한다.
+///
+/// 공용 `parse_i16`(utils.rs)은 `str::parse::<i16>()` 오버플로 시 무경고
+/// `unwrap_or(0)`이라 `positiveInteger` 등 무제한 스키마 값이 i16 범위를 넘으면
+/// 조용히 0이 된다(#4387 후속 — colSz 처럼 HWPX 가 절대 HWPUNIT 을 그대로
+/// 담는 자리에서 실측 재현됨). i64 로 먼저 파싱해 i16 범위로 clamp 하고,
+/// 실제로 잘렸을 때만 stderr 경고를 남긴다(section.rs 의 다른 속성 파서들과
+/// 달리 이 값은 손실 시 단이 통째로 사라지는 시각적 결함으로 이어져 무음
+/// 폴백이 특히 위험하다).
+fn parse_hwpunit16_saturating(
+    attr: &quick_xml::events::attributes::Attribute,
+    field: &str,
+) -> HwpUnit16 {
+    let raw = attr_str(attr);
+    match raw.parse::<i64>() {
+        Ok(v) => {
+            let clamped = v.clamp(HwpUnit16::MIN as i64, HwpUnit16::MAX as i64) as HwpUnit16;
+            if clamped as i64 != v {
+                eprintln!(
+                    "경고: {} 값 {} 이(가) HwpUnit16 범위를 초과해 {} 로 잘렸습니다",
+                    field, v, clamped
+                );
+            }
+            clamped
+        }
+        Err(_) => 0,
     }
 }
 
@@ -1616,7 +1686,12 @@ fn read_text_content_with_tabs(
                     b"lineBreak" | b"columnBreak" => text.push('\n'),
                     b"tab" => {
                         text.push('\t');
-                        tab_ext_buf.push(parse_tab_extension(ce));
+                        // "데이터 없음" 마커(width=0, #4403)는 tab_extended 에 싣지 않는다 —
+                        // 렌더러가 TabDef 기준으로 다시 계산하도록 원본처럼 비워 둔다.
+                        let ext = parse_tab_extension(ce);
+                        if !is_tab_no_data_marker(&ext) {
+                            tab_ext_buf.push(ext);
+                        }
                     }
                     b"nbSpace" => text.push('\u{00A0}'),
                     b"fwSpace" => text.push('\u{2007}'),
@@ -1650,6 +1725,18 @@ fn parse_tab_extension(e: &quick_xml::events::BytesStart) -> [u16; 7] {
     ext[2] = (tab_type << 8) | leader;
 
     ext
+}
+
+/// `<hp:tab width="0" leader="0" type="1"/>` — 서식기(`serializer/hwpx/section.rs`
+/// `TAB_NO_DATA_WIDTH_MARKER`)가 `tab_extended` 항목이 없던 "암묵적 기본 탭"을 내보낼 때
+/// 쓰는 정확한 마커다(#4403). 실제 탭은 폭 0 이 나올 수 없으므로(시각적으로 아무 효과가 없어
+/// 한컴도 만들지 않는다) 안전한 신호로 쓴다. `leader`/`type` 까지 우리 서식기의 고정 폴백값과
+/// 정확히 일치할 때만 마커로 인정해, width=0 인 (극히 드문) 진짜 캡처 데이터를 오인해 버리지
+/// 않도록 한다. 이 마커를 만나면 `tab_extended` 에 항목을 추가하지 않아, 렌더러가 문단의 실제
+/// `TabDef`/커서 위치 기준 `find_next_tab_stop` 으로 탭 정지를 다시 계산하게 한다 — HWP5
+/// 바이너리 파서의 동형 널 마커 스킵(`parser/body_text.rs` `is_null_ext`, #1892)과 같은 규약.
+fn is_tab_no_data_marker(ext: &[u16; 7]) -> bool {
+    ext[0] == 0 && ext[2] == 0x0100
 }
 
 // ─── Table ───
@@ -3543,6 +3630,24 @@ fn parse_connect_line_type_attr(e: &quick_xml::events::BytesStart) -> LinkLineTy
     LinkLineType::StraightNoArrow
 }
 
+/// [#4388] `<hp:arc>` 전용 `type` 속성 (OWPML `CArcType::WriteElement` —
+/// hancom-io/hwpx-owpml-model `ArcType.cpp`) — `g_ArcTypeList`: NORMAL(0)/PIE(1)/CHORD(2).
+/// `ArcShape.arc_type` (0: Arc, 1: CircularSector, 2: Bow) 와 1:1 대응. 같은 이름의
+/// `type` 속성이 `<hp:connectLine>`(연결선 화살표 종류) 등 다른 도형 태그에도 쓰이므로
+/// 반드시 `<hp:arc>` 요소 자체(shape_type == b"arc")에서만 호출한다.
+fn parse_arc_type_attr(e: &quick_xml::events::BytesStart) -> u8 {
+    for attr in e.attributes().flatten() {
+        if attr.key.as_ref() == b"type" {
+            return match attr_str(&attr).to_ascii_uppercase().as_str() {
+                "PIE" => 1,
+                "CHORD" => 2,
+                _ => 0,
+            };
+        }
+    }
+    0
+}
+
 /// shape 내부의 `<hp:fillBrush>` 자식 요소를 파싱하여 Fill을 반환한다.
 fn parse_shape_fill_brush(reader: &mut Reader<&[u8]>) -> Result<Fill, HwpxError> {
     use crate::model::style::{FillType, GradientFill, ImageFill, ImageFillMode, SolidFill};
@@ -3867,6 +3972,13 @@ fn parse_shape_object(
 
     let object_ids = parse_object_element_attrs(e, &mut common, &mut shape_attr);
     let connect_line_type = parse_connect_line_type_attr(e);
+    // [#4388] `<hp:arc>` 전용 `type` 속성 — 다른 태그의 동명 `type` 속성과
+    // 섞이지 않도록 shape_type == b"arc" 로 한정한다.
+    let arc_type = if shape_type == b"arc" {
+        parse_arc_type_attr(e)
+    } else {
+        0
+    };
     let mut connect_start_subject_id = 0_u32;
     let mut connect_start_subject_index = 0_u32;
     let mut connect_end_subject_id = 0_u32;
@@ -4132,11 +4244,13 @@ fn parse_shape_object(
         b"arc" => ShapeObject::Arc(ArcShape {
             common,
             drawing,
-            // [Task #1598] 호 전용 지오메트리(center/축). arc_type 은 태그속성(추후).
+            // [Task #1598] 호 전용 지오메트리(center/축).
+            // [#4388] arc_type 은 `<hp:arc>` 자체의 `type` 속성(NORMAL/PIE/CHORD) —
+            // 태그속성으로 읽는다(hancom-io/hwpx-owpml-model `ArcType.cpp` 확인).
+            arc_type,
             center: e_center,
             axis1: e_axis1,
             axis2: e_axis2,
-            ..Default::default()
         }),
         b"polygon" => ShapeObject::Polygon(PolygonShape {
             common,
@@ -6115,7 +6229,15 @@ fn parse_hp_chart_element(
 
     let mut extent: Option<(i32, i32)> = None;
     let mut shape_attr = ShapeComponentAttr::default();
-    parse_common_shape_children(reader, &mut common, b"chart", &mut extent, &mut shape_attr)?;
+    let mut caption: Option<crate::model::shape::Caption> = None;
+    parse_common_shape_children(
+        reader,
+        &mut common,
+        b"chart",
+        &mut extent,
+        &mut shape_attr,
+        &mut caption,
+    )?;
     if numbering_type_picture {
         common.hwp5_gen_shape_attr_bit28 = true;
     }
@@ -6135,6 +6257,12 @@ fn parse_hp_chart_element(
     ole.extent_x = if ext_x > 0 { ext_x } else { 7200 };
     ole.extent_y = if ext_y > 0 { ext_y } else { 7200 };
     apply_hwpx_ole_shape_component_contract(&mut ole);
+    // [#4319] HWP5 파서(parser/control/shape.rs:213)와 동형 정규화 — drawing.caption
+    // 에 남기지 않고 OleShape 자신의 caption 필드로 옮긴다. 게이트(shape_caption,
+    // serializer/hwpx/roundtrip.rs)는 `x.caption` 만 보므로 정규화하지 않으면
+    // drawing.caption 잔류가 라운드트립 비교에서 보이지 않는다.
+    ole.drawing.caption = caption;
+    ole.caption = ole.drawing.caption.take();
     Ok(Some(Control::Shape(Box::new(ShapeObject::Ole(Box::new(
         ole,
     ))))))
@@ -6215,7 +6343,15 @@ fn parse_hp_ole_element(
 
     let mut extent: Option<(i32, i32)> = None;
     let mut shape_attr = ShapeComponentAttr::default();
-    parse_common_shape_children(reader, &mut common, b"ole", &mut extent, &mut shape_attr)?;
+    let mut caption: Option<crate::model::shape::Caption> = None;
+    parse_common_shape_children(
+        reader,
+        &mut common,
+        b"ole",
+        &mut extent,
+        &mut shape_attr,
+        &mut caption,
+    )?;
     if numbering_type_picture {
         common.hwp5_gen_shape_attr_bit28 = true;
     }
@@ -6231,6 +6367,10 @@ fn parse_hp_ole_element(
     ole.extent_x = if ext_x > 0 { ext_x } else { 7200 };
     ole.extent_y = if ext_y > 0 { ext_y } else { 7200 };
     apply_hwpx_ole_shape_component_contract(&mut ole);
+    // [#4319] HWP5 파서(parser/control/shape.rs:222)와 동형 정규화 — 차트와 동일한
+    // 이유로 drawing.caption 이 아니라 ole.caption 에 남겨야 게이트가 검출한다.
+    ole.drawing.caption = caption;
+    ole.caption = ole.drawing.caption.take();
     Ok(Some(Control::Shape(Box::new(ShapeObject::Ole(Box::new(
         ole,
     ))))))
@@ -6278,6 +6418,12 @@ fn parse_common_shape_children(
     // [#3546] `<hp:rotationInfo>` 수집용. 종전 미파싱으로 저장 시 기본값으로
     // 되쓰여 rotateimage="1" 등 원본 값이 뒤집혔다(#2726 sz 기준 유실과 동형).
     shape_attr_out: &mut ShapeComponentAttr,
+    // [#4319] `<hp:caption>` 수집용. 종전엔 이 공용 자식 파서(차트·OLE 전용)에
+    // caption arm 이 없어 캡션 subList 가 파싱 단계에서 완전히 유실됐다 —
+    // 도형(parse_shape_object)·묶음(parse_container)·그림(parse_picture) 은 모두
+    // 캡션을 읽지만 차트·OLE 만 빠져 있었다. HWP5 파서(parser/control/shape.rs:213,
+    // 222)와 동형으로 drawing.caption 에 채운 뒤 호출자가 `.caption` 으로 정규화한다.
+    caption_out: &mut Option<crate::model::shape::Caption>,
 ) -> Result<(), HwpxError> {
     let mut buf = Vec::new();
     loop {
@@ -6403,6 +6549,11 @@ fn parse_common_shape_children(
                     // shape comment 사라짐).
                     b"shapeComment" => {
                         common.description = read_dutmal_text(reader, b"shapeComment")?;
+                    }
+                    // [#4319] 캡션 — 미적재 시 라운드트립에서 캡션 subList 소실(다른
+                    // 도형 변형과 동형, parse_shape_object/parse_container 참고).
+                    b"caption" => {
+                        *caption_out = Some(parse_table_caption(ce, reader)?);
                     }
                     _ => {}
                 }
@@ -7234,6 +7385,34 @@ mod tests {
         let para = &section.paragraphs[0];
         assert_eq!(para.text, "A\t(페이지 표기)");
         assert_eq!(para.tab_extended, vec![[17283, 0, 0x0203, 0, 0, 0, 9]]);
+    }
+
+    #[test]
+    fn test_parse_hwpx_tab_width_zero_marker_not_recorded_as_ext() {
+        // #4403: 직렬화기가 "데이터 없음" 마커(width=0)로 내보낸 암묵적 기본 탭은
+        // 재적재 시 tab_extended 항목을 만들면 안 된다 — 만들면 렌더러가 그 폭을
+        // 실제 계산값으로 신뢰해(`total + width`) 문단의 진짜 TabDef(예: 우측 정렬)를
+        // 무시하고 커서 위치와 무관한 고정 거리만 전진시킨다. width=0 은 실제 탭에서
+        // 나올 수 없는 값(폭 0인 탭은 시각 효과가 없음)이라 안전한 마커다. 탭 문자(\t)
+        // 자체는 그대로 보존해야 한다.
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<hs:sec xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph"
+        xmlns:hs="http://www.hancom.co.kr/hwpml/2011/section">
+  <hp:p paraPrIDRef="0" styleIDRef="0">
+    <hp:run charPrIDRef="0">
+      <hp:t>I.소설의 이해<hp:tab width="0" leader="0" type="1"/>3</hp:t>
+    </hp:run>
+  </hp:p>
+</hs:sec>"#;
+
+        let section = parse_hwpx_section(xml).unwrap();
+        let para = &section.paragraphs[0];
+        assert_eq!(para.text, "I.소설의 이해\t3");
+        assert!(
+            para.tab_extended.is_empty(),
+            "width=0 마커는 tab_extended 에 실리면 안 됨: {:?}",
+            para.tab_extended
+        );
     }
 
     #[test]
@@ -8675,6 +8854,77 @@ mod tests {
     }
 
     #[test]
+    fn issue4387_col_sz_parses_individual_widths_and_gaps() {
+        let xml = r##"<?xml version="1.0" encoding="UTF-8"?>
+<hs:sec xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph"
+        xmlns:hs="http://www.hancom.co.kr/hwpml/2011/section">
+  <hp:p paraPrIDRef="0" styleIDRef="0">
+    <hp:run charPrIDRef="0">
+      <hp:ctrl>
+        <hp:colPr type="NEWSPAPER" layout="LEFT" colCount="2" sameSz="0" sameGap="0">
+          <hp:colSz width="4000" gap="500"/>
+          <hp:colSz width="6000" gap="0"/>
+        </hp:colPr>
+      </hp:ctrl>
+      <hp:t>A</hp:t>
+    </hp:run>
+  </hp:p>
+</hs:sec>"##;
+        let section = parse_hwpx_section(xml).unwrap();
+        let Control::ColumnDef(cd) = &section.paragraphs[0].controls[0] else {
+            panic!("expected ColumnDef control");
+        };
+        assert!(!cd.same_width);
+        assert_eq!(
+            cd.widths,
+            vec![4000, 6000],
+            "단별 너비가 파싱돼야 함(#4387)"
+        );
+        assert_eq!(cd.gaps, vec![500, 0], "단별 간격이 파싱돼야 함(#4387)");
+        assert!(!cd.proportional_widths, "HWPX colSz 는 절대 HWPUNIT");
+    }
+
+    /// [#4387 후속] `colSz@width` 는 스키마상 `xs:positiveInteger`(상한 없음)인데
+    /// `ColumnDef.widths` 는 `Vec<i16>`(최대 32767). A3 등 큰 용지·비대칭 다단에서
+    /// 나올 수 있는 40000(≈141mm) 처럼 i16 범위를 넘는 값을 공용 `parse_i16` 로
+    /// 파싱하면 `str::parse::<i16>()` 오버플로 에러를 `unwrap_or(0)` 이 삼켜
+    /// widths=[0, 13000] 처럼 무경고 0-폴백됐다(단이 통째로 사라짐 — 수정 전
+    /// 코드로 직접 재현·확인). saturating 클램프로 i16::MAX 로 잘리는지
+    /// 확인한다 — 0 이 되면 안 된다.
+    #[test]
+    fn issue4387_col_sz_width_overflow_saturates_not_zeroes() {
+        let xml = r##"<?xml version="1.0" encoding="UTF-8"?>
+<hs:sec xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph"
+        xmlns:hs="http://www.hancom.co.kr/hwpml/2011/section">
+  <hp:p paraPrIDRef="0" styleIDRef="0">
+    <hp:run charPrIDRef="0">
+      <hp:ctrl>
+        <hp:colPr type="NEWSPAPER" layout="LEFT" colCount="2" sameSz="0" sameGap="0">
+          <hp:colSz width="40000" gap="500"/>
+          <hp:colSz width="13000" gap="-7"/>
+        </hp:colPr>
+      </hp:ctrl>
+      <hp:t>A</hp:t>
+    </hp:run>
+  </hp:p>
+</hs:sec>"##;
+        let section = parse_hwpx_section(xml).unwrap();
+        let Control::ColumnDef(cd) = &section.paragraphs[0].controls[0] else {
+            panic!("expected ColumnDef control");
+        };
+        assert_eq!(
+            cd.widths[0],
+            i16::MAX,
+            "i16 범위를 넘는 width 는 0 이 아니라 i16::MAX 로 saturate 해야 함"
+        );
+        assert_eq!(cd.widths[1], 13000, "범위 내 값은 그대로 보존돼야 함");
+        assert_eq!(
+            cd.gaps[1], 0,
+            "음수 gap(스키마상 nonNegativeInteger 위반)은 0 으로 클램프돼야 함"
+        );
+    }
+
+    #[test]
     fn test_task1124_col_line_type_and_width_mapping() {
         assert_eq!(parse_hwpx_line_type("NONE"), 0);
         assert_eq!(parse_hwpx_line_type("SOLID"), 1);
@@ -8791,6 +9041,104 @@ mod tests {
         assert!(
             ole.common.locked,
             "lock=\"1\" 이 common.locked 에 보존돼야 한다"
+        );
+    }
+
+    // ---------- #4319: 차트·OLE 캡션 파싱 ----------
+
+    /// [#4319] `<hp:chart>` 내부 `<hp:caption>` — 종전엔 공용 자식 파서
+    /// (`parse_common_shape_children`, 차트·OLE 전용)에 caption arm 이 없어
+    /// 캡션 subList 가 파싱 단계에서 완전히 유실됐다(표/도형/묶음/그림은 모두
+    /// 캡션을 읽지만 차트·OLE 만 빠져 있었다). 캡션 구조는 실 코퍼스 hp:pic
+    /// 캡션 실측(outMargin 뒤·shapeComment 앞, side/fullSz/width/gap/lastWidth
+    /// 속성 + subList/p/run/t)과 OWPML AbstractShapeObjectType 스키마
+    /// (sz→pos→outMargin→caption→shapeComment 순서, hp:chart/hp:ole 모두 이
+    /// 타입을 상속)를 그대로 따른다.
+    #[test]
+    fn issue4319_chart_caption_parses_into_caption_field() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<hs:sec xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph"
+        xmlns:hs="http://www.hancom.co.kr/hwpml/2011/section">
+  <hp:p id="0" paraPrIDRef="0" styleIDRef="0">
+    <hp:run charPrIDRef="0">
+      <hp:chart id="1" zOrder="0" numberingType="NONE" textWrap="SQUARE" textFlow="BOTH_SIDES" chartIDRef="Chart/chart1.xml" instid="1">
+        <hp:sz width="4000" height="3000" widthRelTo="ABSOLUTE" heightRelTo="ABSOLUTE" protect="0"/>
+        <hp:pos treatAsChar="0" vertRelTo="PARA" horzRelTo="PARA"/>
+        <hp:outMargin left="0" right="0" top="0" bottom="0"/>
+        <hp:caption side="BOTTOM" fullSz="0" width="4000" gap="850" lastWidth="4000">
+          <hp:subList id="" textDirection="HORIZONTAL" lineWrap="BREAK" vertAlign="TOP" linkListIDRef="0" linkListNextIDRef="0" textWidth="0" textHeight="0" hasTextRef="0" hasNumRef="0">
+            <hp:p id="0" paraPrIDRef="0" styleIDRef="0">
+              <hp:run charPrIDRef="0"><hp:t>그림 1. 매출 추이</hp:t></hp:run>
+            </hp:p>
+          </hp:subList>
+        </hp:caption>
+      </hp:chart>
+      <hp:t/>
+    </hp:run>
+  </hp:p>
+</hs:sec>"#;
+
+        let section = parse_hwpx_section(xml).unwrap();
+        let Control::Shape(shape) = &section.paragraphs[0].controls[0] else {
+            panic!("expected shape control");
+        };
+        let ShapeObject::Ole(ole) = shape.as_ref() else {
+            panic!("expected chart (modeled as OLE) shape");
+        };
+        let caption = ole
+            .caption
+            .as_ref()
+            .expect("<hp:caption> 이 ole.caption 에 적재돼야 한다 (#4319)");
+        assert_eq!(caption.paragraphs.len(), 1);
+        assert_eq!(caption.paragraphs[0].text, "그림 1. 매출 추이");
+        assert!(
+            ole.drawing.caption.is_none(),
+            "HWP5 파서와 동형 정규화 — drawing.caption 은 비어 있어야 한다 \
+             (shape_caption 게이트는 x.caption 만 본다)"
+        );
+    }
+
+    /// [#4319] `<hp:ole>` 내부 `<hp:caption>` — chart 와 동일한 결함, 동일한 수정.
+    #[test]
+    fn issue4319_ole_caption_parses_into_caption_field() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<hs:sec xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph"
+        xmlns:hs="http://www.hancom.co.kr/hwpml/2011/section">
+  <hp:p id="0" paraPrIDRef="0" styleIDRef="0">
+    <hp:run charPrIDRef="0">
+      <hp:ole id="1" zOrder="0" numberingType="NONE" textWrap="SQUARE" textFlow="BOTH_SIDES" binaryItemIDRef="ole1" instid="1">
+        <hp:sz width="4000" height="3000" widthRelTo="ABSOLUTE" heightRelTo="ABSOLUTE" protect="0"/>
+        <hp:pos treatAsChar="0" vertRelTo="PARA" horzRelTo="PARA"/>
+        <hp:outMargin left="0" right="0" top="0" bottom="0"/>
+        <hp:caption side="BOTTOM" fullSz="0" width="4000" gap="850" lastWidth="4000">
+          <hp:subList id="" textDirection="HORIZONTAL" lineWrap="BREAK" vertAlign="TOP" linkListIDRef="0" linkListNextIDRef="0" textWidth="0" textHeight="0" hasTextRef="0" hasNumRef="0">
+            <hp:p id="0" paraPrIDRef="0" styleIDRef="0">
+              <hp:run charPrIDRef="0"><hp:t>수식 1. 표준편차 계산</hp:t></hp:run>
+            </hp:p>
+          </hp:subList>
+        </hp:caption>
+      </hp:ole>
+      <hp:t/>
+    </hp:run>
+  </hp:p>
+</hs:sec>"#;
+
+        let section = parse_hwpx_section(xml).unwrap();
+        let Control::Shape(shape) = &section.paragraphs[0].controls[0] else {
+            panic!("expected shape control");
+        };
+        let ShapeObject::Ole(ole) = shape.as_ref() else {
+            panic!("expected OLE shape");
+        };
+        let caption = ole
+            .caption
+            .as_ref()
+            .expect("<hp:caption> 이 ole.caption 에 적재돼야 한다 (#4319)");
+        assert_eq!(caption.paragraphs.len(), 1);
+        assert_eq!(caption.paragraphs[0].text, "수식 1. 표준편차 계산");
+        assert!(
+            ole.drawing.caption.is_none(),
+            "HWP5 파서와 동형 정규화 — drawing.caption 은 비어 있어야 한다"
         );
     }
 }

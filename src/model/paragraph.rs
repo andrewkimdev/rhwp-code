@@ -1523,6 +1523,38 @@ impl Paragraph {
         positions
     }
 
+    /// 편집/커서 이동용 control position 을 반환한다.
+    ///
+    /// [`Self::control_text_positions`] 는 HWP/HWPX record stream 의 raw text position 을
+    /// 보존한다. 반면 커서 이동은 `SectionDef`, `ColumnDef` 같은 구조 컨트롤을 건너뛰고,
+    /// Shape/Table/Picture/Equation/Footnote/Endnote 같은 인라인 개체만 한 글자 폭으로 센다.
+    pub fn logical_control_positions(&self) -> Vec<usize> {
+        if self.text.is_empty() && self.char_offsets.is_empty() {
+            let mut inline_seen = 0usize;
+            let mut positions = Vec::with_capacity(self.controls.len());
+            for ctrl in &self.controls {
+                positions.push(inline_seen);
+                if ctrl.is_logical_inline() {
+                    inline_seen += 1;
+                }
+            }
+            return positions;
+        }
+
+        let text_positions = self.control_text_positions();
+        let text_len = self.text.chars().count();
+        let mut inline_seen = 0usize;
+        let mut positions = Vec::with_capacity(self.controls.len());
+        for (ci, ctrl) in self.controls.iter().enumerate() {
+            let text_pos = text_positions.get(ci).copied().unwrap_or(text_len);
+            positions.push(text_pos + inline_seen);
+            if ctrl.is_logical_inline() {
+                inline_seen += 1;
+            }
+        }
+        positions
+    }
+
     /// `char_offsets` 중 UTF-16 위치 `utf16_pos` 이상인 첫 번째 codepoint 의
     /// 인덱스를 반환한다. 모든 entry 가 작으면 `char_offsets.len()` (텍스트 끝).
     ///

@@ -947,7 +947,17 @@ impl DocumentCore {
         self.layout_engine.take_overflow_cell_lines()
     }
 
+    /// [Issue #4379] `RHWP_RENDER_PATH=layer-svg` 는 legacy/layer 두 SVG 경로를 A/B 대조하는
+    /// **네이티브 전용** 디버그 스위치다. `#[cfg(not(target_arch = "wasm32"))]` 로 감싼 이유는
+    /// 장식이 아니라 사실 표시다 — wasm32-unknown-unknown(rhwp-studio 브라우저 빌드)에는
+    /// 프로세스 환경변수가 없어 `std::env::var` 가 항상 `Err` 를 반환하므로, 이 함수를 거쳐서는
+    /// wasm 에서 layer 경로에 절대 도달할 수 없다(`renderPageSvg` → 항상 legacy). studio 가
+    /// 실제로 인쇄 등가 SVG 를 원하면 이 함수를 우회해 `render_page_svg_layer_with_profile_native`
+    /// (`renderPageSvgWithProfile`) 를 직접 불러야 한다 — PDF 내보내기(`file.ts:461`)가 이미
+    /// 그렇게 한다. 이 cfg 분기는 "네이티브 디버그 스위치이지 프로덕션 경로 선택 API 가 아니다"를
+    /// 코드로 드러낸다.
     pub fn render_page_svg_native(&self, page_num: u32) -> Result<String, HwpError> {
+        #[cfg(not(target_arch = "wasm32"))]
         if matches!(
             std::env::var("RHWP_RENDER_PATH").ok().as_deref(),
             Some("layer-svg")
@@ -4011,6 +4021,10 @@ impl DocumentCore {
             self.dirty_paragraphs.push(None);
         }
         self.dirty_paragraphs.truncate(sec_count);
+        // [#4325] 이번 패스에서 실제로 재측정한 구역만 표시한다. dirty가 아니어서 건너뛴
+        // 구역은 표 dirty 플래그를 지우면 안 된다 — 지우는 범위와 소비하는 범위(측정 스킵)가
+        // 어긋나면 그 구역의 표가 이후 dirty로 마킹돼도 이번 패스의 clear로 소실된다.
+        let mut remeasured_sections = vec![false; sec_count];
 
         // 구역 간 쪽번호 위치/번호 상속
         let mut carry_page_number_pos: Option<crate::model::control::PageNumberPos> = None;
@@ -4580,6 +4594,7 @@ impl DocumentCore {
             }
             self.pagination[idx] = result;
             self.dirty_sections[idx] = false;
+            remeasured_sections[idx] = true;
             // 문단 dirty 비트맵 초기화 (모든 문단 clean)
             let para_count = section.paragraphs.len();
             self.dirty_paragraphs[idx] = Some(vec![false; para_count]);
@@ -4619,8 +4634,14 @@ impl DocumentCore {
             *off = 0;
         }
 
-        // 표 dirty 플래그 초기화
-        for section in &mut self.document.sections {
+        // 표 dirty 플래그 초기화. [#4325] 이번 패스에서 재측정하지 않고 건너뛴 구역은
+        // 제외한다 — 그 구역의 표는 measure_section_incremental이 아직 소비하지 않았으므로
+        // dirty를 여기서 지우면 이후 실제로 재측정될 때 변경 전 MeasuredTable을 그대로
+        // clone하게 된다(issue #4325).
+        for (idx, section) in self.document.sections.iter_mut().enumerate() {
+            if !remeasured_sections[idx] {
+                continue;
+            }
             for para in &mut section.paragraphs {
                 for ctrl in &mut para.controls {
                     if let Control::Table(table) = ctrl {
