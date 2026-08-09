@@ -84,6 +84,15 @@ NO_WINDOW = {
     "Action.DeleteField",
 }
 
+# **맥락을 API 로 만들 수 없는** 것들 — 맞추기는 개체를 여럿 골라야 먹는데, `SelectAll` 은
+# 개체 선택을 버리고(모드 4→1) `SelectCtrl` 은 COM 에 아예 없다. 여럿 고르기는 마우스의 일이다.
+UNBUILDABLE_CONTEXT = {
+    "Action.ShapeObjAlignLeft", "Action.ShapeObjAlignRight", "Action.ShapeObjAlignTop",
+    "Action.ShapeObjAlignBottom", "Action.ShapeObjAlignCenter", "Action.ShapeObjAlignMiddle",
+    "Action.ShapeObjAlignWidth", "Action.ShapeObjAlignHeight", "Action.ShapeObjAlignSize",
+    "Action.ShapeObjAlignHorzSpacing", "Action.ShapeObjAlignVertSpacing",
+}
+
 # 머신(설치 글꼴·음력 자료)에 달린 것들.
 MACHINE = {
     "Action.CharShapeNextFaceName", "Action.CharShapePrevFaceName",
@@ -163,6 +172,8 @@ def main() -> int:
             key = "머신 의존"
         elif ident in NO_WINDOW:
             key = "관측창 없음"
+        elif ident in UNBUILDABLE_CONTEXT:
+            key = "맥락을 못 만듦"
         elif ident in LAYOUT:
             key = "조판 의존"
         elif action and action in DIALOG_TITLES:
@@ -189,6 +200,7 @@ def main() -> int:
             "대화상자",
             "안 끝남(대화상자 없음)",
             "관측창 없음",
+            "맥락을 못 만듦",
         ):
             blocked += len(names)
         print(f"  {key:<22} {len(names):>4}")

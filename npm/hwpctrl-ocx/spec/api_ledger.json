@@ -4,10 +4,10 @@
   "oracleVersion": "한글2022 (설치본 COM)",
   "summary": {
     "total": 484,
-    "done": 274,
+    "done": 275,
     "byStatus": {
-      "verified": 272,
-      "unimplemented": 210,
+      "verified": 273,
+      "unimplemented": 209,
       "substituted": 2
     },
     "byUnit": {
@@ -24,8 +24,8 @@
         "unimplemented": 3
       },
       "action": {
-        "unimplemented": 165,
-        "verified": 147
+        "unimplemented": 164,
+        "verified": 148
       },
       "parameterSet": {
         "verified": 49,
@@ -6594,13 +6594,15 @@
       "name": "ShapeObjUngroup",
       "parameterSetId": null,
       "requiresExternalSet": false,
-      "status": "unimplemented",
+      "status": "verified",
       "notes": "",
       "legacyHwpctl": false,
       "oracle": {
-        "scenarios": [],
+        "scenarios": [
+          "p4-ungroup"
+        ],
         "lastRun": null,
-        "diff": null
+        "diff": 0
       }
     },
     {

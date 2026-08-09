@@ -362,6 +362,10 @@ const ACTIONS = {
   ShapeObjMoveDown: { kind: 'objectMoveBy', dx: 0, dy: 56 },
   ShapeObjMoveUp: { kind: 'objectMoveBy', dx: 0, dy: -56 },
 
+  // 묶음 풀기 — 사슬이 통째로 달라져서 보인다. `그리기` 하나가 자식 개체 여럿으로 풀린다
+  // (실측: 그리기 → 그림·그림·그림). 앞뒤 순서·뒤집기와 달리 이 계열은 관측창이 있다.
+  ShapeObjUngroup: { kind: 'objectUngroup' },
+
   ShapeObjResizeRight: { kind: 'objectResize', dw: 283, dh: 0 },
   ShapeObjResizeLeft: { kind: 'objectResize', dw: -283, dh: 0 },
   ShapeObjResizeDown: { kind: 'objectResize', dw: 0, dh: 283 },
@@ -1891,6 +1895,25 @@ export class HwpCtrl {
       }
       if (ok) {
         this.#ctrls = null; // 크기가 바뀌었다 — 사슬의 Properties 를 다시 읽는다
+        this.#modified = true;
+      }
+      callback?.(null, ok, callbackUserData);
+      return;
+    }
+    if (action.kind === 'objectUngroup') {
+      const here = this.#selectedObject;
+      let ok = false;
+      if (here) {
+        try {
+          this.#doc.ungroupShape(0, here.para, here.controlIndex);
+          ok = true;
+        } catch (e) {
+          console.warn(`[hwpctrl] Run("${actionID}") 실패:`, e);
+        }
+      }
+      if (ok) {
+        // 사슬이 통째로 달라진다 — 묶음 하나가 자식 여럿으로 풀린다.
+        this.#ctrls = null;
         this.#modified = true;
       }
       callback?.(null, ok, callbackUserData);

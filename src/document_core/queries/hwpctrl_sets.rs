@@ -86,13 +86,16 @@ fn control_identity(ctrl: &Control) -> (&'static str, u32, &'static str) {
         // 그리기 개체의 이름은 갈래마다 다르다("사각형"·"타원" …). rhwp 가 이미 같은 이름을
         // 들고 있어서 그대로 쓴다(오라클 실측과 일치). 묶음만 다르다 — rhwp 는 "묶음",
         // 한글은 **"그리기"** 다(실측).
+        // 그림은 `shape_name()` 이 "그림(묶음내)" 를 준다 — 그 이름은 렌더 진단이 묶음 안에
+        // 있음을 표시하려고 붙인 것이고, 한글이 부르는 이름은 묶음을 풀든 말든 **"그림"** 이다
+        // (묶음 풀기 실측). 여기서만 걷어낸다 — `shape_name()` 은 다른 곳이 딛고 있다.
         Control::Shape(shape) => (
             "gso",
             11,
-            if matches!(**shape, crate::model::shape::ShapeObject::Group(_)) {
-                "그리기"
-            } else {
-                shape.shape_name()
+            match **shape {
+                crate::model::shape::ShapeObject::Group(_) => "그리기",
+                crate::model::shape::ShapeObject::Picture(_) => "그림",
+                _ => shape.shape_name(),
             },
         ),
         Control::Picture(_) => ("gso", 11, "그림"),
