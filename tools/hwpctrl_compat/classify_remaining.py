@@ -106,9 +106,8 @@ NO_WINDOW = {
     "Action.TableDistributeCellWidth", "Action.TableDistributeCellHeight",
     # 캐럿이 누름틀 안인데도 안 지워진다.
     "Action.DeleteField",
-    # 그림 넣기 — 멀쩡한 파일을 줘도 아무 일도 안 한다(`InsertPicture` 는 null, 사슬도 그대로).
-    # 쪽 배경 그림은 멀쩡한 파일에도 **false** 다. 성공하는 길을 못 찾았다.
-    "HwpCtrl.method.InsertPicture", "HwpCtrl.method.InsertBackgroundPicture",
+    # 쪽 배경 그림은 절대 경로를 줘도 **false** 다. 성공하는 길을 못 찾았다.
+    "HwpCtrl.method.InsertBackgroundPicture",
     # 액션 바꿔치기 — `true` 를 주는데 바꾼 대로 안 돈다(`MoveDocEnd` 를 `MoveDocBegin` 으로
     # 바꿔도 문서 끝으로 간다). 반환 말고는 볼 것이 없다.
     "HwpCtrl.method.ReplaceAction",
@@ -163,6 +162,11 @@ DATA_MISSING = {
     # 쪽 그림 만들기 — 인자 **둘**이고 `true` 를 준다(셋 이상이면 false). rhwp 는 쪽을 그릴 수
     # 있으니 막힌 것이 아니라 아직 안 이은 것이다.
     "HwpCtrl.method.CreatePageImage",
+    # 그림 넣기 — **절대 경로면 된다**(계획서 §4.71). 앞서 "무동작"으로 적은 것은 상대 경로로
+    # 걸어서였다. 컨트롤을 돌려주고 사슬에 `그림` 이 생기며 캐럿이 8 밀린다. rhwp 에도
+    # `insertPicture` 가 있는데 **경로가 아니라 바이트**를 받으므로 호스트 파일 읽기 고리가
+    # 하나 필요하다 — 막힌 것이 아니라 아직 안 이은 것이다.
+    "HwpCtrl.method.InsertPicture",
 }
 
 
