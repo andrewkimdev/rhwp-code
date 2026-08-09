@@ -59,30 +59,66 @@ def remaining_actions() -> list[str]:
     return sorted(names)
 
 
-def observables(action: str) -> list:
+# 맥락 — 액션이 먹으려면 미리 만들어 둬야 하는 상태. 글만 있는 문서에서는 개체·표 액션이
+# 전부 "무동작"으로 보이는데, 그건 액션이 아니라 **맥락이 없어서**다(실측: 65 중 46이 그랬다).
+CONTEXTS = {
+    "plain": {
+        "sample": "samples/para-001.hwp",
+        "setup": [["SetPos", [0, 0, 20]]],
+        "reads": [
+            ["GetPos", []],
+            ["SelectionMode", []],
+            ["CharShape.Item", ["Height"]],
+            ["ParaShape.Item", ["AlignType"]],
+        ],
+        "labels": ["캐럿", "모드", "글자높이", "정렬"],
+    },
+    "object": {
+        "sample": "samples/20250130-hongbo.hwp",
+        "setup": [["SetPos", [0, 0, 0]], ["Run", ["SelectCtrlFront"]]],
+        "reads": [
+            ["GetPos", []],
+            ["SelectionMode", []],
+            ["CurSelectedCtrl.CtrlID", []],
+            ["HeadCtrl.Next.Next.Properties.Item", ["Width"]],
+            ["HeadCtrl.Next.Next.Properties.Item", ["Height"]],
+            ["HeadCtrl.Next.Next.Properties.Item", ["Lock"]],
+            ["HeadCtrl.Next.Next.Next.CtrlID", []],
+        ],
+        "labels": ["캐럿", "모드", "고른개체", "폭", "높이", "잠금", "다음컨트롤"],
+    },
+    "cell": {
+        "sample": "samples/21868765_별표2_보건소_분장사무.hwp",
+        "setup": [["SetPos", [3, 0, 0]]],
+        "reads": [
+            ["GetPos", []],
+            ["SelectionMode", []],
+            ["CellShape.Item", ["Width"]],
+            ["CellShape.Item", ["Height"]],
+            ["CellShape.Item", ["VertAlign"]],
+            ["HeadCtrl.Next.Next.CtrlID", []],
+        ],
+        "labels": ["캐럿", "모드", "칸폭", "칸높이", "세로정렬", "표컨트롤"],
+    },
+}
+
+
+def observables(action: str, ctx: dict) -> list:
     """액션 앞뒤로 같은 것을 읽는다 — 무엇이 달라졌는지 갈래를 보려는 것."""
-    probe = [
-        ["GetPos", []],
-        ["SelectionMode", []],
-        ["CharShape.Item", ["Height"]],
-        ["ParaShape.Item", ["AlignType"]],
-        ["SetPos", [0, 0, 10000000]],
-        ["GetPos", []],
-    ]
     return (
-        [["SetPos", [0, 0, 20]]]
-        + probe
-        + [["SetPos", [0, 0, 20]], ["Run", [action]]]
-        + probe
+        list(ctx["setup"])
+        + list(ctx["reads"])
+        + list(ctx["setup"])
+        + [["Run", [action]]]
+        + list(ctx["reads"])
     )
 
 
-def classify(before: list, after: list) -> tuple[str, str]:
-    labels = ["캐럿", "모드", "글자높이", "정렬", "-", "문단끝"]
+def classify(before: list, after: list, labels: list[str]) -> tuple[str, str]:
     diffs = [
         f"{labels[i]}:{json.dumps(b, ensure_ascii=False)}→{json.dumps(a, ensure_ascii=False)}"
         for i, (b, a) in enumerate(zip(before, after))
-        if b != a and labels[i] != "-"
+        if b != a
     ]
     if not diffs:
         return "NOOP", ""
@@ -96,9 +132,15 @@ def main() -> int:
     ap.add_argument("--out", type=Path, default=REPO / "output" / "poc" / "hwpctrl" / "sweep_actions.tsv")
     ap.add_argument("--limit", type=int, default=0)
     ap.add_argument("--timeout", type=int, default=70)
+    ap.add_argument("--context", choices=sorted(CONTEXTS), default="plain",
+                    help="액션이 먹을 맥락 — plain(글만) | object(개체 고름) | cell(셀 안)")
+    ap.add_argument("--only-prefix", help="이 접두어로 시작하는 액션만")
     args = ap.parse_args()
 
+    ctx = CONTEXTS[args.context]
     names = remaining_actions()
+    if args.only_prefix:
+        names = [n for n in names if n.startswith(args.only_prefix)]
     if args.limit:
         names = names[: args.limit]
     args.out.parent.mkdir(parents=True, exist_ok=True)
@@ -111,8 +153,8 @@ def main() -> int:
             "id": f"sweep-{action}",
             "title": action,
             "ledger": [],
-            "open": SAMPLE,
-            "calls": observables(action),
+            "open": ctx["sample"],
+            "calls": observables(action, ctx),
         }
         path = tmp / f"sweep-{action}.json"
         with io.open(path, "w", encoding="utf-8", newline="\n") as fh:
@@ -134,11 +176,10 @@ def main() -> int:
             print(f"  [{i}/{len(names)}] {action}: FAIL {proc.returncode}")
             continue
         data = json.loads((tmp / f"sweep-{action}.returns.json").read_text(encoding="utf-8"))
-        values = [c.get("value") for c in data["calls"] if c["call"] in
-                  ("GetPos", "SelectionMode", "CharShape.Item", "ParaShape.Item")]
-        # 앞 6, 뒤 6 (SetPos 는 값이 아니라 빠진다)
-        half = len(values) // 2
-        kind, detail = classify(values[:half], values[half:])
+        read_names = {call[0] for call in ctx["reads"]}
+        values = [c.get("value") for c in data["calls"] if c["call"] in read_names]
+        half = len(ctx["reads"])
+        kind, detail = classify(values[:half], values[half : half * 2], ctx["labels"])
         rows.append((action, kind, detail))
         print(f"  [{i}/{len(names)}] {action}: {kind} {detail[:70]}")
 

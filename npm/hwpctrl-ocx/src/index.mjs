@@ -348,6 +348,8 @@ const ACTIONS = {
   ShapeObjNextObject: { kind: 'objectMove', step: 1 },
   ShapeObjPrevObject: { kind: 'objectMove', step: -1 },
   ShapeObjTextBoxEdit: { kind: 'objectTextEdit' },
+  // 표를 고른 채로 걸면 그 표의 **첫 칸을 칸 블록**으로 잡는다(모드 3).
+  ShapeObjTableSelCell: { kind: 'objectCellSelect' },
 
   // 잠금은 고른 개체 하나에 걸고, 풀기는 본문 전체를 푼다. 둘 다 **고르기를 놓는다**(모드 0)
   // — 캐럿은 그 개체 자리에 남는다(실측: 0/0/16 그대로).
@@ -1504,6 +1506,16 @@ export class HwpCtrl {
    */
   MovePos(moveID = MOVE.CUR_LIST, para = 0, pos = 0) {
     const model = this.#cursorModel();
+    // **칸 블록이 잡혀 있으면 리스트를 벗어나는 이동이 안 먹는다**(실측: 칸 블록에서
+    // `MoveRootList` 가 제자리다). 선택을 풀기 **전에** 봐야 한다 — 아래에서 풀고 나면
+    // 이 상태를 알 수 없다.
+    const inCellBlock = this.#selectionMode === SELECTION_TABLE;
+    if (
+      inCellBlock &&
+      (moveID === MOVE.ROOT_LIST || moveID === MOVE.PARENT_LIST || moveID === MOVE.TOP_LEVEL_LIST)
+    ) {
+      return true;
+    }
     this.#clearSelection(); // 규격 §8.3.30 — 위치 이동 시 셀렉션은 무조건 풀린다
     switch (moveID) {
       case MOVE.MAIN: // 루트 리스트의 특정 위치
@@ -1797,7 +1809,11 @@ export class HwpCtrl {
       callback?.(null, done, callbackUserData);
       return;
     }
-    if (action.kind === 'objectMove' || action.kind === 'objectTextEdit') {
+    if (
+      action.kind === 'objectMove' ||
+      action.kind === 'objectTextEdit' ||
+      action.kind === 'objectCellSelect'
+    ) {
       const done = this.#runObjectAction(action);
       callback?.(null, done, callbackUserData);
       return;
@@ -1972,27 +1988,44 @@ export class HwpCtrl {
    * 문서 순서로 돌아간다(끝에서 처음으로 감긴다). 고른 개체가 없으면 첫 개체부터다.
    */
   #runObjectAction(action) {
-    const objects = parseJson(this.#doc?.getObjects?.() ?? '', null);
-    if (!Array.isArray(objects) || !objects.length) return false;
+    // 차례는 **컨트롤 사슬**이 정한다 — 문서 자리 순서가 아니다(실측: 개체 셋을 도는 순서가
+    // 문단 0 → 5 → 2 라 자리 순서와 다르다). 사슬은 한글이 스스로 매긴 차례다.
+    const chain = this.#ctrlChain().filter((c) => c.location.list === 0 && c.CtrlCh === 11);
+    if (!chain.length) return false;
 
-    if (action.kind === 'objectTextEdit') {
-      const here = this.#selectedObject;
-      if (!here || here.listId == null) return false;
-      this.#selectionMode = SELECTION_NONE;
+    const here = this.#selectedObject;
+    const at = here
+      ? chain.findIndex(
+          (c) => c.location.para === here.para && c.location.controlIndex === here.controlIndex,
+        )
+      : -1;
+
+    if (action.kind === 'objectTextEdit' || action.kind === 'objectCellSelect') {
+      // 고른 개체가 담은 **글 리스트**로 들어간다. 그 번호는 리스트 표에서 찾는다 —
+      // `SelectCtrlFront` 는 종류도 리스트도 안 남기므로 자리로 되짚어야 한다.
+      if (at < 0) return false;
+      const host = chain[at].location;
+      const model = this.#cursorModel();
+      const child = (model.lists ?? []).find(
+        (l) => l.hostListId === 0 && l.hostPara === host.para && l.controlIndex === host.controlIndex,
+      );
+      if (!child) return false;
+      this.#selectedObject = null;
       this.#selection = null;
-      this.#cursor = { list: here.listId, para: 0, pos: 0 };
+      // 칸 고르기는 **칸 블록**(모드 3)으로, 글상자 편집은 보통 캐럿(모드 0)으로 들어간다.
+      this.#selectionMode = action.kind === 'objectCellSelect' ? SELECTION_TABLE : SELECTION_NONE;
+      this.#cursor = { list: child.listId, para: 0, pos: 0 };
       return true;
     }
 
-    const at = this.#selectedObject
-      ? objects.findIndex(
-          (o) =>
-            o.para === this.#selectedObject.para &&
-            o.controlIndex === this.#selectedObject.controlIndex,
-        )
-      : -1;
-    const next = objects[(at + action.step + objects.length * 2) % objects.length];
-    this.#selectObject(next);
+    const next = chain[(at + action.step + chain.length * 2) % chain.length];
+    const anchor = next.GetAnchorPos().toObject();
+    this.#selectedObject = { ...next.location, kind: null };
+    this.#selectionMode = SELECTION_OBJECT;
+    this.#selection = null;
+    this.#selAnchor = null;
+    this.#tableBlock = null;
+    this.#cursor = { list: 0, para: anchor.Para, pos: anchor.Pos };
     return true;
   }
 
