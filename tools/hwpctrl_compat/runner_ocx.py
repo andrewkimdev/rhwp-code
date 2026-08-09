@@ -197,6 +197,23 @@ def clear_previous_outputs(scenario: dict, out_dir: Path) -> tuple[Path, Path, P
     return paths
 
 
+def discard_changes_and_quit(hwp: object, com: object) -> None:
+    """Oracle 문서 변경을 버린 뒤 한글을 종료한다.
+
+    `HwpObject.Quit()`만 호출하면 수정된 문서의 저장 확인창이 active RDP 세션을 막는다.
+    `pyhwpx.Hwp.clear(option=1)`은 active `XHwpDocument`에 hwpDiscard를 적용하는 API다.
+    시나리오의 `com.Clear(1)` 호출과는 다른 종료 경로이므로 혼용하지 않는다.
+    """
+    try:
+        hwp.clear(option=1)
+    except Exception:  # noqa: BLE001 - 종료는 clear 실패와 무관하게 시도한다.
+        pass
+    try:
+        com.Quit()
+    except Exception:  # noqa: BLE001 - runner 결과는 이미 기록했을 수 있다.
+        pass
+
+
 def run(scenario: dict, out_dir: Path, expect_version: str | None = None) -> dict:
     from pyhwpx import Hwp
 
@@ -229,10 +246,7 @@ def run(scenario: dict, out_dir: Path, expect_version: str | None = None) -> dic
     version = (result.get("oracle") or {}).get("version")
     if not matches_expected_version(version, expect_version):
         result["rejected"] = f"기대 major '{expect_version}' 실제 '{version}'"
-        try:
-            com.Quit()
-        except Exception:  # noqa: BLE001
-            pass
+        discard_changes_and_quit(hwp, com)
         return result
 
     # 연 표본의 **원본 지문**을 떠 둔다. 시나리오가 표본을 고치면 그 다음 실행부터 정답지가
@@ -284,10 +298,7 @@ def run(scenario: dict, out_dir: Path, expect_version: str | None = None) -> dic
     except Exception:  # noqa: BLE001
         result["fatal"] = traceback.format_exc(limit=3)
     finally:
-        try:
-            com.Quit()
-        except Exception:  # noqa: BLE001
-            pass
+        discard_changes_and_quit(hwp, com)
     # 표본이 바뀌었으면 이 실행의 정답지를 **믿을 수 없다** — 다음 실행은 다른 문서를 잰다.
     if src_path is not None and src_path.exists():
         if src_path.stat().st_mtime_ns != src_before:

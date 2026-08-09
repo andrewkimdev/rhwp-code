@@ -26,10 +26,42 @@ from run_gate import (
     validate_rhwp_output,
     wait_for_hwp_exit,
 )
-from runner_ocx import clear_previous_outputs
+from runner_ocx import clear_previous_outputs, discard_changes_and_quit
 
 
 class HarnessContractTests(unittest.TestCase):
+    def test_oracle_quit_discards_modified_document_before_closing(self) -> None:
+        calls: list[tuple[str, object | None]] = []
+
+        class FakeHwp:
+            def clear(self, *, option: int) -> None:
+                calls.append(("clear", option))
+
+        class FakeCom:
+            def Quit(self) -> None:
+                calls.append(("quit", None))
+
+        discard_changes_and_quit(FakeHwp(), FakeCom())
+
+        self.assertEqual(calls, [("clear", 1), ("quit", None)])
+
+    def test_oracle_quit_still_runs_when_discard_fails(self) -> None:
+        calls: list[str] = []
+
+        class FailingHwp:
+            def clear(self, *, option: int) -> None:
+                if option != 1:
+                    raise AssertionError(f"unexpected discard option: {option}")
+                raise RuntimeError("discard failed")
+
+        class FakeCom:
+            def Quit(self) -> None:
+                calls.append("quit")
+
+        discard_changes_and_quit(FailingHwp(), FakeCom())
+
+        self.assertEqual(calls, ["quit"])
+
     def test_hancom_2022_version_spellings_use_the_same_major(self) -> None:
         self.assertTrue(matches_expected_version("12, 0, 0, 4547", "12"))
         self.assertTrue(matches_expected_version("12.0.0.4547", "12,"))

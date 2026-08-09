@@ -69,6 +69,30 @@ Windows에서 이 값을 그대로 COM Oracle에 전달하므로, 다른 Windows
   `issue_4347_insert_leaves_coordinate_trace`의 본문·글상자 2건, 그리고
   `test_inline_control_insert_line_segs_shift`가 모두 통과했다.
 
+## 5차 계획 (Windows Hancom 종료 대화상자, 2026-08-09)
+
+- 실제 full gate에서 수정된 `2026_oss_rst.hwp`를 직접 `Quit()`해 “저장할까요?” 대화상자가
+  활성 RDP 세션을 막는 것을 확인했다. 이 실행은 중단했고 결과를 사용하지 않는다.
+- 설치된 `pyhwpx` API 문서에 따르면 `clear(option=1)`은 변경을 버리고, `option=0`만 저장
+  질문을 띄운다. Oracle runner가 모든 종료 갈래에서 명시적으로 discard한 뒤 `Quit()`하도록
+  helper를 추가한다.
+- mock 계약은 discard와 Quit의 순서 및 종료 예외 격리를 고정한다. Windows에서는 먼저 수정
+  시나리오 한 건을 prompt 없이 끝내는지 확인하고, 그 뒤 전체 package gate를 새 로그로 재실행한다.
+
+## 5차 결과 (Windows Hancom 종료 대화상자, 2026-08-10)
+
+- `runner_ocx.py`가 종료할 때 `pyhwpx.Hwp.clear(option=1)`로 활성 문서 변경을 버린 뒤
+  `HwpObject.Quit()`하도록 공용 helper를 적용했다. discard가 예외를 내더라도 Quit은 계속
+  시도한다.
+- Linux mock 계약 24건, npm 공개 패키지 계약 1건, 원장 검사 308/484가 모두 통과했다.
+- Windows 한컴 2022 `12, 0, 0, 535`에서 원본을 실제 수정하는 `p3-action-autonum` 138개 COM
+  호출이 exit 0으로 끝났다. 실행 후 `Hwp.exe`는 0개였고 저장 확인 대화상자도 나타나지 않았으며,
+  원본 표본의 변경 감지 가드도 통과했다.
+- 같은 보정으로 당시 81개 live Oracle/rhwp 시나리오가 끝까지 실행됐다. 마지막 L3 비교만
+  `target/release/rhwp.exe` 부재로 `WinError 2`가 나서 전체 exit 1이었으며, 이는 한컴 종료
+  모달과 무관한 검증 선행조건 누락이다. 이후 Windows release CLI를 생성했고, 최신 contributor
+  head의 확장 시나리오까지 반영한 full gate에서 최종 판정을 다시 고정한다.
+
 ## 경계와 rollback
 
 - HwpCtrl API 구현·원장 완료 수·Oracle 반환 계약은 수정하지 않는다.
