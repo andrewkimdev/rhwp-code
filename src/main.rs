@@ -15554,7 +15554,7 @@ fn cmd_replay(args: &[String]) -> i32 {
                 println!(
                     "{}",
                     provenance::marked(
-                        serde_json::json!({ "schemaVersion": "1.0", "error": msg }),
+                        serde_json::json!({ "schemaVersion": ENVELOPE_SCHEMA_VERSION, "error": msg }),
                         "replay",
                     )
                 );
@@ -15567,7 +15567,7 @@ fn cmd_replay(args: &[String]) -> i32 {
     let reproduced = expected.as_deref().map(|e| e == output_sha);
     let envelope = provenance::marked(
         serde_json::json!({
-            "schemaVersion": "1.0",
+            "schemaVersion": ENVELOPE_SCHEMA_VERSION,
             "mode": if expected.is_some() { "verify" } else { "attest" },
             "input": input,
             "inputSha256": input_sha,
@@ -15632,7 +15632,7 @@ fn cmd_replay(args: &[String]) -> i32 {
             None => serde_json::Value::Null,
         };
         let capsule = serde_json::json!({
-            "schemaVersion": "1.0",
+            "schemaVersion": ENVELOPE_SCHEMA_VERSION,
             "kind": "workCapsule",
             "parent": parent_link,
             "plan": plan_original,
@@ -15875,7 +15875,7 @@ fn cmd_lineage(args: &[String]) -> i32 {
     }
     let envelope = provenance::marked(
         serde_json::json!({
-            "schemaVersion": "1.0",
+            "schemaVersion": ENVELOPE_SCHEMA_VERSION,
             "head": head,
             "depth": links.len(),
             "valid": valid,
@@ -16028,7 +16028,7 @@ fn cmd_audit(args: &[String]) -> i32 {
     let rate = reproduced_count as f64 / total as f64;
     let envelope = provenance::marked(
         serde_json::json!({
-            "schemaVersion": "1.0",
+            "schemaVersion": ENVELOPE_SCHEMA_VERSION,
             "root": dir,
             "total": total,
             "reproduced": reproduced_count,

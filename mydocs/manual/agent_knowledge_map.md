@@ -304,7 +304,7 @@ printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocol
 를 싣고 `--dry-run` 에서는 싣지 않는다. `edit set-cell` 은 `oldText` 때문에
 `untrustedContent:true`, `edit fill-fields`·`replace-text` 는 `false` 다(실측).
 
-### 2-2. 전수 사전 — 187개 필드
+### 2-2. 전수 사전 — 188개 필드
 
 `capabilities` 의 `recordFields` 합집합이다. `등장 명령` 은 자기서술 기준이며,
 실제 봉투에는 조건부로 더 실리는 필드가 있다(§2-5).
