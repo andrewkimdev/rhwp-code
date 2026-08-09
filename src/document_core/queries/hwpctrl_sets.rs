@@ -16,6 +16,7 @@ use crate::error::HwpError;
 use crate::model::control::{AutoNumber, AutoNumberType, Control};
 use crate::model::page::ColumnDef;
 use crate::model::paragraph::{ColumnBreakType, Paragraph};
+use crate::model::shape::{Caption, ShapeObject};
 use crate::model::style::{Alignment, HeadType, LineSpacingType, UnderlineType};
 
 /// 언어 일곱 갈래 — 항목 이름 접미사 순서가 모델 배열 순서와 같다.
@@ -128,6 +129,33 @@ fn collect_controls(
 ) {
     let (list_id, para_in_list) = at;
     let control_positions = para.control_text_positions();
+    // 자리표 글자가 **없는** 문단은 아래 식이 안 맞는다. 컨트롤 여럿이 같은 글자 번호를
+    // 가리키면(0·0·0 …) 그것이 그 신호다 — 자리표가 있으면 번호가 서로 다르다.
+    //
+    // 그런 문단은 스트림을 되짚어 세운다: 자리 0 에서 시작해 다음 글자의 스트림 자리가 지금
+    // 자리와 같으면 글자를 놓고 한 칸, 아니면 컨트롤을 놓고 여덟 칸 간다. 자리차지 개체 사이에
+    // 공백이 한 칸씩 있는 문단(실측 앵커 16·25·34)이 이 길로 맞아떨어진다.
+    let rebuilt: Option<Vec<usize>> = {
+        let mut seen = control_positions.clone();
+        seen.sort_unstable();
+        let has_dup = seen.windows(2).any(|w| w[0] == w[1]);
+        if has_dup && !para.char_offsets.is_empty() {
+            let mut out = Vec::with_capacity(para.controls.len());
+            let mut p = 0usize;
+            let mut chars = para.char_offsets.iter().peekable();
+            for _ in 0..para.controls.len() {
+                while chars.peek().is_some_and(|off| (**off as usize) <= p) {
+                    chars.next();
+                    p += 1;
+                }
+                out.push(p);
+                p += EXTENDED_CTRL_UNITS;
+            }
+            Some(out)
+        } else {
+            None
+        }
+    };
     for (ci, ctrl) in para.controls.iter().enumerate() {
         let (id, ch, desc) = control_identity(ctrl);
         // 앵커 자리는 그 컨트롤이 **스트림에서 서 있는 자리**다(실측: 본문 첫 문단의 셋이
@@ -136,7 +164,10 @@ fn collect_controls(
         // `stream_pos` 로는 못 구한다 — 자리표 글자를 남기는 문단과 안 남기는 문단이 섞여
         // 있어 그 함수 하나로 갈리지 않는다. 여기서는 **앞선 것들만** 세면 된다:
         // 앞의 맨 글자 수 + 8 × 앞의 컨트롤 수.
-        let pos = control_positions
+        let pos = if let Some(rebuilt) = &rebuilt {
+            rebuilt.get(ci).copied().unwrap_or(0)
+        } else {
+            control_positions
             .get(ci)
             .map(|char_idx| {
                 let placeholders_before = control_positions[..ci]
@@ -146,7 +177,8 @@ fn collect_controls(
                 let plain_before = char_idx.saturating_sub(placeholders_before);
                 plain_before + ci * EXTENDED_CTRL_UNITS
             })
-            .unwrap_or(0);
+            .unwrap_or(0)
+        };
         items.push(format!(
             "{{\"ctrlId\":{},\"ctrlCh\":{},\"userDesc\":{},\"list\":{},\"para\":{},\"pos\":{},\"controlIndex\":{},\"props\":{}}}",
             json_escape(id),
@@ -1015,6 +1047,109 @@ impl DocumentCore {
         c.vertical_offset = (c.vertical_offset as i64 + dy as i64).max(0) as u32;
         section.raw_stream = None;
         Ok(r#"{"ok":true,"moved":true}"#.to_string())
+    }
+
+    /// 캡션 붙이기 — 웹한글컨트롤 `Run("ShapeObjAttachCaption")`.
+    ///
+    /// 한글은 **빈 캡션을 만들지 않는다.** 붙이는 순간 `그림 ` + 번호 + 공백이 들어가 있고
+    /// 캐럿이 그 끝(12칸)에 선다. 캡션 문단의 자리 지도를 재서 알아낸 구성이다 — `SetPos` 를
+    /// 0~13 으로 훑으면 0·1·2·3 은 그대로 서고 4~10 은 **11 로 스냅**한 뒤 11·12 가 다시 선다:
+    ///
+    /// | 자리 | 무엇 |
+    /// | --- | --- |
+    /// | 0–2 | 글자 `그`·`림`·공백 |
+    /// | 3–10 | 번호 컨트롤 **8칸** |
+    /// | 11 | 공백 하나 |
+    /// | 12 | 문단 끝 |
+    ///
+    /// 개체 갈래와 무관하게 말머리는 `그림` 이다(사각형에 붙여도 그렇다 — 실측).
+    pub fn attach_caption_at(
+        &mut self,
+        para_in_list: usize,
+        control_index: usize,
+    ) -> Result<String, HwpError> {
+        let (sec, para_idx) = root_para_location(self, para_in_list)
+            .ok_or_else(|| HwpError::InvalidField(format!("본문 문단 {} 없음", para_in_list)))?;
+        let section = self
+            .document
+            .sections
+            .get_mut(sec)
+            .ok_or_else(|| HwpError::InvalidField(format!("구역 {} 없음", sec)))?;
+        let para = section
+            .paragraphs
+            .get_mut(para_idx)
+            .ok_or_else(|| HwpError::InvalidField(format!("문단 {} 없음", para_idx)))?;
+        let Some(Control::Shape(shape)) = para.controls.get_mut(control_index) else {
+            return Ok(r#"{"ok":false,"reason":"그리기 개체가 아니다"}"#.to_string());
+        };
+        if Self::shape_caption_slot(shape).is_some() {
+            return Ok(r#"{"ok":false,"reason":"이미 캡션이 있다"}"#.to_string());
+        }
+
+        // 말머리 세 글자와 꼬리 공백 하나를 먼저 놓고, 번호를 그 사이에 끼운다. 자리표 글자는
+        // `insert_text_at` 이 넣게 둔다 — `char_offsets` 를 함께 갱신해 주기 때문이다.
+        let mut caption_para = Paragraph::new_empty();
+        // 글자 다섯: `그`·`림`·공백 · **번호 자리표** · 공백. 자리표 뒤 글자는 컨트롤 몫 8칸을
+        // 건너뛴 자리(11)에 있으므로 대응표를 직접 놓는다 — `insert_text_at` 은 컨트롤을 모른다.
+        caption_para.insert_text_at(0, "그림   ");
+        caption_para.char_offsets = vec![0, 1, 2, 3, 11];
+        caption_para.controls.push(Control::AutoNumber(AutoNumber {
+            number_type: AutoNumberType::Picture,
+            ..Default::default()
+        }));
+        caption_para.char_count = 12;
+
+        *Self::shape_caption_slot(shape) = Some(Caption {
+            paragraphs: vec![caption_para],
+            ..Default::default()
+        });
+        shape.common_mut().attr |= 1 << 29;
+        section.raw_stream = None;
+        Ok(r#"{"ok":true,"pos":12}"#.to_string())
+    }
+
+    /// 캡션 떼기 — 웹한글컨트롤 `Run("ShapeObjDetachCaption")`. 캐럿은 개체 앵커로 돌아온다.
+    pub fn detach_caption_at(
+        &mut self,
+        para_in_list: usize,
+        control_index: usize,
+    ) -> Result<String, HwpError> {
+        let (sec, para_idx) = root_para_location(self, para_in_list)
+            .ok_or_else(|| HwpError::InvalidField(format!("본문 문단 {} 없음", para_in_list)))?;
+        let section = self
+            .document
+            .sections
+            .get_mut(sec)
+            .ok_or_else(|| HwpError::InvalidField(format!("구역 {} 없음", sec)))?;
+        let para = section
+            .paragraphs
+            .get_mut(para_idx)
+            .ok_or_else(|| HwpError::InvalidField(format!("문단 {} 없음", para_idx)))?;
+        let Some(Control::Shape(shape)) = para.controls.get_mut(control_index) else {
+            return Ok(r#"{"ok":false,"reason":"그리기 개체가 아니다"}"#.to_string());
+        };
+        let had = Self::shape_caption_slot(shape).take().is_some();
+        if had {
+            shape.common_mut().attr &= !(1u32 << 29);
+            section.raw_stream = None;
+        }
+        Ok(format!("{{\"ok\":{}}}", had))
+    }
+
+    /// 캡션이 담기는 자리 — 갈래마다 `drawing` 밑이거나 제 몸에 붙어 있다.
+    fn shape_caption_slot(shape: &mut ShapeObject) -> &mut Option<Caption> {
+        match shape {
+            ShapeObject::Line(s) => &mut s.drawing.caption,
+            ShapeObject::Rectangle(s) => &mut s.drawing.caption,
+            ShapeObject::Ellipse(s) => &mut s.drawing.caption,
+            ShapeObject::Arc(s) => &mut s.drawing.caption,
+            ShapeObject::Polygon(s) => &mut s.drawing.caption,
+            ShapeObject::Curve(s) => &mut s.drawing.caption,
+            ShapeObject::Group(s) => &mut s.caption,
+            ShapeObject::Picture(s) => &mut s.caption,
+            ShapeObject::Chart(s) => &mut s.caption,
+            ShapeObject::Ole(s) => &mut s.caption,
+        }
     }
 
     /// 나누기 — 웹한글컨트롤 `Run("BreakPage"·"BreakColumn"·"BreakColDef"·"BreakSection")`.

@@ -5540,6 +5540,28 @@ impl HwpDocument {
             .map_err(|e| e.into())
     }
 
+    /// 개체에 캡션을 붙인다 — 웹한글컨트롤 `Run("ShapeObjAttachCaption")`.
+    #[wasm_bindgen(js_name = attachCaptionAt)]
+    pub fn attach_caption_at_api(
+        &mut self,
+        para_in_list: u32,
+        control_index: u32,
+    ) -> Result<String, JsValue> {
+        self.attach_caption_at(para_in_list as usize, control_index as usize)
+            .map_err(|e| e.into())
+    }
+
+    /// 개체에서 캡션을 뗀다 — 웹한글컨트롤 `Run("ShapeObjDetachCaption")`.
+    #[wasm_bindgen(js_name = detachCaptionAt)]
+    pub fn detach_caption_at_api(
+        &mut self,
+        para_in_list: u32,
+        control_index: u32,
+    ) -> Result<String, JsValue> {
+        self.detach_caption_at(para_in_list as usize, control_index as usize)
+            .map_err(|e| e.into())
+    }
+
     /// 개체 크기를 한 걸음 바꾼다 — 웹한글컨트롤 `ShapeObjResize*`(걸음 283 HWPUNIT).
     #[wasm_bindgen(js_name = resizeControlAt)]
     pub fn resize_control_at_api(

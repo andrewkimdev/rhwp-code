@@ -362,6 +362,11 @@ const ACTIONS = {
   ShapeObjMoveDown: { kind: 'objectMoveBy', dx: 0, dy: 56 },
   ShapeObjMoveUp: { kind: 'objectMoveBy', dx: 0, dy: -56 },
 
+  // 캡션 붙이기·떼기 — 붙이면 캐럿이 **캡션 리스트 안**으로 들어가고(자리 12), 떼면 개체
+  // 앵커로 돌아온다. 한글은 빈 캡션을 만들지 않는다 — `그림 ` + 번호 + 공백이 이미 들어 있다.
+  ShapeObjAttachCaption: { kind: 'objectCaption', attach: true },
+  ShapeObjDetachCaption: { kind: 'objectCaption', attach: false },
+
   // 묶음 풀기 — 사슬이 통째로 달라져서 보인다. `그리기` 하나가 자식 개체 여럿으로 풀린다
   // (실측: 그리기 → 그림·그림·그림). 앞뒤 순서·뒤집기와 달리 이 계열은 관측창이 있다.
   ShapeObjUngroup: { kind: 'objectUngroup' },
@@ -1547,6 +1552,10 @@ export class HwpCtrl {
     // 문단 밖을 찍으면 문단 안으로 자른다 — 한글도 그렇다(59칸 문단에 60을 주면 59,
     // 앞머리 자리차지가 있는 문단에 0 을 주면 그 뒤 자리로 민다).
     const bounds = this.#paraBounds(list, para);
+    // 자른 자리가 **컨트롤 한가운데**여도 그대로 둔다. 한글은 그때 다음 글자 자리로 미는데
+    // (캡션 문단에서 4~10 이 전부 11 로 간다), 그 규칙을 `char_offsets` 로 옮겨 전역에 걸었더니
+    // 이미 검증된 95건이 어긋났다 — 자리표 글자가 있는 문단에서는 한글이 다르게 민다. 아직
+    // 안 밝힌 규칙이라 흉내내지 않는다.
     this.#cursor = { list, para, pos: Math.min(Math.max(pos, bounds.start), bounds.end) };
     if (anchor) this.#applyExtendedSelection(anchor);
     return true;
@@ -1896,6 +1905,40 @@ export class HwpCtrl {
       if (ok) {
         this.#ctrls = null; // 크기가 바뀌었다 — 사슬의 Properties 를 다시 읽는다
         this.#modified = true;
+      }
+      callback?.(null, ok, callbackUserData);
+      return;
+    }
+    if (action.kind === 'objectCaption') {
+      const here = this.#selectedObject;
+      let ok = false;
+      if (here) {
+        try {
+          const raw = action.attach
+            ? this.#doc.attachCaptionAt(here.para, here.controlIndex)
+            : this.#doc.detachCaptionAt(here.para, here.controlIndex);
+          ok = parseJson(raw, { ok: false }).ok === true;
+        } catch (e) {
+          console.warn(`[hwpctrl] Run("${actionID}") 실패:`, e);
+        }
+      }
+      if (ok) {
+        // 리스트 표가 달라진다 — 캡션이 새 리스트로 생기거나 사라진다.
+        this.#listModel = null;
+        this.#ctrls = null;
+        this.#modified = true;
+        if (action.attach) {
+          // 캐럿은 **캡션 안**으로 들어간다. 리스트 번호는 박지 않고 표에서 찾는다 — 문서마다
+          // 다르다(이 표본에서만 2 다).
+          const list = (this.#cursorModel().lists ?? []).find(
+            (l) => l.hostPara === here.para && l.controlIndex === here.controlIndex && !l.isCell,
+          );
+          if (list) {
+            this.#clearSelection();
+            this.#cursor = { list: list.listId, para: 0, pos: this.#paraBounds(list.listId, 0).end };
+          }
+        }
+        // 떼기는 고르기를 **안 푼다**(모드 4 그대로, 캐럿도 개체 앵커에 그대로) — 실측이다.
       }
       callback?.(null, ok, callbackUserData);
       return;

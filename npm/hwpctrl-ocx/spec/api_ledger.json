@@ -4,10 +4,10 @@
   "oracleVersion": "한글2022 (설치본 COM)",
   "summary": {
     "total": 484,
-    "done": 279,
+    "done": 281,
     "byStatus": {
-      "verified": 277,
-      "unimplemented": 205,
+      "verified": 279,
+      "unimplemented": 203,
       "substituted": 2
     },
     "byUnit": {
@@ -24,8 +24,8 @@
         "unimplemented": 3
       },
       "action": {
-        "unimplemented": 160,
-        "verified": 152
+        "unimplemented": 158,
+        "verified": 154
       },
       "parameterSet": {
         "verified": 49,
@@ -6164,13 +6164,15 @@
       "name": "ShapeObjAttachCaption",
       "parameterSetId": null,
       "requiresExternalSet": false,
-      "status": "unimplemented",
+      "status": "verified",
       "notes": "",
       "legacyHwpctl": false,
       "oracle": {
-        "scenarios": [],
+        "scenarios": [
+          "p4-caption"
+        ],
         "lastRun": null,
-        "diff": null
+        "diff": 0
       }
     },
     {
@@ -6260,13 +6262,15 @@
       "name": "ShapeObjDetachCaption",
       "parameterSetId": null,
       "requiresExternalSet": false,
-      "status": "unimplemented",
+      "status": "verified",
       "notes": "",
       "legacyHwpctl": false,
       "oracle": {
-        "scenarios": [],
+        "scenarios": [
+          "p4-caption"
+        ],
         "lastRun": null,
-        "diff": null
+        "diff": 0
       }
     },
     {
