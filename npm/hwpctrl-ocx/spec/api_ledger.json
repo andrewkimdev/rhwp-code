@@ -4,10 +4,10 @@
   "oracleVersion": "한글2022 (설치본 COM)",
   "summary": {
     "total": 484,
-    "done": 305,
+    "done": 306,
     "byStatus": {
-      "verified": 303,
-      "unimplemented": 179,
+      "verified": 304,
+      "unimplemented": 178,
       "substituted": 2
     },
     "byUnit": {
@@ -17,8 +17,8 @@
         "unimplemented": 2
       },
       "method": {
-        "verified": 53,
-        "unimplemented": 35
+        "verified": 54,
+        "unimplemented": 34
       },
       "event": {
         "unimplemented": 3
@@ -2218,14 +2218,16 @@
       "name": "GetPageText",
       "arity": 2,
       "section": "8.3.65",
-      "status": "unimplemented",
+      "status": "verified",
       "notes": "",
       "legacyHwpctl": false,
       "specArityAmbiguous": true,
       "oracle": {
-        "scenarios": [],
+        "scenarios": [
+          "pA-pagetext"
+        ],
         "lastRun": null,
-        "diff": null
+        "diff": 0
       }
     },
     {

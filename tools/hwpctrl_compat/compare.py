@@ -57,6 +57,14 @@ def saved_path(value: str) -> Path:
 def classify(ocx_call: dict, rhwp_call: dict) -> tuple[str, str]:
     ocx_err = ocx_call.get("error")
     rhwp_err = rhwp_call.get("error")
+    # **`MissingApi` 는 어떤 경우에도 일치가 아니다.** 그것은 "rhwp 가 그 API 를 아직 안
+    # 만들었다"는 뜻이라, 마침 오라클도 그 자리에서 죽었다고 해서 맞은 것이 될 수 없다.
+    #
+    # 이 구멍이 실제로 초록을 만들어 냈다: `p2-group-chain` 이 사슬 끝을 넘어 역참조해
+    # 양쪽이 죽었는데 다섯 건이 `MATCH` 로 세어졌다(#4274 리뷰). 없는 것을 없다고 말하는 것과
+    # 서로 같은 이유로 죽는 것은 다르다.
+    if rhwp_err and str(rhwp_err).startswith("MissingApi"):
+        return "MISSING_API", rhwp_err
     if ocx_err and rhwp_err:
         return "MATCH", "양쪽 모두 예외"
     if ocx_err:

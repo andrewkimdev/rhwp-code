@@ -7,7 +7,8 @@
 
 use crate::document_core::queries::field_query::{
     caret_stops, cell_path_to_list, char_idx_at_stream_pos, cursor_paragraph, json_escape,
-    leading_anchor_pos, root_para_location, root_para_of, select_start_pos, shape_lists,
+    leading_anchor_pos, root_para_count, root_para_location, root_para_of, select_start_pos,
+    shape_lists,
     stream_len, stream_pos, word_end_from, word_starts, ListEntry, EXTENDED_CTRL_UNITS,
     ROOT_LIST_ID,
 };
@@ -1175,6 +1176,75 @@ impl DocumentCore {
             "{{\"charIndex\":{}}}",
             char_idx_at_stream_pos(para, pos)
         ))
+    }
+
+    /// 쪽 하나의 글 — 웹한글컨트롤 `GetPageText`.
+    ///
+    /// 규칙은 실측이다(`20250130-hongbo`):
+    ///
+    /// - **본문 문단만** 담는다. 표 안 글은 안 들어간다 — 표만 있는 문단은 **빈 줄**이 된다
+    ///   (3쪽이 표 넷뿐이라 빈 줄 넷이다).
+    /// - 문단 사이는 `\r\n` 이다. 마지막 문단 뒤에는 안 붙인다.
+    /// - **쪽 경계에서 문단을 자른다.** 1쪽이 `…현장 문` 으로 끝나고 2쪽이 `화로…` 로 시작한다 —
+    ///   문단 15 의 줄 3(`text_start` 122)에서 정확히 갈린다.
+    pub fn page_text(&self, page_index: usize) -> Result<String, HwpError> {
+        let starts: Vec<(usize, usize)> = {
+            let raw = self.page_caret_starts()?;
+            // `[{"list":0,"para":N,"pos":M}, …]` — 본문 밖에서 시작하는 쪽은 그 문단으로 친다.
+            let mut out = Vec::new();
+            for chunk in raw.split("{\"list\":").skip(1) {
+                let para = chunk
+                    .split("\"para\":")
+                    .nth(1)
+                    .and_then(|s| s.split([',', '}']).next())
+                    .and_then(|s| s.trim().parse::<usize>().ok())
+                    .unwrap_or(0);
+                let pos = chunk
+                    .split("\"pos\":")
+                    .nth(1)
+                    .and_then(|s| s.split([',', '}']).next())
+                    .and_then(|s| s.trim().parse::<usize>().ok())
+                    .unwrap_or(0);
+                out.push((para, pos));
+            }
+            out
+        };
+        let Some(&(from_para, from_pos)) = starts.get(page_index) else {
+            return Ok(json_escape(""));
+        };
+        let last_para = root_para_count(self).saturating_sub(1);
+        let (to_para, to_pos) = starts
+            .get(page_index + 1)
+            .copied()
+            .unwrap_or((last_para + 1, 0));
+
+        let mut lines: Vec<String> = Vec::new();
+        for p in from_para..=to_para.min(last_para) {
+            let Some(para) = self.cursor_paragraph_ref(ROOT_LIST_ID, p) else {
+                continue;
+            };
+            let chars: Vec<char> = para.text.chars().collect();
+            let begin = if p == from_para {
+                char_idx_at_stream_pos(para, from_pos)
+            } else {
+                0
+            };
+            let end = if p == to_para {
+                char_idx_at_stream_pos(para, to_pos)
+            } else {
+                chars.len()
+            };
+            // 경계 문단은 **양쪽 쪽에 다 들어간다**(다음 쪽이 그 문단의 처음부터라 이 쪽에는
+            // 빈 줄로 들어간다) — 실측: 2쪽 끝이 `끝.` 뒤 빈 줄 넷으로 끝나는데 그 마지막이
+            // 3쪽 첫 문단이다. 빼면 쪽마다 한 줄씩 모자란다.
+            lines.push(chars[begin.min(chars.len())..end.min(chars.len())].iter().collect());
+        }
+        // 마지막 쪽에는 다음 쪽이 없는데도 **경계 항목이 하나 더** 붙는다(실측: 마지막 쪽이
+        // 줄바꿈 하나다 — 문단 하나뿐인데 항목은 둘이다). 문서 끝을 경계로 치는 셈이다.
+        if page_index + 1 >= starts.len() {
+            lines.push(String::new());
+        }
+        Ok(json_escape(&lines.join("\r\n")))
     }
 
     /// 개체 사이를 도는 차례 — 웹한글컨트롤 `Run("ShapeObjNext/PrevObject")` 용.

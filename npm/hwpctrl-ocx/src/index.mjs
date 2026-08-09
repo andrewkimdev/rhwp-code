@@ -1109,7 +1109,9 @@ export class HwpCtrl {
    * 빼고, 각 조각이 줄 끝으로 끝나도록 보장해 이어 붙인다(실측: 표식 둘이 든 문서의 글이
    * `\r\n` 둘로 시작하지 넷이 아니다).
    *
-   * `option` 이 `saveblock` 이면 블록만 가져온다 — 블록이 없으면 한글은 아무것도 안 준다.
+   * `option` 이 `saveblock` 일 때 **잰 것은 "블록이 없으면 `null`" 하나뿐이다.** 블록이
+   * 있을 때 무엇을 주는지는 아직 안 쟀고, 지금 구현은 그 경우 문서 전체를 준다 — 즉 이
+   * 가지는 **검증 범위 밖**이다. 주석이 실측보다 넓게 읽히지 않도록 여기 못박아 둔다.
    */
   /**
    * 규격 §8.3.55 — 글을 문서에 **밀어 넣는다**. 반환은 **1** 이다(성공 여부가 아니라 1).
@@ -1139,6 +1141,15 @@ export class HwpCtrl {
       this.#cursor = { ...this.#cursor, pos: this.#cursor.pos + grew };
     }
     return 1;
+  }
+
+  /**
+   * 규격 §8.3.20 — 쪽 하나의 글. **본문 문단만** 담고 표 안 글은 안 들어간다(표만 있는
+   * 문단은 빈 줄이 된다). 쪽 경계에서 문단을 자른다 — 실측으로 1쪽이 `…현장 문` 으로 끝나고
+   * 2쪽이 `화로…` 로 시작한다.
+   */
+  GetPageText(pageNo = 0, option = 0) {
+    return parseJson(this.#doc?.getPageText?.(pageNo) ?? '""', '');
   }
 
   GetTextFile(format, option) {

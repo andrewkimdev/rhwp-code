@@ -1,7 +1,10 @@
 # @rhwp/hwpctrl - 웹한글컨트롤 호환 층
 
 한컴 웹한글컨트롤(WebHwpCtrl) API v2.4를 rhwp WASM 위에서 호출 호환으로 구현한다.
-현재는 P1~P3 개발자 미리보기이며, 원장 기준 193/484 항목이 한글 2022 COM Oracle과 대조됐다.
+현재는 P1~P5 개발자 미리보기이며, 원장 기준 **305/484** 항목이 한글 2022 COM Oracle과 0 diff 로
+대조됐다. 남은 179 중 176 은 이 하니스로는 구조적으로 못 재는 것들이라(대화상자·안 끝남·
+관측창 없음·숨은 상태 따위) **도달 가능한 상한은 308** 이다 —
+`tools/hwpctrl_compat/classify_remaining.py` 가 그 갈래와 이유를 낸다.
 지원 범위와 보류 항목의 권위 자료는 [`spec/api_ledger.json`](spec/api_ledger.json)이다.
 
 이 패키지는 아직 `private` 상태다. npm 레지스트리에서 설치하거나 단독 `<script>` 파일을
@@ -54,9 +57,15 @@ HwpCtrl.Open(fileInput.files[0], '', '', (ok) => {
 
 ## 현재 지원 범위
 
-문서 I/O(`Open`, `SaveAs`), 필드 읽기·쓰기·이름 변경, 커서·선택 이동, 문서 속성,
-글자·문단 모양, 블록과 `Run` Action을 지원한다. 정확한 지원·보류·대체 항목은 원장에서 확인한다.
-`Version`과 `IsModified`는 COM 값이 아니라 웹 호환 계약에 따른 `substituted` 항목이다.
+문서 I/O(`Open`, `SaveAs`, `SetTextFile`/`GetTextFile`), 필드 읽기·쓰기·이름 변경, 커서·선택
+이동, 문서 훑기(`InitScan`/`GetText`), 문서 속성, 글자·문단 모양, 블록, 표 셀 이동·블록·편집,
+개체 고르기·옮기기·크기 조절·묶음 풀기·캡션·글상자, 되돌리기, 파라미터셋과 `Run` Action을
+지원한다. 정확한 지원·보류·대체 항목은 원장에서 확인한다. `Version`과 `IsModified`는 COM 값이
+아니라 웹 호환 계약에 따른 `substituted` 항목이다.
+
+**물려받는 한계.** 줄·쪽 단위 API(`MoveLine*`·`MovePage*`·`DeleteLine*`)는 저장된 줄 나눔과
+rhwp 조판기에 기대므로 조판 정밀도를 그대로 물려받는다. 조판이 한글과 갈리는 문서에서는 이
+값들도 갈린다.
 
 ## 기존 studio 층과의 관계
 

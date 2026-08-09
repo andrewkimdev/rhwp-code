@@ -1,6 +1,6 @@
 {
   "id": "p2-group-chain",
-  "title": "묶음 개체 — 한글이 그룹 속을 사슬·리스트에 어떻게 싣는가",
+  "title": "묶음 개체 — 사슬을 끝까지 걷고 **끝 다음은 null 로** 대조한다",
   "ledger": [
     "HwpCtrl.property.HeadCtrl",
     "HwpCtrl.property.LastCtrl",
@@ -74,25 +74,7 @@
       ]
     ],
     [
-      "HeadCtrl.Next.Next.Next.Next.CtrlID",
-      []
-    ],
-    [
-      "HeadCtrl.Next.Next.Next.Next.UserDesc",
-      []
-    ],
-    [
-      "HeadCtrl.Next.Next.Next.Next.GetAnchorPos(0).Item",
-      [
-        "List"
-      ]
-    ],
-    [
-      "HeadCtrl.Next.Next.Next.Next.Next.CtrlID",
-      []
-    ],
-    [
-      "HeadCtrl.Next.Next.Next.Next.Next.UserDesc",
+      "HeadCtrl.Next.Next.Next.Next",
       []
     ],
     [
@@ -101,6 +83,10 @@
     ],
     [
       "LastCtrl.UserDesc",
+      []
+    ],
+    [
+      "LastCtrl.Next",
       []
     ],
     [

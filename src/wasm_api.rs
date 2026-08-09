@@ -5540,6 +5540,12 @@ impl HwpDocument {
             .map_err(|e| e.into())
     }
 
+    /// 쪽 하나의 글 — 웹한글컨트롤 `GetPageText`.
+    #[wasm_bindgen(js_name = getPageText)]
+    pub fn page_text_api(&self, page_index: u32) -> Result<String, JsValue> {
+        self.page_text(page_index as usize).map_err(|e| e.into())
+    }
+
     /// 개체 사이를 도는 차례(쪽·z) — 웹한글컨트롤 `Run("ShapeObjNext/PrevObject")` 용.
     #[wasm_bindgen(js_name = getObjectCycle)]
     pub fn object_cycle_api(&self) -> Result<String, JsValue> {
