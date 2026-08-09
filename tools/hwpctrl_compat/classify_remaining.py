@@ -61,6 +61,29 @@ LAYOUT = {
     "Action.MoveSelViewDown", "Action.ParagraphShapeIndentAtCaret",
 }
 
+# **관측창이 없는** 것들 — 맥락은 섰는데 어느 API 도 결과를 안 비춘다(계획서 §4.58).
+#
+# 무동작으로 뭉뚱그리지 않고 따로 세는 이유: 무동작은 "맥락을 더 찾으면 될지 모른다"이고
+# 이것은 "찾아도 볼 창이 없다"라 성격이 다르다. 파일에는 적히지만 이 게이트가 대조하는 것은
+# API 반환이라, 양쪽이 나란히 아무 일도 안 해 생기는 초록은 뜻이 없다.
+NO_WINDOW = {
+    # 앞뒤 순서 — 사슬도 안 바뀌고 ShapeObject 35항목에도 이름이 없다.
+    "Action.ShapeObjBringToFront", "Action.ShapeObjSendToBack",
+    "Action.ShapeObjBringForward", "Action.ShapeObjSendBack",
+    "Action.ShapeObjBringInFrontOfText", "Action.ShapeObjCtrlSendBehindText",
+    # 표 칸 조절 — 칸 블록을 풀고 다시 들어가 읽어도 `CellShape` 가 그대로다.
+    "Action.TableResizeCellDown", "Action.TableResizeCellLeft",
+    "Action.TableResizeCellRight", "Action.TableResizeCellUp",
+    "Action.TableResizeDown", "Action.TableResizeLeft",
+    "Action.TableResizeRight", "Action.TableResizeUp",
+    "Action.TableResizeExDown", "Action.TableResizeExLeft",
+    "Action.TableResizeExRight", "Action.TableResizeExUp",
+    "Action.TableResizeLineDown", "Action.TableResizeLineLeft",
+    "Action.TableResizeLineRight", "Action.TableResizeLineUp",
+    # 캐럿이 누름틀 안인데도 안 지워진다.
+    "Action.DeleteField",
+}
+
 # 머신(설치 글꼴·음력 자료)에 달린 것들.
 MACHINE = {
     "Action.CharShapeNextFaceName", "Action.CharShapePrevFaceName",
@@ -138,6 +161,8 @@ def main() -> int:
             key = "UI 전용(관측 불가)"
         elif ident in MACHINE:
             key = "머신 의존"
+        elif ident in NO_WINDOW:
+            key = "관측창 없음"
         elif ident in LAYOUT:
             key = "조판 의존"
         elif action and action in DIALOG_TITLES:
@@ -163,6 +188,7 @@ def main() -> int:
             "머신 의존",
             "대화상자",
             "안 끝남(대화상자 없음)",
+            "관측창 없음",
         ):
             blocked += len(names)
         print(f"  {key:<22} {len(names):>4}")
