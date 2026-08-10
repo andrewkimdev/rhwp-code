@@ -157,6 +157,23 @@ def test_replay_audit_and_lineage_build_commands(captured: List[List[Any]]) -> N
     assert _as_strings(captured[3]) == ["lineage", "head.capsule.json", "--deep", "--json"]
 
 
+def test_replay_audit_and_lineage_forward_verdict_option(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen: List[Dict[str, Any]] = []
+
+    def fake_run_json(args, **kwargs):  # type: ignore[no-untyped-def]
+        seen.append({"args": list(args), **kwargs})
+        return {"schemaVersion": "1.0"}
+
+    monkeypatch.setattr(rhwp.commands, "run_json", fake_run_json)
+    rhwp.replay("plan.json", raise_on_verdict=True)
+    rhwp.audit("capsules", raise_on_verdict=True)
+    rhwp.lineage("head.capsule.json", raise_on_verdict=True)
+
+    assert [call["raise_on_verdict"] for call in seen] == [True, True, True]
+
+
 def test_export_provenance_map_builds_command(captured: List[List[Any]]) -> None:
     rhwp.export_provenance_map()
     assert _as_strings(captured[0]) == ["export-provenance-map", "--json"]

@@ -218,6 +218,7 @@ def replay(
     plan: Union[Mapping[str, Any], PathLike],
     *,
     expect_output_sha256: Optional[str] = None,
+    raise_on_verdict: bool = False,
     timeout: Optional[float] = DEFAULT_TIMEOUT,
 ) -> Envelope:
     """계획을 임시 산출로 재실행해 작업 영수증을 발급하거나 재현을 판정한다."""
@@ -227,25 +228,33 @@ def replay(
         args = ["replay", plan]
     _flag(args, "--expect-output-sha256", expect_output_sha256)
     args.append("--json")
-    return Envelope(run_json(args, timeout=timeout))
+    return Envelope(run_json(args, timeout=timeout, raise_on_verdict=raise_on_verdict))
 
 
-def audit(root: PathLike, *, timeout: Optional[float] = DEFAULT_TIMEOUT) -> Envelope:
+def audit(
+    root: PathLike,
+    *,
+    raise_on_verdict: bool = False,
+    timeout: Optional[float] = DEFAULT_TIMEOUT,
+) -> Envelope:
     """작업 캡슐 폴더를 전수 재실행해 재현율을 회계한다."""
-    return Envelope(run_json(["audit", root, "--json"], timeout=timeout))
+    return Envelope(
+        run_json(["audit", root, "--json"], timeout=timeout, raise_on_verdict=raise_on_verdict)
+    )
 
 
 def lineage(
     head: PathLike,
     *,
     deep: bool = False,
+    raise_on_verdict: bool = False,
     timeout: Optional[float] = DEFAULT_TIMEOUT,
 ) -> Envelope:
     """작업 캡슐 해시 체인의 파일 무결성과 입력·산출 연결을 판정한다."""
     args: List[Any] = ["lineage", head]
     _switch(args, "--deep", deep)
     args.append("--json")
-    return Envelope(run_json(args, timeout=timeout))
+    return Envelope(run_json(args, timeout=timeout, raise_on_verdict=raise_on_verdict))
 
 
 def inspect(
