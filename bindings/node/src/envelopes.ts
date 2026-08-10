@@ -24,6 +24,28 @@ import type { RawVerifyReport } from './envelope.js';
 export const CAPABILITIES_SNAPSHOT_VERSION = '0.8.2';
 
 /**
+ * `rhwp anchor --json` 봉투.
+ *
+ * 투명성 로그(T7 방어) — add(append-only 등재, 깨진 로그 거부)·checkpoint(머클
+ * 루트)·verify(등재·자기 무결·머클 경로 판정, 아님 exit 3). 공표는 운영 절차 (#4543)
+ */
+export interface AnchorEnvelope {
+  readonly capsuleSha256?: unknown;
+  readonly entries?: unknown;
+  readonly inCheckpoint?: unknown;
+  readonly log?: unknown;
+  readonly logChainOk?: unknown;
+  readonly logged?: unknown;
+  readonly merklePath?: unknown;
+  readonly merkleRoot?: unknown;
+  readonly schemaVersion?: string;
+  readonly seq?: unknown;
+  readonly upToSeq?: unknown;
+
+  readonly [key: string]: unknown;
+}
+
+/**
  * `rhwp audit --json` 봉투.
  *
  * 작업 캡슐(*.capsule.json) 폴더 전수 재실행·대조 — 에이전트 노동의 재현율 회계. 불일치
@@ -853,6 +875,7 @@ export interface VerifySignatureEnvelope {
  * `recordFields` 를 선언한 명령만 들어 있습니다 — 나머지는 `--json` 봉투를 내지 않습니다.
  */
 export interface EnvelopeByCommand {
+  anchor: AnchorEnvelope;
   audit: AuditEnvelope;
   batch: BatchEnvelope;
   "build-from-ingest": BuildFromIngestEnvelope;
