@@ -4,6 +4,7 @@
 //! 각 노드는 페이지 내 위치와 크기가 계산된 상태를 가진다.
 
 use serde::Serialize;
+use std::ops::{Deref, DerefMut};
 
 use super::composer::{legacy_hancom_product_display_text, CharOverlapInfo};
 use super::layout::CellContext;
@@ -1681,6 +1682,20 @@ impl PageRenderTree {
         for child in &mut node.children {
             Self::apply_image_clips(child, clips);
         }
+    }
+}
+
+impl Deref for PageRenderTree {
+    type Target = LayoutFrame;
+
+    fn deref(&self) -> &Self::Target {
+        &self.frame
+    }
+}
+
+impl DerefMut for PageRenderTree {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.frame
     }
 }
 
