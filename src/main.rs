@@ -8,6 +8,7 @@ mod agent_profiles;
 mod atomic_file;
 mod mcp_serve;
 use rhwp::provenance;
+use rhwp::schema_registry::ENVELOPE_SCHEMA_VERSION;
 
 /// [#2707] CLI 종료 코드 계약 — 성공.
 const EXIT_OK: i32 = 0;
@@ -346,6 +347,9 @@ fn main() {
         Some("explain") => exit_with(explain_document(&args[2..])),
         Some("edit") => exit_with(run_edit(&args[2..])),
         Some("run") => exit_with(cmd_run_plan(&args[2..])),
+        Some("replay") => exit_with(cmd_replay(&args[2..])),
+        Some("audit") => exit_with(cmd_audit(&args[2..])),
+        Some("lineage") => exit_with(cmd_lineage(&args[2..])),
         // [#3719 §6-4] 계획을 *만드는* 쪽의 정답지 — `run` 바로 옆에 둔다.
         Some("export-plan-schema") => exit_with(cmd_export_plan_schema(&args[2..])),
         // [#2707] 알 수 없는 명령·명령 누락은 사용법 오류다. 표준 CLI 관례대로 stderr 로 안내하고
@@ -412,7 +416,7 @@ fn mcp_manifest_value(profile: Option<&'static agent_profiles::AgentProfile>) ->
 
     provenance::marked(
         serde_json::json!({
-        "schemaVersion": "1.0",
+        "schemaVersion": ENVELOPE_SCHEMA_VERSION,
         "protocol": "mcp",
         "server": {
             "suggestedName": "rhwp",
@@ -1555,6 +1559,58 @@ fn mcp_tool_definitions() -> Vec<serde_json::Value> {
             &["schemaVersion", "planVersion", "input", "output", "outputFormat", "steps", "steps[].confusable", "steps[].skipped", "verify", "invalid", "changedPages", "dryRun", "preview"],
         ),
         tool_with_optional_args(
+            "hwp_replay",
+            "[#4391] 작업 영수증 — 계획을 **임시 산출**로 재실행해 (입력·계획·산출) SHA-256 3종 영수증을 발급(attest)하거나, expectOutputSha256 을 주면 타인의 작업 주장을 재현 검증한다(verify — 불일치 exit 3, reproduced:false). 사용자 파일은 절대 건드리지 않는다(계획의 output 은 임시 경로로 대체). 전제는 결정론: 같은 계획의 재실행은 같은 산출 바이트를 낸다(replay_contract 가 고정).",
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "plan": {
+                        "type": "object",
+                        "description": "hwp_run_plan 과 같은 계획서. output 경로는 영수증 발급 시 무시(임시 산출로 대체)되고 확장자만 산출 형식 결정에 쓰인다"
+                    },
+                    "expectOutputSha256": {
+                        "type": "string",
+                        "description": "검증 모드 — 주장된 산출의 SHA-256(64자리 16진). 재현 산출과 다르면 exit 3"
+                    }
+                },
+                "required": ["plan"],
+            }),
+            "replay",
+            serde_json::json!(["replay", "--plan-json", "{plan}", "--json"]),
+            serde_json::json!([{ "when": "expectOutputSha256", "args": ["--expect-output-sha256", "{expectOutputSha256}"] }]),
+            &["schemaVersion", "mode", "input", "inputSha256", "planSha256", "outputSha256", "toolVersion", "steps", "reproduced", "expectedOutputSha256"],
+        ),
+        tool_with_optional_args(
+            "hwp_lineage",
+            "[#4401] 작업 계보 검증 — 캡슐 해시 체인을 머리부터 거슬러 부모 파일 무결(기록 해시 대조)·계보 불변식(부모 산출=자식 입력)을 판정하고, deep 이면 링크마다 재실행 재현까지 확인한다. 깨진 체인은 exit 3, 봉투의 brokenAt·links[] 가 어느 링크가 왜 깨졌는지 명세.",
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "capsule": { "type": "string", "description": "체인의 머리(최신) 캡슐 경로" },
+                    "deep": { "type": "boolean", "description": "링크마다 재실행 재현까지 확인" }
+                },
+                "required": ["capsule"],
+            }),
+            "lineage",
+            serde_json::json!(["lineage", "{capsule}", "--json"]),
+            serde_json::json!([{ "when": "deep", "args": ["--deep"] }]),
+            &["schemaVersion", "head", "depth", "valid", "brokenAt", "links"],
+        ),
+        tool(
+            "hwp_audit",
+            "[#4393] 에이전트 노동 감사 — 작업 캡슐(*.capsule.json) 폴더를 전수 재실행해 재현율을 회계한다. 개별 검증은 hwp_replay, 조직 규모 일괄은 이 도구. 불일치 1건 = exit 3, failed[] 에 캡슐별 기대/실제 해시.",
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "dir": { "type": "string", "description": "*.capsule.json 이 담긴 폴더 (비재귀)" }
+                },
+                "required": ["dir"],
+            }),
+            "audit",
+            serde_json::json!(["audit", "{dir}", "--json"]),
+            &["schemaVersion", "root", "total", "reproduced", "failed", "reproducedRate"],
+        ),
+        tool_with_optional_args(
             "hwp_export_plan_schema",
             "[#3719 §6-4] hwp_run_plan 이 받는 **계획서 자체**의 JSON Schema 를 돌려준다. hwp_run_plan 이 계획을 실행한다면 이 도구는 계획을 어떻게 쓰는지 알려준다 — step 4종의 필수·선택 필드, 조건절 if 의 문법, assertions 의 뜻이 판별 유니온으로 적혀 있다. 계획을 처음 만들 때 한 번 받아 두면 필드명을 지어내 invalid[] 로 되돌아오는 왕복을 없앨 수 있다. 문서를 입력으로 받지 않는다(계획서 문법의 서술이지 특정 문서의 속성이 아니다).",
             serde_json::json!({
@@ -1899,6 +1955,57 @@ fn capabilities_command_entries() -> Vec<serde_json::Value> {
                 "invalid",
             ],
         ),
+        // [#4391] 작업 영수증 — run 계획의 제3자 재현·증명. 사용자 파일은 건드리지
+        // 않는다(임시 산출만). attest = 영수증 발급, --expect-output-sha256 = 검증.
+        cmd_json(
+            "replay",
+            "query",
+            "계획을 임시 산출로 재실행해 작업 영수증(입력·계획·산출 SHA-256)을 발급하고, --expect-output-sha256 로 타인의 작업 주장을 재현 검증한다 — 불일치는 exit 3 (#4391)",
+            false,
+            &["--json", "--plan-json", "--expect-output-sha256", "--capsule", "--parent"],
+            &[
+                "schemaVersion",
+                "mode",
+                "input",
+                "inputSha256",
+                "planSha256",
+                "outputSha256",
+                "toolVersion",
+                "steps",
+                "reproduced",
+                "expectedOutputSha256",
+            ],
+        ),
+        cmd_json(
+            "lineage",
+            "query",
+            "작업 캡슐 해시 체인을 거슬러 연대기를 검증 — 부모 파일 무결·계보 불변식(부모 산출=자식 입력)·(--deep) 링크별 재현. 깨진 체인은 exit 3, brokenAt 명세 (#4401)",
+            false,
+            &["--json", "--deep"],
+            &[
+                "schemaVersion",
+                "head",
+                "depth",
+                "valid",
+                "brokenAt",
+                "links",
+            ],
+        ),
+        cmd_json(
+            "audit",
+            "query",
+            "작업 캡슐(*.capsule.json) 폴더 전수 재실행·대조 — 에이전트 노동의 재현율 회계. 불일치 1건이라도 있으면 exit 3 (#4393)",
+            false,
+            &["--json"],
+            &[
+                "schemaVersion",
+                "root",
+                "total",
+                "reproduced",
+                "failed",
+                "reproducedRate",
+            ],
+        ),
         // [#3719 §6-4] 계획서 문법의 단일 출처 — `run` 바로 뒤에 둔다. 계획을 실행하는
         // 명령과 계획을 쓰는 법을 알려주는 명령이 자기서술에서도 붙어 있어야 에이전트가
         // 하나를 보고 다른 하나를 놓치지 않는다.
@@ -1924,6 +2031,7 @@ fn capabilities_command_entries() -> Vec<serde_json::Value> {
             &["--search"],
             &[
                 "schemaVersion",
+                "schemaRegistry",
                 "tool",
                 "version",
                 "exitCodes",
@@ -2701,7 +2809,7 @@ fn show_capabilities_search(query: &str, json_mode: bool) -> i32 {
 
     if json_mode {
         let envelope = serde_json::json!({
-            "schemaVersion": "1.0",
+            "schemaVersion": ENVELOPE_SCHEMA_VERSION,
             "tool": "rhwp",
             "version": rhwp::version(),
             "search": query,
@@ -2817,9 +2925,14 @@ fn capabilities_value() -> serde_json::Value {
     let commands = capabilities_command_entries();
 
     serde_json::json!({
-        "schemaVersion": "1.0",
+        "schemaVersion": ENVELOPE_SCHEMA_VERSION,
         "tool": "rhwp",
         "version": rhwp::version(),
+        // [#4329 R67×R83] 전 버전 축(봉투·IR·capabilities·plan + crate semver)의
+        // 단일 출처 자기서술 — 외부 소비자가 이 한 번의 호출로 상류 버전을 기계
+        // 대조한다(#4327 U2). 값의 원천은 rhwp::schema_registry 이고, 여기와
+        // 각 export-*-schema 봉투의 일치는 tests/schema_registry_contract.rs 가 고정.
+        "schemaRegistry": rhwp::schema_registry::registry_value(),
         // hwp5 는 convert·extract-pages·edit -o *.hwp 가 실제로 내는 산출 형식이다
         // (봉투의 format/outputFormat 이 "hwp5"). 쓰기 목록에서 빠져 있어 매니페스트만
         // 읽은 에이전트가 "HWP5 로는 못 쓴다"고 오판했다.
@@ -3426,6 +3539,9 @@ fn print_help() {
     println!("      공개 IR 의 JSON Schema — 외부 바인딩 코드 생성의 단일 출처");
     println!("      --bare 는 봉투 없이 스키마 본문만 (JSON Schema 도구 입력용)");
     println!("  run <계획.json> [--json]              선언적 편집 계획 실행 (#3703)");
+    println!("  replay <계획.json> [--expect-output-sha256 <hex>] [--json]  작업 영수증 발급·재현 검증 (#4391)");
+    println!("  audit <캡슐 폴더> [--json]            작업 캡슐 전수 재검증 — 재현율 회계 (#4393)");
+    println!("  lineage <캡슐.json> [--deep] [--json]  작업 계보(해시 체인) 연대기 검증 (#4401)");
     println!("      전 step 을 정적 선검증(불가 시 실행 0·exit 2)하고 인메모리로 원자");
     println!("      실행해 단언(verify) 통과 시에만 단 한 번 저장한다 — 실패 시 디스크 무변경.");
     println!("      steps: fill_fields{{data}} · replace_text{{find,replace[,occurrence]}}");
@@ -3794,7 +3910,7 @@ fn export_svg(args: &[String]) -> i32 {
 
     if json_mode {
         let envelope = serde_json::json!({
-            "schemaVersion": "1.0",
+            "schemaVersion": ENVELOPE_SCHEMA_VERSION,
             "source": file_path,
             "format": "svg",
             "outputDir": output_dir,
@@ -4870,7 +4986,7 @@ fn export_pdf(args: &[String]) -> i32 {
                 "{}",
                 provenance::marked(
                     serde_json::json!({
-                        "schemaVersion": "1.0",
+                        "schemaVersion": ENVELOPE_SCHEMA_VERSION,
                         "source": file_path,
                         "format": "pdf",
                         "backend": backend_name,
@@ -5073,7 +5189,7 @@ fn export_text(args: &[String]) -> i32 {
         // (`search --limit` 이 전수 grep 후 절단하는 것과 같은 이유, #3353).
         let (page_objs, omitted_count) = truncate_page_texts(&extracted, max_chars);
         let result = serde_json::json!({
-            "schemaVersion": "1.0",
+            "schemaVersion": ENVELOPE_SCHEMA_VERSION,
             "source": file_path,
             "pageCount": page_objs.len(),
             "truncated": omitted_count > 0,
@@ -5383,7 +5499,7 @@ fn table_to_csv(args: &[String]) -> i32 {
             })
             .collect();
         let mut envelope = serde_json::json!({
-            "schemaVersion": "1.0",
+            "schemaVersion": ENVELOPE_SCHEMA_VERSION,
             "source": file_path,
             "tableCount": tables.len(),
             "tables": tables,
@@ -5637,7 +5753,7 @@ fn csv_to_table(args: &[String]) -> i32 {
     if !invalid.is_empty() {
         if json_mode {
             let envelope = serde_json::json!({
-                "schemaVersion": "1.0",
+                "schemaVersion": ENVELOPE_SCHEMA_VERSION,
                 "source": file_path,
                 "csv": csv_path,
                 "table": table_no,
@@ -5778,7 +5894,7 @@ fn csv_to_table(args: &[String]) -> i32 {
 
     if json_mode {
         let mut envelope = serde_json::json!({
-            "schemaVersion": "1.0",
+            "schemaVersion": ENVELOPE_SCHEMA_VERSION,
             "source": file_path,
             "csv": csv_path,
             "table": table_no,
@@ -6137,7 +6253,7 @@ fn export_markdown(args: &[String]) -> i32 {
             "{}",
             provenance::marked(
                 serde_json::json!({
-                    "schemaVersion": "1.0",
+                    "schemaVersion": ENVELOPE_SCHEMA_VERSION,
                     "source": file_path,
                     "format": "markdown",
                     "outputDir": output_dir,
@@ -6420,7 +6536,7 @@ fn cmd_scan(args: &[String]) -> i32 {
     // ③ 출력.
     if json_mode {
         let envelope = serde_json::json!({
-            "schemaVersion": "1.0",
+            "schemaVersion": ENVELOPE_SCHEMA_VERSION,
             "roots": roots,
             "files": records,
             "summary": summary,
@@ -7502,7 +7618,7 @@ fn batch_record(mode: BatchMode<'_>, path: &str) -> serde_json::Value {
 fn batch_fail_record(path: &str, message: String) -> serde_json::Value {
     provenance::marked(
         serde_json::json!({
-            "schemaVersion": "1.0",
+            "schemaVersion": ENVELOPE_SCHEMA_VERSION,
             "source": path,
             "error": message,
             "exitClass": "runtime",
@@ -7542,7 +7658,7 @@ fn batch_export_text_record_inner(path: &str) -> serde_json::Value {
 
     provenance::marked(
         serde_json::json!({
-            "schemaVersion": "1.0",
+            "schemaVersion": ENVELOPE_SCHEMA_VERSION,
             "source": path,
             "pageCount": page_count,
             "text": text,
@@ -7764,7 +7880,7 @@ fn batch_convert_record_inner(
     let envelope = |verify: serde_json::Value, verify_pages: serde_json::Value| {
         provenance::marked(
             serde_json::json!({
-                "schemaVersion": "1.0",
+                "schemaVersion": ENVELOPE_SCHEMA_VERSION,
                 "source": path,
                 "output": output_path.display().to_string(),
                 "format": "hwp5",
@@ -7846,7 +7962,7 @@ fn structure_json_value(
 ) -> serde_json::Value {
     provenance::marked(
         serde_json::json!({
-            "schemaVersion": "1.0",
+            "schemaVersion": ENVELOPE_SCHEMA_VERSION,
             "source": file_path,
             "mode": st.mode,
             "nodeCount": st.node_count,
@@ -7863,7 +7979,7 @@ fn tables_json_value(
 ) -> serde_json::Value {
     provenance::marked(
         serde_json::json!({
-            "schemaVersion": "1.0",
+            "schemaVersion": ENVELOPE_SCHEMA_VERSION,
             "source": file_path,
             "tableCount": tables.len(),
             "tables": tables,
@@ -7880,7 +7996,7 @@ fn fields_json_value(file_path: &str, fields: &[serde_json::Value]) -> serde_jso
         .collect();
     provenance::marked(
         serde_json::json!({
-            "schemaVersion": "1.0",
+            "schemaVersion": ENVELOPE_SCHEMA_VERSION,
             "source": file_path,
             "fieldCount": fields.len(),
             "fields": fields,
@@ -7949,7 +8065,7 @@ fn search_json_value(
 ) -> serde_json::Value {
     provenance::marked(
         serde_json::json!({
-        "schemaVersion": "1.0",
+        "schemaVersion": ENVELOPE_SCHEMA_VERSION,
         "source": file_path,
         "query": query,
         "caseSensitive": case_sensitive,
@@ -8077,7 +8193,7 @@ fn info_json_value(
     let para_count: usize = document.sections.iter().map(|s| s.paragraphs.len()).sum();
     provenance::marked(
         serde_json::json!({
-            "schemaVersion": "1.0",
+            "schemaVersion": ENVELOPE_SCHEMA_VERSION,
             "source": file_path,
             "format": format_str,
             "sizeBytes": file_size,
@@ -8342,7 +8458,7 @@ fn digest_document(args: &[String]) -> i32 {
 
         let truncated = any_truncated || section_count > sections.len();
         let envelope = serde_json::json!({
-            "schemaVersion": "1.0",
+            "schemaVersion": ENVELOPE_SCHEMA_VERSION,
             "source": file_path,
             "format": info["format"],
             "pageCount": info["pageCount"],
@@ -8394,7 +8510,7 @@ fn digest_document(args: &[String]) -> i32 {
             DIGEST_PAGES_DONE_NEXT_STEP.to_string()
         };
         let envelope = serde_json::json!({
-            "schemaVersion": "1.0",
+            "schemaVersion": ENVELOPE_SCHEMA_VERSION,
             "source": file_path,
             "format": info["format"],
             "pageCount": info["pageCount"],
@@ -8437,7 +8553,7 @@ fn digest_document(args: &[String]) -> i32 {
     let (excerpt, truncated) = cut(excerpt_src, max_chars.unwrap_or(DIGEST_DEFAULT_MAX_CHARS));
 
     let envelope = serde_json::json!({
-        "schemaVersion": "1.0",
+        "schemaVersion": ENVELOPE_SCHEMA_VERSION,
         "source": file_path,
         "format": info["format"],
         "pageCount": info["pageCount"],
@@ -9245,7 +9361,7 @@ fn dump_pages(args: &[String]) -> i32 {
         // [#3697] 페이지네이션 진단 기계 계약 (#3608 1-C). stdout 은 순수 JSON 단건 봉투 —
         // 진행/요약 출력은 내지 않는다 (jsonContract 규약).
         let envelope = serde_json::json!({
-            "schemaVersion": "1.0",
+            "schemaVersion": ENVELOPE_SCHEMA_VERSION,
             "source": file_path,
             "pageCount": page_count,
             "pageFilter": target_page,
@@ -11090,7 +11206,7 @@ fn extract_data_json_value(
 ) -> serde_json::Value {
     provenance::marked(
         serde_json::json!({
-            "schemaVersion": "1.0",
+            "schemaVersion": ENVELOPE_SCHEMA_VERSION,
             "source": file_path,
             "kind": kind,
             "itemCount": items.len(),
@@ -11559,7 +11675,7 @@ fn extract_pages(args: &[String]) -> i32 {
             "{}",
             provenance::marked(
                 serde_json::json!({
-                    "schemaVersion": "1.0",
+                    "schemaVersion": ENVELOPE_SCHEMA_VERSION,
                     "source": input,
                     "output": output,
                     "from": from,
@@ -11649,7 +11765,7 @@ fn convert_hwp(args: &[String]) -> i32 {
                 "{}",
                 provenance::marked(
                     serde_json::json!({
-                        "schemaVersion": "1.0",
+                        "schemaVersion": ENVELOPE_SCHEMA_VERSION,
                         "source": input_path,
                         "output": output_path,
                         "format": "hwp5",
@@ -11898,7 +12014,7 @@ fn export_doclang(args: &[String]) -> i32 {
                     "{}",
                     provenance::marked(
                         serde_json::json!({
-                            "schemaVersion": "1.0",
+                            "schemaVersion": ENVELOPE_SCHEMA_VERSION,
                             "source": file_path,
                             "output": output_path.display().to_string(),
                             "format": "doclang",
@@ -12008,7 +12124,7 @@ fn export_hwpx(args: &[String]) -> i32 {
                 "{}",
                 provenance::marked(
                     serde_json::json!({
-                        "schemaVersion": "1.0",
+                        "schemaVersion": ENVELOPE_SCHEMA_VERSION,
                         "source": positionals[0],
                         "output": output_path.display().to_string(),
                         "format": "hwpx",
@@ -12244,7 +12360,7 @@ fn export_hml(args: &[String]) {
             "{}",
             provenance::marked(
                 serde_json::json!({
-                    "schemaVersion": "1.0",
+                    "schemaVersion": ENVELOPE_SCHEMA_VERSION,
                     "source": paths.input.display().to_string(),
                     "output": paths.output.display().to_string(),
                     "format": "hml",
@@ -12375,7 +12491,7 @@ fn build_from_ingest(args: &[String]) -> i32 {
                     "{}",
                     provenance::marked(
                         serde_json::json!({
-                            "schemaVersion": "1.0",
+                            "schemaVersion": ENVELOPE_SCHEMA_VERSION,
                             "source": input,
                             "output": output,
                             "format": "hwpx",
@@ -14049,7 +14165,7 @@ fn cmd_verify(args: &[String]) -> i32 {
     let pass_count = expectation_count - fail_count;
     if json_mode {
         let envelope = serde_json::json!({
-            "schemaVersion": "1.0",
+            "schemaVersion": ENVELOPE_SCHEMA_VERSION,
             "source": path,
             "expectations": expectations,
             "passCount": pass_count,
@@ -14368,7 +14484,7 @@ fn ir_diff(args: &[String]) -> i32 {
     if json_mode {
         // [#3274] 계약 봉투 한 줄 — 카테고리 버킷(BTreeMap)은 키 정렬이 결정적이다.
         let envelope = serde_json::json!({
-            "schemaVersion": "1.0",
+            "schemaVersion": ENVELOPE_SCHEMA_VERSION,
             "a": file_a,
             "b": file_b,
             "identical": total_diffs == 0,
@@ -14675,7 +14791,7 @@ fn cmd_export_ir_schema(args: &[String]) -> i32 {
                 "{}",
                 provenance::marked(
                     serde_json::json!({
-                        "schemaVersion": "1.0",
+                        "schemaVersion": ENVELOPE_SCHEMA_VERSION,
                         "irSchemaVersion": rhwp::ir_schema::IR_SCHEMA_VERSION,
                         "output": path,
                         "bytes": text.len(),
@@ -14754,7 +14870,7 @@ fn cmd_export_plan_schema(args: &[String]) -> i32 {
                 "{}",
                 provenance::marked(
                     serde_json::json!({
-                        "schemaVersion": "1.0",
+                        "schemaVersion": ENVELOPE_SCHEMA_VERSION,
                         "planSchemaVersion": rhwp::plan_schema::PLAN_SCHEMA_VERSION,
                         "output": path,
                         "bytes": text.len(),
@@ -14828,7 +14944,7 @@ fn cmd_export_capabilities_schema(args: &[String]) -> i32 {
                 "{}",
                 provenance::marked(
                     serde_json::json!({
-                        "schemaVersion": "1.0",
+                        "schemaVersion": ENVELOPE_SCHEMA_VERSION,
                         "capabilitiesSchemaVersion":
                             rhwp::capabilities_schema::CAPABILITIES_SCHEMA_VERSION,
                         "output": path,
@@ -14912,7 +15028,7 @@ fn cmd_export_ontology(args: &[String]) -> i32 {
                 "{}",
                 provenance::marked(
                     serde_json::json!({
-                        "schemaVersion": "1.0",
+                        "schemaVersion": ENVELOPE_SCHEMA_VERSION,
                         "ontologyVersion": rhwp::ontology::ONTOLOGY_VERSION,
                         "output": path,
                         "bytes": text.len(),
@@ -14961,7 +15077,10 @@ fn agent_manifest_value(bare: bool) -> serde_json::Value {
         return serde_json::Value::Object(fields);
     }
     let mut envelope = serde_json::Map::new();
-    envelope.insert("schemaVersion".to_string(), serde_json::json!("1.0"));
+    envelope.insert(
+        "schemaVersion".to_string(),
+        serde_json::json!(ENVELOPE_SCHEMA_VERSION),
+    );
     envelope.extend(fields);
     serde_json::Value::Object(envelope)
 }
@@ -15016,6 +15135,931 @@ fn cmd_export_agent_manifest(args: &[String]) -> i32 {
 /// 뿌리라서 절차 대신 **의도(계획서)** 를 받는다. 판정은 전부 데이터다:
 /// 선검증 위반 = invalid[] + exit 2(실행 0), verify 단언 실패 = exit 3(디스크
 /// 무변경), 성공 = step 저널 + verify + exit 0(단 한 번 저장).
+/// [#4378 R24] `--expect-sha256` CAS 대조. 불일치는 "검증 단언 실패" 계열(exit 3,
+/// #2707 사전)이다 — 문서가 기대 상태가 아니면 한 바이트도 쓰지 않는다.
+fn sha256_hex_of(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    let out = Sha256::digest(bytes);
+    let mut hex = String::with_capacity(out.len() * 2);
+    for b in out {
+        use std::fmt::Write as _;
+        let _ = write!(hex, "{b:02x}");
+    }
+    hex
+}
+
+/// 같은 입력 경로를 다루는 rhwp writer 사이의 read-check-write 경계를 직렬화한다.
+/// 잠금 파일은 rename 뒤에도 같은 inode/handle을 유지해야 하므로 원본 파일이 아니라
+/// 정규화한 경로의 해시로 만든 안정적인 temp sidecar를 사용한다.
+struct CasPathLock {
+    _file: fs::File,
+}
+
+impl CasPathLock {
+    fn acquire(source: &Path) -> std::io::Result<Self> {
+        #[cfg(unix)]
+        use std::os::unix::fs::OpenOptionsExt;
+
+        let canonical = fs::canonicalize(source)?;
+        let key = sha256_hex_of(canonical.to_string_lossy().as_bytes());
+        let lock_path = std::env::temp_dir().join(format!("rhwp-cas-v1-{key}.lock"));
+        let mut options = fs::OpenOptions::new();
+        options.read(true).write(true).create(true);
+        #[cfg(unix)]
+        options.mode(0o600);
+        let file = options.open(lock_path)?;
+        file.lock()?;
+        Ok(Self { _file: file })
+    }
+}
+
+/// debug 통합 회귀에서 두 별도 프로세스를 잠금 시도 직전까지 모은다. release
+/// binary에는 환경변수 기반 파일 쓰기·대기 경로 자체를 컴파일하지 않는다.
+#[cfg(debug_assertions)]
+fn cas_test_synchronize_before_lock() -> Result<(), String> {
+    let Some(directory) = std::env::var_os("RHWP_INTERNAL_TEST_CAS_BARRIER") else {
+        return Ok(());
+    };
+    let directory = std::path::PathBuf::from(directory);
+    fs::write(
+        directory.join(format!("arrived-{}", std::process::id())),
+        b"",
+    )
+    .map_err(|e| e.to_string())?;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        let arrived = fs::read_dir(&directory)
+            .map_err(|e| e.to_string())?
+            .filter_map(Result::ok)
+            .filter(|entry| entry.file_name().to_string_lossy().starts_with("arrived-"))
+            .count();
+        if arrived >= 2 {
+            return Ok(());
+        }
+        if std::time::Instant::now() >= deadline {
+            return Err("CAS test barrier 에 두 프로세스가 도착하지 않았습니다".to_string());
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+}
+
+#[cfg(not(debug_assertions))]
+fn cas_test_synchronize_before_lock() -> Result<(), String> {
+    Ok(())
+}
+
+/// 최초 해시 검사를 통과한 프로세스를 표시한다. 잠금이 사라진 mutation에서는 두
+/// marker가 생기고, 정상 구현에서는 첫 writer만 이 경계에 도달한다.
+#[cfg(debug_assertions)]
+fn cas_test_mark_checked_and_wait() {
+    let Some(directory) = std::env::var_os("RHWP_INTERNAL_TEST_CAS_BARRIER") else {
+        return;
+    };
+    let directory = std::path::PathBuf::from(directory);
+    let _ = fs::write(
+        directory.join(format!("checked-{}", std::process::id())),
+        b"",
+    );
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
+    while std::time::Instant::now() < deadline {
+        let checked = fs::read_dir(&directory)
+            .ok()
+            .into_iter()
+            .flatten()
+            .filter_map(Result::ok)
+            .filter(|entry| entry.file_name().to_string_lossy().starts_with("checked-"))
+            .count();
+        if checked >= 2 {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+}
+
+#[cfg(not(debug_assertions))]
+fn cas_test_mark_checked_and_wait() {}
+
+/// 기대 해시가 주어졌을 때만 검사한다. 형식 오류는 exit 2, 불일치는 exit 3 을
+/// 돌려주고 봉투/진단을 직접 낸다. `None` 이면 통과.
+fn check_expect_sha256(
+    expect: Option<&str>,
+    bytes: &[u8],
+    source: &str,
+    json_mode: bool,
+) -> Option<i32> {
+    let expect = expect?;
+    let normalized = expect.trim().to_ascii_lowercase();
+    if normalized.len() != 64 || !normalized.bytes().all(|b| b.is_ascii_hexdigit()) {
+        eprintln!("오류: --expect-sha256 값은 64자리 16진이어야 합니다: {expect}");
+        return Some(EXIT_USAGE);
+    }
+    let actual = sha256_hex_of(bytes);
+    if actual == normalized {
+        return None;
+    }
+    if json_mode {
+        let envelope = provenance::marked(
+            serde_json::json!({
+                "schemaVersion": ENVELOPE_SCHEMA_VERSION,
+                "source": source,
+                "preconditionFailed": {
+                    "kind": "inputSha256",
+                    "expected": normalized,
+                    "actual": actual,
+                },
+                "error": "입력 문서가 기대 해시와 다릅니다 — 다른 에이전트/사람이 먼저 바꿨을 수 있습니다. 문서를 다시 읽고 계획을 재수립하세요 (#3905 CAS).",
+            }),
+            "edit",
+        );
+        println!("{envelope}");
+    } else {
+        eprintln!("검증 실패: 입력 해시 불일치 (기대 {normalized} / 실제 {actual}) — 저장하지 않았습니다.");
+    }
+    Some(3) // #2707: 검증 단언 실패
+}
+
+/// [#4391] 작업 영수증 — 계획을 **임시 산출**로 재실행해 (입력·계획·산출) SHA-256
+/// 3종을 발급(attest)하거나, 기대 산출 해시와 대조해 타인의 작업 주장을
+/// 재현 검증(verify)한다. 전제는 실측된 바이트 결정론(같은 계획 = 같은 산출)이고,
+/// 사용자 파일은 절대 건드리지 않는다 — 계획의 output 은 임시 경로로 대체된다.
+fn replay_sha256_hex(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(bytes)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
+fn is_sha256_hex(value: &str) -> bool {
+    value.len() == 64 && value.bytes().all(|b| b.is_ascii_hexdigit())
+}
+
+struct ReplayScratchDir(std::path::PathBuf);
+
+impl Drop for ReplayScratchDir {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
+    }
+}
+
+fn replay_scratch_dir(tag: &str) -> Result<ReplayScratchDir, String> {
+    #[cfg(unix)]
+    use std::os::unix::fs::DirBuilderExt;
+
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|e| e.to_string())?
+        .as_nanos();
+    for attempt in 0..128_u16 {
+        let candidate = std::env::temp_dir().join(format!(
+            "rhwp-replay-{}-{nonce:x}-{tag}-{attempt}",
+            std::process::id()
+        ));
+        let mut builder = fs::DirBuilder::new();
+        #[cfg(unix)]
+        builder.mode(0o700);
+        match builder.create(&candidate) {
+            Ok(()) => return Ok(ReplayScratchDir(candidate)),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(e.to_string()),
+        }
+    }
+    Err("사용 가능한 임시 폴더 이름이 없습니다".to_string())
+}
+
+/// 해시한 입력 바이트를 임시 파일에 고정하고, 엔진에는 그 스냅샷만 넘긴다.
+fn with_replay_input_snapshot<T>(
+    plan: &mut serde_json::Value,
+    input_bytes: &[u8],
+    scratch_dir: &std::path::Path,
+    execute: impl FnOnce(&serde_json::Value) -> T,
+) -> Result<T, String> {
+    use std::io::Write;
+    #[cfg(unix)]
+    use std::os::unix::fs::OpenOptionsExt;
+
+    let input = plan["input"]
+        .as_str()
+        .ok_or_else(|| "계획에 input 이 필요합니다".to_string())?;
+    let ext = std::path::Path::new(input)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("hwp");
+    let snapshot = scratch_dir.join(format!("input.{ext}"));
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    options.mode(0o600);
+    let mut file = options.open(&snapshot).map_err(|e| e.to_string())?;
+    file.write_all(input_bytes).map_err(|e| e.to_string())?;
+    drop(file);
+    let original_input = plan["input"].clone();
+    plan["input"] = serde_json::json!(snapshot.to_string_lossy());
+    let result = execute(plan);
+    plan["input"] = original_input;
+    Ok(result)
+}
+
+fn validated_capsule_plan(capsule: &serde_json::Value) -> Result<(serde_json::Value, u64), String> {
+    let plan_text = capsule
+        .get("planText")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| "planText 없음".to_string())?;
+    let expected_plan_sha = capsule["receipt"]["planSha256"]
+        .as_str()
+        .filter(|value| is_sha256_hex(value))
+        .ok_or_else(|| "receipt.planSha256 가 없거나 64자리 16진이 아님".to_string())?;
+    let actual_plan_sha = replay_sha256_hex(plan_text.as_bytes());
+    if actual_plan_sha != expected_plan_sha {
+        return Err("planText 와 receipt.planSha256 불일치".to_string());
+    }
+    let plan: serde_json::Value =
+        serde_json::from_str(plan_text).map_err(|e| format!("planText JSON 파싱 실패: {e}"))?;
+    if !plan.is_object() {
+        return Err("planText 계획 객체 없음".to_string());
+    }
+    if capsule.get("plan") != Some(&plan) {
+        return Err("plan 과 planText 불일치".to_string());
+    }
+    let steps = capsule["receipt"]["steps"]
+        .as_u64()
+        .ok_or_else(|| "receipt.steps 가 음이 아닌 정수가 아님".to_string())?;
+    let plan_steps = plan["steps"]
+        .as_array()
+        .ok_or_else(|| "planText.steps/plan.steps 가 배열이 아님".to_string())?
+        .len() as u64;
+    if steps != plan_steps {
+        return Err(
+            "receipt.steps 와 planText.steps 길이 불일치 (plan.steps 길이와 receipt.steps 불일치)"
+                .to_string(),
+        );
+    }
+    Ok((plan, steps))
+}
+
+/// [#4393] replay·audit 공용 실행 코어 — 계획을 **임시 산출**로 실행해 (산출
+/// SHA-256, step 수, 입력 SHA-256)를 얻는다. 임시 파일은 성공·실패 모두
+/// 정리한다. 계획의 output 은 이 함수가 임시 경로로 덮어쓴다(호출자는 필요 시
+/// 사전 clone).
+fn replay_execute_to_temp(
+    plan: &mut serde_json::Value,
+    tag: &str,
+) -> Result<(String, usize, String), (String, i32)> {
+    let Some(input) = plan["input"].as_str() else {
+        return Err(("계획에 input 이 필요합니다".to_string(), EXIT_USAGE));
+    };
+    let input_bytes = fs::read(input).map_err(|e| {
+        (
+            format!("입력을 읽을 수 없습니다 - {input}: {e}"),
+            EXIT_RUNTIME,
+        )
+    })?;
+    let input_sha = replay_sha256_hex(&input_bytes);
+    let scratch = replay_scratch_dir(tag).map_err(|e| {
+        (
+            format!("재실행 전용 임시 폴더를 만들 수 없습니다 - {e}"),
+            EXIT_RUNTIME,
+        )
+    })?;
+    let ext = plan["output"]
+        .as_str()
+        .and_then(|o| std::path::Path::new(o).extension().and_then(|e| e.to_str()))
+        .unwrap_or("hwp")
+        .to_string();
+    let temp_out = scratch.0.join(format!("output.{ext}"));
+    plan["output"] = serde_json::json!(temp_out.to_string_lossy());
+    let (engine_env, engine_code) =
+        with_replay_input_snapshot(plan, &input_bytes, &scratch.0, run_plan_engine).map_err(
+            |e| {
+                (
+                    format!("재실행 입력 스냅샷을 만들 수 없습니다 - {e}"),
+                    EXIT_RUNTIME,
+                )
+            },
+        )?;
+    if engine_code != 0 {
+        return Err((
+            format!("계획 재실행 실패 (engine exit {engine_code})"),
+            engine_code,
+        ));
+    }
+    let bytes = match fs::read(&temp_out) {
+        Ok(b) => b,
+        Err(e) => {
+            return Err((
+                format!("재실행 산출을 읽을 수 없습니다 - {e}"),
+                EXIT_RUNTIME,
+            ));
+        }
+    };
+    let steps = engine_env["steps"].as_array().map(|s| s.len()).unwrap_or(0);
+    Ok((replay_sha256_hex(&bytes), steps, input_sha))
+}
+
+fn cmd_replay(args: &[String]) -> i32 {
+    let mut plan_path: Option<&str> = None;
+    let mut plan_inline: Option<&str> = None;
+    let mut expected: Option<String> = None;
+    let mut capsule_path: Option<String> = None;
+    let mut parent_path: Option<String> = None;
+    let mut json_mode = false;
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--json" => json_mode = true,
+            "--plan-json" => {
+                i += 1;
+                match args.get(i) {
+                    Some(v) => plan_inline = Some(v.as_str()),
+                    None => {
+                        eprintln!("오류: --plan-json 뒤에 계획 JSON 이 필요합니다.");
+                        return EXIT_USAGE;
+                    }
+                }
+            }
+            "--expect-output-sha256" => {
+                i += 1;
+                match args.get(i) {
+                    Some(v) => expected = Some(v.trim().to_ascii_lowercase()),
+                    None => {
+                        eprintln!(
+                            "오류: --expect-output-sha256 뒤에 64자리 16진 해시가 필요합니다."
+                        );
+                        return EXIT_USAGE;
+                    }
+                }
+            }
+            "--parent" => {
+                i += 1;
+                match args.get(i) {
+                    Some(v) => parent_path = Some(v.clone()),
+                    None => {
+                        eprintln!("오류: --parent 뒤에 부모 캡슐 경로가 필요합니다.");
+                        return EXIT_USAGE;
+                    }
+                }
+            }
+            "--capsule" => {
+                i += 1;
+                match args.get(i) {
+                    Some(v) => capsule_path = Some(v.clone()),
+                    None => {
+                        eprintln!("오류: --capsule 뒤에 저장 경로가 필요합니다.");
+                        return EXIT_USAGE;
+                    }
+                }
+            }
+            other if !other.starts_with("--") && plan_path.is_none() => plan_path = Some(other),
+            other => {
+                eprintln!("알 수 없는 옵션: {other}");
+                return EXIT_USAGE;
+            }
+        }
+        i += 1;
+    }
+    if let Some(e) = expected.as_deref() {
+        if e.len() != 64 || !e.bytes().all(|b| b.is_ascii_hexdigit()) {
+            eprintln!("오류: --expect-output-sha256 값은 64자리 16진이어야 합니다: {e}");
+            return EXIT_USAGE;
+        }
+    }
+    let plan_text: String = match (plan_inline, plan_path) {
+        (Some(inline), _) => inline.to_string(),
+        (None, Some(path)) => match fs::read_to_string(path) {
+            Ok(t) => t,
+            Err(e) => {
+                eprintln!("오류: 계획을 읽을 수 없습니다 - {path}: {e}");
+                return EXIT_RUNTIME;
+            }
+        },
+        (None, None) => {
+            eprintln!("사용법: rhwp replay <계획.json> [--plan-json <json>] [--expect-output-sha256 <hex>] [--json]");
+            return EXIT_USAGE;
+        }
+    };
+    let plan_sha = replay_sha256_hex(plan_text.as_bytes());
+    let mut plan: serde_json::Value = match serde_json::from_str(&plan_text) {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("오류: 계획 JSON 파싱 실패 - {e}");
+            return EXIT_USAGE;
+        }
+    };
+    let Some(input) = plan["input"].as_str().map(str::to_string) else {
+        eprintln!("오류: 계획에 input 이 필요합니다.");
+        return EXIT_USAGE;
+    };
+    let plan_original = plan.clone();
+    let (output_sha, steps, input_sha) = match replay_execute_to_temp(&mut plan, &plan_sha[..12]) {
+        Ok(v) => v,
+        Err((msg, code)) => {
+            if json_mode {
+                println!(
+                    "{}",
+                    provenance::marked(
+                        serde_json::json!({ "schemaVersion": ENVELOPE_SCHEMA_VERSION, "error": msg }),
+                        "replay",
+                    )
+                );
+            } else {
+                eprintln!("{msg} — 영수증 없음");
+            }
+            return code;
+        }
+    };
+    let reproduced = expected.as_deref().map(|e| e == output_sha);
+    let envelope = provenance::marked(
+        serde_json::json!({
+            "schemaVersion": ENVELOPE_SCHEMA_VERSION,
+            "mode": if expected.is_some() { "verify" } else { "attest" },
+            "input": input,
+            "inputSha256": input_sha,
+            "planSha256": plan_sha,
+            "outputSha256": output_sha,
+            "toolVersion": rhwp::version(),
+            "steps": steps,
+            "reproduced": reproduced,
+            "expectedOutputSha256": expected,
+        }),
+        "replay",
+    );
+    if let Some(cp) = capsule_path.as_deref() {
+        // [#4393] 작업 캡슐 — 계획(원본 output 보존)+영수증의 자기완결 교환 형식.
+        // [#4401] --parent 가 있으면 부모 캡슐 파일의 SHA-256 을 내장해 계보
+        // 링크를 만든다 — 부모가 나중에 변조되면 lineage 가 이 해시로 폭로한다.
+        let parent_link = match parent_path.as_deref() {
+            Some(pp) => {
+                let parent_abs = match fs::canonicalize(pp) {
+                    Ok(path) => path,
+                    Err(e) => {
+                        eprintln!("오류: 부모 캡슐을 읽을 수 없습니다 - {pp}: {e}");
+                        return EXIT_RUNTIME;
+                    }
+                };
+                if paths_refer_to_same_file(std::path::Path::new(cp), &parent_abs) {
+                    eprintln!(
+                        "오류: --capsule과 --parent가 같은 기존 파일을 가리킵니다 — 부모 캡슐을 덮어쓰지 않습니다."
+                    );
+                    return EXIT_USAGE;
+                }
+                let bytes = match fs::read(&parent_abs) {
+                    Ok(bytes) => bytes,
+                    Err(e) => {
+                        eprintln!("오류: 부모 캡슐을 읽을 수 없습니다 - {pp}: {e}");
+                        return EXIT_RUNTIME;
+                    }
+                };
+                let capsule_dir = std::path::Path::new(cp)
+                    .parent()
+                    .filter(|path| !path.as_os_str().is_empty())
+                    .unwrap_or(std::path::Path::new("."));
+                let capsule_dir_abs = match fs::canonicalize(capsule_dir) {
+                    Ok(path) => path,
+                    Err(e) => {
+                        eprintln!(
+                            "오류: 캡슐 폴더를 확인할 수 없습니다 - {}: {e}",
+                            capsule_dir.display()
+                        );
+                        return EXIT_RUNTIME;
+                    }
+                };
+                let stored_parent = parent_abs
+                    .strip_prefix(&capsule_dir_abs)
+                    .map(std::path::PathBuf::from)
+                    .unwrap_or(parent_abs);
+                serde_json::json!({
+                    "capsule": stored_parent.to_string_lossy(),
+                    "sha256": replay_sha256_hex(&bytes),
+                })
+            }
+            None => serde_json::Value::Null,
+        };
+        let capsule = serde_json::json!({
+            "schemaVersion": ENVELOPE_SCHEMA_VERSION,
+            "kind": "workCapsule",
+            "parent": parent_link,
+            "plan": plan_original,
+            "planText": plan_text,
+            "receipt": envelope,
+        });
+        if let Err(e) = fs::write(
+            cp,
+            serde_json::to_string_pretty(&capsule).unwrap_or_default(),
+        ) {
+            eprintln!("오류: 캡슐 저장 실패 - {cp}: {e}");
+            return EXIT_RUNTIME;
+        }
+    }
+    if json_mode {
+        println!("{envelope}");
+    } else {
+        println!("작업 영수증 — 입력 {input}");
+        println!("  inputSha256:  {input_sha}");
+        println!("  planSha256:   {plan_sha}");
+        println!(
+            "  outputSha256: {output_sha}  (steps {steps}, rhwp v{})",
+            rhwp::version()
+        );
+        if let Some(r) = reproduced {
+            println!("  reproduced:   {r}");
+        }
+    }
+    match reproduced {
+        Some(false) => 3, // #2707: 검증 단언 실패 — 주장된 산출과 재현 산출이 다르다.
+        _ => EXIT_OK,
+    }
+}
+
+fn collect_audit_capsules(
+    entries: impl IntoIterator<Item = std::io::Result<std::path::PathBuf>>,
+) -> Result<Vec<std::path::PathBuf>, String> {
+    let mut capsules = Vec::new();
+    for entry in entries {
+        let path = entry.map_err(|e| format!("폴더 항목 읽기 실패: {e}"))?;
+        let is_capsule = path
+            .file_name()
+            .map(|name| name.to_string_lossy().ends_with(".capsule.json"))
+            .unwrap_or(false);
+        if is_capsule {
+            capsules.push(path);
+        }
+    }
+    capsules.sort();
+    Ok(capsules)
+}
+
+/// [#4401] 작업 계보 — 캡슐 해시 체인을 머리부터 거슬러 검증한다.
+///
+/// 3중 판정: ① 부모 파일 무결(자식이 기록한 부모 파일 SHA-256 과 실물 대조 —
+/// 사후 변조는 여기서 폭로된다) ② 계보 불변식(부모의 산출 해시 == 자식의 입력
+/// 해시 — "이전 작업의 산출이 다음 작업의 입력"이라는 연대기의 정의) ③ `--deep`
+/// 이면 링크마다 재실행 재현까지. 판정은 봉투 데이터(valid·brokenAt·links[])이고
+/// 깨진 체인은 exit 3 이다.
+fn cmd_lineage(args: &[String]) -> i32 {
+    let mut head: Option<&str> = None;
+    let mut deep = false;
+    let mut json_mode = false;
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--json" => json_mode = true,
+            "--deep" => deep = true,
+            other if !other.starts_with("--") && head.is_none() => head = Some(other),
+            other => {
+                eprintln!("알 수 없는 옵션: {other}");
+                return EXIT_USAGE;
+            }
+        }
+        i += 1;
+    }
+    let Some(head) = head else {
+        eprintln!("사용법: rhwp lineage <캡슐.json> [--deep] [--json]");
+        return EXIT_USAGE;
+    };
+    let mut links: Vec<serde_json::Value> = Vec::new();
+    let mut valid = true;
+    let mut broken_at: Option<String> = None;
+    let mut current = std::path::PathBuf::from(head);
+    // 자식이 기록한 (부모 파일 해시, 자식 입력 해시) — 다음 링크에서 대조한다.
+    let mut recorded_parent_sha: Option<String> = None;
+    let mut child_input_sha: Option<String> = None;
+    let mut guard = 0usize;
+    loop {
+        guard += 1;
+        let name = current.display().to_string();
+        if guard > 1000 {
+            valid = false;
+            broken_at = Some(name);
+            links.push(serde_json::json!({ "error": "체인 길이 1000 초과 — 순환 의심" }));
+            break;
+        }
+        let bytes = match fs::read(&current) {
+            Ok(b) => b,
+            Err(e) => {
+                if links.is_empty() {
+                    eprintln!("오류: 캡슐을 읽을 수 없습니다 - {name}: {e}");
+                    return EXIT_RUNTIME;
+                }
+                valid = false;
+                broken_at = Some(name.clone());
+                links.push(serde_json::json!({ "capsule": name, "error": format!("부모 캡슐 읽기 실패: {e}") }));
+                break;
+            }
+        };
+        let file_sha = replay_sha256_hex(&bytes);
+        let capsule: serde_json::Value = match serde_json::from_slice(&bytes) {
+            Ok(v) => v,
+            Err(e) => {
+                valid = false;
+                broken_at = Some(name.clone());
+                links.push(
+                    serde_json::json!({ "capsule": name, "error": format!("JSON 파싱 실패: {e}") }),
+                );
+                break;
+            }
+        };
+        if capsule["kind"] != "workCapsule" {
+            valid = false;
+            broken_at = Some(name.clone());
+            links.push(
+                serde_json::json!({ "capsule": name, "error": "kind 가 workCapsule 이 아님" }),
+            );
+            break;
+        }
+        let Some(input_sha) = capsule["receipt"]["inputSha256"]
+            .as_str()
+            .filter(|value| is_sha256_hex(value))
+            .map(str::to_string)
+        else {
+            valid = false;
+            broken_at = Some(name.clone());
+            links.push(serde_json::json!({
+                "capsule": name,
+                "error": "receipt.inputSha256 가 없거나 64자리 16진이 아님",
+            }));
+            break;
+        };
+        let Some(output_sha) = capsule["receipt"]["outputSha256"]
+            .as_str()
+            .filter(|value| is_sha256_hex(value))
+            .map(str::to_string)
+        else {
+            valid = false;
+            broken_at = Some(name.clone());
+            links.push(serde_json::json!({
+                "capsule": name,
+                "error": "receipt.outputSha256 가 없거나 64자리 16진이 아님",
+            }));
+            break;
+        };
+        let (validated_plan, expected_steps) = match validated_capsule_plan(&capsule) {
+            Ok(value) => value,
+            Err(error) => {
+                valid = false;
+                broken_at = Some(name.clone());
+                links.push(serde_json::json!({ "capsule": name, "error": error }));
+                break;
+            }
+        };
+        let Some(parent) = capsule.get("parent") else {
+            valid = false;
+            broken_at = Some(name.clone());
+            links.push(serde_json::json!({
+                "capsule": name,
+                "error": "parent 필드 없음",
+            }));
+            break;
+        };
+        let parent_link = if parent.is_null() {
+            None
+        } else {
+            let Some(pp) = parent["capsule"].as_str() else {
+                valid = false;
+                broken_at = Some(name.clone());
+                links.push(serde_json::json!({ "capsule": name, "error": "parent.capsule 없음" }));
+                break;
+            };
+            let Some(parent_sha) = parent["sha256"]
+                .as_str()
+                .filter(|value| is_sha256_hex(value))
+            else {
+                valid = false;
+                broken_at = Some(name.clone());
+                links.push(serde_json::json!({
+                    "capsule": name,
+                    "error": "parent.sha256 가 없거나 64자리 16진이 아님",
+                }));
+                break;
+            };
+            Some((pp.to_string(), parent_sha.to_string()))
+        };
+        let parent_ok = recorded_parent_sha.as_deref().map(|r| r == file_sha);
+        let lineage_ok = child_input_sha.as_deref().map(|ci| output_sha == ci);
+        let reproduced = if deep {
+            let mut plan = validated_plan;
+            match replay_execute_to_temp(&mut plan, &format!("lineage{guard}")) {
+                Ok((actual, actual_steps, actual_input)) => Some(
+                    actual == output_sha
+                        && actual_input == input_sha
+                        && actual_steps as u64 == expected_steps,
+                ),
+                Err(_) => Some(false),
+            }
+        } else {
+            None
+        };
+        links.push(serde_json::json!({
+            "capsule": name,
+            "inputSha256": input_sha,
+            "outputSha256": output_sha,
+            "parentOk": parent_ok,
+            "lineageOk": lineage_ok,
+            "reproduced": reproduced,
+        }));
+        if parent_ok == Some(false) || lineage_ok == Some(false) || reproduced == Some(false) {
+            valid = false;
+            broken_at = Some(name);
+            break;
+        }
+        let Some((pp, parent_sha)) = parent_link else {
+            break;
+        };
+        recorded_parent_sha = Some(parent_sha);
+        child_input_sha = Some(input_sha);
+        let pp_path = std::path::PathBuf::from(pp);
+        current = if pp_path.is_absolute() {
+            pp_path
+        } else {
+            current
+                .parent()
+                .unwrap_or(std::path::Path::new("."))
+                .join(pp_path)
+        };
+    }
+    let envelope = provenance::marked(
+        serde_json::json!({
+            "schemaVersion": ENVELOPE_SCHEMA_VERSION,
+            "head": head,
+            "depth": links.len(),
+            "valid": valid,
+            "brokenAt": broken_at,
+            "links": links,
+        }),
+        "lineage",
+    );
+    if json_mode {
+        println!("{envelope}");
+    } else {
+        println!(
+            "작업 계보 — {head}: 깊이 {} · {}",
+            envelope["depth"],
+            if valid { "유효" } else { "깨짐" }
+        );
+        if let Some(b) = envelope["brokenAt"].as_str() {
+            println!("  brokenAt: {b}");
+        }
+    }
+    if valid {
+        EXIT_OK
+    } else {
+        3 // #2707: 검증 단언 실패 — 연대기가 깨졌다.
+    }
+}
+
+/// [#4393] 에이전트 노동 감사 — 작업 캡슐(*.capsule.json) 폴더를 전수 재실행해
+/// 재현율을 회계한다. 개별 영수증(replay)이 작업 하나의 증명이라면, audit 은
+/// 조직 규모의 "에이전트가 한 일" 전체에 대한 회계감사다. 불일치 1건 = exit 3.
+fn cmd_audit(args: &[String]) -> i32 {
+    let mut dir: Option<&str> = None;
+    let mut json_mode = false;
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--json" => json_mode = true,
+            other if !other.starts_with("--") && dir.is_none() => dir = Some(other),
+            other => {
+                eprintln!("알 수 없는 옵션: {other}");
+                return EXIT_USAGE;
+            }
+        }
+        i += 1;
+    }
+    let Some(dir) = dir else {
+        eprintln!("사용법: rhwp audit <캡슐 폴더> [--json]  (대상: *.capsule.json)");
+        return EXIT_USAGE;
+    };
+    let entries = match fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(e) => {
+            eprintln!("오류: 폴더를 읽을 수 없습니다 - {dir}: {e}");
+            return EXIT_RUNTIME;
+        }
+    };
+    let capsules =
+        match collect_audit_capsules(entries.map(|entry| entry.map(|entry| entry.path()))) {
+            Ok(capsules) => capsules,
+            Err(e) => {
+                eprintln!("오류: {dir} 감사 대상을 전수 열거할 수 없습니다 - {e}");
+                return EXIT_RUNTIME;
+            }
+        };
+    if capsules.is_empty() {
+        eprintln!("오류: {dir} 에 *.capsule.json 이 없습니다 — 감사 대상 없음.");
+        return EXIT_USAGE;
+    }
+    let mut reproduced_count = 0usize;
+    let mut failed: Vec<serde_json::Value> = Vec::new();
+    for (idx, path) in capsules.iter().enumerate() {
+        let name = path
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| path.display().to_string());
+        let fail = |reason: String| serde_json::json!({ "capsule": name, "error": reason });
+        let text = match fs::read_to_string(path) {
+            Ok(t) => t,
+            Err(e) => {
+                failed.push(fail(format!("읽기 실패: {e}")));
+                continue;
+            }
+        };
+        let capsule: serde_json::Value = match serde_json::from_str(&text) {
+            Ok(v) => v,
+            Err(e) => {
+                failed.push(fail(format!("JSON 파싱 실패: {e}")));
+                continue;
+            }
+        };
+        if capsule["kind"] != "workCapsule" {
+            failed.push(fail("kind 가 workCapsule 이 아님".into()));
+            continue;
+        }
+        let Some(expected) = capsule["receipt"]["outputSha256"]
+            .as_str()
+            .filter(|value| is_sha256_hex(value))
+        else {
+            failed.push(fail(
+                "receipt.outputSha256 가 없거나 64자리 16진이 아님".into(),
+            ));
+            continue;
+        };
+        let Some(expected_input) = capsule["receipt"]["inputSha256"]
+            .as_str()
+            .filter(|value| is_sha256_hex(value))
+        else {
+            failed.push(fail(
+                "receipt.inputSha256 가 없거나 64자리 16진이 아님".into(),
+            ));
+            continue;
+        };
+        let (mut plan, expected_steps) = match validated_capsule_plan(&capsule) {
+            Ok(value) => value,
+            Err(error) => {
+                failed.push(fail(error));
+                continue;
+            }
+        };
+        match replay_execute_to_temp(&mut plan, &format!("audit{idx}")) {
+            Ok((actual, actual_steps, actual_input)) => {
+                if actual_input != expected_input {
+                    failed.push(serde_json::json!({
+                        "capsule": name,
+                        "kind": "inputSha256",
+                        "expected": expected_input,
+                        "actual": actual_input,
+                    }));
+                } else if actual_steps as u64 != expected_steps {
+                    failed.push(serde_json::json!({
+                        "capsule": name,
+                        "kind": "steps",
+                        "expected": expected_steps,
+                        "actual": actual_steps,
+                    }));
+                } else if actual == expected {
+                    reproduced_count += 1;
+                } else {
+                    failed.push(serde_json::json!({
+                        "capsule": name,
+                        "expected": expected,
+                        "actual": actual,
+                    }));
+                }
+            }
+            Err((msg, _code)) => failed.push(fail(msg)),
+        }
+    }
+    let total = capsules.len();
+    let rate = reproduced_count as f64 / total as f64;
+    let envelope = provenance::marked(
+        serde_json::json!({
+            "schemaVersion": ENVELOPE_SCHEMA_VERSION,
+            "root": dir,
+            "total": total,
+            "reproduced": reproduced_count,
+            "failed": failed,
+            "reproducedRate": rate,
+        }),
+        "audit",
+    );
+    if json_mode {
+        println!("{envelope}");
+    } else {
+        println!("에이전트 노동 감사 — {dir}");
+        println!(
+            "  캡슐 {total} · 재현 {reproduced_count} · 실패 {} · 재현율 {:.1}%",
+            total - reproduced_count,
+            rate * 100.0
+        );
+        for f in &failed {
+            println!("  [FAIL] {}", f["capsule"].as_str().unwrap_or("?"));
+        }
+    }
+    if failed.is_empty() {
+        EXIT_OK
+    } else {
+        3 // #2707: 검증 단언 실패 — 재현되지 않은 작업이 있다.
+    }
+}
+
 fn cmd_run_plan(args: &[String]) -> i32 {
     let mut plan_path: Option<&str> = None;
     let mut plan_inline: Option<&str> = None;
@@ -15184,7 +16228,7 @@ fn run_plan_engine(plan: &serde_json::Value) -> (serde_json::Value, i32) {
     fn usage(reason: &str) -> (serde_json::Value, i32) {
         (
             provenance::marked(
-                serde_json::json!({ "schemaVersion": "1.0", "error": reason }),
+                serde_json::json!({ "schemaVersion": ENVELOPE_SCHEMA_VERSION, "error": reason }),
                 "run",
             ),
             EXIT_USAGE,
@@ -15193,7 +16237,7 @@ fn run_plan_engine(plan: &serde_json::Value) -> (serde_json::Value, i32) {
     fn fail(reason: String) -> (serde_json::Value, i32) {
         (
             provenance::marked(
-                serde_json::json!({ "schemaVersion": "1.0", "error": reason }),
+                serde_json::json!({ "schemaVersion": ENVELOPE_SCHEMA_VERSION, "error": reason }),
                 "run",
             ),
             EXIT_RUNTIME,
@@ -15218,11 +16262,82 @@ fn run_plan_engine(plan: &serde_json::Value) -> (serde_json::Value, i32) {
     let assert_not_found_empty = plan["assertions"]["notFoundEmpty"]
         .as_bool()
         .unwrap_or(true);
+    // [#4378 R22] preconditions.inputSha256 — 형식은 여기서(usage), 대조는 읽기 직후.
+    // 키가 있는데 타입이 잘못된 경우를 "전제조건 없음"으로 낮추면 CAS 경계가
+    // fail-open 된다. 생략만 허용하고, 명시된 값은 반드시 문자열이어야 한다.
+    let expected_input_sha = match plan.get("preconditions") {
+        None => None,
+        Some(serde_json::Value::Object(preconditions)) => match preconditions.get("inputSha256") {
+            None => {
+                return usage("preconditions 객체에는 inputSha256 하나가 반드시 필요합니다");
+            }
+            Some(serde_json::Value::String(raw)) => {
+                if preconditions.len() != 1 {
+                    return usage("preconditions 에는 inputSha256 외 속성을 둘 수 없습니다");
+                }
+                let normalized = raw.trim().to_ascii_lowercase();
+                if normalized.len() != 64 || !normalized.bytes().all(|b| b.is_ascii_hexdigit()) {
+                    return usage("preconditions.inputSha256 은 64자리 16진이어야 합니다");
+                }
+                Some(normalized)
+            }
+            Some(_) => {
+                return usage("preconditions.inputSha256 은 문자열이어야 합니다");
+            }
+        },
+        Some(_) => return usage("preconditions 는 객체여야 합니다"),
+    };
 
+    let _cas_lock = match expected_input_sha.as_ref() {
+        Some(_) => {
+            if let Err(e) = cas_test_synchronize_before_lock() {
+                return fail(e);
+            }
+            match CasPathLock::acquire(Path::new(input)) {
+                Ok(lock) => Some(lock),
+                Err(e) => {
+                    return fail(format!(
+                        "입력 문서 CAS 잠금을 얻을 수 없습니다 - {input}: {e}"
+                    ))
+                }
+            }
+        }
+        None => None,
+    };
     let bytes = match fs::read(input) {
         Ok(d) => d,
         Err(e) => return fail(format!("입력을 읽을 수 없습니다 - {}: {}", input, e)),
     };
+    // [#4378 R22] CAS — 계획이 세워진 시점의 문서가 아니면 실행 0·저장 0 으로
+    // 거절한다(#3905 M1: 두 exit 0 이 편집 하나를 지우는 경합의 차단기).
+    let precondition_failure = |expected: &str, actual: String| {
+        (
+            provenance::marked(
+                serde_json::json!({
+                    "schemaVersion": ENVELOPE_SCHEMA_VERSION,
+                    "planVersion": "1.0",
+                    "input": input,
+                    "invalid": [{
+                        "step": serde_json::Value::Null,
+                        "action": "preconditions",
+                        "code": "preconditionFailed",
+                        "reason": "입력 문서가 계획의 기대 해시와 다릅니다 — 계획 수립 후 문서가 바뀌었습니다. 실행 0·저장 0. 문서를 다시 읽고 재계획하세요 (#3905 CAS).",
+                        "expected": expected,
+                        "actual": actual,
+                    }],
+                }),
+                "run",
+            ),
+            EXIT_USAGE,
+        )
+    };
+    if let Some(expected) = expected_input_sha.as_deref() {
+        let actual = sha256_hex_of(&bytes);
+        if actual != expected {
+            return precondition_failure(expected, actual);
+        }
+        cas_test_mark_checked_and_wait();
+    }
     let mut doc = match rhwp::wasm_api::HwpDocument::from_bytes(&bytes) {
         Ok(d) => d,
         Err(e) => return fail(format!("HWP 파싱 실패 - {}", e)),
@@ -15439,7 +16554,7 @@ fn run_plan_engine(plan: &serde_json::Value) -> (serde_json::Value, i32) {
         return (
             provenance::marked(
                 serde_json::json!({
-                    "schemaVersion": "1.0", "planVersion": "1.0",
+                    "schemaVersion": ENVELOPE_SCHEMA_VERSION, "planVersion": "1.0",
                     "input": input, "output": output, "invalid": invalid,
                 }),
                 "run",
@@ -15454,7 +16569,7 @@ fn run_plan_engine(plan: &serde_json::Value) -> (serde_json::Value, i32) {
     if plan["dryRun"].as_bool().unwrap_or(false) {
         return (
             serde_json::json!({
-                "schemaVersion": "1.0", "planVersion": "1.0", "dryRun": true,
+                "schemaVersion": ENVELOPE_SCHEMA_VERSION, "planVersion": "1.0", "dryRun": true,
                 "input": input, "output": output,
                 "preview": preview, "invalid": [],
                 "assertions": { "notFoundEmpty": assert_not_found_empty, "verify": assert_verify },
@@ -15659,7 +16774,7 @@ fn run_plan_engine(plan: &serde_json::Value) -> (serde_json::Value, i32) {
             return (
                 provenance::marked(
                     serde_json::json!({
-                        "schemaVersion": "1.0", "planVersion": "1.0",
+                        "schemaVersion": ENVELOPE_SCHEMA_VERSION, "planVersion": "1.0",
                         "input": input, "output": output,
                         "steps": journal_steps, "verify": verify_report,
                         "error": "verify 단언 실패 — 디스크 무변경",
@@ -15670,13 +16785,27 @@ fn run_plan_engine(plan: &serde_json::Value) -> (serde_json::Value, i32) {
             );
         }
     }
+    if let Some(expected) = expected_input_sha.as_deref() {
+        let latest = match fs::read(input) {
+            Ok(bytes) => bytes,
+            Err(e) => {
+                return fail(format!(
+                    "저장 직전 입력을 다시 읽을 수 없습니다 - {input}: {e}"
+                ))
+            }
+        };
+        let actual = sha256_hex_of(&latest);
+        if actual != expected {
+            return precondition_failure(expected, actual);
+        }
+    }
     if let Err(e) = fs::write(output, &out_bytes) {
         return fail(format!("출력 파일을 쓸 수 없습니다 - {}: {}", output, e));
     }
     (
         provenance::marked(
             serde_json::json!({
-                "schemaVersion": "1.0", "planVersion": "1.0",
+                "schemaVersion": ENVELOPE_SCHEMA_VERSION, "planVersion": "1.0",
                 "input": input, "output": output, "outputFormat": out_format.label(),
                 "steps": journal_steps, "verify": verify_report,
                 "changedPages": changed_pages,
@@ -16128,7 +17257,7 @@ fn fill_fields_core(
     };
 
     let mut envelope = serde_json::json!({
-        "schemaVersion": "1.0",
+        "schemaVersion": ENVELOPE_SCHEMA_VERSION,
         "source": file_path,
         "dryRun": dry_run,
         "changedPages": changed_pages,
@@ -16168,6 +17297,8 @@ fn edit_replace_text(args: &[String]) -> i32 {
     let mut json_mode = false;
     // [#3702] 저장 직후 자기검증 — 판정은 데이터, 차이 시 exit 3.
     let mut verify_mode = false;
+    // [#4378 R24] CAS — 입력이 이 해시일 때만 진행(다른 에이전트의 선행 편집 감지).
+    let mut expect_sha256: Option<String> = None;
     // [#3395] 문서 순서 k번째(0 기준) 매치만 치환 — 체크박스류 반복 문자 지목.
     let mut occurrence: Option<usize> = None;
 
@@ -16218,6 +17349,16 @@ fn edit_replace_text(args: &[String]) -> i32 {
             "--dry-run" => dry_run = true,
             "--json" => json_mode = true,
             "--verify" => verify_mode = true,
+            "--expect-sha256" => {
+                i += 1;
+                match args.get(i) {
+                    Some(v) => expect_sha256 = Some(v.clone()),
+                    None => {
+                        eprintln!("오류: --expect-sha256 뒤에 64자리 16진 해시가 필요합니다.");
+                        return EXIT_USAGE;
+                    }
+                }
+            }
             other if other.starts_with('-') => {
                 eprintln!("알 수 없는 옵션: {other}");
                 return EXIT_USAGE;
@@ -16243,6 +17384,22 @@ fn edit_replace_text(args: &[String]) -> i32 {
         return EXIT_USAGE;
     }
 
+    let _cas_lock = match expect_sha256.as_ref() {
+        Some(_) => {
+            if let Err(e) = cas_test_synchronize_before_lock() {
+                eprintln!("오류: {e}");
+                return EXIT_RUNTIME;
+            }
+            match CasPathLock::acquire(Path::new(file_path)) {
+                Ok(lock) => Some(lock),
+                Err(e) => {
+                    eprintln!("오류: 입력 문서 CAS 잠금을 얻을 수 없습니다 - {file_path}: {e}");
+                    return EXIT_RUNTIME;
+                }
+            }
+        }
+        None => None,
+    };
     let bytes = match fs::read(file_path) {
         Ok(d) => d,
         Err(e) => {
@@ -16250,6 +17407,14 @@ fn edit_replace_text(args: &[String]) -> i32 {
             return EXIT_RUNTIME;
         }
     };
+    // [#4378 R24] 파싱 전에 CAS 대조 — 기대 상태가 아니면 여기서 끝(디스크 무변경).
+    if let Some(code) = check_expect_sha256(expect_sha256.as_deref(), &bytes, file_path, json_mode)
+    {
+        return code;
+    }
+    if expect_sha256.is_some() {
+        cas_test_mark_checked_and_wait();
+    }
     let mut doc = match load_document(&bytes) {
         Ok(d) => d,
         Err(e) => return e.report(),
@@ -16320,6 +17485,20 @@ fn edit_replace_text(args: &[String]) -> i32 {
                 return EXIT_RUNTIME;
             }
         };
+        if expect_sha256.is_some() {
+            let latest = match fs::read(file_path) {
+                Ok(bytes) => bytes,
+                Err(e) => {
+                    eprintln!("오류: 저장 직전 입력을 다시 읽을 수 없습니다 - {file_path}: {e}");
+                    return EXIT_RUNTIME;
+                }
+            };
+            if let Some(code) =
+                check_expect_sha256(expect_sha256.as_deref(), &latest, file_path, json_mode)
+            {
+                return code;
+            }
+        }
         if let Err(e) = fs::write(&output_path, &out_bytes) {
             eprintln!("오류: 출력 쓰기 실패 - {}: {}", output_path, e);
             return EXIT_RUNTIME;
@@ -16346,7 +17525,7 @@ fn edit_replace_text(args: &[String]) -> i32 {
 
     if json_mode {
         let mut envelope = serde_json::json!({
-            "schemaVersion": "1.0",
+            "schemaVersion": ENVELOPE_SCHEMA_VERSION,
             "source": file_path,
             "find": find,
             "replace": replace,
@@ -16642,7 +17821,7 @@ fn edit_redact(args: &[String]) -> i32 {
             }
         }
         let mut envelope = serde_json::json!({
-            "schemaVersion": "1.0",
+            "schemaVersion": ENVELOPE_SCHEMA_VERSION,
             "source": file_path,
             "kinds": kinds.iter().map(|k| k.as_str()).collect::<Vec<_>>(),
             "mask": mask_char.to_string(),
@@ -17109,7 +18288,7 @@ fn edit_sanitize(args: &[String]) -> i32 {
 
     if json_mode {
         let envelope = serde_json::json!({
-            "schemaVersion": "1.0",
+            "schemaVersion": ENVELOPE_SCHEMA_VERSION,
             "source": file_path,
             "keepPreview": keep_preview,
             "removedCount": removed.len(),
@@ -17672,7 +18851,7 @@ fn edit_set_cell(args: &[String]) -> i32 {
 
     if json_mode {
         let mut envelope = serde_json::json!({
-            "schemaVersion": "1.0",
+            "schemaVersion": ENVELOPE_SCHEMA_VERSION,
             "source": file_path,
             "table": table_no,
             "row": row,
@@ -18101,7 +19280,7 @@ fn edit_insert_image(args: &[String]) -> i32 {
 
     if json_mode {
         let mut envelope = serde_json::json!({
-            "schemaVersion": "1.0",
+            "schemaVersion": ENVELOPE_SCHEMA_VERSION,
             "source": file_path,
             "image": image_path,
             "page": page_arg,
@@ -18350,7 +19529,7 @@ fn explain_json_value(
     );
     provenance::marked(
         serde_json::json!({
-            "schemaVersion": "1.0",
+            "schemaVersion": ENVELOPE_SCHEMA_VERSION,
             "source": file_path,
             "format": format_label,
             "pageCount": page_count,
@@ -18534,7 +19713,7 @@ fn inspect_hidden_text(args: &[String]) -> i32 {
 
     if json_mode {
         let envelope = serde_json::json!({
-            "schemaVersion": "1.0",
+            "schemaVersion": ENVELOPE_SCHEMA_VERSION,
             "source": file_path,
             "thresholdPt": opts.threshold_pt,
             "includeOffPage": opts.include_off_page,
@@ -18791,7 +19970,7 @@ fn inspect_unicode(args: &[String]) -> i32 {
     if json_mode {
         // 0건이면 findings: [] · clean: true — "검사했는데 깨끗함"과 "검사 안 함"은 다르다.
         let envelope = serde_json::json!({
-            "schemaVersion": "1.0",
+            "schemaVersion": ENVELOPE_SCHEMA_VERSION,
             "source": file_path,
             "kindFilter": kind_label,
             "scannedChars": scanned_chars,
@@ -18986,7 +20165,7 @@ fn inspect_injection(args: &[String]) -> i32 {
 
     if json_mode {
         let envelope = serde_json::json!({
-            "schemaVersion": "1.0",
+            "schemaVersion": ENVELOPE_SCHEMA_VERSION,
             "source": file_path,
             "minConfidence": min_confidence.label(),
             "includeFields": include_fields,
@@ -19047,9 +20226,16 @@ fn injection_scan_scopes(include_fields: bool) -> Vec<&'static str> {
         "endnote",
         "header",
         "footer",
+        "caption",
     ];
     if include_fields {
-        scopes.extend(["fieldName", "fieldGuide", "fieldCommand", "hiddenComment"]);
+        scopes.extend([
+            "fieldName",
+            "fieldGuide",
+            "fieldCommand",
+            "hiddenComment",
+            "fieldMemo",
+        ]);
     }
     scopes
 }
@@ -19145,7 +20331,7 @@ fn extract_thumbnail(args: &[String]) -> i32 {
     // [#3600] JSON 봉투 공통부 — 모드별로 output/base64/dataUri 만 달라진다.
     let envelope_base = |extra: serde_json::Value| {
         let mut v = serde_json::json!({
-            "schemaVersion": "1.0",
+            "schemaVersion": ENVELOPE_SCHEMA_VERSION,
             "source": input_path,
             "format": result.format,
             "mime": mime,
@@ -19231,8 +20417,9 @@ fn extract_thumbnail(args: &[String]) -> i32 {
 mod tests {
     use super::{
         allows_implicit_sibling_resources, cli_output_password, cli_password,
-        set_cli_output_password, set_cli_password, strip_global_auth_options,
-        tab_ext_semantic_differs, EXIT_USAGE,
+        collect_audit_capsules, replay_scratch_dir, set_cli_output_password, set_cli_password,
+        strip_global_auth_options, tab_ext_semantic_differs, with_replay_input_snapshot,
+        EXIT_USAGE,
     };
     use rhwp::parser::FileFormat;
 
@@ -19241,6 +20428,66 @@ mod tests {
         assert!(!allows_implicit_sibling_resources(FileFormat::Hml));
         assert!(allows_implicit_sibling_resources(FileFormat::Hwp));
         assert!(allows_implicit_sibling_resources(FileFormat::Hwpx));
+    }
+
+    #[test]
+    fn replay_engine_receives_the_hashed_input_snapshot() {
+        let original =
+            std::env::temp_dir().join(format!("rhwp-replay-original-{}.hwp", std::process::id()));
+        std::fs::write(&original, b"original bytes").expect("원본 작성");
+        let mut plan = serde_json::json!({ "input": original.to_string_lossy() });
+        let scratch = replay_scratch_dir("unit").expect("전용 임시 폴더");
+        let scratch_path = scratch.0.clone();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                std::fs::metadata(&scratch_path)
+                    .expect("전용 임시 폴더 metadata")
+                    .permissions()
+                    .mode()
+                    & 0o777,
+                0o700
+            );
+        }
+        let seen = with_replay_input_snapshot(
+            &mut plan,
+            b"hashed snapshot",
+            &scratch.0,
+            |snapshot_plan| {
+                std::fs::write(&original, b"changed after hashing").expect("원본 교체");
+                let snapshot_path = snapshot_plan["input"].as_str().expect("스냅샷 경로");
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    assert_eq!(
+                        std::fs::metadata(snapshot_path)
+                            .expect("입력 스냅샷 metadata")
+                            .permissions()
+                            .mode()
+                            & 0o777,
+                        0o600
+                    );
+                }
+                std::fs::read(snapshot_path).expect("스냅샷 읽기")
+            },
+        )
+        .expect("스냅샷 실행");
+        assert_eq!(seen, b"hashed snapshot");
+        assert_eq!(plan["input"], original.to_string_lossy().as_ref());
+        drop(scratch);
+        assert!(!scratch_path.exists(), "전용 임시 폴더는 RAII 정리");
+        let _ = std::fs::remove_file(original);
+    }
+
+    #[test]
+    fn audit_directory_entry_errors_are_not_silently_dropped() {
+        let entries: [std::io::Result<std::path::PathBuf>; 1] = [Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "denied",
+        ))];
+        let error = collect_audit_capsules(entries).expect_err("항목 오류는 fail-closed");
+        assert!(error.contains("폴더 항목 읽기 실패"));
     }
 
     #[test]

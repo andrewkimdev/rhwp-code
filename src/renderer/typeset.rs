@@ -14,7 +14,7 @@ use crate::model::header_footer::HeaderFooterApply;
 use crate::model::page::{ColumnDef, ColumnType, PageDef};
 use crate::model::paragraph::{ColumnBreakType, LineSeg, Paragraph};
 use crate::model::shape::CaptionDirection;
-use crate::renderer::composer::{compose_paragraph, ComposedParagraph};
+use crate::renderer::composer::{compose_paragraph, first_text_line, ComposedParagraph};
 use crate::renderer::float_placement::{
     horizontal_range, is_page_bottom_fixed_float, is_para_topbottom_float,
     native_empty_host_rowbreak_line_advance_hu, signed_hwpunit, FloatLaneSet,
@@ -2659,7 +2659,12 @@ fn is_stored_anchor_picture_table(table: &crate::model::table::Table) -> bool {
 /// 동작한다. 두 경로가 다른 표를 참조하면 행 수가 1 대 N으로 갈라져, 보이지
 /// 않는 래퍼 행 높이가 쪽 소비에 더해진다. `table_layout` 및
 /// `HeightMeasurer::measure_table_impl`의 unwrap 조건과 의도적으로 동일하다.
-fn row_geometry_table(table: &crate::model::table::Table) -> &crate::model::table::Table {
+///
+/// [Issue #4326] fallback `Paginator`(`pagination/engine.rs`)도 같은 unwrap 여부를
+/// `PageItem::PartialTable::row_cursor_is_nested`에 실어야 하므로 crate 내부에 공개한다.
+pub(crate) fn row_geometry_table(
+    table: &crate::model::table::Table,
+) -> &crate::model::table::Table {
     let mut effective = table;
     loop {
         if effective.row_count != 1 || effective.col_count != 1 || effective.cells.len() != 1 {
@@ -12154,6 +12159,7 @@ impl TypesetEngine {
                         start_cut,
                         end_cut,
                         is_block_split,
+                        row_cursor_is_nested,
                     } => lookup_local(*para_index).map(|l| PageItem::PartialTable {
                         para_index: l + 1,
                         control_index: *control_index,
@@ -12163,6 +12169,7 @@ impl TypesetEngine {
                         start_cut: start_cut.clone(),
                         end_cut: end_cut.clone(),
                         is_block_split: *is_block_split,
+                        row_cursor_is_nested: *row_cursor_is_nested,
                     }),
                     PageItem::Shape {
                         para_index,
@@ -13509,13 +13516,13 @@ impl TypesetEngine {
     ) -> f64 {
         use crate::renderer::layout::{layout_rect_to_bbox, LayoutEngine};
         use crate::renderer::page_layout::LayoutRect;
-        use crate::renderer::render_tree::{PageRenderTree, RenderNode, RenderNodeType};
+        use crate::renderer::render_tree::{LayoutFrame, RenderNode, RenderNodeType};
 
-        // 렌더 `layout_column_item` 의 FullParagraph 텍스트 경로 정합(layout.rs has_real_text):
-        // 실제 텍스트가 있는 para 는 **leading 컨트롤-전용 줄**(수식 객체마커 ￼ 등)을 건너뛰고
-        // `text_start_line` 부터 그린다. scratch 가 start_line=0 으로 그 줄을 포함하면 수식 다줄
-        // para 가 +수십px 과대 측정된다(sep20/20 pi=936: 127.7 vs 렌더 101.3). 객체-전용 para
-        // (TAC 그림 등)는 0 부터(렌더도 동일). Partial 은 항목 지정 줄 범위 그대로.
+        // 렌더 `layout_column_item` 의 FullParagraph 텍스트 경로 정합: 실제 텍스트가 있는 para 는
+        // **leading 컨트롤-전용 줄**(수식 객체마커 ￼ 등)을 건너뛰고 첫 텍스트 줄부터 그린다.
+        // `composer::first_text_line` 로 판정을 공유해(#4312) 재구현 divergence(sep20/20
+        // pi=936: 측정 127.7 vs 렌더 101.3)를 구조적으로 막는다. 객체-전용 para(TAC 그림 등)는
+        // 0 부터(렌더도 동일). Partial 은 항목 지정 줄 범위 그대로.
         let (start_line, end_line) = match item {
             PageItem::PartialParagraph {
                 start_line,
@@ -13528,15 +13535,7 @@ impl TypesetEngine {
                     .chars()
                     .any(|c| c > '\u{001F}' && c != '\u{FFFC}' && !c.is_whitespace());
                 let start = if has_real_text {
-                    item_composed
-                        .lines
-                        .iter()
-                        .position(|line| {
-                            line.runs
-                                .iter()
-                                .any(|r| r.text.chars().any(|c| c > '\u{001F}' && c != '\u{FFFC}'))
-                        })
-                        .unwrap_or(0)
+                    first_text_line(item_composed).unwrap_or(0)
                 } else {
                     0
                 };
@@ -13550,16 +13549,20 @@ impl TypesetEngine {
             width: en_col_w,
             height,
         };
+        // [#4277] 페이지네이션 측정은 paint 트리를 만들지 않는다 — 레이아웃 재귀가 실제로
+        // 쓰는 건 흐름 상태(id 카운터 + 인라인 Shape 레지스트리 + 페이지 기하)뿐이므로
+        // `LayoutFrame` 만 만든다. `col_node` 는 방출된 노드를 받는 sink 로만 쓰이고
+        // 높이만 읽은 뒤 버려진다.
         let scratch = LayoutEngine::new(self.dpi);
-        let mut tree = PageRenderTree::new(0, en_col_w, height);
-        let col_id = tree.next_id();
+        let mut frame = LayoutFrame::new(0, en_col_w, height);
+        let col_id = frame.next_id();
         let mut col_node = RenderNode::new(
             col_id,
             RenderNodeType::Column(0),
             layout_rect_to_bbox(&col_area),
         );
         let y_after = scratch.layout_partial_paragraph(
-            &mut tree,
+            &mut frame,
             &mut col_node,
             item_para,
             Some(item_composed),
@@ -20287,6 +20290,11 @@ impl TypesetEngine {
         let row_geometry_table = source.row_geometry_table;
         let mt = source.measured_table;
         let styles = source.styles;
+        // [Issue #4326] 이 continuation이 방출하는 모든 PartialTable의 start_row/end_row/
+        // start_cut/end_cut은 `row_geometry_table` 기준(투명 1×1 래퍼를 벗긴 표일 수
+        // 있다)이다. 렌더러가 `end_row <= table.row_count` 로 값을 되추론하던 것을,
+        // 결정 시점의 이 포인터 비교로 데이터화해 PageItem에 함께 싣는다.
+        let row_cursor_is_nested = !std::ptr::eq(row_geometry_table, table);
         // [#2424 프로파일] fragment 루프 하위 단계 누적 — closure 1회 = fragment 판정 1회.
         // 스캔 두 곳 외의 잔여(배치·각주 큐·커서 전진)는 total−scan−refit 로 산출한다.
         let issue2424_step_enabled =
@@ -20829,6 +20837,7 @@ impl TypesetEngine {
                         start_cut: continuation.start_cut.clone(),
                         end_cut: Vec::new(),
                         is_block_split: start_cut_is_block,
+                        row_cursor_is_nested,
                     });
                     // 마지막 fragment: spacing_after만 포함 (Paginator engine.rs:1051 동일)
                     // host line advance/positive offset은 원 anchor 조각의 계약이며,
@@ -20905,6 +20914,7 @@ impl TypesetEngine {
                 end_cut: split_end_cut.clone(),
                 // [Task #1025] 이번 분할이 블록 분할이거나 start_cut 이 이미 블록 인덱스.
                 is_block_split: split_block_start.is_some() || start_cut_is_block,
+                row_cursor_is_nested,
             });
             // [#2238] 중간 fragment 가시높이 부기 — used_height(flush 시 current_height)
             // 표시용. advance 직후 current_height 가 리셋되므로 흐름/기하 불변.
@@ -22808,6 +22818,7 @@ mod tests {
                 start_cut: Vec::new(),
                 end_cut: Vec::new(),
                 is_block_split: false,
+                row_cursor_is_nested: false,
             }]),
             page_with_items(vec![PageItem::PartialTable {
                 para_index: 7,
@@ -22818,6 +22829,7 @@ mod tests {
                 start_cut: Vec::new(),
                 end_cut: Vec::new(),
                 is_block_split: false,
+                row_cursor_is_nested: false,
             }]),
         ];
 

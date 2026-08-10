@@ -395,6 +395,16 @@ fn recipes() -> Vec<Recipe> {
     })
     .to_string();
 
+    // audit 캡슐 폴더 — 고의로 깨진 캡슐 1개. 실패 회계 봉투(failed[])가 문서
+    // 문자열 없이 캡슐 이름·사유만 실음을 실측으로 고정한다 (실패 존재 → exit 3).
+    let audit_dir = dir.join("prov-audit-capsules");
+    std::fs::create_dir_all(&audit_dir).expect("audit 캡슐 폴더");
+    std::fs::write(
+        audit_dir.join("broken.capsule.json"),
+        r#"{"kind":"notACapsule"}"#,
+    )
+    .expect("깨진 캡슐 픽스처");
+
     // search 질의어는 문서에서 뽑는다 — 매치가 0건이면 봉투가 비어 가드가 공허해진다.
     let main_oracle = oracle(&main);
     let query = main_oracle
@@ -799,6 +809,38 @@ fn recipes() -> Vec<Recipe> {
             stdin: None,
             exit: 0,
             ndjson: true,
+        },
+        Recipe {
+            // replay 영수증 — 봉투가 해시·카운트뿐(문서 문자열 없음)임을 실측으로 고정.
+            command: "replay",
+            doc: Some(table.clone()),
+            args: vec![s("replay"), s("--plan-json"), plan.clone(), s("--json")],
+            stdin: None,
+            exit: 0,
+            ndjson: false,
+        },
+        Recipe {
+            // audit 실패 회계 — 캡슐(호출자 산출물)만 읽고 문서 오라클이 없다(doc: None).
+            command: "audit",
+            doc: None,
+            args: vec![s("audit"), p(&audit_dir), s("--json")],
+            stdin: None,
+            exit: 3,
+            ndjson: false,
+        },
+        Recipe {
+            // lineage 깨진 머리 — kind 불일치 캡슐 하나로 valid:false 경로(exit 3)를
+            // 고정한다. 봉투는 경로·해시·판정뿐, 문서 오라클이 없다(doc: None).
+            command: "lineage",
+            doc: None,
+            args: vec![
+                s("lineage"),
+                p(&audit_dir.join("broken.capsule.json")),
+                s("--json"),
+            ],
+            stdin: None,
+            exit: 3,
+            ndjson: false,
         },
         Recipe {
             command: "run",

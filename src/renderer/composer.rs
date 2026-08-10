@@ -6,10 +6,11 @@
 
 use super::layout::{estimate_text_width, resolved_to_text_style};
 use super::style_resolver::{detect_lang_category, ResolvedStyleSet};
-use super::{px_to_hwpunit, TextStyle};
+use super::{hwpunit_to_px, px_to_hwpunit, TextStyle};
 use crate::model::control::Control;
 use crate::model::document::Section;
 use crate::model::paragraph::{CharShapeRef, LineSeg, Paragraph, SingleLineOverflowMemo};
+use crate::model::shape::Caption;
 
 /// 글자겹침(CharOverlap) 렌더링 정보
 #[derive(Debug, Clone, serde::Serialize)]
@@ -184,7 +185,7 @@ fn synthesize_marker_paragraph(para: &Paragraph) -> Option<Paragraph> {
     // 쉼표/고정탭/일반 글자가 한 줄에 섞인 문단은 [0,0,2,2,4] 같은 raw
     // position 자체가 편집자가 입력한 순서다. 여기에 \u{FFFC}를 재합성하면
     // TAC가 쉼표/탭 뒤로 밀려 순서가 깨진다.
-    let raw_positions = find_control_text_positions(para);
+    let raw_positions = para.control_text_positions();
     let raw_inline_positions: Vec<usize> = para
         .controls
         .iter()
@@ -340,6 +341,68 @@ pub fn compose_paragraph(para: &Paragraph) -> ComposedParagraph {
     convert_pua_display_text(&mut composed);
 
     composed
+}
+
+/// 컴포즈드 줄 목록에서 첫 "텍스트 포함 줄"(런에 텍스트 성격 문자가 있는 줄)의 인덱스.
+/// 실제 텍스트가 있는 문단은 leading 컨트롤-전용 줄(수식 객체마커 ￼ 등)을 건너뛰고 이
+/// 줄부터 그린다 — `LayoutEngine::layout_column_item`(실제 렌더)과
+/// `TypesetEngine::measure_endnote_para_advance`(측정 전용)가 이 판정을 공유한다.
+/// 종전엔 각자 재구현해 sep20/20(pi=936, 측정 127.7px vs 렌더 101.3px)에서 갈라졌다(#4312).
+pub(crate) fn first_text_line(composed: &ComposedParagraph) -> Option<usize> {
+    composed.lines.iter().position(|line| {
+        line.runs
+            .iter()
+            .any(|r| r.text.chars().any(|c| c > '\u{001F}' && c != '\u{FFFC}'))
+    })
+}
+
+/// 캡션(문단 목록)의 총 높이를 px 로 계산한다.
+///
+/// 렌더(`calculate_caption_height`)와 측정(`measure_caption`)이 각자 재구현하며 갈라졌던
+/// 산식을 통일한 것이다(#4320). 저장된 `line_segs` 는 한컴이 실제로 배치한 레이아웃 값이므로
+/// `compose_paragraph` 재계산 높이의 하한으로 쓴다 — `line_segs`가 있어도 폰트 대체 등으로
+/// 재계산 높이가 더 작게 나오면 실제보다 낮게 예약되어 다음 요소가 겹친다
+/// (`2d973021c`가 `samples/rowbreak-problem-pages.hwpx`에서 고친 오버랩이 이 경우다).
+/// `line_segs`가 비어 있으면(레이아웃 전/미저장 캡션) `compose_paragraph`로만 계산한다.
+pub fn caption_height_px(caption: &Option<Caption>, dpi: f64) -> f64 {
+    let caption = match caption {
+        Some(c) => c,
+        None => return 0.0,
+    };
+
+    if caption.paragraphs.is_empty() {
+        return 0.0;
+    }
+
+    // line_segs가 비어 컴포즈로 대체할 때 쓰는 기본 줄 높이(HWPUNIT).
+    const DEFAULT_LINE_HEIGHT_HWPUNIT: i32 = 400;
+
+    let mut line_seg_height = 0.0f64;
+    let mut composed_height = 0.0f64;
+    for para in &caption.paragraphs {
+        if let (Some(first), Some(last)) = (para.line_segs.first(), para.line_segs.last()) {
+            let para_top = first.vertical_pos.min(0);
+            let para_bottom = last.vertical_pos + last.line_height;
+            line_seg_height = line_seg_height.max(hwpunit_to_px(para_bottom - para_top, dpi));
+        }
+
+        let composed = compose_paragraph(para);
+        if composed.lines.is_empty() {
+            composed_height += hwpunit_to_px(DEFAULT_LINE_HEIGHT_HWPUNIT, dpi); // 기본 줄 높이
+        } else {
+            for (i, line) in composed.lines.iter().enumerate() {
+                let line_h = hwpunit_to_px(line.line_height, dpi);
+                let spacing = if i < composed.lines.len() - 1 {
+                    hwpunit_to_px(line.line_spacing, dpi)
+                } else {
+                    0.0 // 마지막 줄은 line_spacing 제외
+                };
+                composed_height += line_h + spacing;
+            }
+        }
+    }
+
+    line_seg_height.max(composed_height)
 }
 
 /// Hanyang-PUA 옛한글 코드포인트·한컴 PUA와 legacy 제품명을 렌더링용 텍스트로 변환한다.
@@ -791,6 +854,30 @@ fn effective_line_seg_count(para: &Paragraph) -> usize {
     }
 }
 
+/// [#4384 조사] 이 문단 텍스트 리터럴을 IR 속성 판정으로 일반화할 수 있는지 조사했으나
+/// 안전하게 일반화할 신호를 찾지 못했다 — 아래는 기각한 가설과 근거다.
+///
+/// 1. **LINE_SEG tag bit 17/18(첫/마지막 세그먼트)**: `hwp3-sample16-hwp5-2022.hwp`
+///    p83 실측 — 두 LINE_SEG 모두 `tag=0x00060000`/`0x00160000`으로 bit17+18
+///    (`LineSeg::TAG_SINGLE_SEGMENT_LINE`)을 함께 켜고 있다. 즉 한컴 인코더 자신도
+///    이 둘을 "한 줄이 세그먼트 2개로 쪼개진 것"이 아니라 "완결된 줄 2개"로
+///    표시했다 — 세그먼트 비트로는 이 문서조차 구분되지 않는다.
+/// 2. **bit 20(indentation 적용) 차이**: 유일하게 다른 비트가 bit20(ls[1]에만 설정)
+///    이다. 그러나 이 문단의 ParaShape는 `indent=-5000`(내어쓰기, 번호/글머리
+///    스타일)이고, bit20은 내어쓰기 문단의 "이어지는 줄"에 일반적으로 켜지는
+///    비트라 — 이 신호로 판정하면 내어쓰기 문단의 정상적인 2번째 줄 전부가
+///    (합쳐지면 안 되는데도) 접혀버린다. 오탐 범위가 이 문서 하나가 아니라
+///    "내어쓰기 문단 + 짧은 마지막 줄" 전체로 넓어진다.
+/// 3. **"마지막 줄이 짧다"는 기하 조건 단독**: 문단이 줄바꿈 후 마지막 줄에 단어
+///    1~2개만 남는 것은 지극히 흔한 정상 조판 결과다(orphan/widow 자체가 아니라
+///    그냥 마지막 줄). 이 조건만으로 접으면 정상적으로 2줄이어야 하는 문단들을
+///    광범위하게 회귀시킨다.
+///
+/// 즉 이 오프셋/피치 조건은 이미 `hwp3-sample16-hwp5-2022.hwp` 문서 안에서도
+/// "정상적인 마지막 짧은 줄"과 "한컴이 인코딩은 2줄로 했지만 실제로는 1줄로
+/// 그리는 이 특정 문단"을 IR 필드만으로 구분하지 못한다 — 텍스트 리터럴이 사실상
+/// 유일하게 안전한 좁힘 조건이다. 회귀 fixture: `tests/issue_1116.rs`
+/// (`sample16_hwp5_2022_page3_bcp_tail_paragraph_folds_orphan_lineseg` 등).
 fn is_sample16_2022_bcp_orphan_tail_lineseg(para: &Paragraph) -> bool {
     if para.line_segs.len() != 2 {
         return false;
@@ -1129,12 +1216,6 @@ fn identify_inline_controls(para: &Paragraph) -> Vec<InlineControl> {
     result
 }
 
-/// char_offsets 갭을 분석하여 각 컨트롤의 텍스트 내 삽입 위치를 결정한다.
-/// → document_core::helpers::find_control_text_positions 으로 위임
-fn find_control_text_positions(para: &Paragraph) -> Vec<usize> {
-    crate::document_core::find_control_text_positions(para)
-}
-
 fn is_render_inline_control(ctrl: &Control) -> bool {
     match ctrl {
         Control::Picture(pic) => pic.common.treat_as_char,
@@ -1159,7 +1240,7 @@ fn find_render_inline_control_positions(para: &Paragraph) -> Vec<usize> {
         return positions;
     }
 
-    find_control_text_positions(para)
+    para.control_text_positions()
 }
 
 /// CharOverlap 컨트롤의 글자를 조합된 텍스트에 올바른 위치로 삽입한다.
@@ -1186,7 +1267,7 @@ fn inject_char_overlap_text(composed: &mut ComposedParagraph, para: &Paragraph) 
     }
 
     // 모든 컨트롤의 텍스트 위치 결정
-    let control_positions = find_control_text_positions(para);
+    let control_positions = para.control_text_positions();
 
     // CharOverlap별 (텍스트위치, 런) 수집
     let mut insertions: Vec<(usize, ComposedTextRun)> = Vec::new();

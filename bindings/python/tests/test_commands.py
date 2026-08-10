@@ -142,6 +142,38 @@ def test_capabilities_mcp_flag(captured: List[List[Any]]) -> None:
     assert _as_strings(captured[1]) == ["capabilities", "--mcp"]
 
 
+def test_replay_audit_and_lineage_build_commands(captured: List[List[Any]]) -> None:
+    rhwp.replay({"input": "a.hwp", "output": "b.hwp"}, expect_output_sha256="a" * 64)
+    rhwp.replay("plan.json")
+    rhwp.audit("capsules")
+    rhwp.lineage("head.capsule.json", deep=True)
+
+    replay_json = json.loads(str(captured[0][2]))
+    assert replay_json == {"input": "a.hwp", "output": "b.hwp"}
+    assert _as_strings(captured[0][:2]) == ["replay", "--plan-json"]
+    assert _as_strings(captured[0][3:]) == ["--expect-output-sha256", "a" * 64, "--json"]
+    assert _as_strings(captured[1]) == ["replay", "plan.json", "--json"]
+    assert _as_strings(captured[2]) == ["audit", "capsules", "--json"]
+    assert _as_strings(captured[3]) == ["lineage", "head.capsule.json", "--deep", "--json"]
+
+
+def test_replay_audit_and_lineage_forward_verdict_option(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen: List[Dict[str, Any]] = []
+
+    def fake_run_json(args, **kwargs):  # type: ignore[no-untyped-def]
+        seen.append({"args": list(args), **kwargs})
+        return {"schemaVersion": "1.0"}
+
+    monkeypatch.setattr(rhwp.commands, "run_json", fake_run_json)
+    rhwp.replay("plan.json", raise_on_verdict=True)
+    rhwp.audit("capsules", raise_on_verdict=True)
+    rhwp.lineage("head.capsule.json", raise_on_verdict=True)
+
+    assert [call["raise_on_verdict"] for call in seen] == [True, True, True]
+
+
 def test_export_provenance_map_builds_command(captured: List[List[Any]]) -> None:
     rhwp.export_provenance_map()
     assert _as_strings(captured[0]) == ["export-provenance-map", "--json"]

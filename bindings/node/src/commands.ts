@@ -778,6 +778,91 @@ export async function verify(path: PathLike, options: VerifyOptions = {}): Promi
   return call(args, options);
 }
 
+/** {@link replay} 옵션. */
+export interface ReplayOptions extends CommandOptions {
+  /**
+   * 검증 모드 — 주장된 산출의 SHA-256(64자리 16진).
+   *
+   * 재현 산출과 다르면 exit 3 · `reproduced: false`.
+   */
+  readonly expectOutputSha256?: string | undefined;
+  /**
+   * 재현 실패(exit 3)를 예외로 올릴지.
+   *
+   * 기본은 거짓 — 판정은 봉투(`reproduced`)로 읽는 것이 이 바인딩의 규약이다.
+   */
+  readonly throwOnVerdict?: boolean | undefined;
+}
+
+/**
+ * [#4391] 작업 영수증 — 계획을 **임시 산출**로 재실행해 (입력·계획·산출) SHA-256
+ * 3종 영수증을 발급(attest)하고, `expectOutputSha256` 을 주면 타인의 작업 주장을
+ * 재현 검증한다(verify — 불일치 exit 3, `reproduced: false`). 사용자 파일은
+ * 건드리지 않는다(계획의 `output` 은 임시 경로로 대체).
+ *
+ * @param plan - `run` 과 같은 계획서 객체, 또는 계획서 JSON 파일 경로.
+ */
+export async function replay(
+  plan: Readonly<Record<string, unknown>> | PathLike,
+  options: ReplayOptions = {},
+): Promise<Envelope> {
+  const args: Argument[] =
+    typeof plan === 'string'
+      ? ['replay', plan]
+      : ['replay', '--plan-json', JSON.stringify(plan)];
+  flag(args, '--expect-output-sha256', options.expectOutputSha256);
+  args.push('--json');
+  return call(args, options);
+}
+
+/** {@link audit} 옵션. */
+export interface AuditOptions extends CommandOptions {
+  /**
+   * 재현 실패(exit 3)를 예외로 올릴지.
+   *
+   * 기본은 거짓 — 회계는 봉투(`failed`·`reproducedRate`)로 읽는 것이 이 바인딩의 규약이다.
+   */
+  readonly throwOnVerdict?: boolean | undefined;
+}
+
+/**
+ * [#4393] 에이전트 노동 감사 — 작업 캡슐(`*.capsule.json`) 폴더를 전수 재실행해
+ * 재현율을 회계한다. 재현되지 않은 캡슐이 하나라도 있으면 exit 3 ·
+ * `failed` 에 캡슐별 사유가 남는다.
+ *
+ * @param root - 캡슐 폴더 경로. `*.capsule.json` 이 0개면 CLI 가 사용법 오류(exit 2)를 낸다.
+ */
+export async function audit(root: PathLike, options: AuditOptions = {}): Promise<Envelope> {
+  const args: Argument[] = ['audit', root, '--json'];
+  return call(args, options);
+}
+
+/** {@link lineage} 옵션. */
+export interface LineageOptions extends CommandOptions {
+  /** 링크마다 재실행 재현(`reproduced`)까지 판정할지 — 링크 수만큼 재실행 비용이 든다. */
+  readonly deep?: boolean | undefined;
+  /**
+   * 깨진 계보(exit 3)를 예외로 올릴지.
+   *
+   * 기본은 거짓 — 판정은 봉투(`valid`·`brokenAt`·`links[]`)로 읽는 것이 이 바인딩의 규약이다.
+   */
+  readonly throwOnVerdict?: boolean | undefined;
+}
+
+/**
+ * [#4401] 작업 계보 — 캡슐 해시 체인을 머리부터 거슬러 검증한다. 링크마다
+ * 부모 파일 무결(`parentOk`)과 계보 불변식(부모 산출 해시 == 자식 입력 해시,
+ * `lineageOk`)을 판정하고, `deep` 이면 재실행 재현(`reproduced`)까지 본다.
+ * 깨진 체인은 exit 3 · `brokenAt` 이 어느 링크인지 가리킨다.
+ *
+ * @param head - 체인의 머리(최신) 캡슐 경로. 없으면 CLI 가 실행 오류(exit 1)를 낸다.
+ */
+export async function lineage(head: PathLike, options: LineageOptions = {}): Promise<Envelope> {
+  const args: Argument[] = ['lineage', head, '--json'];
+  if (options.deep) args.push('--deep');
+  return call(args, options);
+}
+
 // ── 편집 ──────────────────────────────────────────────────────────────────
 
 /**
