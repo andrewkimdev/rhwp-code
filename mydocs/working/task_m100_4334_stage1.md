@@ -328,3 +328,24 @@ f6518ca21f4cdf1b2490d54bdf24f920
 
 **결론: 겹침 개체가 있는 738페이지에서 시각 회귀 0건, 정렬 순서 변화 1건이며 그 1건은 이 이슈가
 의도한 방향(카운터 → 문서 위치)의 변화다.**
+
+
+## 후속 이슈 (2026-08-11)
+
+이 작업에서 발견했지만 범위 밖이라 손대지 않은 것을 전부 이슈로 분리했다.
+
+- **[#4521](https://github.com/edwardkim/rhwp/issues/4521)** — `doc_path_for_node` 에
+  `TextLine` arm 이 없어 paper 층위 줄이 빈 경로를 받고 언제나 가라앉는다. 738쪽 중
+  유일하게 달라진 `samples/aift.hwp` 24쪽의 원인이다(래스터는 동일). 2원소 경로를 주면
+  같은 문단 컨트롤 경로의 진접두사가 되어 "줄은 컨트롤 아래"라는 새 의미 규칙이 생기므로
+  배관이 아니라 결정이 필요하다. `walk_controls` 래칫이 쓰는 근사 판정도 함께 걸었다.
+- **[#4522](https://github.com/edwardkim/rhwp/issues/4522)** — `svg.rs:253`
+  `node_z_sort_key` 가 세 번째 정렬 키 구현으로 남아 있고, 이번 변경으로 `paper_node_sort_key`
+  와 **의미가 갈라졌다**(패킹 u32 대 문서 경로). 종전에는 중복이되 일치했다.
+- **[#4523](https://github.com/edwardkim/rhwp/issues/4523)** — `doc_path_single_cell_level`
+  이 같은 타입 `Option<usize>` 6개를 받고(호출부 5곳은 전부 올바름을 확인),
+  `unwrap_or(0)` 근사가 이중 중첩 Rectangle/Line/Ellipse/Path/Equation 의 경로를 뭉갤 수
+  있다. `node.id` 폴백을 없앴으므로 그 경우 동률을 깨는 것이 없다.
+- **[#4524](https://github.com/edwardkim/rhwp/issues/4524)** — `controlTopKey(ctrl: any)`
+  가 `stableIndex: number[]` 계약을 무력화한다. 오늘 두 계약이 섞이는 경로는 없지만,
+  섞이면 던지지 않고 조용히 전부 동률이 된다.
