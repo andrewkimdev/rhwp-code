@@ -87,7 +87,7 @@ macOS에서 통합 테스트 바이너리별 release LTO 링크가 오래 걸릴
 
 ```bash
 cargo test --release --lib
-CARGO_INCREMENTAL=0 cargo nextest run \
+cargo nextest run \
   --cargo-profile release-test \
   --target-dir target/pr-review \
   --tests --test-threads 12 --no-fail-fast

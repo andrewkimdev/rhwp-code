@@ -307,7 +307,7 @@ git fetch upstream
 git switch devel
 git merge --ff-only upstream/devel
 cargo build
-CARGO_INCREMENTAL=0 cargo nextest run \
+cargo nextest run \
   --cargo-profile release-test \
   --target-dir target/pr-review \
   --tests --test-threads 12 --no-fail-fast

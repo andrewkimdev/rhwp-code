@@ -11,9 +11,8 @@ last_verified: 2026-08-09
 PR별 review 문서에 남긴다. 같은 checkout·target·Cargo cache를 공유하는 Cargo 계열 명령은
 **반드시 하나가 끝난 뒤 다음 명령을 실행**한다.
 
-모든 PR review Cargo 실행에는 CARGO_INCREMENTAL=0을 사용한다. 이전 review의 debug incremental 비대화가
-검증 시간과 디스크 상태를 왜곡하지 않게 하기 위함이다. 다만 Cargo의 일반 컴파일 산출물까지 매번 버릴
-이유는 없으므로, 전체 회귀는 host마다 고정한 `target/pr-review`를 재사용한다. Cargo가 소스·feature·compiler
+모든 PR review Cargo 실행은 기본 증분 빌드를 사용한다. 전체 회귀는 host마다 고정한
+`target/pr-review`를 재사용해 이전 review의 debug/release 산출물과 분리한다. Cargo가 소스·feature·compiler
 변경을 판별해 필요한 unit만 다시 빌드한다.
 
 `target/pr-review`는 **이동하거나 이름을 바꾸지 않는다**. 일부 통합 테스트의 `CARGO_BIN_EXE_*` fallback은
@@ -35,7 +34,7 @@ pgrep -alf '(^|/)(cargo|rustc|wasm-pack)( |$)' || true
 앞 명령의 종료를 확인한 뒤 실행한다.
 
 ~~~bash
-CARGO_INCREMENTAL=0 cargo nextest run \
+cargo nextest run \
   --cargo-profile release-test \
   --target-dir target/pr-review \
   --tests --test-threads 12 --no-fail-fast
@@ -183,21 +182,21 @@ merge 판단에서는 다음 경계를 적용한다.
 일반 Rust 검증 예시는 다음과 같다. 명령은 같은 checkout에서 동시에 실행하지 않는다.
 
 ~~~bash
-CARGO_INCREMENTAL=0 cargo nextest run \
+cargo nextest run \
   --cargo-profile release-test \
   --target-dir target/pr-review \
   --tests --test-threads 12 --no-fail-fast
-CARGO_INCREMENTAL=0 cargo fmt --check
-CARGO_INCREMENTAL=0 cargo clippy --all-targets -- -D warnings
+cargo fmt --check
+cargo clippy --all-targets -- -D warnings
 ~~~
 
 renderer 영향 PR의 Native Skia 공식 회귀 범위는 다음 3종이다.
 
 ~~~bash
-CARGO_INCREMENTAL=0 cargo test --profile release-test --features native-skia skia --lib
-CARGO_INCREMENTAL=0 cargo test --profile release-test --features native-skia --test issue_2225_missing_picture_placeholder
-CARGO_INCREMENTAL=0 cargo test --profile release-test --features native-skia --test render_p37_direct_pdf_export
-CARGO_INCREMENTAL=0 wasm-pack build --target web --out-dir pkg
+cargo test --profile release-test --features native-skia skia --lib
+cargo test --profile release-test --features native-skia --test issue_2225_missing_picture_placeholder
+cargo test --profile release-test --features native-skia --test render_p37_direct_pdf_export
+wasm-pack build --target web --out-dir pkg
 ~~~
 
 ## 4.3.1 새 HWP/HWPX fixture의 baseline 등록 — IR sweep + overflow-cell 원장
@@ -207,7 +206,7 @@ draft 해제 전에 **두 baseline 절차**를 수행한다: ① IR field sweep(
 
 ~~~bash
 RHWP_IR_SWEEP_DUMP=/tmp/ir_field_sweep_current.tsv \
-  CARGO_INCREMENTAL=0 cargo test --profile release-test \
+  cargo test --profile release-test \
   --test ir_field_sweep_baseline -- --nocapture
 diff -u tests/fixtures/ir_field_sweep_baseline.tsv /tmp/ir_field_sweep_current.tsv
 ~~~
@@ -227,7 +226,7 @@ diff -u tests/fixtures/ir_field_sweep_baseline.tsv /tmp/ir_field_sweep_current.t
 
 ~~~bash
 RHWP_OVERFLOW_CELL_DUMP=/tmp/overflow_cell_current.tsv \
-  CARGO_INCREMENTAL=0 cargo test --profile release-test \
+  cargo test --profile release-test \
   --test overflow_cell_baseline -- --nocapture
 diff -u tests/fixtures/overflow_cell_baseline.tsv /tmp/overflow_cell_current.tsv
 ~~~
@@ -255,7 +254,7 @@ iframe RPC 완료 시점이나 기본 옵션이 바뀌면 fresh WASM build와 �
 embed E2E를 추가한다. 기본값 변경은 옵션을 생략한 smoke에서도 loadFile 완료와 페이지 수를 기록한다.
 
 ~~~bash
-CARGO_INCREMENTAL=0 wasm-pack build --target web --out-dir pkg
+wasm-pack build --target web --out-dir pkg
 VITE_URL=http://127.0.0.1:7700 npm --prefix rhwp-studio run e2e:embed
 ~~~
 
@@ -263,22 +262,22 @@ VITE_URL=http://127.0.0.1:7700 npm --prefix rhwp-studio run e2e:embed
 diff check, clippy, doc test, TypeScript, npm test, wasm-pack을 이 순서로 실행한다.
 
 ~~~bash
-CARGO_INCREMENTAL=0 cargo build --release
-CARGO_INCREMENTAL=0 cargo test --release --lib
-CARGO_INCREMENTAL=0 cargo nextest run \
+cargo build --release
+cargo test --release --lib
+cargo nextest run \
   --cargo-profile release-test \
   --target-dir target/pr-review \
   --tests --test-threads 12 --no-fail-fast
-CARGO_INCREMENTAL=0 cargo test --profile release-test --features native-skia skia --lib
-CARGO_INCREMENTAL=0 cargo test --profile release-test --features native-skia --test issue_2225_missing_picture_placeholder
-CARGO_INCREMENTAL=0 cargo test --profile release-test --features native-skia --test render_p37_direct_pdf_export
-CARGO_INCREMENTAL=0 cargo fmt --check
+cargo test --profile release-test --features native-skia skia --lib
+cargo test --profile release-test --features native-skia --test issue_2225_missing_picture_placeholder
+cargo test --profile release-test --features native-skia --test render_p37_direct_pdf_export
+cargo fmt --check
 git diff --check
-CARGO_INCREMENTAL=0 cargo clippy --all-targets -- -D warnings
-CARGO_INCREMENTAL=0 cargo test --doc
+cargo clippy --all-targets -- -D warnings
+cargo test --doc
 (cd rhwp-studio && npx tsc --noEmit)
 npm --prefix rhwp-studio test
-CARGO_INCREMENTAL=0 wasm-pack build --target web --out-dir pkg
+wasm-pack build --target web --out-dir pkg
 ~~~
 
 각 명령은 앞 명령이 끝난 뒤 실행한다. 실패하면 뒤 명령으로 건너뛰어 전체 통과처럼 기록하지 않는다.
@@ -287,9 +286,9 @@ svg_snapshot은 release-test 전체에 포함된다. 렌더 영향 PR에서 gold
 확인할 때만 다음을 추가한다. golden은 원 PR merge 전에 별도 commit으로 반영하고 최신 CI를 다시 확인한다.
 
 ~~~bash
-CARGO_INCREMENTAL=0 cargo test --test svg_snapshot
-UPDATE_GOLDEN=1 CARGO_INCREMENTAL=0 cargo test --test svg_snapshot
-CARGO_INCREMENTAL=0 cargo test --test svg_snapshot
+cargo test --test svg_snapshot
+UPDATE_GOLDEN=1 cargo test --test svg_snapshot
+cargo test --test svg_snapshot
 git add tests/golden_svg/
 git commit -m "test(svg_snapshot): regenerate golden after #N (...)"
 # 작업지시자 push 승인 뒤

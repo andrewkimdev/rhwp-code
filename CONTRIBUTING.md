@@ -111,7 +111,7 @@ HWP 파일이 한컴과 다르게 렌더링되면 알려주세요:
 ```bash
 cargo install cargo-nextest --locked             # 최초 1회
 cargo fmt --all -- --check                       # 포맷 정책 준수
-CARGO_INCREMENTAL=0 cargo nextest run \
+cargo nextest run \
   --cargo-profile release-test \
   --target-dir target/pr-review \
   --tests --test-threads 12 --no-fail-fast       # 통합 테스트 포함 전체
