@@ -2937,10 +2937,21 @@ impl DocumentCore {
         fn collect_controls(node: &RenderNode, controls: &mut Vec<String>) {
             // [Task #1280 v2] 컨트롤별 plane/zOrder/stableIndex 노출 — 렌더 정렬키
             // `paper_node_sort_key`(layout.rs)를 그대로 재사용해 프런트 히트테스트가
-            // 겹침 시 "최상단 개체"를 선택할 수 있게 한다. inline(layer=None) 노드는
-            // (plane=2, z=0, stable=node.id) 폴백으로 렌더 정렬과 동일.
-            let (plane, z_order, stable_index) =
+            // 겹침 시 "최상단 개체"를 선택할 수 있게 한다.
+            // [#4334] stableIndex 는 더 이상 스칼라가 아니다 — next_id() 카운터/패킹된
+            // u32 대신 문서 경로(정수 배열, `DocPath`)를 그대로 JSON 배열로 내보낸다.
+            // TS `controlTopKey`/`isAboveControl`(input-handler-picture.ts)가 사전식
+            // 배열 비교로 이미 갱신되어 있다.
+            let (plane, z_order, doc_path) =
                 crate::renderer::layout::LayoutEngine::paper_node_sort_key(node);
+            let stable_index = format!(
+                "[{}]",
+                doc_path
+                    .iter()
+                    .map(u32::to_string)
+                    .collect::<Vec<_>>()
+                    .join(",")
+            );
             // wrap 은 이미지뿐 아니라 shape/line/group/path 에도 노출(히트테스트 plane/wrap 일관성).
             // 이미지는 자체 wrap_str(image_node.text_wrap)을 방출하므로 중복 방지로 제외한다.
             let wrap_extra = if matches!(node.node_type, RenderNodeType::Image(_)) {

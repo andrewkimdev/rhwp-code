@@ -2602,6 +2602,8 @@ impl LayoutEngine {
                 section_index: Some(section_index),
                 para_index: table_meta.map(|(pi, _)| pi),
                 control_index: table_meta.map(|(_, ci)| ci),
+                // [#4334] 셀 안에 중첩된 표(nested table)의 문서 경로 — 최외곽 표는 None.
+                cell_context: enclosing_cell_ctx.clone(),
             }),
             BoundingBox::new(table_x, table_y, table_width, table_height),
         );
@@ -5377,6 +5379,11 @@ impl LayoutEngine {
                             });
                             new_ctx
                         });
+                        // [#4334] 아래 재귀 `layout_table` 호출 두 곳이 `table_meta: None`
+                        // 을 넘겨 TableNode.para_index/control_index 가 항상 비었다 —
+                        // 방금 확장한 `nested_ctx` 에서 이 중첩 표 자신의 좌표를 읽는다.
+                        let derived_table_meta =
+                            nested_ctx.as_ref().and_then(CellContext::nested_table_meta);
                         if is_tac_table {
                             // TAC 표: inline_x를 사용하여 수평 배치
                             // [Task #573] layout_composed_paragraph 의 run_tacs 가
@@ -5469,7 +5476,7 @@ impl LayoutEngine {
                                     bin_data_content,
                                     None,
                                     depth + 1,
-                                    None,
+                                    derived_table_meta,
                                     para_alignment,
                                     nested_ctx,
                                     0.0,
@@ -5625,7 +5632,7 @@ impl LayoutEngine {
                                 bin_data_content,
                                 None,
                                 depth + 1,
-                                None,
+                                derived_table_meta,
                                 para_alignment,
                                 nested_ctx,
                                 0.0,
