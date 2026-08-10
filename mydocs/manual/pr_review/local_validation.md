@@ -183,7 +183,10 @@ merge 판단에서는 다음 경계를 적용한다.
 일반 Rust 검증 예시는 다음과 같다. 명령은 같은 checkout에서 동시에 실행하지 않는다.
 
 ~~~bash
-CARGO_INCREMENTAL=0 cargo test --profile release-test --tests
+CARGO_INCREMENTAL=0 cargo nextest run \
+  --cargo-profile release-test \
+  --target-dir target/pr-review \
+  --tests --test-threads 12 --no-fail-fast
 CARGO_INCREMENTAL=0 cargo fmt --check
 CARGO_INCREMENTAL=0 cargo clippy --all-targets -- -D warnings
 ~~~
@@ -214,7 +217,7 @@ diff -u tests/fixtures/ir_field_sweep_baseline.tsv /tmp/ir_field_sweep_current.t
   lane, 상대경로, 필드경로, 실측 건수를 사전순 TSV 행으로 추가한다.
 - 원인을 모르는 증가분을 baseline으로 숨기지 않는다.
 - TSV 행을 추가하면 fixture 경로·SHA-256·lane·필드·건수·상세 값 변화·판정 근거를 review 문서에 적는다.
-- 마지막으로 CARGO_INCREMENTAL=0 cargo test --profile release-test --tests가 통과해야 한다.
+- 마지막으로 이 문서 상단의 `release-test` 전체 `cargo nextest run`이 통과해야 한다.
 
 ### overflow-cell 원장 (#3668)
 
@@ -262,7 +265,10 @@ diff check, clippy, doc test, TypeScript, npm test, wasm-pack을 이 순서로 �
 ~~~bash
 CARGO_INCREMENTAL=0 cargo build --release
 CARGO_INCREMENTAL=0 cargo test --release --lib
-CARGO_INCREMENTAL=0 cargo test --profile release-test --tests
+CARGO_INCREMENTAL=0 cargo nextest run \
+  --cargo-profile release-test \
+  --target-dir target/pr-review \
+  --tests --test-threads 12 --no-fail-fast
 CARGO_INCREMENTAL=0 cargo test --profile release-test --features native-skia skia --lib
 CARGO_INCREMENTAL=0 cargo test --profile release-test --features native-skia --test issue_2225_missing_picture_placeholder
 CARGO_INCREMENTAL=0 cargo test --profile release-test --features native-skia --test render_p37_direct_pdf_export

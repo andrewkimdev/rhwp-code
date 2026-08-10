@@ -109,14 +109,19 @@ HWP 파일이 한컴과 다르게 렌더링되면 알려주세요:
 ### PR 전 체크리스트
 
 ```bash
-cargo fmt --all -- --check                   # 포맷 정책 준수
-cargo test --profile release-test --tests    # 통합 테스트 포함 전체 (3,400+)
-cargo clippy -- -D warnings                  # 린트 경고 0건
+cargo install cargo-nextest --locked             # 최초 1회
+cargo fmt --all -- --check                       # 포맷 정책 준수
+CARGO_INCREMENTAL=0 cargo nextest run \
+  --cargo-profile release-test \
+  --target-dir target/pr-review \
+  --tests --test-threads 12 --no-fail-fast       # 통합 테스트 포함 전체
+cargo clippy -- -D warnings                      # 린트 경고 0건
 ```
 
 세 명령이 모두 통과하는지 확인한 후 PR을 생성해주세요.
 
-- `release-test` 프로필은 CI와 같은 기준이며 debug 대비 수 배 빠릅니다.
+- `release-test` 프로필은 PR CI와 같은 기준이며 debug 대비 수 배 빠릅니다.
+- 논리 CPU가 12개 미만이거나 메모리가 부족하면 `--test-threads`를 논리 CPU 이하로 낮춰주세요.
 - `cargo test --lib` 만으로는 통합 테스트 회귀를 잡지 못합니다 — `--tests` 를 포함해주세요.
 
 ### 성능 검증 책임
@@ -182,7 +187,7 @@ cargo fmt --all -- --check       # CI와 같은 포맷 검증
 신뢰할 수 있는 검증 기준 (우선순위):
 
 1. **결정적 자동 검증** (필수):
-   - `cargo test --profile release-test --tests` (통합 테스트 포함, 회귀 0)
+   - 위 PR 전 체크리스트의 `cargo nextest run` (통합 테스트 포함, 회귀 0)
    - `cargo test --test svg_snapshot` (rhwp 자체 일관성)
    - `cargo clippy -- -D warnings`
 
