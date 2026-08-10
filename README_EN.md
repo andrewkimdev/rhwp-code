@@ -47,9 +47,12 @@ rhwp changes that. Built with Rust and compiled to WebAssembly, it renders HWP d
 
 Build the skeleton solo, grow the muscle together, complete it as a public good.
 
-The current phase is **v0.8.2 — systematizing the v1.0 typesetting engine**. The single
-[project roadmap](ROADMAP.md) explains what each version aims to achieve, how completion is judged, and where
-the detailed AI-agent roadmap fits. It is maintained in Korean as the source of truth.
+The project is currently **v0.8.2 — systematizing the v1.0 typesetting engine** while also
+growing its v2.0 collaboration foundation with more than 40 external contributors and two
+collaborators. The single [project roadmap](ROADMAP.md) explains what each version aims to achieve,
+how overlapping work is tracked, how completion is judged, and where the detailed AI-agent roadmap
+fits. It also defines which work belongs in the rhwp upstream and which product-specific work should
+grow in downstream projects. It is maintained in Korean as the source of truth.
 
 ## Current Milestone
 
