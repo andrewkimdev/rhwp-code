@@ -142,6 +142,7 @@ export {
 // ── 1층: 무상태 명령 ────────────────────────────────────────────────────────
 
 export {
+  audit,
   batch,
   buildFromIngest,
   capabilities,
@@ -171,8 +172,10 @@ export {
   info,
   inspect,
   irDiff,
+  lineage,
   renderDiff,
   replaceText,
+  replay,
   scan,
   search,
   setCell,
@@ -180,6 +183,7 @@ export {
   thumbnail,
   verify,
   type AgentManifestOptions,
+  type AuditOptions,
   type BatchOptions,
   type BuildFromIngestOptions,
   type CapabilitiesOptions,
@@ -203,6 +207,7 @@ export {
   type InspectUnicodeOptions,
   type IrDiffOptions,
   type IrSchemaOptions,
+  type LineageOptions,
   type OntologyOptions,
   type OutputOptions,
   type PagedOutputOptions,
@@ -212,6 +217,7 @@ export {
   type RenderDiffOptions,
   type RenderProfile,
   type ReplaceTextOptions,
+  type ReplayOptions,
   type RoundtripVia,
   type ScanOptions,
   type SearchOptions,

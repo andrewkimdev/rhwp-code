@@ -40,6 +40,8 @@
 
 use serde_json::{json, Value};
 
+use crate::schema_registry::ENVELOPE_SCHEMA_VERSION;
+
 /// 문서 파생 필드 하나의 선언.
 pub struct UntrustedField {
     /// 봉투 안의 경로. `.` 는 객체 하위, `[]` 는 배열 원소 전개를 뜻한다.
@@ -296,6 +298,28 @@ pub const MAP: &[CommandProvenance] = &[
             ),
         ],
         note: "input·output·steps[].find 는 계획서(호출자)가 준 값이다.",
+    },
+    CommandProvenance {
+        command: "replay",
+        untrusted: NONE,
+        note: "영수증 봉투는 해시(inputSha256·planSha256·outputSha256)·모드·step 수·\
+               도구 버전·재현 판정뿐이다 — run 과 달리 저널을 싣지 않아 문서 문자열이 \
+               나갈 자리가 없다. input 경로와 expectedOutputSha256 은 계획서(호출자)가 \
+               준 값의 에코다.",
+    },
+    CommandProvenance {
+        command: "audit",
+        untrusted: NONE,
+        note: "감사 봉투는 root(호출자 에코)·개수 회계(total/reproduced/reproducedRate)와 \
+               failed[](캡슐 파일 이름·실패 사유·기대/실측 해시)뿐이다 — 캡슐은 문서가 \
+               아니라 호출자 산출물이고, 문서 문자열은 재실행 내부에 머문다.",
+    },
+    CommandProvenance {
+        command: "lineage",
+        untrusted: NONE,
+        note: "계보 봉투는 head(호출자 에코)·depth·판정 불리언(valid·parentOk·lineageOk· \
+               reproduced)·캡슐 파일 경로(brokenAt·links[].capsule)·해시뿐이다 — 캡슐은 \
+               호출자 산출물이고, 문서 문자열은 --deep 재실행 내부에 머문다.",
     },
     CommandProvenance {
         command: "ir-diff",
@@ -559,7 +583,7 @@ pub fn map_json(version: &str) -> Value {
         );
     }
     json!({
-        "schemaVersion": "1.0",
+        "schemaVersion": ENVELOPE_SCHEMA_VERSION,
         "tool": "rhwp",
         "version": version,
         "envelopeFlags": {

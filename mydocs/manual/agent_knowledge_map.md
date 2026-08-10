@@ -2,7 +2,7 @@
 kind: canonical
 status: active
 canonical: mydocs/manual/agent_knowledge_map.md
-last_verified: 2026-08-03
+last_verified: 2026-08-10
 ---
 
 # 에이전트 지식 지도 — rhwp 참조 문서의 단일 진입점
@@ -21,29 +21,28 @@ rhwp 를 도구로 부리는 AI 에이전트·스크립트가 **첫 번째로 �
 | 항목 | 값 |
 |---|---|
 | 바이너리 | `rhwp v0.8.2` (release 빌드, `native-skia` 미포함) |
-| 측정일 | 2026-08-03 |
+| 측정일 | 2026-08-10 |
 | 자기서술 출처 | `rhwp capabilities` · `rhwp capabilities --mcp` · `mcp-serve` 의 `tools/list` |
-| 표면 규모 | CLI 명령 **61개**(그중 `--json` 계약 **31개**, batch 축 **8개**) · MCP 도구 **51개**(무상태 39 + 세션 12) |
-| 봉투 필드 | `recordFields` 합집합 **148개** (§2) |
-| 표본 | `samples/` 439 항목 중 실측한 것만 §7 에 적었다 |
+| 표면 규모 | CLI 명령 **71개**(그중 `--json` 계약 **40개**, batch 축 **9개**) · MCP 도구 **65개**(무상태 49 + 세션 전용 16) |
+| 봉투 필드 | `capabilities.commands[].recordFields` 합집합 **185개** · §2 전수 사전 **188개**(`recordFields` 밖 실측 필드 `assertions`·`docId`·`preview` 포함) |
+| 표본 | `samples/` tracked 파일 **781개** 중 실측한 것만 §7 에 적었다 |
 
 **재확인하는 법** — 이 지도를 믿기 전에 손에 든 바이너리로 다시 찍어 본다.
 
 ```
 rhwp capabilities                 # 명령·플래그·recordFields·종료 코드
-rhwp capabilities --mcp           # MCP 무상태 도구 선언(39)
+rhwp capabilities --mcp           # MCP 무상태 도구 선언(49)
 rhwp capabilities --mcp --profile <프로필>   # 역할별로 좁힌 도구 목록
 printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"x","version":"0"}}}' \
   '{"jsonrpc":"2.0","method":"notifications/initialized"}' \
-  '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}' | rhwp mcp-serve   # 세션 포함 51
+  '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}' | rhwp mcp-serve   # 세션 포함 65
 ```
 
 버전이 다르면 **바이너리가 이긴다**. 이 문서와 어긋나면 이 문서를 고친다.
 
-**이 빌드에 없는 것** — 로드맵 논의에 등장하지만 v0.8.2 에는 아직 없다.
-`rhwp capabilities --search <낱말>` → `알 수 없는 옵션: --search`(exit 2),
-`rhwp export-agent-manifest` → `알 수 없는 명령입니다`(exit 2). 도구 발견은
-`capabilities` 전문(全文) 1회 캐시 + `--profile` 좁히기로 한다.
+**도구 발견과 부트스트랩** — `rhwp capabilities --search <낱말> [--json]` 은 명령
+이름·요약·하위 명령을 검색한다. `rhwp export-agent-manifest --json` 은 capabilities·
+IR·provenance·plan 네 축을 한 번에 조립하고, 빠진 축은 `missingAxes` 로 밝힌다.
 
 ## 1. 3문 진입 — 세 가지 질문으로 필요한 문서에 도착한다
 
@@ -241,25 +240,26 @@ printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocol
 `rhwp export-capabilities-schema`를 코드 생성의 단일 출처로 쓴다. 두 가이드가 서로
 어긋나면 계약이 언어마다 갈린 것이므로 어긋난 쪽을 고친다.
 
-실측 규모(2026-08-03): `export-ir-schema` → `definitionCount:41`,
-`irSchemaVersion:"1.0"`. `export-capabilities-schema` → `definitionCount:19`,
-`capabilitiesSchemaVersion:"1.1"`, 그리고 MCP 선언용 `mcpSchema` 를 함께 낸다.
+실측 규모(2026-08-10): `export-ir-schema` → `definitionCount:41`,
+`irSchemaVersion:"1.0"`. `export-capabilities-schema` → `definitionCount:21`,
+`capabilitiesSchemaVersion:"1.3"`, 그리고 MCP 선언용 `mcpSchema` 를 함께 낸다.
+`export-plan-schema` → `definitionCount:11`, `planSchemaVersion:"1.1"` 이다.
 
 ### 1-5. 역할이 정해져 있는가 — 프로필 라우터
 
-51개를 전부 물리면 작은 모델은 도구 선택에서 진다. `--profile` 은 **역할별로 도구를
+65개를 전부 물리면 작은 모델은 도구 선택에서 진다. `--profile` 은 **역할별로 도구를
 좁히고 레시피를 함께 주는** 라우터다(실측: `capabilities --mcp --profile <이름>`,
 `mcp-serve --profile <이름>`).
 
 | 프로필 | 무상태 도구 | 서버 총계 | 요지 |
 |---|---|---|---|
-| `경영보고` | 6 | 6 | 문서 파악·요약 근거 수집, 제출용 산출물 확인 |
-| `행정서식` | 8 | 20 (세션 12 포함) | 누름틀·표·체크박스 채움과 제출 전 검증 |
-| `데이터분석` | 6 | 6 | 표 수확·아카이브 일괄 추출 |
-| `콘텐츠제작` | 6 | 6 | 명세로 새 문서를 만들고 배포 형식으로 |
-| `아카이브검색` | 7 | 15 (세션 8 포함) | 수백 건 스윕과 근거 쪽 번호 인용 |
-| `품질검증` | 6 | 6 | 변환·편집 무손실 게이트 |
-| `개발통합` | 39 | 51 | 필터 없음 — rhwp 를 통합하는 개발 에이전트 |
+| `경영보고` | 8 | 8 | 문서 파악·요약 근거 수집, 제출용 산출물 확인 |
+| `행정서식` | 12 | 28 (세션 전용 16 포함) | 누름틀·표·체크박스 채움과 제출 전 검증 |
+| `데이터분석` | 9 | 9 | 표 수확·아카이브 일괄 추출 |
+| `콘텐츠제작` | 9 | 9 | 명세로 새 문서를 만들고 배포 형식으로 |
+| `아카이브검색` | 11 | 23 (세션 전용 12 포함) | 수백 건 스윕과 근거 쪽 번호 인용 |
+| `품질검증` | 11 | 11 | 변환·편집 무손실 게이트 |
+| `개발통합` | 49 | 65 | 필터 없음 — rhwp 를 통합하는 개발 에이전트 |
 
 각 프로필 봉투에는 `profile.recipe[]`(권장 호출 순서)와 `profile.session`·
 `profile.sessionTools[]` 가 함께 실린다. 예를 들어 `행정서식` 의 레시피는
@@ -304,17 +304,18 @@ printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocol
 를 싣고 `--dry-run` 에서는 싣지 않는다. `edit set-cell` 은 `oldText` 때문에
 `untrustedContent:true`, `edit fill-fields`·`replace-text` 는 `false` 다(실측).
 
-### 2-2. 전수 사전 — 172개 필드
+### 2-2. 전수 사전 — 188개 필드
 
-`capabilities` 의 `recordFields` 합집합이다. `등장 명령` 은 자기서술 기준이며,
-실제 봉투에는 조건부로 더 실리는 필드가 있다(§2-5).
+`capabilities` 의 `recordFields` 고유 **185개**와 그 밖의 실측-only 필드
+`assertions`·`docId`·`preview` **3개**를 합친 188개다. `등장 명령` 은 자기서술
+기준이며, 실제 봉투에는 조건부로 더 실리는 필드가 있다(§2-5).
 
 #### 신원·스키마
 
 | 필드 | 타입 | 의미 · `null` 의 뜻 | 등장 명령 |
 |---|---|---|---|
-| `schemaVersion` | string | 봉투 계약 버전 | 전 31개 `--json` 명령 |
-| `source` | string | 입력 경로 | 24개(문서를 여는 명령 전부) |
+| `schemaVersion` | string | 봉투 계약 버전 | 전 40개 `--json` 명령(`--bare` 본문 제외) |
+| `source` | string | 입력 경로 | 26개(문서를 여는 명령 전부) |
 | `tool` | string | 도구 이름(`"rhwp"`) | `capabilities`·`export-provenance-map` |
 | `version` | string | 문서 판본(`info`) 또는 바이너리 버전(`capabilities`) — **같은 이름, 다른 뜻** | `info`·`capabilities`·`export-provenance-map` |
 | `a` / `b` | string | 비교 대상 두 문서 경로 | `ir-diff` |
@@ -438,10 +439,40 @@ printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocol
 | 필드 | 타입 | 의미 · `null` 의 뜻 | 등장 명령 |
 |---|---|---|---|
 | `planVersion` | string | 계획서 버전. `"1.0"` 이 아니면 실행 0 · exit 2 | `run` |
-| `steps` | array | 실행 저널 — step 마다 `action` 과 그 step 의 판정 필드가 그대로 | `run` |
+| `steps` | array\|number | `run` 은 실행 저널(step 마다 `action` 과 판정 필드), `replay` 는 실행된 step 수 — **같은 이름, 다른 타입** | `run`·`replay` |
 | `invalid` | array | **정적 선검증 위반.** 비어 있지 않으면 한 step 도 실행하지 않는다 | `run` |
 | `assertions` | object | 적용된 단언 `{verify,notFoundEmpty}` — 미지정 기본값도 명시해 저널에 남는다 | `run` (실측; `recordFields` 에는 없다) |
 | `preview` | array | `--dry-run` 전용. 선검증이 이미 계산한 대상 목록 | `run --dry-run` (실측) |
+
+#### 작업 영수증 (`replay`)
+
+| 필드 | 타입 | 의미 · `null` 의 뜻 | 등장 명령 |
+|---|---|---|---|
+| `inputSha256` | string | 계획서 `input` 문서 바이트의 SHA-256 | `replay` |
+| `planSha256` | string | 계획서 원문 바이트의 SHA-256 | `replay` |
+| `outputSha256` | string | 임시 재실행 산출 바이트의 SHA-256 — 영수증의 몸통 | `replay` |
+| `expectedOutputSha256` | string\|null | 검증(verify) 모드에서 호출자가 주장한 산출 해시. 발급(attest) 모드는 `null` | `replay` |
+| `reproduced` | boolean\|null\|number | `replay` 는 재현 판정(`false` 면 exit 3, 발급 모드는 `null`), `audit` 는 재현 성공 캡슐 수 — **같은 이름, 다른 타입** | `replay`·`audit` |
+| `toolVersion` | string | 재현 조건 고정용 rhwp 버전 — 같은 계획이라도 버전이 다르면 산출이 다를 수 있다 | `replay` |
+
+#### 노동 감사 (`audit`)
+
+| 필드 | 타입 | 의미 · `null` 의 뜻 | 등장 명령 |
+|---|---|---|---|
+| `root` | string | 감사한 캡슐 폴더 경로(호출자 에코) | `audit` |
+| `total` | number | 발견한 `*.capsule.json` 수 — 0개면 봉투 없이 exit 2 | `audit` |
+| `failed` | array | 재현 실패 회계 — 캡슐 이름과 사유(또는 기대/실측 해시). 비어 있지 않으면 exit 3 | `audit` |
+| `reproducedRate` | number | 재현율(0.0~1.0) = `reproduced`/`total` | `audit` |
+
+#### 작업 계보 (`lineage`)
+
+| 필드 | 타입 | 의미 · `null` 의 뜻 | 등장 명령 |
+|---|---|---|---|
+| `head` | string | 체인의 머리(최신) 캡슐 경로(호출자 에코) | `lineage` |
+| `depth` | number | 걸은 링크 수 — 뿌리(부모 없음)까지 가면 체인 전체 길이 | `lineage` |
+| `valid` | bool | 계보 판정 — `false` 면 exit 3. **깨짐은 오류가 아니라 데이터** | `lineage` |
+| `brokenAt` | string\|null | 처음 깨진 링크의 캡슐 경로. 유효한 체인은 `null` | `lineage` |
+| `links` | array | 링크별 판정 — `parentOk`(부모 파일 무결)·`lineageOk`(부모 산출=자식 입력)·`reproduced`(`--deep`). 머리 링크는 대조할 자식 기록이 없어 앞 둘이 `null` | `lineage` |
 
 #### 판정·비교
 
@@ -526,13 +557,14 @@ printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocol
 | `commands` | array\|object | `capabilities` 는 명령 배열, `export-provenance-map` 은 명령→출처 객체 — **같은 이름, 다른 타입** | `capabilities`·`export-provenance-map` |
 | `exitCodes` | object | 종료 코드 0~4 의 의미 | `capabilities` |
 | `batch` | object | batch 축·플래그·집계 규칙 선언 | `capabilities` |
+| `schemaRegistry` | object | 버전 레지스트리 자기서술(`crateVersion`+네 축 `axes[]`) — 전 버전 축을 한 호출로 대조하는 단일 출처 (#4329) | `capabilities` |
 | `envelopeFlags` | object | `untrustedContent`/`untrustedFields` 의 뜻 | `export-provenance-map` |
 | `pathSyntax` | string | 필드 경로 표기법(`.`/`[]`) | `export-provenance-map` |
 | `policy` | object | 출처 표지 정책(`coverage`·`conservatism`·`guards`·`meaning`) | `export-provenance-map` |
-| `schema` | object | JSON Schema 본체 | `export-ir-schema`·`export-capabilities-schema` |
+| `schema` | object | JSON Schema 본체 | `export-ir-schema`·`export-plan-schema`·`export-capabilities-schema` |
 | `mcpSchema` | object | MCP 도구 선언용 스키마 | `export-capabilities-schema` |
-| `dialect` | string | JSON Schema 방언 URI | 두 schema 명령 |
-| `definitionCount` | number | `$defs` 개수 | 두 schema 명령 |
+| `dialect` | string | JSON Schema 방언 URI | 세 schema 명령 |
+| `definitionCount` | number | `$defs` 개수 | 세 schema 명령 |
 | `irSchemaVersion` / `capabilitiesSchemaVersion` | string | 각 스키마의 자체 버전 | 각 명령 |
 | `planSchemaVersion` | string | `run` 계획서 스키마의 자체 버전 | `export-plan-schema` |
 | `capabilities` | object | 명령 표면 자기서술 봉투(내장) | `export-agent-manifest` |
@@ -833,30 +865,33 @@ exit 3 ↔ `isError:false` + `identical:false`. 상세는
 `nextCall.name:"hwp_search"`). CLI 도 같다: `rhwp serach` →
 `힌트: 가장 가까운 명령은 'search' 입니다`.
 
-## 5. 명령 전수 지도 — 61개를 성격으로 나눈다
+## 5. 명령 전수 지도 — 71개를 성격으로 나눈다
 
-`capabilities` 의 `category` 그대로다. **`--json` 이 있는 31개만이 기계 계약**이고,
+`capabilities` 의 `category` 그대로다. **`--json` 이 있는 40개만이 기계 계약**이고,
 나머지는 사람이 읽는 진단 출력이다.
 
 | 분류 | 개수 | 명령 |
 |---|---|---|
-| `query` | 8 | `info`·`digest`·`capabilities`·`export-provenance-map`·`search`·`extract-data`·`fields`·`inspect` |
-| `export` | 18 | `export-text`·`export-structure`·`export-ir-schema`·`export-svg`·`export-png`·`export-pdf`·`export-markdown`·`export-hwpx`·`export-hml`·`export-doclang`·`export-capabilities-schema`·`export-tables`·`table-to-csv`·`extract-pages`·`export-render-tree`·`convert`·`build-from-ingest`·`thumbnail` |
+| `query` | 13 | `info`·`digest`·`replay`·`lineage`·`audit`·`capabilities`·`export-provenance-map`·`export-agent-manifest`·`search`·`extract-data`·`fields`·`explain`·`inspect` |
+| `export` | 20 | `export-text`·`export-structure`·`export-ir-schema`·`export-plan-schema`·`export-svg`·`export-png`·`export-pdf`·`export-markdown`·`export-hwpx`·`export-hml`·`export-doclang`·`export-capabilities-schema`·`export-ontology`·`export-tables`·`table-to-csv`·`extract-pages`·`export-render-tree`·`convert`·`build-from-ingest`·`thumbnail` |
 | `edit` | 3 | `run`·`csv-to-table`·`edit`(6개 하위 명령) |
-| `batch` | 1 | `batch`(8축) |
+| `batch` | 2 | `batch`(9축)·`scan` |
 | `serve` | 1 | `mcp-serve` |
-| `diagnostic` | 25 | `dump`·`dump-pages`·`dump-extents`·`dump-note-shape`·`dump-endnote-lines`·`dump-records`·`diag`·`ir-diff`·`render-diff`·`hwpx-roundtrip`·`hwp5-roundtrip`·`measure-width`·`core-pages`·`bench`·`hwp5-inventory`·`hwp5-inventory-diff`·`hwp5-contract-analyze`·`hwp5-contract-probe`·`hwp5-ctrl-data-trace`·`hwp5-table-probe`·`hwp5-mel-personnel-probe`·`hwp5-borderfill-diagonal-probe`·`hwp5-first-para-control-probe`·`hwp5-anchor-trace`·`hwp5-cell-header-probe` |
+| `diagnostic` | 27 | `dump`·`dump-pages`·`dump-extents`·`dump-note-shape`·`dump-endnote-lines`·`dump-records`·`diag`·`ir-diff`·`verify`·`render-diff`·`hwpx-roundtrip`·`hwp5-roundtrip`·`measure-width`·`core-pages`·`bench`·`hwp5-inventory`·`hwp5-inventory-diff`·`hwp5-contract-analyze`·`hwp5-contract-probe`·`hwp5-ctrl-data-trace`·`hwp5-table-probe`·`hwp5-mel-personnel-probe`·`hwp5-borderfill-diagonal-probe`·`hwp5-first-para-control-probe`·`hwp5-anchor-trace`·`hwp5-cell-header-probe`·`hwp5-char-shape-audit` |
 | `internal` | 5 | `test-shape`·`test-caption`·`test-field`·`gen-table`·`gen-pua` |
 
-**`--json` 계약 31개** — `info`·`export-text`·`export-structure`·`digest`·
-`export-ir-schema`·`run`·`capabilities`·`export-provenance-map`·`export-svg`·
+**`--json` 계약 40개** — `info`·`export-text`·`export-structure`·`digest`·
+`export-ir-schema`·`run`·`replay`·`lineage`·`audit`·`export-plan-schema`·
+`capabilities`·`export-provenance-map`·`export-agent-manifest`·`export-svg`·
 `export-pdf`·`export-markdown`·`export-hwpx`·`export-hml`·`export-doclang`·
-`export-capabilities-schema`·`export-tables`·`table-to-csv`·`csv-to-table`·
-`extract-pages`·`search`·`extract-data`·`fields`·`inspect`·`convert`·
-`build-from-ingest`·`thumbnail`·`edit`·`batch`·`dump-pages`·`ir-diff`·`render-diff`.
+`export-capabilities-schema`·`export-ontology`·`export-tables`·`table-to-csv`·
+`csv-to-table`·`extract-pages`·`search`·`extract-data`·`fields`·`explain`·`inspect`·
+`convert`·`build-from-ingest`·`thumbnail`·`edit`·`batch`·`scan`·`dump-pages`·
+`ir-diff`·`verify`·`render-diff`.
 
-**batch 로도 도는 축 8개** — `export-text`·`info`·`export-structure`·`export-tables`·
-`fields`·`search`·`convert`·`fill`. 이 중 파일을 쓰는 축은 `convert`·`fill` 둘뿐이고,
+**batch 로도 도는 축 9개** — `export-text`·`info`·`export-structure`·`export-tables`·
+`fields`·`search`·`extract-data`·`convert`·`fill`. 이 중 파일을 쓰는 축은
+`convert`·`fill` 둘뿐이고,
 `convert` 는 MCP 에 노출하지 않는다(CLI 전용).
 
 **`edit` 하위 6개** — `fill-fields`·`replace-text`·`set-cell`·`insert-image`·
@@ -865,9 +900,9 @@ exit 3 ↔ `isError:false` + `identical:false`. 상세는
 **`inspect` 하위 3개** — `hidden-text`·`injection`·`unicode`. 전부 읽기 전용이고
 문서를 고치지 않는다.
 
-## 6. MCP 도구 전수 지도 — 51개
+## 6. MCP 도구 전수 지도 — 65개
 
-### 6-1. 무상태 39개 (`capabilities --mcp` 선언 = `mcp-serve` 제공)
+### 6-1. 무상태 49개 (`capabilities --mcp` 선언 = `mcp-serve` 제공)
 
 | 도구 | CLI 대응 | 필수 인자 |
 |---|---|---|
@@ -876,6 +911,7 @@ exit 3 ↔ `isError:false` + `identical:false`. 상세는
 | `hwp_export_text` | `export-text --json` | `path` |
 | `hwp_export_structure` | `export-structure --json` | `path` |
 | `hwp_ir_diff` | `ir-diff --json` | `a`,`b` |
+| `hwp_verify` | `verify --json` | `path` |
 | `hwp_export_svg` | `export-svg --json` | `path` |
 | `hwp_export_pdf` | `export-pdf --json` | `path`,`output` |
 | `hwp_export_markdown` | `export-markdown --json` | `path`,`output` |
@@ -892,11 +928,14 @@ exit 3 ↔ `isError:false` + `identical:false`. 상세는
 | `hwp_search` | `search --json` | `path`,`query` |
 | `hwp_extract_data` | `extract-data --json` | `path` |
 | `hwp_fields` | `fields --json` | `path` |
+| `hwp_explain` | `explain --json` | `path` |
 | `hwp_inspect_hidden_text` | `inspect hidden-text --json` | `path` |
 | `hwp_inspect_injection` | `inspect injection --json` | `path` |
 | `hwp_inspect_unicode` | `inspect unicode --json` | `path` |
+| `hwp_scan` | `scan --json` | `path` |
 | `hwp_batch` | `batch <축> --json` | `subcommand`,`paths` |
 | `hwp_batch_search` | `batch search --json` | `query`,`paths` |
+| `hwp_batch_extract_data` | `batch extract-data --json` | `paths` |
 | `hwp_batch_fill` | `batch fill --json` | `form`,`data`,`outDir` |
 | `hwp_fill_fields` | `edit fill-fields --json` | `path`,`data` |
 | `hwp_replace_text` | `edit replace-text --json` | `path`,`find`,`replace` |
@@ -906,22 +945,29 @@ exit 3 ↔ `isError:false` + `identical:false`. 상세는
 | `hwp_redact` | `edit redact --json` | `path` |
 | `hwp_sanitize` | `edit sanitize --json` | `path` |
 | `hwp_run_plan` | `run --plan-json --json` | `plan` |
+| `hwp_replay` | `replay --plan-json --json` | `plan` |
+| `hwp_lineage` | `lineage --json` | `capsule` |
+| `hwp_audit` | `audit --json` | `dir` |
+| `hwp_export_plan_schema` | `export-plan-schema --json` | (없음) |
 | `hwp_render_diff` | `render-diff --json` | `path` |
 | `hwp_export_ir_schema` | `export-ir-schema --json` | (없음) |
 | `hwp_export_capabilities_schema` | `export-capabilities-schema --json` | (없음) |
 | `hwp_export_provenance_map` | `export-provenance-map --json` | (없음) |
+| `hwp_export_agent_manifest` | `export-agent-manifest --json` | (없음) |
+| `hwp_export_ontology` | `export-ontology --json` | (없음) |
 
 암호 문서는 어느 도구든 선택 인자 `password` 로 연다. 서버는 **응답·세션에 저장하지
 않고** 자식 CLI 의 stdin(`--password-stdin`)으로만 넘긴다(스키마에 `writeOnly:true`).
 
-`hwp_batch`·`hwp_batch_search` 는 `invocation.stdinTools` 로 표시된 stdin 도구다 —
-CLI 로 직접 조립할 때 경로 목록을 stdin 으로 흘려야 한다.
+`hwp_batch`·`hwp_batch_search`·`hwp_batch_extract_data` 는 `invocation.stdinTools` 로
+표시된 stdin 도구다 — CLI 로 직접 조립할 때 경로 목록을 stdin 으로 흘려야 한다.
 
-### 6-2. 세션 12개 (`mcp-serve` 전용, `capabilities --mcp` 에는 없다)
+### 6-2. 세션 전용 16개 (`mcp-serve` 전용, `capabilities --mcp` 에는 없다)
 
-`hwp_open` · `hwp_doc_info` · `hwp_doc_text` · `hwp_doc_fields` · `hwp_doc_tables` ·
-`hwp_doc_search` · `hwp_doc_render_page` · `hwp_doc_fill_fields` ·
-`hwp_doc_replace_text` · `hwp_doc_set_cell` · `hwp_doc_save` · `hwp_close`.
+`hwp_open` · `hwp_ws_list` · `hwp_ws_open` · `hwp_doc_info` · `hwp_doc_text` ·
+`hwp_doc_tree` · `hwp_doc_fields` · `hwp_doc_tables` · `hwp_doc_search` ·
+`hwp_doc_render_page` · `hwp_doc_fill_fields` · `hwp_doc_replace_text` ·
+`hwp_doc_set_cell` · `hwp_doc_save` · `hwp_ws_journal` · `hwp_close`.
 
 **계약**: 봉투 어휘는 무상태 대응 도구와 동형(`hwp_doc_search` ↔ `hwp_search`).
 디스크 기록은 `hwp_doc_save` 만. 저장 후에도 핸들은 열려 있어 이어서 편집할 수 있다.
@@ -984,7 +1030,7 @@ CLI 로 직접 조립할 때 경로 목록을 stdin 으로 흘려야 한다.
 
 ## 8. 계약 테스트 지도 — `tests/*_contract.rs` 가 고정하는 계약
 
-61개 계약 테스트가 있다. 표면을 고칠 때 **어느 테스트가 red 로 바뀌어야 하는지**를
+tracked `tests/**/*_contract.rs` **85개**가 있다. 표면을 고칠 때 **어느 테스트가 red 로 바뀌어야 하는지**를
 먼저 정한다.
 
 ### 8-1. 봉투·계약 기반

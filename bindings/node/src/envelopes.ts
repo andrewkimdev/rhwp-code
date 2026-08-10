@@ -2,7 +2,7 @@
  * 명령별 봉투 타입 — **자동 생성 파일. 손으로 고치지 마세요.**
  *
  * 재생성: `npm run gen:types` (tools/gen-types.ts)
- * 출처:   `rhwp capabilities` — version 0.8.2, `--json` 봉투 37개
+ * 출처:   `rhwp capabilities` — version 0.8.2, `--json` 봉투 40개
  *
  * `capabilities` 는 명령마다 **어떤 필드가 있는지**(`recordFields`)만 선언하고 타입은
  * 말하지 않습니다. 그래서 대부분의 필드가 `unknown` 입니다 — 짐작한 타입을 적으면 그
@@ -22,6 +22,23 @@ import type { RawVerifyReport } from './envelope.js';
 
 /** 이 파일을 만들어 낸 capabilities 스냅샷 버전(= rhwp 버전). */
 export const CAPABILITIES_SNAPSHOT_VERSION = '0.8.2';
+
+/**
+ * `rhwp audit --json` 봉투.
+ *
+ * 작업 캡슐(*.capsule.json) 폴더 전수 재실행·대조 — 에이전트 노동의 재현율 회계. 불일치
+ * 1건이라도 있으면 exit 3 (#4393)
+ */
+export interface AuditEnvelope {
+  readonly failed?: unknown;
+  readonly reproduced?: unknown;
+  readonly reproducedRate?: unknown;
+  readonly root?: unknown;
+  readonly schemaVersion?: string;
+  readonly total?: unknown;
+
+  readonly [key: string]: unknown;
+}
 
 /**
  * `rhwp batch --json` 봉투.
@@ -68,6 +85,7 @@ export interface CapabilitiesEnvelope {
   readonly batch?: unknown;
   readonly commands?: unknown;
   readonly exitCodes?: unknown;
+  readonly schemaRegistry?: unknown;
   readonly schemaVersion?: string;
   readonly tool?: string;
   readonly version?: string;
@@ -586,6 +604,23 @@ export interface IrDiffEnvelope {
 }
 
 /**
+ * `rhwp lineage --json` 봉투.
+ *
+ * 작업 캡슐 해시 체인을 거슬러 연대기를 검증 — 부모 파일 무결·계보 불변식(부모 산출=자식
+ * 입력)·(--deep) 링크별 재현. 깨진 체인은 exit 3, brokenAt 명세 (#4401)
+ */
+export interface LineageEnvelope {
+  readonly brokenAt?: unknown;
+  readonly depth?: unknown;
+  readonly head?: unknown;
+  readonly links?: unknown;
+  readonly schemaVersion?: string;
+  readonly valid?: unknown;
+
+  readonly [key: string]: unknown;
+}
+
+/**
  * `rhwp render-diff --json` 봉투.
  *
  * 왕복/두 파일 렌더 기하 차이 검증 — --json 회귀 검출은 exit 3 (--batch 는 NDJSON)
@@ -609,6 +644,27 @@ export interface RenderDiffEnvelope {
   readonly threshold?: unknown;
   readonly via?: unknown;
   readonly worstPage?: unknown;
+
+  readonly [key: string]: unknown;
+}
+
+/**
+ * `rhwp replay --json` 봉투.
+ *
+ * 계획을 임시 산출로 재실행해 작업 영수증(입력·계획·산출 SHA-256)을 발급하고,
+ * --expect-output-sha256 로 타인의 작업 주장을 재현 검증한다 — 불일치는 exit 3 (#4391)
+ */
+export interface ReplayEnvelope {
+  readonly expectedOutputSha256?: unknown;
+  readonly input?: unknown;
+  readonly inputSha256?: unknown;
+  readonly mode?: unknown;
+  readonly outputSha256?: unknown;
+  readonly planSha256?: unknown;
+  readonly reproduced?: unknown;
+  readonly schemaVersion?: string;
+  readonly steps?: unknown;
+  readonly toolVersion?: unknown;
 
   readonly [key: string]: unknown;
 }
@@ -724,6 +780,7 @@ export interface VerifyEnvelope {
  * `recordFields` 를 선언한 명령만 들어 있습니다 — 나머지는 `--json` 봉투를 내지 않습니다.
  */
 export interface EnvelopeByCommand {
+  audit: AuditEnvelope;
   batch: BatchEnvelope;
   "build-from-ingest": BuildFromIngestEnvelope;
   capabilities: CapabilitiesEnvelope;
@@ -754,7 +811,9 @@ export interface EnvelopeByCommand {
   info: InfoEnvelope;
   inspect: InspectEnvelope;
   "ir-diff": IrDiffEnvelope;
+  lineage: LineageEnvelope;
   "render-diff": RenderDiffEnvelope;
+  replay: ReplayEnvelope;
   run: RunEnvelope;
   scan: ScanEnvelope;
   search: SearchEnvelope;
