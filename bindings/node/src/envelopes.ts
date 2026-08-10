@@ -558,6 +558,27 @@ export interface FieldsEnvelope {
 }
 
 /**
+ * `rhwp gate --json` 봉투.
+ *
+ * 반입 정책 기계 판정 — admissionPolicy(연산자 eq·in·gte·lte 4종 고정, deny 기본, 미지 키 로드
+ * 거부)를 캡슐에 적용. 재료는 자기 신고가 아니라 재계산(계보·서명·앵커·--deep 재실행), 거부는
+ * exit 3 + violations[] (#4545)
+ */
+export interface GateEnvelope {
+  readonly evaluated?: unknown;
+  readonly policy?: unknown;
+  readonly policyPath?: unknown;
+  readonly policySigned?: unknown;
+  readonly schemaVersion?: string;
+  readonly target?: unknown;
+  readonly targetSha256?: unknown;
+  readonly verdict?: unknown;
+  readonly violations?: unknown;
+
+  readonly [key: string]: unknown;
+}
+
+/**
  * `rhwp harness --json` 봉투.
  *
  * 검증 루프의 쓰는 쪽 — init(작업장 규약)·wrap(실산출+영수증+캡슐+자동 부모 연결+서명 한 방).
@@ -904,6 +925,7 @@ export interface EnvelopeByCommand {
   "extract-data": ExtractDataEnvelope;
   "extract-pages": ExtractPagesEnvelope;
   fields: FieldsEnvelope;
+  gate: GateEnvelope;
   harness: HarnessEnvelope;
   "harness-status": HarnessStatusEnvelope;
   info: InfoEnvelope;

@@ -409,6 +409,14 @@ fn recipes() -> Vec<Recipe> {
         br#"{"schemaVersion":"1.0","kind":"keyring","keys":[]}"#,
     )
     .expect("빈 keyring 픽스처");
+    // gate 픽스처 — 빈 규칙 + deny 기본 = 거부(exit 3) 순수 fs 경로.
+    let gate_policy = dir.join("prov-gate-policy.json");
+    std::fs::write(
+        &gate_policy,
+        br#"{"kind":"admissionPolicy","name":"prov","defaultVerdict":"deny","rules":[]}"#,
+    )
+    .expect("게이트 정책 픽스처");
+
     // anchor verify 픽스처 — 빈 로그 + 아무 캡슐 = 미등재(logged:false, exit 3).
     let anchor_log = dir.join("prov-anchor.ndjson");
     std::fs::write(&anchor_log, b"").expect("빈 앵커 로그");
@@ -966,6 +974,21 @@ fn recipes() -> Vec<Recipe> {
             ],
             stdin: None,
             exit: 0,
+            ndjson: false,
+        },
+        Recipe {
+            // gate deny 기본 — 빈 규칙은 통과가 아니다(exit 3), 문서 오라클 없음.
+            command: "gate",
+            doc: None,
+            args: vec![
+                s("gate"),
+                p(&sig_capsule),
+                s("--policy"),
+                p(&gate_policy),
+                s("--json"),
+            ],
+            stdin: None,
+            exit: 3,
             ndjson: false,
         },
         Recipe {
