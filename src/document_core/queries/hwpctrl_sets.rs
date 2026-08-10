@@ -7,14 +7,16 @@
 
 use crate::document_core::queries::field_query::{
     caret_stops, cell_path_to_list, char_idx_at_stream_pos, cursor_paragraph, json_escape,
-    leading_anchor_pos, root_para_location, root_para_of, select_start_pos, stream_len, stream_pos,
-    word_end_from, word_starts, ListEntry, EXTENDED_CTRL_UNITS, ROOT_LIST_ID,
+    leading_anchor_pos, root_para_count, root_para_location, root_para_of, select_start_pos,
+    shape_lists, stream_len, stream_pos, word_end_from, word_starts, ListEntry,
+    EXTENDED_CTRL_UNITS, ROOT_LIST_ID,
 };
 use crate::document_core::DocumentCore;
 use crate::error::HwpError;
 use crate::model::control::{AutoNumber, AutoNumberType, Control};
 use crate::model::page::ColumnDef;
 use crate::model::paragraph::{ColumnBreakType, Paragraph};
+use crate::model::shape::{Caption, ShapeObject, TextBox};
 use crate::model::style::{Alignment, HeadType, LineSpacingType, UnderlineType};
 
 /// 언어 일곱 갈래 — 항목 이름 접미사 순서가 모델 배열 순서와 같다.
@@ -83,15 +85,29 @@ fn control_identity(ctrl: &Control) -> (&'static str, u32, &'static str) {
         Control::ColumnDef(_) => ("cold", 2, "단 정의"),
         Control::Table(_) => ("tbl", 11, "표"),
         // 그리기 개체의 이름은 갈래마다 다르다("사각형"·"타원" …). rhwp 가 이미 같은 이름을
-        // 들고 있어서 그대로 쓴다(오라클 실측과 일치).
-        Control::Shape(shape) => ("gso", 11, shape.shape_name()),
+        // 들고 있어서 그대로 쓴다(오라클 실측과 일치). 묶음만 다르다 — rhwp 는 "묶음",
+        // 한글은 **"그리기"** 다(실측).
+        // 그림은 `shape_name()` 이 "그림(묶음내)" 를 준다 — 그 이름은 렌더 진단이 묶음 안에
+        // 있음을 표시하려고 붙인 것이고, 한글이 부르는 이름은 묶음을 풀든 말든 **"그림"** 이다
+        // (묶음 풀기 실측). 여기서만 걷어낸다 — `shape_name()` 은 다른 곳이 딛고 있다.
+        Control::Shape(shape) => (
+            "gso",
+            11,
+            match **shape {
+                crate::model::shape::ShapeObject::Group(_) => "그리기",
+                crate::model::shape::ShapeObject::Picture(_) => "그림",
+                _ => shape.shape_name(),
+            },
+        ),
         Control::Picture(_) => ("gso", 11, "그림"),
         Control::Equation(_) => ("eqed", 11, "수식"),
         Control::Header(_) => ("head", 2, "머리말"),
         Control::Footer(_) => ("foot", 2, "꼬리말"),
         Control::Footnote(_) => ("fn", 2, "각주"),
         Control::Endnote(_) => ("en", 2, "미주"),
-        Control::AutoNumber(_) => ("atno", 2, "자동 번호"),
+        // 한글이 부르는 이름은 "번호 넣기" 다(실측). rhwp 안에서 쓰는 이름과 다르다.
+        // `CtrlCh` 는 스트림 글자 코드다 — 자동 번호는 `0x12` = 18 이다(실측).
+        Control::AutoNumber(_) => ("atno", 18, "번호 넣기"),
         Control::NewNumber(_) => ("nwno", 2, "새 번호 지정"),
         Control::PageNumberPos(_) => ("pgnp", 2, "쪽 번호 위치"),
         Control::PageHide(_) => ("pghd", 2, "감추기"),
@@ -113,6 +129,37 @@ fn collect_controls(
 ) {
     let (list_id, para_in_list) = at;
     let control_positions = para.control_text_positions();
+    // 자리표 글자가 **없는** 문단은 아래 식이 안 맞는다. 컨트롤 여럿이 같은 글자 번호를
+    // 가리키면(0·0·0 …) 그것이 그 신호다 — 자리표가 있으면 번호가 서로 다르다.
+    //
+    // 그런 문단은 스트림을 되짚어 세운다: 자리 0 에서 시작해 다음 글자의 스트림 자리가 지금
+    // 자리와 같으면 글자를 놓고 한 칸, 아니면 컨트롤을 놓고 여덟 칸 간다. 자리차지 개체 사이에
+    // 공백이 한 칸씩 있는 문단(실측 앵커 16·25·34)이 이 길로 맞아떨어진다.
+    let rebuilt: Option<Vec<usize>> = {
+        let mut seen = control_positions.clone();
+        seen.sort_unstable();
+        let has_dup = seen.windows(2).any(|w| w[0] == w[1]);
+        // **첫 글자 자리가 0 이면 대응표를 못 믿는다** — 앞머리에 컨트롤이 있는데 0 이라는 것은
+        // 그 표가 컨트롤을 안 담았다는 뜻이다(`leading_anchor_pos` 와 같은 단서). 그때 이 되짚기를
+        // 쓰면 자리가 통째로 어긋난다(그림을 넣은 문단에서 앵커가 20 대신 406 으로 나왔다).
+        let offsets_trustworthy = para.char_offsets.first().is_some_and(|o| *o > 0);
+        if has_dup && offsets_trustworthy {
+            let mut out = Vec::with_capacity(para.controls.len());
+            let mut p = 0usize;
+            let mut chars = para.char_offsets.iter().peekable();
+            for _ in 0..para.controls.len() {
+                while chars.peek().is_some_and(|off| (**off as usize) <= p) {
+                    chars.next();
+                    p += 1;
+                }
+                out.push(p);
+                p += EXTENDED_CTRL_UNITS;
+            }
+            Some(out)
+        } else {
+            None
+        }
+    };
     for (ci, ctrl) in para.controls.iter().enumerate() {
         let (id, ch, desc) = control_identity(ctrl);
         // 앵커 자리는 그 컨트롤이 **스트림에서 서 있는 자리**다(실측: 본문 첫 문단의 셋이
@@ -121,17 +168,21 @@ fn collect_controls(
         // `stream_pos` 로는 못 구한다 — 자리표 글자를 남기는 문단과 안 남기는 문단이 섞여
         // 있어 그 함수 하나로 갈리지 않는다. 여기서는 **앞선 것들만** 세면 된다:
         // 앞의 맨 글자 수 + 8 × 앞의 컨트롤 수.
-        let pos = control_positions
-            .get(ci)
-            .map(|char_idx| {
-                let placeholders_before = control_positions[..ci]
-                    .iter()
-                    .filter(|p| *p < char_idx)
-                    .count();
-                let plain_before = char_idx.saturating_sub(placeholders_before);
-                plain_before + ci * EXTENDED_CTRL_UNITS
-            })
-            .unwrap_or(0);
+        let pos = if let Some(rebuilt) = &rebuilt {
+            rebuilt.get(ci).copied().unwrap_or(0)
+        } else {
+            control_positions
+                .get(ci)
+                .map(|char_idx| {
+                    let placeholders_before = control_positions[..ci]
+                        .iter()
+                        .filter(|p| *p < char_idx)
+                        .count();
+                    let plain_before = char_idx.saturating_sub(placeholders_before);
+                    plain_before + ci * EXTENDED_CTRL_UNITS
+                })
+                .unwrap_or(0)
+        };
         items.push(format!(
             "{{\"ctrlId\":{},\"ctrlCh\":{},\"userDesc\":{},\"list\":{},\"para\":{},\"pos\":{},\"controlIndex\":{},\"props\":{}}}",
             json_escape(id),
@@ -168,9 +219,12 @@ fn collect_controls(
                 }
             }
             Control::Shape(shape) => {
-                if let Some(text_box) = shape.drawing().and_then(|d| d.text_box.as_ref()) {
-                    let Some(child) = child_of(0) else { continue };
-                    for (pi, box_para) in text_box.paragraphs.iter().enumerate() {
+                // 글상자와 **캡션** 둘 다 리스트를 연다 — 리스트 표와 같은 번호를 쓴다.
+                for (node, paragraphs) in shape_lists(shape) {
+                    let Some(child) = child_of(node) else {
+                        continue;
+                    };
+                    for (pi, box_para) in paragraphs.iter().enumerate() {
                         collect_controls(box_para, (child, pi), lists, items);
                     }
                 }
@@ -178,6 +232,182 @@ fn collect_controls(
             _ => {}
         }
     }
+}
+
+/// CP949 로 못 담는 글자를 `&#N;` 수치 참조로 바꾼다 — `GetTextFile("TEXT")` 의 규칙이다.
+///
+/// 판정은 **인코딩을 실제로 해 본다**. 표를 손으로 적으면 반드시 틀린다 — CP949 는 EUC-KR 에
+/// 마이크로소프트 확장이 붙은 것이라 `€`·`①` 처럼 "없을 것 같은데 있는" 글자가 많다.
+fn escape_outside_cp949(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut buf = [0u8; 4];
+    for ch in text.chars() {
+        let one = ch.encode_utf8(&mut buf);
+        let (_, _, had_errors) = encoding_rs::EUC_KR.encode(one);
+        if had_errors {
+            out.push_str(&format!("&#{};", ch as u32));
+        } else {
+            out.push(ch);
+        }
+    }
+    out
+}
+
+/// 스캔 항목 하나를 담는다. 상태는 **앞 항목과의 관계**라 넣는 자리에서 정한다.
+///
+/// - 문단이 바뀌면 3, 같은 문단 안에서 이어지면 2.
+/// - 개체 리스트로 들어가는 첫 항목은 4, 나온 뒤 첫 항목은 5.
+fn scan_push(items: &mut Vec<(u8, String, u8)>, state: u8, text: String) {
+    items.push((state, text, 0));
+}
+
+/// 문단 하나를 스캔 차례로 푼다 — 글은 개체에서 끊기고, 개체 속을 돈 뒤 이어진다.
+fn scan_paragraph(
+    para: &Paragraph,
+    at: (u32, usize),
+    lists: &[ListEntry],
+    items: &mut Vec<(u8, String, u8)>,
+) {
+    let (list_id, para_in_list) = at;
+    // 그 리스트의 **첫 문단**이면 2, 아니면 3(같은 리스트의 다음 문단)이다. 셀은 저마다 다른
+    // 리스트라 첫 문단뿐이어서 2 로 나온다 — 실측과 맞는다.
+    let mut state: u8 = if para_in_list == 0 { 2 } else { 3 };
+
+    // 구역·단 정의는 빈 항목을 하나씩 낸다. 그 뒤로는 같은 문단이므로 2 다.
+    //
+    // 이 항목들은 **표식**이라고 따로 적어 둔다 — `GetTextFile` 은 글을 이어 붙일 때 이것들만
+    // 뺀다(실측: 표식 둘이 든 문서의 글이 `\r\n` 둘로 시작하지 넷이 아니다).
+    for ctrl in para.controls.iter() {
+        if matches!(ctrl, Control::SectionDef(_) | Control::ColumnDef(_)) {
+            items.push((state, String::new(), 1));
+            state = 2;
+        }
+    }
+
+    let control_positions = para.control_text_positions();
+
+    // **빈 누름틀은 안내문을 글로 낸다.** 한글은 파일을 열며 빈 필드에 안내문을 채우고, 그
+    // 글이 스트림에도 들어간다(좌표 셈의 `guide_units` 가 이미 그것을 센다). 안 넣으면 서식
+    // 문서의 글이 통째로 짧아진다.
+    let mut inserts: Vec<(usize, String)> = Vec::new();
+    for fr in para.field_ranges.iter() {
+        if fr.start_char_idx != fr.end_char_idx {
+            continue;
+        }
+        if let Some(Control::Field(field)) = para.controls.get(fr.control_idx) {
+            if let Some(guide) = field.guide_text() {
+                if !guide.is_empty() {
+                    inserts.push((fr.start_char_idx, guide.to_string()));
+                }
+            }
+        }
+    }
+    inserts.sort_by_key(|(at, _)| *at);
+
+    // 원래 글자 번호 → 안내문을 끼운 뒤의 번호. 컨트롤 자리를 옮길 때 쓴다.
+    let raw: Vec<char> = para.text.chars().collect();
+    let mut chars: Vec<char> = Vec::with_capacity(raw.len());
+    let mut shift_at: Vec<(usize, usize)> = Vec::new(); // (원래 번호, 그 앞까지 밀린 양)
+    let mut shift = 0usize;
+    let mut next_insert = 0usize;
+    for (i, ch) in raw.iter().enumerate() {
+        while next_insert < inserts.len() && inserts[next_insert].0 == i {
+            let text = &inserts[next_insert].1;
+            chars.extend(text.chars());
+            shift += text.chars().count();
+            next_insert += 1;
+        }
+        shift_at.push((i, shift));
+        chars.push(*ch);
+    }
+    while next_insert < inserts.len() {
+        chars.extend(inserts[next_insert].1.chars());
+        shift += inserts[next_insert].1.chars().count();
+        next_insert += 1;
+    }
+    let shift_for = |orig: usize| -> usize {
+        match shift_at.binary_search_by_key(&orig, |(i, _)| *i) {
+            Ok(k) => shift_at[k].1,
+            Err(_) => shift,
+        }
+    };
+    let mut cut = 0usize;
+
+    for (ci, ctrl) in para.controls.iter().enumerate() {
+        let nested: Vec<(usize, &[Paragraph])> = match ctrl {
+            Control::Table(table) => (0..table.cells.len())
+                .filter_map(|cell| {
+                    table
+                        .cells
+                        .get(cell)
+                        .map(|c| (cell, c.paragraphs.as_slice()))
+                })
+                .collect(),
+            Control::Shape(shape) => shape_lists(shape),
+            _ => Vec::new(),
+        };
+        // 구역·단 정의는 위에서 이미 항목을 냈다.
+        if matches!(ctrl, Control::SectionDef(_) | Control::ColumnDef(_)) {
+            continue;
+        }
+        // **리스트가 없는 개체에서도 글은 끊긴다.** 수식이 그렇다(실측: 수식 앞 다섯 칸이
+        // 한 항목으로 따로 난다). 리스트 있는 것만 끊다가 항목이 하나씩 모자랐다.
+        //
+        // 개체 앞까지의 글은 **비어 있어도 낸다**(글 없는 문단에 표만 있어도 빈 항목이 하나
+        // 난다). 줄 끝은 아직 안 붙인다 — 문단이 안 끝났다.
+        let here = control_positions
+            .get(ci)
+            .copied()
+            .map(|orig| orig + shift_for(orig))
+            .unwrap_or(chars.len())
+            .min(chars.len());
+        let run: String = chars[cut.min(here)..here].iter().collect();
+        // 리스트를 여는 개체(표·글상자) 앞 조각은 줄이 되고, 인라인 개체(수식) 앞 조각은
+        // 안 된다 — `GetTextFile` 이 그 둘을 다르게 잇는다(실측).
+        items.push((state, run, if nested.is_empty() { 2 } else { 0 }));
+        state = 2;
+        cut = here;
+        // 개체 속으로 — 첫 항목이 4, 나온 뒤 첫 항목이 5 다. 속이 없으면 여기서 끝이다.
+        if nested.is_empty() {
+            continue;
+        }
+        let mut entered = false;
+        for (node, paragraphs) in nested {
+            let child = lists
+                .iter()
+                .find(|l| {
+                    l.host_list_id == list_id
+                        && l.host_para_index == para_in_list
+                        && l.control_index == ci
+                        && l.cell_index == node
+                })
+                .map(|l| l.list_id);
+            let Some(child_list) = child else { continue };
+            for (pi, child_para) in paragraphs.iter().enumerate() {
+                let before = items.len();
+                scan_paragraph(child_para, (child_list, pi), lists, items);
+                // **개체의 맨 첫 항목만** 진입 상태로 바꾼다. 그 뒤 문단들은 자기 자리대로
+                // (같은 리스트의 다음 문단이면 3) 두어야 한다 — 여기서 전부 2 로 덮었다가
+                // 글상자 안 문단들이 어긋났다.
+                //
+                // 진입 상태는 **어디서 들어가느냐**로 갈린다: 본문에서면 4, 이미 리스트 안이면
+                // 5 다(실측: 같은 표라도 본문에 있으면 4, 글상자 안에 있으면 5).
+                if !entered {
+                    if let Some(first) = items.get_mut(before) {
+                        first.0 = if list_id == ROOT_LIST_ID { 4 } else { 5 };
+                    }
+                    entered = true;
+                }
+            }
+        }
+        if entered {
+            state = 5;
+        }
+    }
+
+    // 남은 글 + 줄 끝.
+    let tail: String = chars[cut.min(chars.len())..].iter().collect();
+    scan_push(items, state, format!("{}\r\n", tail));
 }
 
 /// 컨트롤의 `Properties` 파라미터셋 — 채울 수 있는 항목만 낸다.
@@ -202,14 +432,19 @@ fn control_props_json(ctrl: &Control) -> String {
     let Some(c) = common else {
         return "{}".to_string();
     };
+    // 자리(`*Offset`)도 낸다 — 옮기기 액션의 유일한 관측창이다. 오라클의 이 셋은 32항목이라
+    // 여기 있는 것은 그중 확인한 것뿐이다.
     format!(
-        "{{\"Lock\":{},\"TreatAsChar\":{},\"AllowOverlap\":{},\"TextWrap\":{},\"Width\":{},\"Height\":{}}}",
+        "{{\"Lock\":{},\"TreatAsChar\":{},\"AllowOverlap\":{},\"TextWrap\":{},\
+         \"Width\":{},\"Height\":{},\"HorzOffset\":{},\"VertOffset\":{}}}",
         u8::from(c.locked),
         u8::from(c.treat_as_char),
         u8::from(c.allow_overlap),
         (c.attr >> 21) & 0x03,
         c.width,
         c.height,
+        c.horizontal_offset,
+        c.vertical_offset,
     )
 }
 
@@ -412,6 +647,94 @@ impl DocumentCore {
             }
         }
         format!("[{}]", items.join(","))
+    }
+
+    /// 문서 글을 **한글 스캔 차례**로 늘어놓는다 — `InitScan`·`GetText`·`ReleaseScan` 이 쓴다.
+    ///
+    /// 각 항목은 `{state, text}` 다. 실측으로 세운 규칙(§4.54, 표본 넷):
+    ///
+    /// | 상태 | 뜻 |
+    /// | --- | --- |
+    /// | 2 | 같은 문단이 이어지거나 리스트가 바뀜(셀 → 셀) |
+    /// | 3 | 같은 리스트에서 **다음 문단** |
+    /// | 4 | 개체 리스트로 **들어감** |
+    /// | 5 | 개체 리스트에서 **나옴** |
+    ///
+    /// 방출 규칙도 실측이다. **구역·단 정의는 빈 항목을 하나씩 낸다.** 표·그리기는 항목을
+    /// 안 내고 대신 그 속 리스트로 들어간다(진입 4, 탈출 5). 문단의 글은 개체를 만나면
+    /// **거기서 끊기고**, 개체를 다 돈 뒤 남은 글과 줄 끝이 이어진다.
+    pub fn scan_items_json(&self) -> String {
+        let (_, lists) = self.collect_fields_and_lists();
+        let mut items: Vec<(u8, String, u8)> = Vec::new();
+        let mut para_in_body = 0usize;
+        for section in self.document.sections.iter() {
+            for para in section.paragraphs.iter() {
+                scan_paragraph(para, (ROOT_LIST_ID, para_in_body), &lists, &mut items);
+                para_in_body += 1;
+            }
+        }
+        let body: Vec<String> = items
+            .iter()
+            .map(|(state, text, kind)| {
+                format!(
+                    "{{\"state\":{},\"kind\":{},\"text\":{}}}",
+                    state,
+                    kind,
+                    json_escape(text)
+                )
+            })
+            .collect();
+        format!("[{}]", body.join(","))
+    }
+
+    /// 문서 글 전체를 GetTextFile 공통 순서로 조립한다.
+    ///
+    /// 훑기([`scan_items_json`](Self::scan_items_json))와 **같은 뿌리**다. 표식 항목(구역·단
+    /// 정의)만 빼고 각 조각이 줄 끝으로 끝나게 이어 붙이되, **마지막 문단 뒤에는 줄 끝을 안
+    /// 붙인다**(실측: 오라클이 정확히 두 글자 짧다).
+    ///
+    fn text_file_content(&self) -> String {
+        let (_, lists) = self.collect_fields_and_lists();
+        let mut items: Vec<(u8, String, u8)> = Vec::new();
+        let mut para_in_body = 0usize;
+        for section in self.document.sections.iter() {
+            for para in section.paragraphs.iter() {
+                scan_paragraph(para, (ROOT_LIST_ID, para_in_body), &lists, &mut items);
+                para_in_body += 1;
+            }
+        }
+        let mut out = String::new();
+        for (_, text, kind) in items.iter() {
+            if *kind == 1 {
+                continue; // 표식(구역·단 정의)은 글에 안 실린다
+            }
+            out.push_str(text);
+            // 인라인 개체(수식 따위) 앞 조각은 **줄을 만들지 않는다** — 그 개체는 줄 안에 있다.
+            // 표·글상자처럼 리스트를 여는 개체 앞 조각만 줄이 된다.
+            if *kind != 2 && !text.ends_with("\r\n") {
+                out.push_str("\r\n");
+            }
+        }
+        if out.ends_with("\r\n") {
+            out.truncate(out.len() - 2);
+        }
+        out
+    }
+
+    /// 문서 글 전체 — 웹한글컨트롤 `GetTextFile("TEXT")`.
+    ///
+    /// 이 형식만의 규칙이 하나 더 있다. **CP949 로 못 담는 글자는 `&#N;` 수치 참조가 된다** —
+    /// `◦`(U+25E6)는 바뀌고 `€`·`①`·`㈜` 는 그대로다(여덟 글자로 예측 전수 적중). 훑기와
+    /// `UNICODE` 형식은 escape 하지 않는다.
+    pub fn text_file_json(&self) -> String {
+        json_escape(&escape_outside_cp949(&self.text_file_content()))
+    }
+
+    /// 문서 글 전체 — 웹한글컨트롤 `GetTextFile("UNICODE")`.
+    ///
+    /// 문자열을 CP949로 왕복시키지 않고 원문 Unicode를 그대로 JSON 문자열로 내보낸다.
+    pub fn text_file_unicode_json(&self) -> String {
+        json_escape(&self.text_file_content())
     }
 
     /// 컨트롤 하나를 지운다 — 웹한글컨트롤 `DeleteCtrl`.
@@ -648,6 +971,531 @@ impl DocumentCore {
         let section_index = entry.section_index;
         let host_para = root_para_of(&lists, entry);
         self.split_paragraph_in_cell_by_path(section_index, host_para, &path, char_idx, None)
+    }
+
+    /// 개체 크기를 한 걸음 늘이거나 줄인다 — 웹한글컨트롤 `Run("ShapeObjResize*")`.
+    ///
+    /// 걸음은 **283 HWPUNIT**(≈1mm)로 일정하다(실측: 25704 → 25987 → 26270, 되돌리면 그대로
+    /// 되짚는다). 표의 크기 조절과 달리 **결정적**이다 — 같은 값을 두 번 읽어도 같다(§4.47 의
+    /// 표 계열은 읽을 때마다 달라 판정 불가였다).
+    ///
+    /// `Right`·`Left` 는 폭을, `Down`·`Up` 은 높이를 바꾼다. 방향 이름이 **가장자리를 미는 쪽**
+    /// 이라 `Left`·`Up` 은 줄인다.
+    pub fn resize_control_at(
+        &mut self,
+        para_in_list: usize,
+        control_index: usize,
+        d_width: i32,
+        d_height: i32,
+    ) -> Result<String, HwpError> {
+        let (sec, para_idx) = root_para_location(self, para_in_list)
+            .ok_or_else(|| HwpError::InvalidField(format!("본문 문단 {} 없음", para_in_list)))?;
+        let section = self
+            .document
+            .sections
+            .get_mut(sec)
+            .ok_or_else(|| HwpError::InvalidField(format!("구역 {} 없음", sec)))?;
+        let para = section
+            .paragraphs
+            .get_mut(para_idx)
+            .ok_or_else(|| HwpError::InvalidField(format!("문단 {} 없음", para_idx)))?;
+        let ctrl = para
+            .controls
+            .get_mut(control_index)
+            .ok_or_else(|| HwpError::InvalidField(format!("컨트롤 {} 없음", control_index)))?;
+        let common = match ctrl {
+            Control::Table(t) => Some(&mut t.common),
+            Control::Shape(s) => Some(s.common_mut()),
+            Control::Picture(p) => Some(&mut p.common),
+            _ => None,
+        };
+        let Some(c) = common else {
+            return Ok(r#"{"ok":false,"reason":"크기를 가진 개체가 아니다"}"#.to_string());
+        };
+        c.width = (c.width as i64 + d_width as i64).max(0) as u32;
+        c.height = (c.height as i64 + d_height as i64).max(0) as u32;
+        section.raw_stream = None;
+        Ok(r#"{"ok":true}"#.to_string())
+    }
+
+    /// 개체를 한 걸음 옮긴다 — 웹한글컨트롤 `Run("ShapeObjMove*")`.
+    ///
+    /// 걸음은 **56 HWPUNIT**(≈0.2mm)로 일정하고 결정적이다(실측: 23040 → 23096 → 23152,
+    /// 되돌리면 그대로 되짚는다). 크기 조절의 걸음(283)과 **다르다** — 같은 개체 액션이라고
+    /// 같은 걸음일 것이라 넘겨짚으면 틀린다.
+    ///
+    /// **글자처럼 배치인 개체는 안 움직인다**(실측). 자리를 문단 흐름이 잡기 때문이다.
+    pub fn move_control_at(
+        &mut self,
+        para_in_list: usize,
+        control_index: usize,
+        dx: i32,
+        dy: i32,
+    ) -> Result<String, HwpError> {
+        let (sec, para_idx) = root_para_location(self, para_in_list)
+            .ok_or_else(|| HwpError::InvalidField(format!("본문 문단 {} 없음", para_in_list)))?;
+        let section = self
+            .document
+            .sections
+            .get_mut(sec)
+            .ok_or_else(|| HwpError::InvalidField(format!("구역 {} 없음", sec)))?;
+        let para = section
+            .paragraphs
+            .get_mut(para_idx)
+            .ok_or_else(|| HwpError::InvalidField(format!("문단 {} 없음", para_idx)))?;
+        let ctrl = para
+            .controls
+            .get_mut(control_index)
+            .ok_or_else(|| HwpError::InvalidField(format!("컨트롤 {} 없음", control_index)))?;
+        let common = match ctrl {
+            Control::Table(t) => Some(&mut t.common),
+            Control::Shape(s) => Some(s.common_mut()),
+            Control::Picture(p) => Some(&mut p.common),
+            _ => None,
+        };
+        let Some(c) = common else {
+            return Ok(r#"{"ok":false,"reason":"자리를 가진 개체가 아니다"}"#.to_string());
+        };
+        if c.treat_as_char {
+            // 글자처럼 배치는 문단 흐름이 자리를 잡는다 — 옮겨지지 않는다.
+            return Ok(r#"{"ok":true,"moved":false}"#.to_string());
+        }
+        c.horizontal_offset = (c.horizontal_offset as i64 + dx as i64).max(0) as u32;
+        c.vertical_offset = (c.vertical_offset as i64 + dy as i64).max(0) as u32;
+        section.raw_stream = None;
+        Ok(r#"{"ok":true,"moved":true}"#.to_string())
+    }
+
+    /// 쪽마다 **캐럿이 설 수 있는 첫 자리** — 웹한글컨트롤 `Run("MovePage*")` 용.
+    ///
+    /// 줄과 달리 쪽 경계는 **파일이 안 알려 준다.** 저장 vpos 가 되돌아가는 자리로 두 곳은
+    /// 짚히는데(실측 `20250130-hongbo` 의 15/122 · 26/0), 셋째는 못 짚는다 — 표가 쪽을
+    /// 넘어가는 자리이고 셀 안 `vpos` 는 **셀 기준**이라 되돌아감이 안 남는다. 그래서 이 값은
+    /// rhwp 조판기가 답한다.
+    ///
+    /// 항목 갈래를 가려야 한글과 같아진다:
+    ///
+    /// - 문단이 이어지는 쪽(`PartialParagraph`)은 **그 줄의 시작**이 답이다(15/122).
+    /// - 표가 이어지는 쪽(`PartialTable` 이어짐)은 캐럿이 설 자리가 **본문에 없다** — 셀 안이다.
+    ///   건너뛰고 그 다음 항목을 본다(그래서 넷째 쪽이 29 가 아니라 **30/0** 이다).
+    /// - 첫 쪽의 시작은 앞머리 자리차지 뒤다(줄 이동과 같은 규칙).
+    ///
+    /// **조판 정밀도를 물려받는다.** 쪽 나눔이 한글과 갈리는 문서에서는 이 값도 갈린다.
+    pub fn page_caret_starts(&self) -> Result<String, HwpError> {
+        use crate::renderer::pagination::PageItem;
+        let mut out: Vec<String> = Vec::new();
+        for (sec_idx, pr) in self.pagination.iter().enumerate() {
+            for page in pr.pages.iter() {
+                let mut found: Option<(usize, usize)> = None;
+                'items: for col in &page.column_contents {
+                    for item in &col.items {
+                        match item {
+                            PageItem::PartialTable {
+                                is_continuation: true,
+                                ..
+                            } => continue,
+                            PageItem::PartialParagraph {
+                                para_index,
+                                start_line,
+                                ..
+                            } => {
+                                let ts = self
+                                    .document
+                                    .sections
+                                    .get(sec_idx)
+                                    .and_then(|s| s.paragraphs.get(*para_index))
+                                    .and_then(|p| p.line_segs.get(*start_line))
+                                    .map(|seg| seg.text_start as usize)
+                                    .unwrap_or(0);
+                                found = Some((*para_index, ts));
+                                break 'items;
+                            }
+                            PageItem::FullParagraph { para_index }
+                            | PageItem::Table { para_index, .. }
+                            | PageItem::PartialTable { para_index, .. }
+                            | PageItem::Shape { para_index, .. } => {
+                                found = Some((*para_index, 0));
+                                break 'items;
+                            }
+                            _ => continue,
+                        }
+                    }
+                }
+                // 쪽 전체가 **이어지는 표**뿐이면 본문에는 설 자리가 없다 — 캐럿은 그 쪽에
+                // 보이는 **첫 칸 안**으로 들어간다(실측: 리스트 52·118 의 0/0). 빠뜨리면 목록이
+                // 밀려 뒤가 다 어긋나므로 그 칸의 리스트를 찾아 채운다.
+                let Some((para_index, pos)) = found else {
+                    let cell = page
+                        .column_contents
+                        .iter()
+                        .flat_map(|col| col.items.iter())
+                        .find_map(|item| match item {
+                            PageItem::PartialTable {
+                                para_index,
+                                control_index,
+                                start_row,
+                                ..
+                            } => self.first_cell_list_of_row(
+                                sec_idx,
+                                *para_index,
+                                *control_index,
+                                *start_row,
+                            ),
+                            _ => None,
+                        });
+                    match cell {
+                        Some(list_id) => {
+                            out.push(format!("{{\"list\":{},\"para\":0,\"pos\":0}}", list_id))
+                        }
+                        None => out.push("null".to_string()),
+                    }
+                    continue;
+                };
+                // 본문 문단 번호는 구역을 가로질러 이어 센다 — 캐럿 좌표가 그렇다.
+                let before: usize = self
+                    .document
+                    .sections
+                    .iter()
+                    .take(sec_idx)
+                    .map(|s| s.paragraphs.len())
+                    .sum();
+                let para_in_list = before + para_index;
+                let start = self
+                    .document
+                    .sections
+                    .get(sec_idx)
+                    .and_then(|s| s.paragraphs.get(para_index))
+                    .map(leading_anchor_pos)
+                    .unwrap_or(0);
+                out.push(format!(
+                    "{{\"list\":0,\"para\":{},\"pos\":{}}}",
+                    para_in_list,
+                    pos.max(start)
+                ));
+            }
+        }
+        Ok(format!("[{}]", out.join(",")))
+    }
+
+    /// 스트림 자리를 **글자 번호**로 옮긴다 — 글자 번호를 받는 코어 API(`createTable` 따위)에
+    /// 커서 좌표를 넘길 때 쓴다. 둘을 헷갈리면 글 한가운데에 꽂힌다(`SetTextFile` 에서 겪었다).
+    pub fn char_index_at(
+        &self,
+        list_id: u32,
+        para_in_list: usize,
+        pos: usize,
+    ) -> Result<String, HwpError> {
+        let Some(para) = self.cursor_paragraph_ref(list_id, para_in_list) else {
+            return Ok("{\"charIndex\":0}".to_string());
+        };
+        Ok(format!(
+            "{{\"charIndex\":{}}}",
+            char_idx_at_stream_pos(para, pos)
+        ))
+    }
+
+    /// 쪽 하나의 글 — 웹한글컨트롤 `GetPageText`.
+    ///
+    /// 규칙은 실측이다(`20250130-hongbo`):
+    ///
+    /// - **본문 문단만** 담는다. 표 안 글은 안 들어간다 — 표만 있는 문단은 **빈 줄**이 된다
+    ///   (3쪽이 표 넷뿐이라 빈 줄 넷이다).
+    /// - 문단 사이는 `\r\n` 이다. 마지막 문단 뒤에는 안 붙인다.
+    /// - **쪽 경계에서 문단을 자른다.** 1쪽이 `…현장 문` 으로 끝나고 2쪽이 `화로…` 로 시작한다 —
+    ///   문단 15 의 줄 3(`text_start` 122)에서 정확히 갈린다.
+    pub fn page_text(&self, page_index: usize) -> Result<String, HwpError> {
+        let starts: Vec<(usize, usize)> = {
+            let raw = self.page_caret_starts()?;
+            // `[{"list":0,"para":N,"pos":M}, …]` — 본문 밖에서 시작하는 쪽은 그 문단으로 친다.
+            let mut out = Vec::new();
+            for chunk in raw.split("{\"list\":").skip(1) {
+                let para = chunk
+                    .split("\"para\":")
+                    .nth(1)
+                    .and_then(|s| s.split([',', '}']).next())
+                    .and_then(|s| s.trim().parse::<usize>().ok())
+                    .unwrap_or(0);
+                let pos = chunk
+                    .split("\"pos\":")
+                    .nth(1)
+                    .and_then(|s| s.split([',', '}']).next())
+                    .and_then(|s| s.trim().parse::<usize>().ok())
+                    .unwrap_or(0);
+                out.push((para, pos));
+            }
+            out
+        };
+        let Some(&(from_para, from_pos)) = starts.get(page_index) else {
+            return Ok(json_escape(""));
+        };
+        let last_para = root_para_count(self).saturating_sub(1);
+        let (to_para, to_pos) = starts
+            .get(page_index + 1)
+            .copied()
+            .unwrap_or((last_para + 1, 0));
+
+        let mut lines: Vec<String> = Vec::new();
+        for p in from_para..=to_para.min(last_para) {
+            let Some(para) = self.cursor_paragraph_ref(ROOT_LIST_ID, p) else {
+                continue;
+            };
+            let chars: Vec<char> = para.text.chars().collect();
+            let begin = if p == from_para {
+                char_idx_at_stream_pos(para, from_pos)
+            } else {
+                0
+            };
+            let end = if p == to_para {
+                char_idx_at_stream_pos(para, to_pos)
+            } else {
+                chars.len()
+            };
+            // 경계 문단은 **양쪽 쪽에 다 들어간다**(다음 쪽이 그 문단의 처음부터라 이 쪽에는
+            // 빈 줄로 들어간다) — 실측: 2쪽 끝이 `끝.` 뒤 빈 줄 넷으로 끝나는데 그 마지막이
+            // 3쪽 첫 문단이다. 빼면 쪽마다 한 줄씩 모자란다.
+            lines.push(
+                chars[begin.min(chars.len())..end.min(chars.len())]
+                    .iter()
+                    .collect(),
+            );
+        }
+        // 마지막 쪽에는 다음 쪽이 없는데도 **경계 항목이 하나 더** 붙는다(실측: 마지막 쪽이
+        // 줄바꿈 하나다 — 문단 하나뿐인데 항목은 둘이다). 문서 끝을 경계로 치는 셈이다.
+        if page_index + 1 >= starts.len() {
+            lines.push(String::new());
+        }
+        Ok(json_escape(&lines.join("\r\n")))
+    }
+
+    /// 개체 사이를 도는 차례 — 웹한글컨트롤 `Run("ShapeObjNext/PrevObject")` 용.
+    ///
+    /// **쪽 단위로 돈다.** 실측(`20250130-hongbo`): 1쪽에서 걸면 문단 0 → 5 → 2 → 0 만 돌고,
+    /// 3쪽에서 걸면 26 ↔ 29 만, 2쪽에서 걸면 24 ↔ 25 만 돈다. 문서 전체를 도는 것이 아니라
+    /// **그 쪽에 놓인 개체**끼리 돈다 — 앞서 "일곱 중 셋만 돈다"고 적힌 수수께끼가 이것이었다.
+    ///
+    /// 쪽 안의 차례는 문단 순서가 아니라 **z 순서**다(0 → 5 → 2 는 문단 순서가 아니다).
+    ///
+    /// 쪽을 조판기에 물으므로 **조판 정밀도를 물려받는다**.
+    pub fn object_cycle_json(&self) -> Result<String, HwpError> {
+        use crate::renderer::pagination::PageItem;
+        // 문단 → 쪽. 한 문단이 여러 쪽에 걸치면 **처음 나온 쪽**으로 친다.
+        let mut page_of: std::collections::HashMap<(usize, usize), usize> =
+            std::collections::HashMap::new();
+        let mut page_no = 0usize;
+        for (sec_idx, pr) in self.pagination.iter().enumerate() {
+            for page in pr.pages.iter() {
+                for col in &page.column_contents {
+                    for item in &col.items {
+                        let para = match item {
+                            PageItem::FullParagraph { para_index }
+                            | PageItem::PartialParagraph { para_index, .. }
+                            | PageItem::Table { para_index, .. }
+                            | PageItem::PartialTable { para_index, .. }
+                            | PageItem::Shape { para_index, .. } => Some(*para_index),
+                            _ => None,
+                        };
+                        if let Some(p) = para {
+                            page_of.entry((sec_idx, p)).or_insert(page_no);
+                        }
+                    }
+                }
+                page_no += 1;
+            }
+        }
+
+        let mut out: Vec<String> = Vec::new();
+        let mut para_in_list = 0usize;
+        for (sec_idx, section) in self.document.sections.iter().enumerate() {
+            for (para_idx, para) in section.paragraphs.iter().enumerate() {
+                for (ci, ctrl) in para.controls.iter().enumerate() {
+                    let common = match ctrl {
+                        Control::Table(t) => Some(&t.common),
+                        Control::Shape(s) => Some(s.common()),
+                        Control::Picture(p) => Some(&p.common),
+                        _ => None,
+                    };
+                    let Some(c) = common else { continue };
+                    let page = page_of.get(&(sec_idx, para_idx)).copied().unwrap_or(0);
+                    out.push(format!(
+                        "{{\"para\":{},\"controlIndex\":{},\"page\":{},\"z\":{}}}",
+                        para_in_list, ci, page, c.z_order
+                    ));
+                }
+                para_in_list += 1;
+            }
+        }
+        Ok(format!("[{}]", out.join(",")))
+    }
+
+    /// 표의 어떤 **행에서 첫 칸**의 리스트 번호. 쪽을 넘어 이어지는 표의 시작 칸을 짚는다.
+    fn first_cell_list_of_row(
+        &self,
+        section_index: usize,
+        host_para: usize,
+        control_index: usize,
+        row: usize,
+    ) -> Option<u32> {
+        let (_, lists) = self.collect_fields_and_lists();
+        lists
+            .iter()
+            .filter(|l| {
+                l.is_cell
+                    && l.section_index == section_index
+                    && l.host_para_index == host_para
+                    && l.control_index == control_index
+                    && l.grid.is_some_and(|g| g.row as usize == row)
+            })
+            .min_by_key(|l| l.grid.map(|g| g.col).unwrap_or(u16::MAX))
+            .map(|l| l.list_id)
+    }
+
+    /// 글상자 붙이기·떼기 — 웹한글컨트롤 `Run("ShapeObjAttach/DetachTextBox")`.
+    ///
+    /// 캡션과 달리 **빈 채로 생긴다**(붙이면 캐럿이 `list 2, para 0, pos 0`). 떼면 그 리스트가
+    /// 사라져서 `SetPos(2,0,0)` 이 본문으로 되돌아간다 — 그 되돌아감이 판별자다.
+    pub fn set_text_box_at(
+        &mut self,
+        para_in_list: usize,
+        control_index: usize,
+        attach: bool,
+    ) -> Result<String, HwpError> {
+        let (sec, para_idx) = root_para_location(self, para_in_list)
+            .ok_or_else(|| HwpError::InvalidField(format!("본문 문단 {} 없음", para_in_list)))?;
+        let section = self
+            .document
+            .sections
+            .get_mut(sec)
+            .ok_or_else(|| HwpError::InvalidField(format!("구역 {} 없음", sec)))?;
+        let para = section
+            .paragraphs
+            .get_mut(para_idx)
+            .ok_or_else(|| HwpError::InvalidField(format!("문단 {} 없음", para_idx)))?;
+        let Some(Control::Shape(shape)) = para.controls.get_mut(control_index) else {
+            return Ok(r#"{"ok":false,"reason":"그리기 개체가 아니다"}"#.to_string());
+        };
+        let Some(drawing) = shape.drawing_mut() else {
+            return Ok(r#"{"ok":false,"reason":"글상자를 담을 수 없는 개체다"}"#.to_string());
+        };
+        let changed = if attach {
+            if drawing.text_box.is_some() {
+                false
+            } else {
+                drawing.text_box = Some(TextBox {
+                    paragraphs: vec![Paragraph::new_empty()],
+                    ..Default::default()
+                });
+                true
+            }
+        } else {
+            drawing.text_box.take().is_some()
+        };
+        if changed {
+            section.raw_stream = None;
+        }
+        Ok(format!("{{\"ok\":{}}}", changed))
+    }
+
+    /// 캡션 붙이기 — 웹한글컨트롤 `Run("ShapeObjAttachCaption")`.
+    ///
+    /// 한글은 **빈 캡션을 만들지 않는다.** 붙이는 순간 `그림 ` + 번호 + 공백이 들어가 있고
+    /// 캐럿이 그 끝(12칸)에 선다. 캡션 문단의 자리 지도를 재서 알아낸 구성이다 — `SetPos` 를
+    /// 0~13 으로 훑으면 0·1·2·3 은 그대로 서고 4~10 은 **11 로 스냅**한 뒤 11·12 가 다시 선다:
+    ///
+    /// | 자리 | 무엇 |
+    /// | --- | --- |
+    /// | 0–2 | 글자 `그`·`림`·공백 |
+    /// | 3–10 | 번호 컨트롤 **8칸** |
+    /// | 11 | 공백 하나 |
+    /// | 12 | 문단 끝 |
+    ///
+    /// 개체 갈래와 무관하게 말머리는 `그림` 이다(사각형에 붙여도 그렇다 — 실측).
+    pub fn attach_caption_at(
+        &mut self,
+        para_in_list: usize,
+        control_index: usize,
+    ) -> Result<String, HwpError> {
+        let (sec, para_idx) = root_para_location(self, para_in_list)
+            .ok_or_else(|| HwpError::InvalidField(format!("본문 문단 {} 없음", para_in_list)))?;
+        let section = self
+            .document
+            .sections
+            .get_mut(sec)
+            .ok_or_else(|| HwpError::InvalidField(format!("구역 {} 없음", sec)))?;
+        let para = section
+            .paragraphs
+            .get_mut(para_idx)
+            .ok_or_else(|| HwpError::InvalidField(format!("문단 {} 없음", para_idx)))?;
+        let Some(Control::Shape(shape)) = para.controls.get_mut(control_index) else {
+            return Ok(r#"{"ok":false,"reason":"그리기 개체가 아니다"}"#.to_string());
+        };
+        if Self::shape_caption_slot(shape).is_some() {
+            return Ok(r#"{"ok":false,"reason":"이미 캡션이 있다"}"#.to_string());
+        }
+
+        // 말머리 세 글자와 꼬리 공백 하나를 먼저 놓고, 번호를 그 사이에 끼운다. 자리표 글자는
+        // `insert_text_at` 이 넣게 둔다 — `char_offsets` 를 함께 갱신해 주기 때문이다.
+        let mut caption_para = Paragraph::new_empty();
+        // 글자 다섯: `그`·`림`·공백 · **번호 자리표** · 공백. 자리표 뒤 글자는 컨트롤 몫 8칸을
+        // 건너뛴 자리(11)에 있으므로 대응표를 직접 놓는다 — `insert_text_at` 은 컨트롤을 모른다.
+        caption_para.insert_text_at(0, "그림   ");
+        caption_para.char_offsets = vec![0, 1, 2, 3, 11];
+        caption_para.controls.push(Control::AutoNumber(AutoNumber {
+            number_type: AutoNumberType::Picture,
+            ..Default::default()
+        }));
+        caption_para.char_count = 12;
+
+        *Self::shape_caption_slot(shape) = Some(Caption {
+            paragraphs: vec![caption_para],
+            ..Default::default()
+        });
+        shape.common_mut().attr |= 1 << 29;
+        section.raw_stream = None;
+        Ok(r#"{"ok":true,"pos":12}"#.to_string())
+    }
+
+    /// 캡션 떼기 — 웹한글컨트롤 `Run("ShapeObjDetachCaption")`. 캐럿은 개체 앵커로 돌아온다.
+    pub fn detach_caption_at(
+        &mut self,
+        para_in_list: usize,
+        control_index: usize,
+    ) -> Result<String, HwpError> {
+        let (sec, para_idx) = root_para_location(self, para_in_list)
+            .ok_or_else(|| HwpError::InvalidField(format!("본문 문단 {} 없음", para_in_list)))?;
+        let section = self
+            .document
+            .sections
+            .get_mut(sec)
+            .ok_or_else(|| HwpError::InvalidField(format!("구역 {} 없음", sec)))?;
+        let para = section
+            .paragraphs
+            .get_mut(para_idx)
+            .ok_or_else(|| HwpError::InvalidField(format!("문단 {} 없음", para_idx)))?;
+        let Some(Control::Shape(shape)) = para.controls.get_mut(control_index) else {
+            return Ok(r#"{"ok":false,"reason":"그리기 개체가 아니다"}"#.to_string());
+        };
+        let had = Self::shape_caption_slot(shape).take().is_some();
+        if had {
+            shape.common_mut().attr &= !(1u32 << 29);
+            section.raw_stream = None;
+        }
+        Ok(format!("{{\"ok\":{}}}", had))
+    }
+
+    /// 캡션이 담기는 자리 — 갈래마다 `drawing` 밑이거나 제 몸에 붙어 있다.
+    fn shape_caption_slot(shape: &mut ShapeObject) -> &mut Option<Caption> {
+        match shape {
+            ShapeObject::Line(s) => &mut s.drawing.caption,
+            ShapeObject::Rectangle(s) => &mut s.drawing.caption,
+            ShapeObject::Ellipse(s) => &mut s.drawing.caption,
+            ShapeObject::Arc(s) => &mut s.drawing.caption,
+            ShapeObject::Polygon(s) => &mut s.drawing.caption,
+            ShapeObject::Curve(s) => &mut s.drawing.caption,
+            ShapeObject::Group(s) => &mut s.caption,
+            ShapeObject::Picture(s) => &mut s.caption,
+            ShapeObject::Chart(s) => &mut s.caption,
+            ShapeObject::Ole(s) => &mut s.caption,
+        }
     }
 
     /// 나누기 — 웹한글컨트롤 `Run("BreakPage"·"BreakColumn"·"BreakColDef"·"BreakSection")`.
@@ -1236,5 +2084,14 @@ mod tests {
         let core = DocumentCore::new_empty();
         assert_eq!(core.para_shape_set_json(ROOT_LIST_ID, 99), "{}");
         assert_eq!(core.char_shape_set_json(ROOT_LIST_ID, 99, 0), "{}");
+    }
+
+    /// TEXT는 CP949 밖 글자를 수치 참조로 바꾸고 UNICODE는 원문을 보존한다.
+    #[test]
+    fn text_file_formats_keep_distinct_encoding_contracts() {
+        let source = "가◦€";
+        assert_eq!(escape_outside_cp949(source), "가&#9702;€");
+        assert_eq!(json_escape(source), "\"가◦€\"");
+        assert_eq!(json_escape(&escape_outside_cp949(source)), "\"가&#9702;€\"");
     }
 }

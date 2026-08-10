@@ -534,6 +534,11 @@ impl HwpDocument {
     /// 기본 A4 구역 1개 + 빈 문단 1개를 포함한다. 구역 0개 문서는 모든
     /// 편집/조회 API가 "구역 인덱스 0 범위 초과"로 실패해 사용 불가하므로
     /// 생성 직후 바로 편집 가능한 최소 구조를 보장한다 (#1386).
+    ///
+    /// 여기서 만든 문단은 **구역 정의·단 정의를 안 진다** — 실제 HWP 문서는 예외 없이 그
+    /// 둘을 첫 문단에 지므로 이 문서는 그 점에서 실물과 다르다. 한글 호환이 필요한 자리
+    /// (`Clear`)는 번들 템플릿을 쓰는 [`create_blank_document`](Self::create_blank_document)
+    /// 를 쓴다. 여기에 그 둘을 넣으면 `char_shapes` 자리가 16칸씩 밀려 기존 호출부가 깨진다.
     #[wasm_bindgen(js_name = createEmpty)]
     pub fn create_empty() -> HwpDocument {
         let mut core = DocumentCore::new_empty();
@@ -5489,6 +5494,24 @@ impl HwpDocument {
             .map_err(|e| e.into())
     }
 
+    /// 문서 글 전체 — `GetTextFile("TEXT")`. CP949 수치 참조를 적용한 JSON 문자열이다.
+    #[wasm_bindgen(js_name = getTextFileText)]
+    pub fn get_text_file_text(&self) -> String {
+        self.text_file_json()
+    }
+
+    /// 문서 글 전체 — `GetTextFile("UNICODE")`. 원문 Unicode JSON 문자열이다.
+    #[wasm_bindgen(js_name = getTextFileUnicode)]
+    pub fn get_text_file_unicode(&self) -> String {
+        self.text_file_unicode_json()
+    }
+
+    /// 문서 글을 한글 스캔 차례로 — `InitScan`·`GetText`·`ReleaseScan` 이 쓴다.
+    #[wasm_bindgen(js_name = getScanItems)]
+    pub fn get_scan_items(&self) -> String {
+        self.scan_items_json()
+    }
+
     /// 구역마다 첫 본문 문단 번호 — `MoveSectionUp`·`MoveSectionDown` 이 딛는다.
     #[wasm_bindgen(js_name = getSectionStarts)]
     pub fn get_section_starts(&self) -> String {
@@ -5508,6 +5531,101 @@ impl HwpDocument {
     ) -> Result<String, JsValue> {
         self.break_at_cursor(list_id, para_in_list as usize, pos as usize, kind)
             .map_err(|e| e.into())
+    }
+
+    /// 개체를 한 걸음 옮긴다 — 웹한글컨트롤 `ShapeObjMove*`(걸음 56 HWPUNIT).
+    #[wasm_bindgen(js_name = moveControlAt)]
+    pub fn move_control_at_api(
+        &mut self,
+        para_in_list: u32,
+        control_index: u32,
+        dx: i32,
+        dy: i32,
+    ) -> Result<String, JsValue> {
+        self.move_control_at(para_in_list as usize, control_index as usize, dx, dy)
+            .map_err(|e| e.into())
+    }
+
+    /// 쪽 하나의 글 — 웹한글컨트롤 `GetPageText`.
+    #[wasm_bindgen(js_name = getPageText)]
+    pub fn page_text_api(&self, page_index: u32) -> Result<String, JsValue> {
+        self.page_text(page_index as usize).map_err(|e| e.into())
+    }
+
+    /// 개체 사이를 도는 차례(쪽·z) — 웹한글컨트롤 `Run("ShapeObjNext/PrevObject")` 용.
+    #[wasm_bindgen(js_name = getObjectCycle)]
+    pub fn object_cycle_api(&self) -> Result<String, JsValue> {
+        self.object_cycle_json().map_err(|e| e.into())
+    }
+
+    /// 스트림 자리를 글자 번호로 옮긴다 — 글자 번호를 받는 코어 API 에 넘길 때 쓴다.
+    #[wasm_bindgen(js_name = getCharIndexAtStreamPos)]
+    pub fn char_index_at_api(
+        &self,
+        list_id: u32,
+        para_in_list: u32,
+        pos: u32,
+    ) -> Result<String, JsValue> {
+        self.char_index_at(list_id, para_in_list as usize, pos as usize)
+            .map_err(|e| e.into())
+    }
+
+    /// 쪽마다 캐럿이 설 수 있는 첫 자리 — 웹한글컨트롤 `Run("MovePage*")` 용.
+    #[wasm_bindgen(js_name = getPageCaretStarts)]
+    pub fn page_caret_starts_api(&self) -> Result<String, JsValue> {
+        self.page_caret_starts().map_err(|e| e.into())
+    }
+
+    /// 개체에 글상자를 붙이거나 뗀다 — 웹한글컨트롤 `Run("ShapeObjAttach/DetachTextBox")`.
+    #[wasm_bindgen(js_name = setTextBoxAt)]
+    pub fn set_text_box_at_api(
+        &mut self,
+        para_in_list: u32,
+        control_index: u32,
+        attach: bool,
+    ) -> Result<String, JsValue> {
+        self.set_text_box_at(para_in_list as usize, control_index as usize, attach)
+            .map_err(|e| e.into())
+    }
+
+    /// 개체에 캡션을 붙인다 — 웹한글컨트롤 `Run("ShapeObjAttachCaption")`.
+    #[wasm_bindgen(js_name = attachCaptionAt)]
+    pub fn attach_caption_at_api(
+        &mut self,
+        para_in_list: u32,
+        control_index: u32,
+    ) -> Result<String, JsValue> {
+        self.attach_caption_at(para_in_list as usize, control_index as usize)
+            .map_err(|e| e.into())
+    }
+
+    /// 개체에서 캡션을 뗀다 — 웹한글컨트롤 `Run("ShapeObjDetachCaption")`.
+    #[wasm_bindgen(js_name = detachCaptionAt)]
+    pub fn detach_caption_at_api(
+        &mut self,
+        para_in_list: u32,
+        control_index: u32,
+    ) -> Result<String, JsValue> {
+        self.detach_caption_at(para_in_list as usize, control_index as usize)
+            .map_err(|e| e.into())
+    }
+
+    /// 개체 크기를 한 걸음 바꾼다 — 웹한글컨트롤 `ShapeObjResize*`(걸음 283 HWPUNIT).
+    #[wasm_bindgen(js_name = resizeControlAt)]
+    pub fn resize_control_at_api(
+        &mut self,
+        para_in_list: u32,
+        control_index: u32,
+        d_width: i32,
+        d_height: i32,
+    ) -> Result<String, JsValue> {
+        self.resize_control_at(
+            para_in_list as usize,
+            control_index as usize,
+            d_width,
+            d_height,
+        )
+        .map_err(|e| e.into())
     }
 
     /// 개체의 잠금을 켜고 끈다 — 웹한글컨트롤 `ShapeObjLock`·`ShapeObjUnlockAll`.
