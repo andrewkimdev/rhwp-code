@@ -52,6 +52,7 @@ from ._binary import BUNDLED_DIR, ENV_VAR, binary_name, clear_cache, find_binary
 from ._naming import to_camel, to_snake
 from ._process import CompletedRun, iter_ndjson, run_json, run_ndjson, run_raw
 from .commands import (
+    audit,
     batch,
     build_from_ingest,
     capabilities,
@@ -79,6 +80,8 @@ from .commands import (
     info,
     inspect,
     ir_diff,
+    lineage,
+    replay,
     render_diff,
     replace_text,
     scan,
@@ -149,6 +152,9 @@ __all__ = [
     "export_agent_manifest",
     "export_ontology",
     "capabilities",
+    "replay",
+    "audit",
+    "lineage",
     # 1층 — 산출
     "export_svg",
     "export_pdf",
