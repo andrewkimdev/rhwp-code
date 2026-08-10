@@ -134,11 +134,11 @@ def run_rhwp(scenario: Path, out_dir: Path, impl: str, timeout: int) -> str:
         "--impl",
         impl,
     ]
-    # node 가 **정상 출력을 다 쓴 뒤** 종료 어서션(`UV_HANDLE_CLOSING`)으로 비영 코드를
-    # 내는 일이 매 실행 한 건꼴로 있다(매번 다른 시나리오). 산출 JSON 은 멀쩡하므로 한 번
-    # 다시 돌려 가른다 — 진짜 실패면 재시도도 같은 코드로 죽고, 종료 잡음이면 초록이 된다.
-    last = None
-    for attempt in range(2):
+    # 종료 코드 0/1 밖은 시나리오 실패가 아니라 프로세스급 붕괴다. Windows 에서 러너가
+    # returns.json 을 다 쓰고 process.exit 하는 중 libuv 단언으로 죽는 종료 레이스가 실측됐다
+    # (`Assertion failed: !(handle->flags & UV_HANDLE_CLOSING)`, 0xC0000409). 그 코드만
+    # 한 번 다시 태운다 — 선언된 실패(1)와 두 번 연속 붕괴는 그대로 ERR 다.
+    for attempt in (1, 2):
         try:
             proc = subprocess.run(cmd, capture_output=True, timeout=timeout, check=False)
         except subprocess.TimeoutExpired:
@@ -146,10 +146,9 @@ def run_rhwp(scenario: Path, out_dir: Path, impl: str, timeout: int) -> str:
         sys.stdout.write(proc.stdout.decode("utf-8", "replace"))
         if proc.returncode == 0:
             return "OK"
-        last = proc.stderr.decode("utf-8", "replace")
-        if attempt == 0:
-            sys.stdout.write(f"  (재시도 — 종료 코드 {proc.returncode})\n")
-    sys.stderr.write((last or "")[-2000:])
+        if proc.returncode == 1 or attempt == 2:
+            sys.stderr.write(proc.stderr.decode("utf-8", "replace")[-2000:])
+            return "ERR"
     return "ERR"
 
 
