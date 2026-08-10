@@ -1,11 +1,22 @@
 ---
 kind: pr-review-implementation
-status: in-progress
+status: completed
 canonical: mydocs/manual/pr_review_workflow.md
-last_verified: 2026-08-09
+last_verified: 2026-08-10
 ---
 
-# PR #4274 Windows 시나리오 이식성 메인터너 보정 계획
+# PR #4274 Windows 시나리오 이식성 메인터너 보정 및 검증 기록
+
+## 병합 확정
+
+- [PR #4274](https://github.com/edwardkim/rhwp/pull/4274)는 2026-08-10에 merge commit
+  `92100edbf6bb1dade47af1342a49b089a6ed2e1c`으로 `devel`에 병합됐다.
+- 최신 head `d69bf7dc1`의 GitHub Full CI, CodeQL, Canvas visual diff, Native Skia와
+  Build & Test가 모두 성공했다.
+- 메인터너 보정은 다른 Windows 작업자에서도 Oracle gate를 재현할 수 있게 경로를
+  `{repo}`·`{out}` 토큰으로 고정하고, Hancom 종료 대기와 저장 질문 차단을 추가한 것이다.
+- 최종 Windows Hancom 2022 검증에서 82개 시나리오 3,519/3,519 호출이 일치했고, 실행 뒤
+  `Hwp.exe`·`HwpFrame.exe` 잔류와 저장 확인 대화상자는 없었다.
 
 ## 근거
 
