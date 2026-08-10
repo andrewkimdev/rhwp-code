@@ -6276,7 +6276,8 @@ impl HwpDocument {
     /// HWP 출처는 어댑터가 no-op 이므로 기존 동작과 동일.
     #[wasm_bindgen(js_name = exportHwp)]
     pub fn export_hwp(&mut self) -> Result<Vec<u8>, JsValue> {
-        self.export_hwp_with_adapter_snapshot().map_err(|e| e.into())
+        self.export_hwp_with_adapter_snapshot()
+            .map_err(|e| e.into())
     }
 
     /// HWP 바이트와 이번 산출물의 내용 손실을 같은 결과로 반환한다 (#4430).
