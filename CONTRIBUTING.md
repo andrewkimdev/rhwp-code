@@ -124,6 +124,17 @@ cargo clippy -- -D warnings                      # 린트 경고 0건
 - 논리 CPU가 12개 미만이거나 메모리가 부족하면 `--test-threads`를 논리 CPU 이하로 낮춰주세요.
 - `cargo test --lib` 만으로는 통합 테스트 회귀를 잡지 못합니다 — `--tests` 를 포함해주세요.
 
+렌더링 변경을 한컴 기준 PDF와 대조할 때는 비교 도구가 최신 실행 파일을 보도록 먼저 다음 빌드를 할 수
+있습니다.
+
+```bash
+cargo build --profile release-test --target-dir target/pr-review
+```
+
+이 명령은 `rhwp` 바이너리를 만들어 시각 대조를 준비할 뿐, 테스트를 실행하지 않습니다. **PR 전 검증을
+대체하지 않으므로**, 코드 변경 뒤에는 위의 전체 `cargo nextest run ... --tests --no-fail-fast`를 반드시
+완료하세요. 상세 절차는 [로컬 사전 검증](mydocs/manual/pr_review/local_validation.md)을 따릅니다.
+
 ### 성능 검증 책임
 
 PR을 제출하기 위해 컨트리뷰터가 특정 로컬 환경의 **절대 성능 수치**, 비공개 코퍼스 또는

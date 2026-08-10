@@ -2,7 +2,7 @@
 kind: guide
 status: active
 canonical: mydocs/manual/pr_review_workflow.md
-last_verified: 2026-08-09
+last_verified: 2026-08-10
 ---
 
 # 로컬 사전 검증
@@ -39,6 +39,23 @@ cargo nextest run \
   --target-dir target/pr-review \
   --tests --test-threads 12 --no-fail-fast
 ~~~
+
+### 시각 대조용 최신 바이너리 준비는 별도다
+
+renderer/layout 변경을 한컴 기준 PDF와 비교할 때는 비교 하네스가 수정 후 바이너리를 실행하도록 다음
+명령을 먼저 쓸 수 있다.
+
+~~~bash
+cargo build --profile release-test --target-dir target/pr-review
+RHWP_BIN=target/pr-review/release-test/rhwp \
+  venv/bin/python tools/fidelity_compare/fidelity_compare.py <키> <시작쪽> <끝쪽> \
+  --out-dir /tmp/rhwp-fidelity-<키>
+~~~
+
+`cargo build`는 **컴파일 전용 준비 단계**이며 테스트를 실행하지 않는다. 시각 보정 중에는 이 명령으로
+빠르게 최신 SVG를 확인하되, code head가 바뀐 뒤 PR 검증을 완료하려면 위의 전체 `cargo nextest run
+... --tests --no-fail-fast`를 다시 성공시켜야 한다. 하네스 옵션과 기준 PDF provenance는
+[`tools/fidelity_compare/README.md`](../../../tools/fidelity_compare/README.md)를 따른다.
 
 2026-08-09 Linux 검증 호스트(`ubuntu-ted`, Intel Xeon E5640 16 vCPU, RAM 15 GiB)에서 이 명령의 fixed
 target cold run은 build 포함 17분 42초였다. 같은 target을 그대로 쓴 warm run은 compile 0.96초·전체 8분

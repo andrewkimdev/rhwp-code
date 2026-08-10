@@ -196,9 +196,10 @@ fn caption_has_topbottom_picture(caption: &Caption) -> bool {
 /// layout emitted it (issue2007 p2-p4, p9).
 ///
 /// Do not expand to every descendant: a RowBreak continuation deliberately
-/// keeps future-page text below its physical cell clip.  This is restricted to
-/// direct nested `Table` outer vertical `Line`s. The horizontal correction
-/// remains unrestricted because it never reveals a future-page text tail.
+/// keeps future-page text below its physical cell clip. This is restricted to
+/// direct nested `Table` outer vertical `Line`s. When the outer clip expands,
+/// direct nested `TableCell` content remains bounded by the host's original
+/// horizontal viewport so the border exception cannot reveal a text tail.
 /// The vertical correction is separately bounded to a terminal border that
 /// misses the clip by at most six pixels.
 fn extend_clipped_cell_horizontal_clip_to_nested_table_borders(cell_node: &mut RenderNode) {
@@ -209,10 +210,12 @@ fn extend_clipped_cell_horizontal_clip_to_nested_table_borders(cell_node: &mut R
         return;
     }
 
-    let mut clip_left = cell_node.bbox.x;
-    let mut clip_right = cell_node.bbox.x + cell_node.bbox.width;
+    let host_clip_left = cell_node.bbox.x;
+    let host_clip_right = cell_node.bbox.x + cell_node.bbox.width;
+    let mut clip_left = host_clip_left;
+    let mut clip_right = host_clip_right;
 
-    for table_node in &cell_node.children {
+    for table_node in &mut cell_node.children {
         if !matches!(table_node.node_type, RenderNodeType::Table(_)) {
             continue;
         }
@@ -252,6 +255,28 @@ fn extend_clipped_cell_horizontal_clip_to_nested_table_borders(cell_node: &mut R
             const FALLBACK_BORDER_HALF_STROKE_PX: f64 = 1.0;
             clip_left = clip_left.min(table_left - FALLBACK_BORDER_HALF_STROKE_PX);
             clip_right = clip_right.max(table_right + FALLBACK_BORDER_HALF_STROKE_PX);
+        }
+
+        if table_left < host_clip_left - NESTED_FRAGMENT_EDGE_EPSILON_PX
+            || table_right > host_clip_right + NESTED_FRAGMENT_EDGE_EPSILON_PX
+        {
+            // Keep the direct child table's frame visible through the expanded
+            // host clip, but never let its cell content paint past the parent
+            // grid edge. The table's `Line` children stay outside this clamp.
+            for nested_cell in &mut table_node.children {
+                let RenderNodeType::TableCell(nested_meta) = &nested_cell.node_type else {
+                    continue;
+                };
+                if !nested_meta.clip {
+                    continue;
+                }
+                let content_left = nested_cell.bbox.x.max(host_clip_left);
+                let content_right = (nested_cell.bbox.x + nested_cell.bbox.width)
+                    .min(host_clip_right)
+                    .max(content_left);
+                nested_cell.bbox.x = content_left;
+                nested_cell.bbox.width = content_right - content_left;
+            }
         }
     }
 
@@ -1612,8 +1637,13 @@ pub(crate) struct NestedTableSplit {
     pub content_offset: f64,
     /// 부모 native short-parent-child fragment가 이미 소비한 source unit을 terminal
     /// child viewport에서도 다시 그리지 않도록 한다. 일반 terminal tail은 종전처럼
-    /// source cut을 끈다; 이 flag는 76076 p81→82의 단일 저장 구조에서만 true다.
+    /// source cut을 끈다; native short-parent-child와 p33→34류 terminal rowbreak
+    /// source cursor를 함께 OR한 값이므로 두 형상 모두 unit 컷 자체는 켠다.
     pub force_source_start_cut: bool,
+    /// native short-parent-child(76076 p81→82)에서만 true. `force_source_start_cut`이
+    /// p33→34류 terminal rowbreak source cursor만으로 true인 경우에는 false를 유지해
+    /// 이미 소유가 끝난 마지막 unit을 다음 조각에서 중복 페인트하지 않는다.
+    pub replay_terminal_boundary_unit: bool,
     /// [#3658] 이 조각이 해당 셀 콘텐츠의 **마지막** 조각인가 (컷이 마지막 유닛까지
     /// 포함 — end_cut 종료). true 면 이어받을 continuation 이 없으므로 셀 하단 초과
     /// 줄 드롭(다음 쪽 소속 줄 제외용)을 적용하지 않는다 — 꼬리 문단 유실 방지.
@@ -1641,6 +1671,7 @@ pub(crate) fn calc_nested_split_rows(
             offset_within_start: 0.0,
             content_offset: 0.0,
             force_source_start_cut: false,
+            replay_terminal_boundary_unit: false,
             terminal: false,
             recursive_cut: None,
         };
@@ -1712,6 +1743,7 @@ pub(crate) fn calc_nested_split_rows(
         offset_within_start: 0.0,
         content_offset: offset.max(0.0),
         force_source_start_cut: false,
+        replay_terminal_boundary_unit: false,
         terminal: false,
         recursive_cut: None,
     }
@@ -1761,6 +1793,8 @@ struct HorizontalCellVars {
     /// native short-parent child의 terminal continuation도 이미 소비한 source
     /// prefix를 건너뛰게 하는 명시 신호. 일반 terminal tail에는 false다.
     force_source_start_cut: bool,
+    /// true면 마지막 source unit을 다음 조각에서 재생한다 (76076 p81→82 형상만 해당).
+    replay_terminal_boundary_unit: bool,
     /// [#3658] 분할 렌더(row_filter)가 이 셀 콘텐츠의 마지막 조각인가.
     /// true 면 셀 하단 초과 줄 드롭(다음 쪽 소속 줄 제외)을 적용하지 않는다 —
     /// 이어받을 continuation 이 없어 드롭된 꼬리 줄은 영구 유실되기 때문.
@@ -2379,6 +2413,8 @@ impl LayoutEngine {
             .map(|split| split.content_offset);
         let scalar_force_source_start_cut = nested_split
             .is_some_and(|split| scalar_single_row_fragment && split.force_source_start_cut);
+        let scalar_replay_terminal_boundary_unit = nested_split
+            .is_some_and(|split| scalar_single_row_fragment && split.replay_terminal_boundary_unit);
         let scalar_single_row_continuation = scalar_single_row_continuation_offset.is_some();
         let mut row_col_x = build_row_col_x(
             table,
@@ -2715,6 +2751,7 @@ impl LayoutEngine {
             scalar_single_row_fragment,
             scalar_single_row_fragment_content_offset,
             scalar_force_source_start_cut,
+            scalar_replay_terminal_boundary_unit,
             split_terminal,
             clamp_header_negative_para_offset,
             inline_table_flow_y_shift,
@@ -4191,6 +4228,7 @@ impl LayoutEngine {
             single_row_fragment,
             single_row_fragment_content_offset,
             force_source_start_cut,
+            replay_terminal_boundary_unit,
             split_terminal,
         } = v;
         let inner_area = LayoutRect {
@@ -4223,7 +4261,21 @@ impl LayoutEngine {
             // 페이지 상단에 이어져야 할 줄이 사라진다. 따라서 현재 페이지 **하단**
             // 까지만 정확히 자르고, 앞부분은 같은 논리 원점에서 배치시킨다.
             let start = if force_source_start_cut {
-                self.cell_units_fitting_height(cell, table, styles, offset)
+                let units = self.cell_units_fitting_height(cell, table, styles, offset);
+                if replay_terminal_boundary_unit {
+                    // Native HWP5 short-parent child fragments can end the preceding
+                    // viewport inside the final source unit.  That unit is physically
+                    // clipped on the preceding page, so treating it as fully consumed
+                    // loses its first visible line on the terminal continuation
+                    // (76076 p81 -> p82).  Keep the outer fragment geometry intact and
+                    // replay exactly that boundary unit on the next page.
+                    units.saturating_sub(1)
+                } else {
+                    // terminal_rowbreak_source_cursor-only (76076 p33 -> p34) already
+                    // owns every unit through `units`; replaying one back here would
+                    // repaint its last source line again.
+                    units
+                }
             } else {
                 0
             };
@@ -5774,6 +5826,7 @@ impl LayoutEngine {
         single_row_fragment: bool,
         single_row_fragment_content_offset: Option<f64>,
         force_source_start_cut: bool,
+        replay_terminal_boundary_unit: bool,
         split_terminal: bool,
         clamp_header_negative_para_offset: bool,
         inline_table_flow_y_shift: f64,
@@ -6315,6 +6368,7 @@ impl LayoutEngine {
                         single_row_fragment,
                         single_row_fragment_content_offset,
                         force_source_start_cut,
+                        replay_terminal_boundary_unit,
                         split_terminal,
                     },
                 );
@@ -11018,12 +11072,12 @@ impl LayoutEngine {
         // 여기서는 종료 여부와 관계없이 content origin을 같은 기준으로 전진시킨다
         // (42065 p12–p17).
         let single_cell_nested_continuation = table.row_count == 1
-            && table.col_count == 1
-            && cell.paragraphs.get(para_idx).is_some_and(|paragraph| {
-                paragraph.controls.iter().any(|control| {
-                    matches!(control, Control::Table(nested) if nested.row_count == 1 && nested.col_count == 1)
-                })
-            });
+                && table.col_count == 1
+                && cell.paragraphs.get(para_idx).is_some_and(|paragraph| {
+                    paragraph.controls.iter().any(|control| {
+                        matches!(control, Control::Table(nested) if nested.row_count == 1 && nested.col_count == 1)
+                    })
+                });
         // PR #4122가 만든 재귀 child cursor가 있으면 그 cursor가 소유권의
         // 권위다. scalar offset 보정은 재귀 투영이 없는 기존 fallback에만 쓴다.
         let compensate_first_visible = recursive_cut.is_none()
@@ -11295,6 +11349,9 @@ impl LayoutEngine {
             },
             content_offset: offset,
             force_source_start_cut,
+            // p33→34류(terminal_rowbreak_source_cursor만 true)는 이미 소유가 끝난 마지막
+            // unit을 재생하면 안 되므로, native short-parent 형상에서만 켠다.
+            replay_terminal_boundary_unit: native_short_terminal_child,
             terminal,
             recursive_cut,
         })
@@ -11364,6 +11421,7 @@ impl LayoutEngine {
             offset_within_start: 0.0,
             content_offset: 0.0,
             force_source_start_cut: false,
+            replay_terminal_boundary_unit: false,
             terminal,
             recursive_cut: Some(NestedTableCut {
                 start_row: first_row,
@@ -11562,7 +11620,27 @@ impl LayoutEngine {
                     paragraph.controls.iter().any(|control| {
                         matches!(control, Control::Table(nested) if nested.row_count == 1 && nested.col_count == 1)
                     })
-            });
+                });
+            let native_short_parent_child = cell
+                .paragraphs
+                .get(para_idx)
+                .and_then(|paragraph| {
+                    paragraph.controls.iter().find_map(|control| match control {
+                        Control::Table(child) => Some(child.as_ref()),
+                        _ => None,
+                    })
+                })
+                .is_some_and(|child| {
+                    self.native_short_parent_child_fragment_eligible(
+                        table,
+                        cell,
+                        child,
+                        self.nested_table_mixed_fragment_heights(child, styles)
+                            .iter()
+                            .map(|fragment| fragment.height)
+                            .sum(),
+                    )
+                });
             // 재귀 투영 run은 `mixed_nested_split_from_cut`의 child RowCut이
             // source cursor와 viewport를 이미 함께 소유한다. 여기에 scalar
             // continuation 보정을 다시 더하면 부모 행만 첫 가시 유닛만큼 커져
@@ -11570,7 +11648,14 @@ impl LayoutEngine {
             // mixed fallback의 42065 p17 terminal 보정과 HWPX 저장 viewport
             // 보정은 유지한다.
             if offset_within_start > 0.5 && !authoritative_recursive_run {
-                if terminal && single_cell_nested_continuation {
+                if terminal && native_short_parent_child {
+                    // The native short-parent continuation replays its boundary
+                    // source unit in the current fragment.  The generic parent
+                    // extra would reserve that whole unit a second time and leave
+                    // an empty row tail (76076 p82); retain only the mixed-flow
+                    // clip guard.
+                    extra += 4.0;
+                } else if terminal && single_cell_nested_continuation {
                     // Keep the parent RowBreak cell in lockstep with the
                     // terminal nested-cell viewport.  Reserving only one
                     // unit leaves the parent clip above the nested tail, so

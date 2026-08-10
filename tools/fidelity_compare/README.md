@@ -46,6 +46,22 @@ PNG가 두부(□)로 채워지는 하네스 오염을 막는다. 글꼴 바이�
 
 자동 탐색이 맞지 않으면 `RHWP_BIN`과 `CHROME_BIN`으로 각각 실행 파일을 지정한다.
 
+## 수정 후 비교 전: 최신 바이너리 준비
+
+Rust 코드를 바꾼 직후에는 기존 `target/release-test/rhwp`가 이전 code head일 수 있다. 비교 전에 현재
+review target으로 실행 파일을 갱신하고 그 경로를 명시한다.
+
+```bash
+cargo build --profile release-test --target-dir target/pr-review
+RHWP_BIN=target/pr-review/release-test/rhwp \
+  venv/bin/python tools/fidelity_compare/fidelity_compare.py <키> <시작쪽> <끝쪽> \
+  --out-dir /tmp/rhwp-fidelity-<키>
+```
+
+이 `cargo build`는 SVG/PDF 시각 대조를 위한 **컴파일 전용 준비**이며 Rust 테스트를 실행하지 않는다.
+PR의 코드 검증은 별도로 [로컬 사전 검증](../../mydocs/manual/pr_review/local_validation.md)의 전체
+`cargo nextest run ... --tests --no-fail-fast`를 실행해야 한다.
+
 Linux 예시:
 
 ```bash

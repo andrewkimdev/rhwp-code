@@ -2207,14 +2207,28 @@ impl DocumentCore {
         parent_para_idx: usize,
         control_idx: usize,
     ) {
+        fn mark_table_tree_dirty(table: &mut crate::model::table::Table) {
+            table.dirty = true;
+            // 중첩 표 셀의 서식/텍스트 변경은 최외곽 표만 dirty로 두면 이미 완료된
+            // 앞쪽 page fragment가 이전 TextRun을 재사용할 수 있다. 하위 표도 함께
+            // 무효화해야 p81과 p82 같은 분할 셀이 하나의 새 문자 모양으로 다시 조판된다.
+            for cell in &mut table.cells {
+                for paragraph in &mut cell.paragraphs {
+                    for control in &mut paragraph.controls {
+                        if let Control::Table(child) = control {
+                            mark_table_tree_dirty(child);
+                        }
+                    }
+                }
+            }
+        }
+
         if let Some(ctrl) = self.document.sections[section_idx].paragraphs[parent_para_idx]
             .controls
             .get_mut(control_idx)
         {
             match ctrl {
-                Control::Table(t) => {
-                    t.dirty = true;
-                }
+                Control::Table(table) => mark_table_tree_dirty(table),
                 // Shape는 별도 dirty 필드가 없으므로 section dirty만으로 충분
                 _ => {}
             }
