@@ -6739,7 +6739,7 @@ fn parse_common_shape_children(
                     // [#4319] 캡션 — 미적재 시 라운드트립에서 캡션 subList 소실(다른
                     // 도형 변형과 동형, parse_shape_object/parse_container 참고).
                     b"caption" => {
-                        *caption_out = Some(parse_table_caption(ce, reader)?);
+                        *caption_out = Some(parse_caption(ce, reader)?);
                     }
                     _ => {}
                 }
