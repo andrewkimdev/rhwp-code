@@ -1435,6 +1435,9 @@ fn reflow_line_segs_impl(
     // LINE_SEG가 가진 line-height와, 0에서 시작해 엄격히 증가하는 start가 모두
     // 있어야 prefix를 권위 경계로 채택한다. 범위 삭제는 삭제된 여러 줄을 같은
     // start로 접을 수 있으므로 duplicate/역행 경계는 full reflow가 안전하다.
+    let has_valid_orig = original_line_segs
+        .iter()
+        .all(|seg| seg.tag & LineSeg::TAG_IMPLEMENTATION_PROPERTY == 0);
     let authoritative_line_seg_prefix = has_valid_orig
         && original_line_segs
             .first()
