@@ -103,6 +103,8 @@ class CodeQLWorkflowTests(unittest.TestCase):
         self,
     ) -> None:
         workflow = self.workflow
+        preflight = job_body(workflow, "preflight")
+        self.assertIn("permissions:\n      actions: read", preflight)
         self.assertIn(
             "codeql_languages: ${{ steps.languages.outputs.codeql_languages "
             "|| 'javascript-typescript,python,rust' }}",
@@ -136,8 +138,13 @@ class CodeQLWorkflowTests(unittest.TestCase):
     def test_analysis_steps_follow_selection_while_check_names_stay_stable(self) -> None:
         analyze = job_body(self.workflow, "analyze")
         selected = (
-            "contains(format(',{0},', needs.preflight.outputs.codeql_languages), "
+            "contains(format(',{0},', env.SELECTED_LANGUAGES), "
             "format(',{0},', matrix.language))"
+        )
+        self.assertIn(
+            "SELECTED_LANGUAGES: ${{ needs.preflight.outputs.codeql_languages "
+            "|| 'javascript-typescript,python,rust' }}",
+            analyze,
         )
         self.assertIn("language: [javascript-typescript, python, rust]", analyze)
         self.assertIn("name: Analyze (${{ matrix.language }})", analyze)
@@ -148,10 +155,22 @@ class CodeQLWorkflowTests(unittest.TestCase):
             "if: ${{ matrix.language == 'rust' && " + selected + " }}",
             analyze,
         )
-        self.assertNotIn(
-            "needs.preflight.outputs.codeql_languages",
-            analyze.split("strategy:", maxsplit=1)[0],
+        job_if = next(
+            line.strip() for line in analyze.splitlines() if line.strip().startswith("if:")
         )
+        self.assertNotIn("codeql_languages", job_if)
+
+    def test_fast_pass_summary_marks_language_classification_not_applicable(
+        self,
+    ) -> None:
+        summary = self.workflow.split(
+            "      - name: Summarize CodeQL impact classification\n", maxsplit=1
+        )[1].split("\n  analyze:", maxsplit=1)[0]
+        self.assertIn("if [[ \"${FAST_PASS}\" == 'true' ]]; then", summary)
+        self.assertIn("IMPACT_AUTHORITY='n/a (fast-pass)'", summary)
+        self.assertIn("CODEQL_LANGUAGES='n/a (fast-pass)'", summary)
+        self.assertIn("CLASSIFICATION_STATUS='n/a (fast-pass)'", summary)
+        self.assertIn('IMPACT_REASON="fast-pass:${FAST_PASS_REASON}"', summary)
 
     def test_language_finalizer_preserves_valid_selection(self) -> None:
         outputs = self._run_language_finalizer(

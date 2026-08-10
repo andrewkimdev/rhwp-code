@@ -4,7 +4,7 @@
 - **브랜치**: `issue-3790-stage5b-codeql-languages`
 - **worktree**: `tmp/issue-3790-stage5b-codeql`
 - **기준**: `upstream/devel` `8ea92cdad120` (#4341 merge)
-- **상태**: 설계 보정·구현·focused 검증 완료, 커밋 전
+- **상태**: Draft PR #4519 1차 CI 통과, 리뷰 F1·F2·F4 보정·focused 검증 완료
 
 ## 선행 정리
 
@@ -42,6 +42,8 @@
 
 - `.github/workflows/codeql.yml` preflight에 trusted classifier checkout, PR 파일 수집, classifier 실행과
   허용 언어 집합 finalizer를 추가했다.
+- candidate-bound workflow run·job을 읽는 기존 preflight REST 호출의 의도를 토큰 권한에도 명시하도록
+  read-only `actions: read`를 선언하고 계약 테스트로 고정한다.
 - preflight output으로 `codeql_languages`, `classification_status`, `impact_reason`, `impact_authority`를
   노출하고 Job Summary에 판정 근거를 남긴다.
 - 고정 세 언어 matrix의 선택되지 않은 lane에는 no-op step을 두고 실제 분석 step을 정확한 token
@@ -62,3 +64,22 @@
 
 변경 범위가 workflow·정적 계약 테스트·문서뿐이므로 Cargo와 제품 테스트는 적용하지 않는다. 원격 push와
 PR 생성은 별도 승인 뒤 진행한다.
+
+## PR #4519 1차 CI와 리뷰 보정
+
+- candidate `d14e29c307ca68393afdd5a2813c64c77fe19769`의 CI run `31410523565`, CodeQL run
+  `31410523372`, 세 Analyze job과 GHAS `CodeQL`이 모두 성공했다. workflow 변경은 trusted classifier에서
+  `fail-closed:workflow-contract`로 판정돼 세 언어 full 경로를 검증했다.
+- 리뷰 [#5243938913](https://github.com/edwardkim/rhwp/pull/4519#issuecomment-5243938913)의 F1을
+  수용했다. preflight가 cancel·runner 장애로 output을 발행하지 못하면 빈 언어 값으로 세 no-op success가
+  되는 경계를 consumer-side `SELECTED_LANGUAGES`의 세 언어 fallback으로 닫는다.
+- F2를 수용해 `actions: read`가 candidate-bound workflow 조회를 위한 최소 읽기 권한임을 기록하고 테스트로
+  고정한다.
+- F4를 수용해 fast-pass Summary의 언어·authority·status를 `n/a (fast-pass)`로 표시하고 fast-pass 사유를
+  별도로 남긴다.
+- F3 review 문서는 reviewer 지정 승인 뒤 추가해야 하므로 이번 code 보정 commit에서는 다루지 않는다.
+- TDD RED에서 consumer fallback 부재와 fast-pass Summary 오표시 2건을 확인했다. 보정 뒤 CodeQL 계약
+  12/12, classifier 28/28, `actionlint`, `git diff --check`가 통과했다.
+- `python3 -m unittest discover -s scripts/tests -p 'test_*.py'`는 Homebrew Python 3.14에 Pillow가 없어
+  `test_visual_sweep` import에서 중단됐다. 코드 실패가 아니므로 Pillow 12.2.0을 포함한 Codex 번들
+  Python으로 같은 discover 범위를 재실행했고 188/188이 통과했다.

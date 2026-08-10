@@ -635,11 +635,19 @@ jobs:
         continue-on-error: true
         env:
           FAST_PASS: ${{ steps.finalize.outputs.fast_pass || 'false' }}
+          FAST_PASS_REASON: ${{ steps.finalize.outputs.reason || 'preflight-unavailable' }}
           IMPACT_AUTHORITY: ${{ steps.collect-impact.outputs.authority || 'unavailable' }}
           CODEQL_LANGUAGES: ${{ steps.languages.outputs.codeql_languages || 'javascript-typescript,python,rust' }}
           CLASSIFICATION_STATUS: ${{ steps.languages.outputs.classification_status || 'full' }}
           IMPACT_REASON: ${{ steps.languages.outputs.reason || 'fail-closed:impact-unavailable' }}
         run: |
+          if [[ "${FAST_PASS}" == 'true' ]]; then
+            IMPACT_AUTHORITY='n/a (fast-pass)'
+            CODEQL_LANGUAGES='n/a (fast-pass)'
+            CLASSIFICATION_STATUS='n/a (fast-pass)'
+            IMPACT_REASON="fast-pass:${FAST_PASS_REASON}"
+          fi
+
           {
             echo '### CodeQL impact classification'
             echo
@@ -660,6 +668,10 @@ jobs:
     timeout-minutes: 45
     needs: preflight
     if: ${{ always() && needs.preflight.outputs.fast_pass != 'true' }}
+    # preflight가 cancel·runner 장애로 job output을 발행하지 못해도 빈 선택이
+    # 세 no-op success로 열리지 않도록 consumer에서 다시 세 언어 full로 닫는다.
+    env:
+      SELECTED_LANGUAGES: ${{ needs.preflight.outputs.codeql_languages || 'javascript-typescript,python,rust' }}
     permissions:
       security-events: write
       contents: read
@@ -673,28 +685,28 @@ jobs:
       # matrix job 이름은 세 언어 모두 유지한다. 선택되지 않은 언어도 명시적 success로
       # 끝나므로 현재·향후 required check가 check 부재로 pending되지 않는다.
       - name: Skip unselected language
-        if: ${{ !contains(format(',{0},', needs.preflight.outputs.codeql_languages), format(',{0},', matrix.language)) }}
+        if: ${{ !contains(format(',{0},', env.SELECTED_LANGUAGES), format(',{0},', matrix.language)) }}
         run: |
           printf 'Skipping unselected CodeQL language: %s\n' '${{ matrix.language }}'
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        if: ${{ contains(format(',{0},', needs.preflight.outputs.codeql_languages), format(',{0},', matrix.language)) }}
+        if: ${{ contains(format(',{0},', env.SELECTED_LANGUAGES), format(',{0},', matrix.language)) }}
 
       # [#3290] 호스티드 16GB VM 은 CodeQL 자동 감지 값이 적정하다. self-hosted 로
       # 되돌릴 경우 ram/threads 캡 필수 — #3289 사고(무캡 JVM 40~55GB×2 로 호스트
       # 포화·스톨) 및 task_m100_3289_report.md 거버넌스 절 참조.
       - name: Initialize CodeQL
-        if: ${{ contains(format(',{0},', needs.preflight.outputs.codeql_languages), format(',{0},', matrix.language)) }}
+        if: ${{ contains(format(',{0},', env.SELECTED_LANGUAGES), format(',{0},', matrix.language)) }}
         uses: github/codeql-action/init@v4
         with:
           languages: ${{ matrix.language }}
 
       - name: Install Rust toolchain
-        if: ${{ matrix.language == 'rust' && contains(format(',{0},', needs.preflight.outputs.codeql_languages), format(',{0},', matrix.language)) }}
+        if: ${{ matrix.language == 'rust' && contains(format(',{0},', env.SELECTED_LANGUAGES), format(',{0},', matrix.language)) }}
         uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable 브랜치 (2026-08-01 시점)
 
       # [#3790 Stage 5A] 기본 build mode의 내부 autobuild가 같은 source alert와
       # fingerprint를 생성함을 canary로 확인했다. 중복 cache·수동 prebuild는 실행하지 않는다.
       - name: Perform CodeQL Analysis
-        if: ${{ contains(format(',{0},', needs.preflight.outputs.codeql_languages), format(',{0},', matrix.language)) }}
+        if: ${{ contains(format(',{0},', env.SELECTED_LANGUAGES), format(',{0},', matrix.language)) }}
         uses: github/codeql-action/analyze@v4

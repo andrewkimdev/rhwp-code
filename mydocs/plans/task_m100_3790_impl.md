@@ -234,6 +234,8 @@ Stage 3 merge 직후 frontend-only canary PR #3951에서 unit/package/render 진
    실패, 허용 집합 밖 언어 또는 잘못된 classification status도 세 언어 full로 닫는다.
 3. `Analyze (javascript-typescript|python|rust)` matrix job은 항상 세 개를 생성한다. 선택되지 않은 job은
    명시적 no-op success로 끝내 현재·향후 required check에서 check 부재로 인한 pending을 만들지 않는다.
+   preflight output이 비면 consumer의 `SELECTED_LANGUAGES`가 세 언어 full로 복구되어 0건 분석 green을
+   만들지 않는다.
 4. checkout·CodeQL init·Rust toolchain·analysis는 선택된 언어 job에서만 실행한다. 동적 matrix로 job
    자체를 제거하지 않아 Stage 5A의 candidate-bound Analyze job 재사용 계약도 유지한다.
 5. `devel` branch metadata의 2026-08-11 live 값은 protected, required context `Build & Test` 하나다.
@@ -241,7 +243,8 @@ Stage 3 merge 직후 frontend-only canary PR #3951에서 unit/package/render 진
    404지만 branch metadata는 required context를 노출하므로 PR 생성 전 같은 API로 다시 확인한다.
 6. `codeql_languages=none`이면 세 job이 no-op success이고 새 GHAS `CodeQL` check가 생기지 않는다.
    후속 review-only run의 candidate 재사용은 GHAS check 부재를 허용하지 않고 기존처럼 fail-closed한다.
-7. 작업 기록은 `mydocs/working/task_m100_3790_stage5b.md`에 구현·검증 결과와 권한 확인 근거를 남긴다.
+7. fast-pass Job Summary는 언어 판정값 대신 `n/a (fast-pass)`를 표시해 실제 분석 실행과 구분한다.
+8. 작업 기록은 `mydocs/working/task_m100_3790_stage5b.md`에 구현·검증 결과와 권한 확인 근거를 남긴다.
 
 ## Stage 5B 이후
 
