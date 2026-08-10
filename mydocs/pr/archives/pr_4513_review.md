@@ -33,8 +33,8 @@ modifiers: intake_and_review.md, local_validation.md,
 `-x` 체리픽해 author와 provenance를 보존했고, contributor branch의 `devel` merge commit은 넣지 않았다.
 Draft이면서 `CONFLICTING`인 #4315는 이 통합에서 제외했다.
 
-원 PR별 수용 근거는 `mydocs/pr/pr_<번호>_review.md`, 적용 순서·충돌·검증 전체는
-`mydocs/pr/pr_4443_4446_4454_4462_4469_4497_4500_4501_4502_4503_4504_review_impl.md`에 기록했다.
+원 PR별 수용 근거는 `mydocs/pr/archives/pr_<번호>_review.md`, 적용 순서·충돌·검증 전체는
+`mydocs/pr/archives/pr_4443_4446_4454_4462_4469_4497_4500_4501_4502_4503_4504_review_impl.md`에 기록했다.
 
 ## 메인터너 보정
 
