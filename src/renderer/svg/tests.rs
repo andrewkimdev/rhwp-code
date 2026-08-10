@@ -105,34 +105,6 @@ fn legacy_hanyang_faces_have_portable_local_aliases() {
     );
 }
 
-#[test]
-fn chrome_fallback_cjk_metrics_use_the_calibrated_layout_advance() {
-    assert_eq!(
-        chrome_cjk_layout_advance_scale("휴먼명조", "구내운반차"),
-        Some(1.0)
-    );
-    assert_eq!(
-        chrome_cjk_layout_advance_scale("휴먼고딕", "안전조치"),
-        Some(1.0)
-    );
-    assert_eq!(
-        chrome_cjk_layout_advance_scale("한양중고딕", "구내운반차"),
-        Some(1.0)
-    );
-    assert_eq!(
-        chrome_cjk_layout_advance_scale("휴먼명조", "HWP 2024"),
-        None
-    );
-    assert_eq!(
-        chrome_cjk_layout_advance_scale("함초롬바탕", "구내운반차"),
-        None
-    );
-    assert_eq!(
-        svg_text_length_attrs("가", 12.0, 1.0, true),
-        " textLength=\"12.0000\" lengthAdjust=\"spacingAndGlyphs\""
-    );
-}
-
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn style_font_face_css_orders_broken_bitmap_faces_after_outline_fallbacks() {

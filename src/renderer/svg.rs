@@ -3322,33 +3322,10 @@ fn color_to_svg(color: u32) -> String {
     format!("#{:02x}{:02x}{:02x}", r, g, b)
 }
 
-fn chrome_cjk_layout_advance_scale(font_family: &str, cluster_str: &str) -> Option<f64> {
+fn svg_text_length_attrs(cluster_str: &str, cluster_advance: f64, scale_x: f64) -> String {
     if !cluster_str
         .chars()
-        .any(|ch| ('\u{AC00}'..='\u{D7A3}').contains(&ch))
-    {
-        return None;
-    }
-
-    match font_family {
-        // HMKMM/HMKMG는 Chrome에서 bitmap glyph를 .notdef로 그릴 수 있어 local()
-        // 체인의 outline face를 먼저 사용한다. 안전 fallback의 natural advance가 저장
-        // HWP metric을 벗어나지 않도록 한글 glyph 폭을 layout advance에 고정한다.
-        "휴먼명조" | "휴먼고딕" | "한양중고딕" | "HY중고딕" => Some(1.0),
-        _ => None,
-    }
-}
-
-fn svg_text_length_attrs(
-    cluster_str: &str,
-    cluster_advance: f64,
-    scale_x: f64,
-    force_cjk_layout_advance: bool,
-) -> String {
-    if !force_cjk_layout_advance
-        && !cluster_str
-            .chars()
-            .any(|ch| ch.is_ascii_alphanumeric() || is_halfwidth_cjk_quote(ch))
+        .any(|ch| ch.is_ascii_alphanumeric() || is_halfwidth_cjk_quote(ch))
     {
         return String::new();
     }
@@ -3377,13 +3354,7 @@ fn svg_cluster_text_length_attrs(
     let Some(glyph_advance) = style.glyph_fit_advance(layout_cluster_advance) else {
         return String::new();
     };
-    let metric_scale = chrome_cjk_layout_advance_scale(&style.font_family, cluster_str);
-    svg_text_length_attrs(
-        cluster_str,
-        glyph_advance * script_advance_scale * metric_scale.unwrap_or(1.0),
-        scale_x,
-        metric_scale.is_some(),
-    )
+    svg_text_length_attrs(cluster_str, glyph_advance * script_advance_scale, scale_x)
 }
 
 /// XML 특수문자 이스케이프
@@ -3526,28 +3497,12 @@ fn font_local_aliases(font_family: &str) -> Vec<&'static str> {
         "바탕체" => vec!["바탕체", "BatangChe"],
         "궁서" => vec!["궁서", "Gungsuh"],
         "궁서체" => vec!["궁서체", "GungsuhChe"],
-        // HWPX는 legacy face `한양중고딕`을 보존하지만, Chrome은 설치된 한양
-        // face를 먼저 선택하면 host마다 glyph shape가 달라진다. SVG 좌표는 이미
-        // 조판 결과로 고정되어 있으므로 macOS Chrome의 outline sans를 우선해
-        // p81 시작 셀과 다음 쪽의 같은 문자 모양이 같은 face를 사용하게 한다.
-        // 한양 별칭은 macOS 대체글꼴이 없는 host를 위한 마지막 fallback으로 남긴다.
-        "한양중고딕" => vec![
-            "Apple SD Gothic Neo",
-            "Noto Sans KR",
-            "Malgun Gothic",
-            "맑은 고딕",
-            "한양중고딕",
-            "HY중고딕",
-            "HYGothic-Medium",
-        ],
-        "HY중고딕" => vec![
-            "Apple SD Gothic Neo",
-            "Noto Sans KR",
-            "Malgun Gothic",
-            "맑은 고딕",
-            "HY중고딕",
-            "HYGothic-Medium",
-        ],
+        // HWPX는 legacy face `한양중고딕`을 보존하지만, 설치된 한양 글꼴의
+        // family/full name은 각각 `HY중고딕`/`HYGothic-Medium`이다. 이 별칭을
+        // `--font-style`과 portable SVG의 local() 해석에 모두 남겨야 글꼴이
+        // 설치된 검증 host에서 Verdana 같은 무관한 폴백이나 두부로 떨어지지 않는다.
+        "한양중고딕" => vec!["한양중고딕", "HY중고딕", "HYGothic-Medium"],
+        "HY중고딕" => vec!["HY중고딕", "HYGothic-Medium"],
         // HMKMM.TTF 같은 legacy 휴먼명조 배포본은 EBDT bitmap strike를 포함하며,
         // Blink/Chrome이 local face를 선택하고도 표준 한글을 .notdef(□)로 그릴 수 있다.
         // SVG 좌표는 이미 조판 결과로 고정되어 있으므로 portable outline serif를 먼저
