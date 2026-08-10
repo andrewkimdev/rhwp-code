@@ -3,8 +3,9 @@
 - **이슈**: [#3790](https://github.com/edwardkim/rhwp/issues/3790)
 - **브랜치**: `issue-3790-stage5a-codeql-safety`
 - **worktree**: `tmp/issue-3790-stage5a-codeql`
-- **기준**: `upstream/devel` `e48fe86947fb` (#4310·#4317 merge 포함)
-- **상태**: Draft PR #4341 최종 CI·GHAS·분석 기록·metadata 반영 완료, review gate 대기
+- **최초 기준**: `upstream/devel` `e48fe86947fb` (#4310·#4317 merge 포함)
+- **최신 동기화 기준**: `upstream/devel` `0664e6568e9b` (#4513 merge 포함)
+- **상태**: Ready PR #4341 self-review F1–F6 보정·최신 devel 병합 완료, 새 full CI·CodeQL 대기
 
 ## 재개와 보존 경계
 
@@ -19,13 +20,15 @@
 
 - Stage 4 canary PR #4078은 wall clock 575초 중 `Analyze (rust)`가 563초여서 CodeQL이 남은 critical
   path임을 확인했다.
-- Actions의 `Analyze (...)` job 성공은 GitHub Advanced Security의 최종 CodeQL check 성공을 보장하지
+- Actions의 `Analyze (...)` job 성공은 GitHub Advanced Security의 별도 policy check 성공을 보장하지
   않는다. PR #4310의 보정 전 candidate에서는 세 Analyze job이 성공했지만 app
   `github-advanced-security`의 `CodeQL` check가 high alert로 실패했고, 보정 candidate에서는 같은
   check가 성공했다.
 - 따라서 workflow job만 재사용하는 정적 selector는 폐기한다. 기존 PR workflow run의 candidate SHA와
   현재 attempt 시작 시각을 기준으로 동일 SHA의 현재 보안 check를 식별해 missing·pending·failure를
-  모두 닫는다. 재실행의 이전 attempt에서 생성된 check도 재사용하지 않는다.
+  모두 닫는다. 재실행의 이전 attempt에서 생성된 check도 재사용하지 않는다. 다만 API 실측에서 이 check는
+  첫 언어 분석 도착 때 종결되고 이후 JavaScript/TypeScript·Rust 분석으로 갱신되지 않았으므로, 단일
+  check에서 뒤에 도착한 언어의 policy 결과까지 추론하지 않는다. 세 Analyze job 성공은 계속 별도 요구한다.
 - Rust `cargo build` 뒤에도 CodeQL이 별도 autobuild와 extraction을 수행했다. Stage 5A는 blocking lane을
   바꾸지 않고 `build-mode: none`, `upload: never`인 별도 shadow를 추가해 prebuild 제거 효과와 SARIF
   동등성을 원격에서 측정한다.
@@ -52,7 +55,7 @@ Stage 5B의 동적 언어 matrix, required status 변경, 원격 push·PR·canar
 ## focused 검증
 
 - TDD RED: 새 Stage 5A 테스트가 보안 check 조회와 shadow job 부재를 각각 검출했다.
-- `python3 -m unittest scripts/tests/test_codeql_stage5a_workflow.py` — 6/6 통과. 세 Analyze job이
+- `python3 -m unittest scripts/tests/test_codeql_workflow.py` — 2026-08-09 기준 6/6 통과. 세 Analyze job이
   green이어도 GHAS `CodeQL` check가 `failure`면 fast-pass가 거부되고, 모두 성공하면 재사용되는 실행
   mock과 이전 workflow run attempt의 check를 거부하는 mock을 포함한다.
 - Stage 5A·review-only fast-pass·wiring·CI impact·Render Diff·cache sweep Python 계약 테스트 —
@@ -136,7 +139,7 @@ API 권한 부재다. 마지막 항목은 shadow에 `security-events` 권한이 
   `Rust no-prebuild shadow`, `rust-no-prebuild-sarif-*`로 바꿨다.
 
 계약 테스트는 보정 전 blocking raw artifact와 no-prebuild shadow가 없어 2건 실패하는 RED를 확인했다.
-구현 뒤 `python3 -m unittest scripts/tests/test_codeql_stage5a_workflow.py` 6/6, 연관 Python workflow
+구현 뒤 `python3 -m unittest scripts/tests/test_codeql_workflow.py` 6/6, 연관 Python workflow
 계약 테스트 74/74, classifier Node 테스트 28/28이 통과했다. `actionlint`와 `git diff --check`도
 통과했다. 같은 run의 두 raw SARIF, 추출 통계, annotation과 duration 비교 결과는 다음 절에 기록한다.
 
@@ -219,7 +222,7 @@ PR #4341의 측정 구성은 그대로 merge하지 않고, blocking check identi
 - **candidate**: `c2674bd336a26448d1673f7f70389cb8fc2a0ce8`
 - **CodeQL run**: [31314188222](https://github.com/edwardkim/rhwp/actions/runs/31314188222)
 - **CI run**: [31314188326](https://github.com/edwardkim/rhwp/actions/runs/31314188326)
-- **PR 상태**: `MERGEABLE / CLEAN`, 모든 check 성공, Draft, review 없음
+- **PR 상태(2026-08-09 당시 참고값)**: `MERGEABLE / CLEAN`, 모든 check 성공, Draft, review 없음
 
 ### 최종 Rust 시간
 
@@ -247,4 +250,22 @@ PR #4341의 측정 구성은 그대로 merge하지 않고, blocking check identi
 - canary용 Actions artifact는 0개라 shadow·raw SARIF 정리가 확인됐다.
 
 Stage 5A 코드·CI gate는 통과다. PR #4341 제목·본문도 최종 no-prebuild 동작과 canary 근거로 보정했다.
-Draft 상태는 유지하고 이후 review 요청은 작업지시자 gate로 남긴다.
+2026-08-09 당시에는 Draft 상태를 유지하고 이후 review 요청을 작업지시자 gate로 남겼다.
+
+## PR #4341 self-review 보정
+
+- **review**: [#4898256773](https://github.com/edwardkim/rhwp/pull/4341#pullrequestreview-4898256773)
+- **최신 devel**: `0664e6568e9bc5a50ff6472db8f9eb5825d569c0`
+- **병합 결과**: `.github/workflows/ci.yml`의 계약 테스트 목록 한 곳만 충돌했다. PR의 CodeQL 테스트와
+  devel의 Docker·release installer·release package·setup 테스트를 모두 보존했다.
+- **GHAS 범위**: candidate `c2674bd33`에서 단일 GHAS `CodeQL` check는 Python analysis와 같은
+  `12:49:58Z`에 시작해 `12:50:00Z`에 끝났다. JavaScript/TypeScript analysis는 `12:50:28Z`, Rust
+  analysis는 `12:57:08Z`에 생성됐으므로 이 단일 check에서 뒤의 두 언어 policy 결과를 추론하지 않는다.
+  세 Analyze job 성공과 단일 GHAS check 성공은 각각 계속 요구한다.
+- **코드 정리**: check-run에 없는 `created_at` fallback, `Date.parse(0)`, 도달 불가능한 identity mismatch
+  분기를 제거했다. `started_at` 누락·이전 attempt는 현재 check 부재로 처리해 full CodeQL로 닫는다.
+- **장기 계약 이름**: `scripts/tests/test_codeql_stage5a_workflow.py`를
+  `scripts/tests/test_codeql_workflow.py`로 바꾸고 단계명이 merge 후 파일 계약에 남지 않게 했다.
+- **focused 검증**: CodeQL 계약 7/7, 연관 Python workflow 계약 86/86, classifier 28/28,
+  `actionlint .github/workflows/ci.yml .github/workflows/codeql.yml`, `git diff --check`가 통과했다.
+- **남은 gate**: 보정 head의 full CI·CodeQL 통과와 실제 reviewer·작업지시자 승인이다.

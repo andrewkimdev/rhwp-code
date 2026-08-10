@@ -5,12 +5,12 @@
 - **브랜치**: Stage 1 `codex/issue-3790-ci-impact-shadow`, Stage 2·2.5
   `codex/issue-3790-shadow-observation`, Stage 3 `codex/issue-3790-stage3-frontend`, Stage 4
   `issue-3790-stage4-rust-native`, Stage 5A `issue-3790-stage5a-codeql-safety`
-- **절차 상태**: Stage 3·4 merge·canary 완료. 최신 `upstream/devel` `e48fe86947fb`에서 Stage 5A의
+- **절차 상태**: Stage 3·4 merge·canary 완료. `upstream/devel` `e48fe86947fb`에서 Stage 5A의
   보안 check 재사용과 Rust no-build shadow를 구현하고 focused 검증을 통과했다. Draft PR #4341의
   1차 원격 canary 분석 뒤 raw blocking SARIF·동일 권한·기본 build mode의 no-prebuild shadow로
   보정하고 원격 동등성 gate를 통과했다. 수동 cache·prebuild와 측정 요소를 제거한 최종 구성도 focused
-  검증과 최종 PR CI·GHAS를 통과했다. 분석 기록과 최종 no-prebuild PR metadata를 반영했으며 Draft
-  review gate는 작업지시자가 진행한다.
+  검증과 최종 PR CI·GHAS를 통과했다. Ready 전환 뒤 self-review F1–F6을 수용해 최신
+  `upstream/devel` `0664e6568e9b`을 병합하고 보정 head의 full CI·CodeQL 재검증 단계로 전환했다.
 
 ## Stage 1 — shadow classifier
 
@@ -126,10 +126,11 @@ Stage 3 merge 직후 frontend-only canary PR #3951에서 unit/package/render 진
 1. `codeqlResult`가 고른 PR CodeQL workflow run은 기존처럼 event, base branch, head repository,
    head branch와 candidate SHA를 모두 검증한다.
 2. 그 candidate SHA에 대해 check-runs를 조회하고 app slug `github-advanced-security`, name `CodeQL`,
-   동일 `head_sha`, 현재 workflow run attempt 시작 이후 시작이라는 조건으로 현재 실행의 보안 check를
-   식별한다. 재실행에서는 이전 attempt의 check를 재사용하지 않는다.
-3. 보안 check가 없으면 `missing`, 완료 전이면 `pending`, conclusion이 `success`가 아니면 `failed`로
-   aggregate를 닫는다. 세 `Analyze (...)` job과 이 check가 모두 성공한 경우에만 green이다.
+   동일 `head_sha`인 단일 policy check를 식별한다. `started_at`이 없거나 현재 workflow run attempt보다
+   이르면 현재 check가 없는 것으로 취급해 이전 attempt 결과를 재사용하지 않는다.
+3. 세 `Analyze (...)` job은 언어별로 모두 성공해야 한다. 별도 GHAS check가 없으면 `missing`, 완료 전이면
+   `pending`, conclusion이 `success`가 아니면 `failed`로 닫는다. 이 check는 실측상 첫 언어 분석에서
+   종결되므로 뒤에 도착한 언어의 policy 결과까지 보증한다고 해석하지 않는다.
 4. 기존 세 언어 blocking matrix와 Rust stable toolchain·cache·`cargo build`는 비교 기준선으로 유지한다.
 5. PR non-fast-pass 전용 `Rust no-build shadow`를 추가한다. 같은 Rust toolchain을 설치하되 cache와
    `cargo build`는 생략하고 CodeQL init에 `languages: rust`, `build-mode: none`을 지정한다.
@@ -205,8 +206,25 @@ Stage 3 merge 직후 frontend-only canary PR #3951에서 unit/package/render 진
   `Analyze (rust)`와 GHAS `CodeQL` annotation은 0건이고 임시 Actions artifact도 0개다.
 - Rust Code Scanning analysis `1591906480`은 25개 규칙, 결과 0건으로 최종 처리됐다. 세 Analyze job과
   별도 GHAS `CodeQL` check가 모두 성공했으므로 Stage 5A 코드·CI gate는 통과다.
-- PR #4341 제목·본문을 최종 no-prebuild 동작과 canary 근거로 보정했다. Draft 상태는 유지하고 이후
-  review 요청은 작업지시자 gate로 남긴다.
+- PR #4341 제목·본문을 최종 no-prebuild 동작과 canary 근거로 보정했다. 2026-08-09 당시에는 Draft
+  상태를 유지하고 이후 review 요청을 작업지시자 gate로 남겼다.
+
+### PR #4341 self-review 보정
+
+- 최신 `upstream/devel` `0664e6568e9b`을 병합하고 `.github/workflows/ci.yml`의 단일 충돌에서
+  CodeQL 계약 테스트와 devel의 Docker·release·setup 계약 테스트를 모두 보존했다.
+- GHAS `CodeQL` check는 실측상 첫 언어 분석에서 종결되고 뒤에 도착한 언어 분석으로 갱신되지 않는다는
+  범위를 코드 주석·계획·작업 기록에 명시했다. 세 Analyze job 성공은 계속 독립적으로 요구한다.
+- check-run에 없는 `created_at` fallback과 유한값처럼 보이는 `Date.parse(0)`, 앞선 filter 때문에 도달할
+  수 없던 identity mismatch 분기를 제거했다. `started_at` 누락·이전 attempt는 현재 check 부재로 처리해
+  기존 fail-closed 결과를 유지한다.
+- 작업 단계명이던 `test_codeql_stage5a_workflow.py`는 장기 계약 이름인 `test_codeql_workflow.py`로
+  바꾸고 CI·wiring 참조를 함께 갱신했다. 실제 GHAS check가 Python 뒤, JavaScript/TypeScript·Rust보다
+  먼저 끝난 순서를 mock에 반영했다.
+- `python3 -m unittest` 연관 workflow 계약 10개 파일은 86/86, classifier는 28/28 통과했다.
+  `actionlint .github/workflows/ci.yml .github/workflows/codeql.yml`과 `git diff --check`도 통과했다.
+- workflow 실행 경로와 최신 devel merge가 포함되므로 보정 head는 fast-pass하지 않고 full CI·CodeQL을
+  새로 통과해야 한다.
 
 ## Stage 5B 이후
 

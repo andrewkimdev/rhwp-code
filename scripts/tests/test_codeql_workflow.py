@@ -1,4 +1,4 @@
-"""[#3790 Stage 5A] CodeQL 보안 판정 재사용과 Rust no-prebuild 계약."""
+"""CodeQL 보안 판정 재사용과 Rust no-prebuild의 장기 workflow 계약."""
 
 from __future__ import annotations
 
@@ -23,7 +23,7 @@ def job_body(workflow: str, job_name: str) -> str:
     return match.group(0)
 
 
-class CodeQLStage5AWorkflowTests(unittest.TestCase):
+class CodeQLWorkflowTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.workflow = CODEQL_WORKFLOW.read_text(encoding="utf-8")
@@ -42,7 +42,15 @@ class CodeQLStage5AWorkflowTests(unittest.TestCase):
         self.assertIn("check.name === 'CodeQL'", workflow)
         self.assertIn("check.head_sha === candidateSha", workflow)
         self.assertIn("workflowRun.run_started_at || workflowRun.created_at", workflow)
+        self.assertIn("Date.parse(securityCheck.started_at)", workflow)
         self.assertIn("securityCheckStartedAt < runAttemptStartedAt", workflow)
+        self.assertNotIn("check.created_at", workflow)
+        self.assertNotIn("securityCheck.created_at", workflow)
+        self.assertNotIn("check.started_at || check.created_at || 0", workflow)
+        self.assertNotIn(
+            "securityCheck.started_at || securityCheck.created_at || 0", workflow
+        )
+        self.assertNotIn("security-check-workflow-identity-mismatch", workflow)
         self.assertIn("missing-security-check:CodeQL:${candidateSha}", workflow)
         self.assertIn("security-check-not-completed:CodeQL:${securityCheck.status}", workflow)
         self.assertIn("security-check-not-green:CodeQL:${securityCheck.conclusion}", workflow)
@@ -61,7 +69,7 @@ class CodeQLStage5AWorkflowTests(unittest.TestCase):
             "security-check-not-green:CodeQL:failure",
         )
 
-    def test_green_analyze_jobs_and_security_check_remain_reusable(self) -> None:
+    def test_green_analyze_jobs_and_early_security_check_remain_reusable(self) -> None:
         outputs = self._run_preflight("success")
         self.assertEqual(outputs["fast_pass"], "true")
         self.assertEqual(outputs["candidate_sha"], "code-candidate")
@@ -72,7 +80,13 @@ class CodeQLStage5AWorkflowTests(unittest.TestCase):
             "success",
             run_started_at="2026-08-09T00:18:00Z",
             security_started_at="2026-08-09T00:15:00Z",
+            security_completed_at="2026-08-09T00:15:02Z",
         )
+        self.assertEqual(outputs["fast_pass"], "false")
+        self.assertEqual(outputs["reason"], "no-green-codeql-candidate")
+
+    def test_security_check_without_started_at_is_not_reused(self) -> None:
+        outputs = self._run_preflight("success", security_started_at=None)
         self.assertEqual(outputs["fast_pass"], "false")
         self.assertEqual(outputs["reason"], "no-green-codeql-candidate")
 
@@ -89,7 +103,7 @@ class CodeQLStage5AWorkflowTests(unittest.TestCase):
         self.assertNotIn("rust-blocking-results", analyze)
         self.assertNotIn("actions/upload-artifact", analyze)
 
-    def test_measurement_shadow_and_raw_artifacts_are_removed_after_canary(self) -> None:
+    def test_temporary_measurement_jobs_and_artifacts_are_absent(self) -> None:
         workflow = self.workflow
         self.assertNotIn("rust-no-prebuild-shadow:", workflow)
         self.assertNotIn("Rust no-prebuild shadow", workflow)
@@ -103,7 +117,8 @@ class CodeQLStage5AWorkflowTests(unittest.TestCase):
         security_conclusion: str,
         *,
         run_started_at: str = "2026-08-09T00:10:00Z",
-        security_started_at: str = "2026-08-09T00:19:00Z",
+        security_started_at: str | None = "2026-08-09T00:11:00Z",
+        security_completed_at: str = "2026-08-09T00:11:02Z",
     ) -> dict[str, str]:
         harness = """
 const outputs = {};
@@ -166,14 +181,16 @@ const github = {
     }
     if (endpoint === endpoints.listJobsForWorkflowRun) {
       return [
-        'Analyze (javascript-typescript)',
-        'Analyze (python)',
-        'Analyze (rust)',
-      ].map((name) => ({
-        name,
+        { name: 'Analyze (python)', completed_at: '2026-08-09T00:12:00Z' },
+        {
+          name: 'Analyze (javascript-typescript)',
+          completed_at: '2026-08-09T00:14:00Z',
+        },
+        { name: 'Analyze (rust)', completed_at: '2026-08-09T00:19:00Z' },
+      ].map((job) => ({
+        ...job,
         status: 'completed',
         conclusion: 'success',
-        completed_at: '2026-08-09T00:19:00Z',
       }));
     }
     if (endpoint === endpoints.listForRef) {
@@ -184,7 +201,7 @@ const github = {
         status: 'completed',
         conclusion: SECURITY_CONCLUSION,
         started_at: SECURITY_STARTED_AT,
-        completed_at: '2026-08-09T00:21:00Z',
+        completed_at: SECURITY_COMPLETED_AT,
       }];
     }
     throw new Error('unexpected paginate endpoint');
@@ -218,6 +235,8 @@ PREFLIGHT_SCRIPT
 """.replace("SECURITY_CONCLUSION", json.dumps(security_conclusion)).replace(
             "RUN_STARTED_AT", json.dumps(run_started_at)
         ).replace("SECURITY_STARTED_AT", json.dumps(security_started_at)).replace(
+            "SECURITY_COMPLETED_AT", json.dumps(security_completed_at)
+        ).replace(
             "PREFLIGHT_SCRIPT", self.preflight_script
         )
         completed = subprocess.run(

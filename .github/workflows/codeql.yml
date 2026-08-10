@@ -211,9 +211,10 @@ jobs:
                 }
               }
 
-              // Actions job success does not prove that SARIF processing and the
-              // GitHub Advanced Security policy check also succeeded. Bind that
-              // separate check to this candidate and workflow run before reuse.
+              // Each Analyze job must succeed independently. The repository currently
+              // emits one GHAS CodeQL policy check when the first language analysis
+              // arrives; bind that observed check to this candidate and run attempt.
+              // Do not infer later-language policy coverage from this single check.
               const securityChecks = await github.paginate(github.rest.checks.listForRef, {
                 owner,
                 repo,
@@ -221,30 +222,23 @@ jobs:
                 filter: 'latest',
                 per_page: 100,
               });
-              const securityCheck = latestRun(securityChecks.filter((check) => {
-                const securityCheckStartedAt = Date.parse(
-                  check.started_at || check.created_at || 0,
-                );
-                return check.app?.slug === 'github-advanced-security'
+              const securityCheck = latestRun(securityChecks.filter((check) => (
+                check.app?.slug === 'github-advanced-security'
                   && check.name === 'CodeQL'
                   && check.head_sha === candidateSha
-                  && Number.isFinite(securityCheckStartedAt)
-                  && securityCheckStartedAt >= runAttemptStartedAt;
-              }));
+              )));
               if (!securityCheck) {
                 return {
                   state: 'missing',
                   reason: `missing-security-check:CodeQL:${candidateSha}`,
                 };
               }
-              const securityCheckStartedAt = Date.parse(
-                securityCheck.started_at || securityCheck.created_at || 0,
-              );
+              const securityCheckStartedAt = Date.parse(securityCheck.started_at);
               if (!Number.isFinite(securityCheckStartedAt)
                 || securityCheckStartedAt < runAttemptStartedAt) {
                 return {
-                  state: 'failed',
-                  reason: 'security-check-workflow-identity-mismatch',
+                  state: 'missing',
+                  reason: `missing-security-check:CodeQL:${candidateSha}`,
                 };
               }
               if (securityCheck.status !== 'completed') {
