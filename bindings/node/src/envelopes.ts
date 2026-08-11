@@ -99,6 +99,32 @@ export interface BuildFromIngestEnvelope {
 }
 
 /**
+ * `rhwp bundle --json` 봉투.
+ *
+ * 연합 교환 — export(계보 폐쇄집합+서명+머클 증명을 zip
+ * 하나로)·verify(컨테이너·폐쇄집합·계보·서명[도메인 키링만, 동봉 불신]·앵커 5단 오프라인 판정,
+ * 깨짐 exit 3) (#4549)
+ */
+export interface BundleEnvelope {
+  readonly anchored?: unknown;
+  readonly brokenAt?: unknown;
+  readonly bundle?: unknown;
+  readonly capsules?: unknown;
+  readonly closureOk?: unknown;
+  readonly containerOk?: unknown;
+  readonly head?: unknown;
+  readonly lineageValid?: unknown;
+  readonly proofs?: unknown;
+  readonly schemaVersion?: string;
+  readonly signatures?: unknown;
+  readonly signed?: unknown;
+  readonly trustDomain?: unknown;
+  readonly verdict?: unknown;
+
+  readonly [key: string]: unknown;
+}
+
+/**
  * `rhwp capabilities` 봉투.
  *
  * 본 자기서술 JSON 출력
@@ -900,6 +926,7 @@ export interface EnvelopeByCommand {
   audit: AuditEnvelope;
   batch: BatchEnvelope;
   "build-from-ingest": BuildFromIngestEnvelope;
+  bundle: BundleEnvelope;
   capabilities: CapabilitiesEnvelope;
   convert: ConvertEnvelope;
   "csv-to-table": CsvToTableEnvelope;
