@@ -792,9 +792,6 @@ def render_all_svg(rhwp: str, source: Path, svg_dir: Path) -> bool:
 
 def render_all_render_tree(rhwp: str, source: Path, tree_dir: Path) -> bool:
     command = [rhwp, "export-render-tree", str(source), "-o", str(tree_dir)]
-    font_path = os.environ.get("RHWP_FONT_PATH_DIR")
-    if font_path:
-        command.extend(["--font-path", font_path])
     result = subprocess.run(
         command,
         capture_output=True,

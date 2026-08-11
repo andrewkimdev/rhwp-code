@@ -9,6 +9,7 @@ import tempfile
 import unittest
 from collections import Counter
 from pathlib import Path
+from unittest.mock import patch
 
 
 MODULE_PATH = Path(__file__).with_name("fidelity_compare.py")
@@ -102,6 +103,34 @@ class SvgExportFontFallbackTests(unittest.TestCase):
         self.assertEqual(manifest, '{"pageCount":1}')
         self.assertEqual(len(calls), 1)
         self.assertIn("--font-style", calls[0])
+
+    def test_render_tree_does_not_receive_svg_only_font_path_option(self) -> None:
+        calls: list[list[str]] = []
+
+        def fake_run(command: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+            calls.append(command)
+            return subprocess.CompletedProcess(command, 0, "", "")
+
+        with tempfile.TemporaryDirectory() as directory:
+            tree_dir = Path(directory)
+            original_run = fidelity_compare.subprocess.run
+            fidelity_compare.subprocess.run = fake_run
+            try:
+                with patch.dict(
+                    fidelity_compare.os.environ,
+                    {"RHWP_FONT_PATH_DIR": "/fonts"},
+                    clear=False,
+                ):
+                    rendered = fidelity_compare.render_all_render_tree(
+                        "rhwp", Path("sample.hwp"), tree_dir
+                    )
+            finally:
+                fidelity_compare.subprocess.run = original_run
+
+        self.assertTrue(rendered)
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0][:2], ["rhwp", "export-render-tree"])
+        self.assertNotIn("--font-path", calls[0])
 
 
 if __name__ == "__main__":
