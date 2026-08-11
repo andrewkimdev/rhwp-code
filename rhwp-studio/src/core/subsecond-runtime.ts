@@ -339,8 +339,10 @@ export function connectSubsecondDevtools(
   const createWebSocket = options.createWebSocket ?? (url => new WebSocket(url));
   const scheduleTimeout = options.setTimeout ?? ((callback, delay) => window.setTimeout(callback, delay));
   const cancelTimeout = options.clearTimeout ?? (id => window.clearTimeout(id));
-  const report = options.reportSignal ?? reportToDevConsole;
-  const errorEvents = options.errorEvents ?? window;
+  // Node 기반 단위 테스트에서는 Vite가 주입하는 import.meta.env가 없으므로 기본 진단을 비활성화한다.
+  const report = options.reportSignal ?? (typeof window === 'undefined' ? () => {} : reportToDevConsole);
+  // Node 기반 단위 테스트는 소켓·타이머만 대체해도 되도록 전역 오류 대상은 브라우저에서만 기본 연결한다.
+  const errorEvents = options.errorEvents ?? (typeof window === 'undefined' ? null : window);
   // 연결이 버틴 시간만 재므로 단조 시계를 쓴다. Date.now() 는 시스템 시각 변경에 흔들린다.
   const now = options.now ?? (() => performance.now());
   const patchAccumulation = options.patchAccumulation ?? new SubsecondPatchAccumulation();
@@ -366,8 +368,8 @@ export function connectSubsecondDevtools(
       dispatchedPatches,
     });
   };
-  errorEvents.addEventListener('error', onGlobalFailure);
-  errorEvents.addEventListener('unhandledrejection', onGlobalFailure);
+  errorEvents?.addEventListener('error', onGlobalFailure);
+  errorEvents?.addEventListener('unhandledrejection', onGlobalFailure);
   let openedAt: number | null = null;
 
   const connect = (): void => {
@@ -407,8 +409,8 @@ export function connectSubsecondDevtools(
 
   return () => {
     active = false;
-    errorEvents.removeEventListener('error', onGlobalFailure);
-    errorEvents.removeEventListener('unhandledrejection', onGlobalFailure);
+    errorEvents?.removeEventListener('error', onGlobalFailure);
+    errorEvents?.removeEventListener('unhandledrejection', onGlobalFailure);
     if (reconnectTimer !== null) {
       cancelTimeout(reconnectTimer);
       reconnectTimer = null;
