@@ -8,7 +8,7 @@ last_verified: 2026-08-11
 # #4100 최종 보고서 — 차트 숫자 데이터 편집 본구현 (B1 엔진축)
 
 - **Issue**: [#4100](https://github.com/edwardkim/rhwp/issues/4100) (#3683 Track B 착수 순서 4번)
-- **브랜치**: `task4100` · **기준 커밋**: `devel = e6a01730d`
+- **브랜치**: `task4100` · **기준 커밋**: `devel = a70797db4` (PR 직전 리베이스)
 - **계획서**: [`task_m100_4100.md`](../plans/task_m100_4100.md) ·
   **단계 보고서**: [stage1](../working/task_m100_4100_stage1.md) ·
   [stage2](../working/task_m100_4100_stage2.md) · [stage3](../working/task_m100_4100_stage3.md) ·
@@ -65,6 +65,8 @@ HWP5 입력에는 ①이 아예 없어 "동시 기록"이 **②만**으로 자�
 
 ## 3. 실측이 설계를 바로잡은 것 — 다섯 건
 
+(마지막 항목은 리베이스 뒤 일곱 곳으로 늘었다 — §3-5)
+
 계획 수립과 구현 중에 **이슈 본문·계획서·내 판단이 틀렸던 지점**들이다. 전부 코드나 문서로
 못박아 뒀다.
 
@@ -109,15 +111,26 @@ CSV** 가 나왔다. 오류도 경고도 없었다.
 `samples/chart/` 28종은 전건이 계열마다 `c:cat` 을 갖고 있어 이 변종이 코퍼스에 **아예 없었다.**
 게이트가 실사용 문서를 강제로 태우지 않았다면 PR 까지 갔을 결함이다.
 
-### 3-5. 배선은 4곳이 아니라 6곳이다
+### 3-5. 배선은 4곳이 아니라 7곳이다
 
-계획서가 센 capabilities·MCP·help·provenance 말고 둘이 더 있었고, 둘 다 **전체 회귀에서만**
-드러났다.
+계획서가 센 capabilities·MCP·help·provenance 말고 셋이 더 있었다. 전부 **전체 회귀에서만**
+드러났고, 셋째는 리베이스로 devel 에서 새로 들어온 축이다.
 
 | 축 | 게이트 | 안 하면 |
 |---|---|---|
 | `agent_profiles.rs` | `every_stateless_tool_belongs_to_some_specific_profile` | 도구가 존재하되 프로필로 좁혀 쓰는 에이전트에게 안 보인다 |
 | 지식지도 §2-2 전수 사전 | `every_declared_record_field_is_in_the_dictionary` | 매니페스트가 내는 필드를 가이드가 설명 못 한다 |
+| 에이전트 대전(codex) | `every_capability_command_has_a_codex_chapter` | 명령 교본에 장이 없다. `tools/gen_agent_codex.py` 재생성 + 가족 배정 |
+
+### 3-5-1. 대전 생성기가 낡은 바이너리를 집는다 (관측)
+
+`gen_agent_codex.py` 는 `RHWP_BIN` 이 없으면 `target/debug/rhwp` → `target/release/rhwp` 순으로
+찾는다. 이 저장소의 표준 검증 프로파일은 `release-test` 라, **디버그 빌드가 오래된 개발자가
+그냥 재생성하면 최신 바이너리에만 있는 명령들의 장이 통째로 지워진다.**
+
+실제로 겪었다 — 하루 전 `target/debug` 로 재생성했더니 `replay`·`lineage`·`audit` 등
+**15개 명령의 장이 함께 사라졌다**(가드가 잡아 되돌렸다). `RHWP_BIN` 을 명시해 해결했지만,
+기본값이 위험한 쪽인 것은 남는다. 후속 이슈 후보다.
 
 ## 4. 한컴 판정 — 7종 전건, 편집기까지
 
@@ -196,7 +209,7 @@ CSV** 가 나왔다. 오류도 경고도 없었다.
 ## 8. 검증
 
 ```text
-전체 회귀   527 바이너리 / 5806 passed / 0 failed / 36 ignored
+전체 회귀   537 바이너리 / 5836 passed / 0 failed / 37 ignored
 cargo fmt --check                          Diff in 0건
 cargo clippy --all-targets -- -D warnings  exit 0
 git diff --check                           통과
