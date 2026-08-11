@@ -1138,3 +1138,213 @@ fn scatter_x_values_are_editable() {
         serde_json::from_str(&core.get_chart_data_by_index_native(0).expect("읽기")).expect("JSON");
     assert_eq!(json["labels"][0], "9.9");
 }
+
+// ---------------------------------------------------------------------------
+// Stage 6 — 한컴 육안 판정 번들
+// ---------------------------------------------------------------------------
+
+/// 판정 대상 7종. 폴더마다 하나씩 고르되 **첫 판정 축을 반드시 포함**한다.
+///
+/// #4055 스파이크는 `묶은세로막대형` 1종으로만 한컴 판정을 받았다. 원형(ofPie 포함)·
+/// 분산형·주식형은 이번이 처음이라, 폴더의 알파벳 첫 파일이 아니라 **그 축을 대표하는
+/// 변종**을 골랐다.
+const JUDGMENT_TARGETS: &[(&str, &str)] = &[
+    ("가로막대형", "묶은가로막대형"),
+    // 4계열 OHLC — 계열 순서 규약(시/고/저/종)이 걸린 축. 첫 판정.
+    ("기타", "시가고가저가종가"),
+    ("라인", "표식이있는꺽은선형"),
+    // 첫 열이 X 값인 유일한 축. 첫 판정.
+    ("분산형", "직선및표식이있는분산형"),
+    // 스파이크가 판정한 바로 그 문서 — 회귀 기준선.
+    ("세로막대형", "묶은세로막대형"),
+    // ofPie(원형대원형) — 보조 플롯이 있는 축. 첫 판정.
+    ("원형", "원형대원형"),
+    // c:numLit 리터럴 + 단일 계열 — 코퍼스에서 이 문서뿐이다.
+    ("특이케이스", "가로막대형_하나만있을떄_단일시리즈제목"),
+];
+
+/// 눈에 띄는 센티널 — 원본 최대값의 10배.
+///
+/// 값을 읽지 않고 **모양만으로** 판정할 수 있어야 한다. 10배면 막대가 차트를 뚫고 솟고,
+/// 원형은 그 조각이 원을 거의 다 먹는다. #4055 가 `4.3 → 91.7`(최대 5의 약 18배)로 잡은
+/// 것과 같은 취지다.
+fn sentinel_for(values: &[String]) -> String {
+    let max = values
+        .iter()
+        .filter_map(|v| v.parse::<f64>().ok())
+        .fold(0.0_f64, f64::max);
+    let candidate = if max > 0.0 { max * 10.0 } else { 91.7 };
+    format!("{candidate:.1}")
+}
+
+/// 차트 첫 계열의 값들을 읽는다.
+fn first_series_values(core: &DocumentCore) -> Vec<String> {
+    let read: serde_json::Value =
+        serde_json::from_str(&core.get_chart_data_by_index_native(0).expect("읽기")).expect("JSON");
+    read["series"][0]["values"]
+        .as_array()
+        .expect("values")
+        .iter()
+        .map(|v| v.as_str().expect("문자열").to_string())
+        .collect()
+}
+
+/// Stage 6 — 한컴 육안 판정용 꾸러미를 만든다.
+///
+/// `output/` 에 파일을 쓰는 부작용이 있어 기본 실행에서 뺀다. 판정 직전에만 돌린다:
+///
+/// ```text
+/// cargo test --profile release-test --test issue_4100_chart_data_edit -- --ignored --nocapture
+/// ```
+///
+/// 각 산출은 내보내기 전에 **rhwp 가 다시 열 수 있는지**와 **의도한 표현에만 센티널이
+/// 들어갔는지**를 스스로 확인한다 — 한컴이 못 열었을 때 그게 편집 탓인지 파일 조립 탓인지
+/// 헷갈리지 않게 하기 위함이다(#4055 선례).
+#[test]
+#[ignore = "output/ 에 파일을 쓴다 — 한컴 판정 직전에만 실행"]
+fn generate_hancom_judgment_bundle() {
+    let out_dir = manifest("output/issue_4100_b1_judgment");
+    std::fs::create_dir_all(&out_dir).expect("출력 디렉터리");
+
+    let mut sheet = String::new();
+    sheet.push_str("# #4100 B1 — 한컴 육안 판정표\n\n");
+    sheet.push_str(
+        "차트의 **첫 계열 첫 값**을 원본 최대값의 **10배**로 바꾼 편집본입니다.\n\
+         반영되면 그 막대/조각/점이 차트를 압도하므로 **숫자를 읽을 필요가 없습니다.**\n\n",
+    );
+    sheet.push_str("## 보는 법\n\n");
+    sheet.push_str(
+        "1. `*-대조군.hwpx` 로 정상 모습을 눈에 익힙니다.\n\
+         2. `*-편집.hwpx` / `*-편집.hwp` 를 엽니다. 첫 값이 압도적으로 커야 합니다.\n\
+         3. 파일마다 **세 가지**를 함께 봐 주세요:\n   \
+         (a) 열 때 오류·복구 대화상자가 뜨는가\n   \
+         (b) 차트가 그려지는가 (틀만 나오고 속이 비면 실패입니다)\n   \
+         (c) **차트를 더블클릭하면 편집기가 열리는가**\n\n\
+         (b) 는 루트 CLSID 축입니다 — 재포장이 그것을 떨구면 한컴이 개체를 못 알아보고 \
+         틀만 그립니다(#4097).\n\n",
+    );
+    sheet.push_str(
+        "## 첫 판정 축\n\n\
+         #4055 스파이크는 `묶은세로막대형` **1종**으로만 판정했습니다. \
+         **원형(ofPie)·분산형·주식형·특이케이스는 이번이 처음**이라 특히 봐 주세요.\n\n",
+    );
+    sheet.push_str("## 산출물\n\n");
+    sheet.push_str("| 파일 | 종류 | 원본 첫 값 | 편집 후 | 쓴 표현 |\n");
+    sheet.push_str("|---|---|---|---|---|\n");
+
+    let mut written = 0usize;
+    for (folder, stem) in JUDGMENT_TARGETS {
+        let hwpx_src = manifest(&format!("samples/chart/{folder}/{stem}.hwpx"));
+        let hwp_src = manifest(&format!("samples/chart/{folder}/{stem}.hwp"));
+
+        // 센티널은 두 포맷이 같아야 대조가 선다 (①==② 이므로 값도 같다).
+        let values = first_series_values(&core_of(&hwpx_src));
+        let before = values[0].clone();
+        let sentinel = sentinel_for(&values);
+        assert_ne!(
+            before, sentinel,
+            "{stem}: 센티널이 원본과 같으면 판정이 공허하다"
+        );
+
+        // 대조군 — 원본 그대로.
+        std::fs::copy(&hwpx_src, out_dir.join(format!("{stem}-대조군.hwpx"))).expect("대조군 복사");
+        written += 1;
+
+        for (src, ext, expect_zip) in [(&hwpx_src, "hwpx", true), (&hwp_src, "hwp", false)] {
+            let mut core = core_of(src);
+            let mut edits = edits_from(&core, 0);
+            edits["series"][0]["values"][0] = serde_json::json!(sentinel);
+            let result = set_chart(&mut core, &edits);
+            assert_eq!(result["ok"], true, "{stem}.{ext}: {result}");
+            assert_eq!(result["changedCount"], 1, "{stem}.{ext}: {result}");
+
+            let wrote: Vec<String> = result["wrote"]
+                .as_array()
+                .expect("wrote")
+                .iter()
+                .map(|v| v.as_str().expect("문자열").to_string())
+                .collect();
+            let expected_wrote: Vec<&str> = if expect_zip {
+                vec!["zipPart", "nestedCopy"]
+            } else {
+                vec!["nestedCopy"]
+            };
+            assert_eq!(wrote, expected_wrote, "{stem}.{ext}");
+
+            let bytes = if expect_zip {
+                core.export_hwpx_native().expect("HWPX 저장")
+            } else {
+                core.export_hwp_native().expect("HWP5 저장")
+            };
+
+            // 자기 검증 — rhwp 가 다시 열고, 새 값이 실제로 들어 있다.
+            let reread = DocumentCore::from_bytes(&bytes)
+                .unwrap_or_else(|e| panic!("{stem}.{ext}: rhwp 가 다시 열지 못한다 — {e:?}"));
+            assert_eq!(
+                first_series_values(&reread)[0],
+                sentinel,
+                "{stem}.{ext}: 저장본에 새 값이 없다"
+            );
+
+            let name = format!("{stem}-편집.{ext}");
+            std::fs::write(out_dir.join(&name), &bytes).expect("산출 쓰기");
+            written += 1;
+
+            sheet.push_str(&format!(
+                "| `{name}` | {folder} | {before} | **{sentinel}** | {} |\n",
+                wrote.join("+")
+            ));
+        }
+        sheet.push_str(&format!(
+            "| `{stem}-대조군.hwpx` | {folder} | {before} | (무편집) | — |\n"
+        ));
+    }
+
+    // 변환 축 — HWPX 를 편집한 뒤 HWP5 로 변환한다. #4099 착지 전에는 만들 수 없었다
+    // (변환이 차트를 통째로 잃었다). ①은 변환에서 사라지므로 이 파일이 보여 주는 값은
+    // 곧 ②다 — "①만 고치면 안 된다"의 산 증거다.
+    {
+        let src = manifest("samples/chart/세로막대형/묶은세로막대형.hwpx");
+        let mut core = core_of(&src);
+        let sentinel = sentinel_for(&first_series_values(&core));
+
+        let mut edits = edits_from(&core, 0);
+        edits["series"][0]["values"][0] = serde_json::json!(sentinel);
+        assert_eq!(set_chart(&mut core, &edits)["ok"], true);
+
+        let bytes = core
+            .export_hwp_with_adapter_snapshot()
+            .expect("HWP5 변환 저장");
+        let reread = DocumentCore::from_bytes(&bytes).expect("변환본 재파스");
+        assert_eq!(
+            first_series_values(&reread)[0],
+            sentinel,
+            "변환본에 새 값이 없다"
+        );
+
+        let name = "묶은세로막대형-편집-HWPX에서변환.hwp";
+        std::fs::write(out_dir.join(name), &bytes).expect("변환본 쓰기");
+        written += 1;
+        sheet.push_str(&format!(
+            "| `{name}` | 세로막대형 | — | **{sentinel}** | 변환 후 ② |\n"
+        ));
+    }
+
+    sheet.push_str(&format!("\n총 {written} 파일.\n\n"));
+    sheet.push_str(
+        "> **`가로막대형_하나만있을떄_단일시리즈제목` 만 보는 법이 다릅니다.**\n\
+         > 값이 **하나뿐**이라 축이 그 값에 맞춰 다시 잡힙니다 — 막대 길이는 그대로이고 \
+         **축 눈금 숫자가 바뀝니다**(`0~5` → `0~45`). 이 파일만 축 숫자를 읽어 주세요.\n\n",
+    );
+    sheet.push_str(
+        "## PDF 회신\n\n\
+         각 파일을 한컴에서 열어 **같은 폴더에 PDF 로 저장**해 주시면, 대조군과 편집본의 \
+         렌더를 144DPI 해시로 갈라 반영 여부를 데이터로 판정하겠습니다(#4055 와 같은 절차).\n\n\
+         상세 설계는 `mydocs/plans/task_m100_4100.md`.\n",
+    );
+
+    std::fs::write(out_dir.join("PANJEONG.md"), sheet).expect("판정표 쓰기");
+    println!("\n  판정 번들: {}", out_dir.display());
+    println!("  파일 {written}개 + 판정표 PANJEONG.md");
+    assert_eq!(written, 22, "7종 × 3 + 변환본 1");
+}
