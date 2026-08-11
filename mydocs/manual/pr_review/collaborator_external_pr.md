@@ -159,6 +159,53 @@ gh pr view N --repo edwardkim/rhwp --json headRefOid
 remote ref와 PR headRefOid가 local HEAD와 같은지 확인한다. code 또는 test commit이 하나라도 포함되면
 review-only fast-pass를 적용하지 않고 최신 head full CI를 기다린다.
 
+#### 9.3.1.4 최신 `devel` 호환 보정
+
+`MERGEABLE`은 Git의 텍스트 충돌이 없다는 참고값이다. 최신 `upstream/devel`에 PR source가 바꾼 공용
+struct·trait·API의 새 사용처가 추가된 경우, GitHub가 계산한 current-base merge tree는 충돌 없이 만들어져도
+workspace 컴파일 또는 테스트에서 실패할 수 있다. 예를 들어 source가 struct 필드를 추가한 뒤 최신 `devel`이
+그 struct literal을 새로 만들면, merge tree에서 새 필드 초기화 누락 오류가 난다.
+
+이 경로는 다음을 모두 만족할 때만 사용한다.
+
+1. 최신 PR head의 GitHub CI 또는 local `git merge-tree` 기반 재현에서 current-base 호환 오류를 확인했다.
+2. source SHA, contributor remote ref, PR `headRefOid`, 정확한 최신 `upstream/devel` SHA를 기록하고 다시
+   일치 여부를 확인했다.
+3. `maintainerCanModify=true`이거나 contributor가 source branch push를 명시적으로 허용했다.
+4. 문서 기록만 추가하는 경우가 아니다. review·오늘할일만 필요하면 9.3.2와
+   [통합 워크플로우 3.2.1절](../pr_review_workflow.md#321-최신-devel-오늘할일을-보존하는-trailing-기록)을
+   따른다.
+
+먼저 clean한 같은 visibility review branch에서 호환 필요성을 고정한다.
+
+~~~bash
+git fetch upstream devel
+source_sha=$(git rev-parse HEAD)
+base_sha=$(git rev-parse upstream/devel)
+git status --short --branch
+git merge-tree --write-tree upstream/devel HEAD
+gh pr view N --repo edwardkim/rhwp --json headRefOid,headRefName,maintainerCanModify,mergeable
+git ls-remote --heads https://github.com/<contributor>/rhwp.git refs/heads/<head-branch>
+~~~
+
+필요성이 확인되면 contributor commit을 rebase, amend, reset, force-push하지 않는다. 동일한 review branch에서
+현재 `upstream/devel`을 parent로 갖는 merge commit을 먼저 만들고, 그 다음 호환 보정 code/test를 별도 commit으로
+만든다. 최신 `devel`의 대규모 변경은 merge parent로 들어갈 수 있지만 reviewer의 기능 변경으로 집계하지 않으며,
+최종 PR 고유 diff는 항상 `upstream/devel...HEAD`로 읽는다.
+
+~~~bash
+git merge --no-ff upstream/devel -m "merge: 최신 devel을 PR #N source에 반영"
+# 현재 base와 source API의 실제 호환 오류만 보정한다.
+git add <code-or-test-path>
+git commit -m "test: 최신 devel 호환 초기화를 보완"
+git diff --check upstream/devel...HEAD
+~~~
+
+호환 보정에는 해당 focused test와 CI 실패 명령에 대응하는 로컬 build/test를 실행한다. source·test commit이
+포함됐으므로 9.3.2 fast-pass를 적용하지 않고, push 후 새 PR head의 Full CI·CodeQL·필요한 Render Diff를
+모두 확인한다. 검토 기록과 오늘할일은 이 새 code head가 녹색이 된 뒤에만 trailing docs-only commit으로
+추가한다.
+
 ### 9.3.2 review-only fast-pass
 
 [공용 review-only fast-pass](review_only_fast_pass.md)를 함께 읽는다. collaborator가 contributor의
