@@ -6823,10 +6823,7 @@ impl LayoutEngine {
                                         let delta = ns.vertical_pos - seg.vertical_pos;
                                         if delta <= 0
                                             || delta
-                                                >= seg
-                                                    .line_height
-                                                    .saturating_mul(4)
-                                                    .max(160_000)
+                                                >= seg.line_height.saturating_mul(4).max(160_000)
                                         {
                                             return None;
                                         }
@@ -6838,7 +6835,8 @@ impl LayoutEngine {
                                                 .unwrap_or(0.0)
                                         };
                                         Some(
-                                            para_flow_start + sb(para.para_shape_id)
+                                            para_flow_start
+                                                + sb(para.para_shape_id)
                                                 + hwpunit_to_px(delta, self.dpi)
                                                 - sb(np.para_shape_id),
                                         )
