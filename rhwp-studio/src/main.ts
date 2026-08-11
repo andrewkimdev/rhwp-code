@@ -34,6 +34,7 @@ import { showToast } from '@/ui/toast';
 import { addRecentDoc, listRecentDocs } from '@/recent/recent-store';
 import { showDropConfirmDialog } from '@/ui/drop-confirm-dialog';
 import { showHwpPasswordDialog } from '@/ui/hwp-password-dialog';
+import { EMBED_HIDDEN_FILE_COMMAND_IDS, resolveChromeModeRequest } from '@/ui/chrome-mode';
 import { initRhwpDev } from '@/core/rhwp-dev';
 import { DocumentDirtyState } from '@/core/document-dirty-state';
 import { initThemeSync, setThemeMode, getThemeMode, getEffectiveTheme } from '@/core/theme';
@@ -120,6 +121,17 @@ let extensionViewerSettings: ExtensionViewerSettings = {
 };
 
 
+// ─── UI chrome 프로파일 (#4564) ─────────────────────────────
+// 문서 수명주기(열기/저장)를 호스트가 소유하는 임베드 구성용 opt-in 스위치.
+// 파라미터가 없거나 미지원 값이면 full — 기존 표면 그대로다.
+const chromeModeRequest = resolveChromeModeRequest(window.location.search);
+const chromeMode = chromeModeRequest.mode;
+if (chromeModeRequest.unsupportedReason) {
+  console.warn(
+    `[main] 지원하지 않는 chrome 값입니다: ${chromeModeRequest.requested}; full 프로파일을 사용합니다.`,
+  );
+}
+
 // ─── 커맨드 시스템 ─────────────────────────────
 const registry = new CommandRegistry();
 
@@ -177,8 +189,17 @@ const commandServices: CommandServices = {
 
 const dispatcher = new CommandDispatcher(registry, commandServices, eventBus);
 
-// 모든 내장 커맨드 등록
-registry.registerAll(fileCommands);
+// 모든 내장 커맨드 등록. embed 프로파일에서는 파일 수명주기 커맨드를 등록하지 않는다 —
+// registerAll이 메뉴 클릭·단축키·전역 단축키·커맨드 팔레트가 모두 지나는 choke point라
+// 이 필터 하나로 충분하다. shortcut-map은 그대로 둔다: 매핑이 남아야 Ctrl+S/Ctrl+P가
+// preventDefault로 계속 삼켜져 브라우저 저장/인쇄 대화상자로 빠지지 않고, Ctrl+Shift+S가
+// 후순위 table:block-sum 매핑으로 폴스루하지 않는다. 미등록 커맨드 dispatch는 무해하게
+// false를 반환한다.
+registry.registerAll(
+  chromeMode === 'embed'
+    ? fileCommands.filter((cmd) => !EMBED_HIDDEN_FILE_COMMAND_IDS.includes(cmd.id))
+    : fileCommands,
+);
 registry.registerAll(editCommands);
 registry.registerAll(viewCommands);
 registry.registerAll(formatCommands);
@@ -186,6 +207,31 @@ registry.registerAll(insertCommands);
 registry.registerAll(tableCommands);
 registry.registerAll(pageCommands);
 registry.registerAll(toolCommands);
+
+/**
+ * embed 프로파일의 파일 메뉴 정리 — index.html은 그대로 두고 부트 시 런타임에 제거한다
+ * (기본 full 프로파일의 정적 마크업·테스트에 무회귀). 모듈 스크립트는 문서 파스 후
+ * 실행되므로 이 시점의 톱레벨 DOM 접근은 안전하고, MenuBar는 이후 initialize()에서
+ * 정리된 DOM을 읽는다. `#file-input`은 커맨드 표면이 아니라 입력 채널이므로 건드리지
+ * 않는다 — setupFileInput이 존재를 전제한다.
+ */
+function pruneEmbedFileMenu(): void {
+  const dropdown = document.querySelector('.menu-item[data-menu="file"] .menu-dropdown');
+  if (!dropdown) return;
+  for (const id of EMBED_HIDDEN_FILE_COMMAND_IDS) {
+    dropdown.querySelectorAll(`.md-item[data-cmd="${id}"]`).forEach((item) => item.remove());
+  }
+  dropdown.querySelectorAll('.md-sub[data-recent]').forEach((sub) => sub.remove());
+  // 고아가 된 구분선 정리: 선행 항목이 없거나 구분선끼리 연속이면 제거하고,
+  // 말단에 남은 구분선도 제거한다.
+  dropdown.querySelectorAll('.md-sep').forEach((sep) => {
+    const prev = sep.previousElementSibling;
+    if (!prev || prev.classList.contains('md-sep')) sep.remove();
+  });
+  const last = dropdown.lastElementChild;
+  if (last?.classList.contains('md-sep')) last.remove();
+}
+if (chromeMode === 'embed') pruneEmbedFileMenu();
 
 // 상태 바 요소
 const sbMessage = () => document.getElementById('sb-message')!;
@@ -506,21 +552,27 @@ async function initialize(): Promise<void> {
     setupEventListeners();
     setupGlobalShortcuts();
     void loadFromUrlParam();
-    void offerAutosaveRecoveryIfIdle();
-    installPwaFileHandling(window as FileHandlingWindowLike, {
-      openDocumentBytes(payload) {
-        eventBus.emit('open-document-bytes', payload);
-      },
-      notifyUnsupportedFile(fileName) {
-        showLoadError(new Error(`지원하지 않는 파일 형식입니다: ${fileName}. HWP/HWPX/HML 파일만 지원합니다.`));
-      },
-      notifyError(error) {
-        showLoadErrorUnlessCancelled(error);
-      },
-      notifyMultipleFiles(count) {
-        console.warn(`[pwa-file-handling] 여러 파일(${count}개)이 전달되어 첫 번째 파일만 엽니다.`);
-      },
-    });
+    // embed 프로파일: 자동저장 복구 다이얼로그의 드래프트 복원도 호스트가 감지할 수
+    // 없는 문서 교체 경로이므로 띄우지 않는다 (드래프트 기록 자체는 유지).
+    if (chromeMode !== 'embed') void offerAutosaveRecoveryIfIdle();
+    // embed 프로파일: PWA launch queue로 문서를 넘겨받는 진입도 문서 교체 경로이므로
+    // 설치하지 않는다.
+    if (chromeMode !== 'embed') {
+      installPwaFileHandling(window as FileHandlingWindowLike, {
+        openDocumentBytes(payload) {
+          eventBus.emit('open-document-bytes', payload);
+        },
+        notifyUnsupportedFile(fileName) {
+          showLoadError(new Error(`지원하지 않는 파일 형식입니다: ${fileName}. HWP/HWPX/HML 파일만 지원합니다.`));
+        },
+        notifyError(error) {
+          showLoadErrorUnlessCancelled(error);
+        },
+        notifyMultipleFiles(count) {
+          console.warn(`[pwa-file-handling] 여러 파일(${count}개)이 전달되어 첫 번째 파일만 엽니다.`);
+        },
+      });
+    }
 
     // E2E 테스트용 전역 노출 (개발 모드 전용)
     if (import.meta.env.DEV) {
@@ -615,6 +667,9 @@ function setupFileInput(): void {
     const imageExts = ['.png', '.jpg', '.jpeg', '.gif', '.bmp', '.webp'];
     const isImage = imageExts.some(ext => dropName.endsWith(ext));
     const isDoc = isSupportedDocumentFileName(dropName);
+    // embed 프로파일: 문서 드롭은 호스트가 감지할 수 없는 문서 교체 경로이므로 무시한다.
+    // 이미지 드롭은 수명주기가 아니라 편집 기능이라 그대로 둔다.
+    if (chromeMode === 'embed' && isDoc) return;
     if (!isImage && !isDoc) {
       alert('HWP/HWPX/HML 파일 또는 이미지 파일만 지원합니다.');
       return;
