@@ -1,7 +1,7 @@
 # rhwp 프로젝트 로드맵
 
 > 이 문서는 rhwp가 어디로 가고 있으며, 각 버전을 언제 완성으로 볼 것인지 설명하는 기준 문서입니다.<br>
-> 현재 버전: **v0.8.2**<br>
+> 현재 버전: **v0.8.3**<br>
 > 현재 목표: [**v1.0.0 — 조판 엔진 체계화, 한컴오피스와 같은 조판 구현**](https://github.com/edwardkim/rhwp/milestone/1)<br>
 > 최근 검토: 2026-08-10, [#4467](https://github.com/edwardkim/rhwp/issues/4467)
 
