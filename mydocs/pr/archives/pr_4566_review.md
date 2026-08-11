@@ -1,6 +1,6 @@
 ---
 kind: pr-review
-status: local-accept-recommendation
+status: local-ci-complete
 canonical: mydocs/manual/pr_review_workflow.md
 last_verified: 2026-08-11
 ---

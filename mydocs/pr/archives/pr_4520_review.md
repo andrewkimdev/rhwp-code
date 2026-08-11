@@ -1,6 +1,6 @@
 ---
 kind: pr-review
-status: local-functional-review-complete-visual-fidelity-pending
+status: local-ci-complete-visual-fidelity-pending
 canonical: mydocs/manual/pr_review_workflow.md
 last_verified: 2026-08-11
 ---
@@ -51,4 +51,5 @@ last_verified: 2026-08-11
 않았다. 앵커 흐름의 기능 회귀와 전체 시각 fidelity는 별도 판정이다.
 
 **최종 권고: #4520의 최신 기능 회귀와 누적 로컬 CI는 통과했다. 다만 이 PR을 한컴 PDF 전면 fidelity
-수용 근거로 사용하지 않으며, 래스터 재비교와 별도 fidelity 과제 판단 뒤에 수용 여부를 결정한다.**
+수용 근거로 사용하지 않으며, 래스터 재비교와 [#3820](https://github.com/edwardkim/rhwp/issues/3820)의
+후속 fidelity 과제 판단 뒤에 수용 여부를 결정한다.**
