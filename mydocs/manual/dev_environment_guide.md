@@ -174,6 +174,19 @@ fetch/compile/instantiate future 를 띄우고 **즉시** `Ok(())` 를 돌려주
 
 브라우저 콘솔의 `[subsecond]` 진단은 개발 빌드에서만 나온다(`import.meta.env.DEV`).
 
+### subsecond 핫패치 세션은 길이를 관리한다
+
+`npm run dev:subsecond`(dx devserver + Vite)는 Rust 변경을 새로고침 없이 적용한다. 대신 **적용한
+패치는 세션이 끝날 때까지 회수되지 않는다.** subsecond 는 이전 점프 테이블을 그대로 버리고, wasm 의
+선형 메모리와 간접 함수 테이블은 `memory.grow`/`funcs.grow` 로 늘기만 할 뿐 줄어들 수 없다. 디버그
+베이스 모듈이 약 123MB 라 패치 한 건이 8MB 이상을 영구히 더한다.
+
+- 핫패치 32건마다 브라우저 콘솔에 누적 경고(`[subsecond] 이 세션에 핫패치 …건이 쌓였다`)가 나온다.
+  경고를 보면 탭을 새로고침해 세션을 끊는다.
+- 새로고침 없이 오래 끌면 편집 도중 `RangeError: WebAssembly.Memory.grow(): Unable to grow instance
+  memory` 로 탭이 죽는다. 이 실패는 핫패치가 원인이라는 표시를 남기지 않는다.
+- 회수는 플랫폼 제약이라 코드로 고칠 수 없다. 세션 길이로만 관리한다.
+
 ## OS별 참고
 
 ### macOS
