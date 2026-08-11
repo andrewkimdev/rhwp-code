@@ -947,6 +947,12 @@ impl DocumentCore {
         self.layout_engine.take_overflow_cell_lines()
     }
 
+    /// [#4515] 직전 렌더에서 발생한 최상위 표 y 겹침(`LAYOUT_TABLE_OVERLAP`) 목록을
+    /// 읽고 리셋한다. 페이지 렌더 직후 호출하면 그 페이지 귀속 목록이 된다.
+    pub fn take_table_overlaps(&self) -> Vec<crate::renderer::layout::LayoutTableOverlap> {
+        self.layout_engine.take_table_overlaps()
+    }
+
     /// [Issue #4379] `RHWP_RENDER_PATH=layer-svg` 는 legacy/layer 두 SVG 경로를 A/B 대조하는
     /// **네이티브 전용** 디버그 스위치다. `#[cfg(not(target_arch = "wasm32"))]` 로 감싼 이유는
     /// 장식이 아니라 사실 표시다 — wasm32-unknown-unknown(rhwp-studio 브라우저 빌드)에는
@@ -3635,6 +3641,7 @@ impl DocumentCore {
         let hwp3_origin_flow_spacing_before = uses_hwp3_origin_flow_spacing_before(&self.document);
         let measurer = HeightMeasurer::new(self.dpi)
             .with_hwp3_variant(profile.hwp3_layout())
+            .with_native_hwp5(profile.native_hwp5_layout())
             .with_hwp3_origin_flow_spacing_before(hwp3_origin_flow_spacing_before);
         let column_def = Self::find_initial_column_def(paragraphs);
         let layout =
@@ -3964,6 +3971,7 @@ impl DocumentCore {
         let profile = self.document.layout_profile();
         let measurer = HeightMeasurer::new(self.dpi)
             .with_hwp3_variant(profile.hwp3_layout())
+            .with_native_hwp5(profile.native_hwp5_layout())
             .with_hwp3_origin_flow_spacing_before(hwp3_origin_flow_spacing_before)
             .with_render_normalization(std::sync::Arc::clone(&self.render_normalization.overlay));
 
