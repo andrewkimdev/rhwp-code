@@ -1,6 +1,6 @@
 ---
 kind: pr_review
-status: active
+status: archived
 canonical: mydocs/manual/pr_review_workflow.md
 last_verified: 2026-08-11
 ---
@@ -63,8 +63,8 @@ modifiers: `intake_and_review.md`, `local_validation.md`,
 | HWP 2020 PDF - rhwp HWP 변환본 | 47쪽, 1,174,638 bytes, 본문 검증 성공 |
 
 실제 한컴 PDF의 3쪽을 검토했다. 변환본에는 이 이슈의 증상인 줄 크기 검정 막대가 없고 본문이
-판독된다. 안정 증적은 [원본 3쪽](assets/pr_4366_so_sueop_source_p003_hancom2020.png)과
-[변환본 3쪽](assets/pr_4366_so_sueop_rhwp_p003_hancom2020.png)에 보존했다.
+판독된다. 안정 증적은 [원본 3쪽](../assets/pr_4366_so_sueop_source_p003_hancom2020.png)과
+[변환본 3쪽](../assets/pr_4366_so_sueop_rhwp_p003_hancom2020.png)에 보존했다.
 
 원본 46쪽과 변환본 47쪽의 자동 번호, 머리말, 들여쓰기, 페이지 나눔 차이는 남아 있다. 이는
 원 PR의 한컴 판정 보고서가 이미 #2151 계열 기존 fidelity 항목으로 분리한 범위이며, 이번 변경은

@@ -1,6 +1,6 @@
 ---
 kind: pr_review
-status: active
+status: archived
 canonical: mydocs/manual/pr_review_workflow.md
 last_verified: 2026-08-11
 ---
@@ -45,8 +45,8 @@ HWPX의 `<hp:switch>` 차트 branch가 만드는 가상 `BinData` 참조를 HWP5
 
 한컴 2020에서 원본과 변환본을 각각 PDF로 출력한 뒤 첫 쪽 144 DPI 래스터를 비교했다. 두 PNG의
 SHA-256이 같고, 묶은 세로 막대 3계열, 4개 범주, 제목, 범례, 축 눈금이 모두 존재한다. 증적은
-[원본](assets/pr_4499_chart_source_p001_hancom2020.png)과
-[변환본](assets/pr_4499_chart_rhwp_p001_hancom2020.png)에 보존했다.
+[원본](../assets/pr_4499_chart_source_p001_hancom2020.png)과
+[변환본](../assets/pr_4499_chart_rhwp_p001_hancom2020.png)에 보존했다.
 
 ## 권고
 

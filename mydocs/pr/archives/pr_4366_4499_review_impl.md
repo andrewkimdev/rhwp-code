@@ -1,6 +1,6 @@
 ---
 kind: pr_review_impl
-status: active
+status: archived
 canonical: mydocs/manual/pr_review_workflow.md
 last_verified: 2026-08-11
 ---
