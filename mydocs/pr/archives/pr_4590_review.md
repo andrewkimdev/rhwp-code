@@ -22,9 +22,10 @@ modifiers: intake_and_review.md, local_validation.md,
 | 원 head | `764bcd64b705356fe1d18537405e7fb455521921` |
 | 규모 | 7 files, +766/-23 |
 | 원 PR 상태 | `MERGEABLE`, `CLEAN`; Build & Test 성공, CodeQL 언어별 Analyze 성공, 집계 `CodeQL`은 `neutral` |
-| 누적 적용 | `2aff7a651`, `5229c8495`, `4621859ab`, `83aa22ac9`, `05d217e03` |
-| 메인터너 보정 | `a08be5d10` - Node 검증에서 브라우저 전역 객체가 없을 때 기본 진단을 no-op으로 처리 |
-| 누적 코드 후보 | `a08be5d1051016adb0378c40fc0010b677628c15` |
+| 누적 적용 | `72e7473d1`, `b37ced8e0`, `946255b60`, `756ceaa35`, `2d60cb008` |
+| 메인터너 보정 | `ed8e0387a` - Node 검증에서 브라우저 전역 객체가 없을 때 기본 진단을 no-op으로 처리 |
+| 로컬 검증 후보 | rebase 전 `a08be5d1051016adb0378c40fc0010b677628c15` |
+| 현재 rebase 후보 | `ed8e0387ad249cacae8edab85dd2283ea559ba21` |
 
 ## 변경 판단
 
@@ -40,13 +41,13 @@ patch wasm, `dx serve` 로그라는 다음 진단 지점을 연결한다. Unix �
 ## 메인터너 보정과 완료한 검증
 
 누적 검토에서 `subsecond-runtime.ts`의 기본 진단이 Node test runtime에서도 `window`을 직접
-참조하는 결함을 발견했다. `a08be5d10`은 브라우저에서는 기존 전역 오류 listener를 유지하고,
+참조하는 결함을 발견했다. `ed8e0387a`는 브라우저에서는 기존 전역 오류 listener를 유지하고,
 Node에서는 기본 report를 no-op으로 바꿔 테스트 환경 오류만 제거한다. 패치 전달·오류 분류·브라우저
 진단 의미는 바꾸지 않는다.
 
-- `npx tsc --noEmit`과 `npm --prefix rhwp-studio test`를 누적 후보에서 실행해 각각 통과했고,
+- `npx tsc --noEmit`과 `npm --prefix rhwp-studio test`를 rebase 전 누적 후보에서 실행해 각각 통과했고,
   후자는 847건 통과했다.
-- 누적 후보에서 전체 nextest 5,764건 통과, `cargo fmt --check`, clippy, release build, release lib
+- rebase 전 누적 후보에서 전체 nextest 5,764건 통과, `cargo fmt --check`, clippy, release build, release lib
   test, Native Skia 3종, WASM build가 모두 통과했다.
 - 원 head의 CI preflight·CodeQL preflight·Render Diff preflight는 성공했다. 최신 source head에서
   CodeQL 집계가 `neutral`인 것은 language Analyze 세 job 성공과 구분해 기록하며, 실패나 skip을

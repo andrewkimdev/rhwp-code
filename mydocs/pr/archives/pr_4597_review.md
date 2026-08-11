@@ -23,8 +23,9 @@ modifiers: intake_and_review.md, local_validation.md,
 | 규모 | 3 files, +507/-32 |
 | 원 PR 상태 | `MERGEABLE`, `CLEAN`; source head CI·CodeQL·Canvas visual diff 성공 |
 | 선행 의존 | #4584의 `&mut self` 파생 상태 재구성 뒤에 적용 |
-| 누적 적용 | `fd5494879`, `b6ad403fd`, `51599734a` |
-| 누적 코드 후보 | `a08be5d1051016adb0378c40fc0010b677628c15` |
+| 누적 적용 | `a78def626`, `f0a771f9f`, `33f92a494` |
+| 로컬 검증 후보 | rebase 전 `a08be5d1051016adb0378c40fc0010b677628c15` |
+| 현재 rebase 후보 | `ed8e0387ad249cacae8edab85dd2283ea559ba21` |
 
 ## 변경 판단
 
@@ -41,13 +42,13 @@ wasm `HotFn::current`는 등록된 함수 하나만 새 patch 구현으로 전�
 
 - #4584와 `src/wasm_api.rs`를 함께 변경하므로 사용자 지정 순서대로 #4584 뒤, #4590·#4594 뒤에
   적용했다. 충돌 없이 누적했고 `git diff --check`가 통과했다.
-- 누적 후보에서 전체 nextest 5,764건 통과, fmt·clippy·release build·release lib test·Native Skia
+- rebase 전 누적 후보에서 전체 nextest 5,764건 통과, fmt·clippy·release build·release lib test·Native Skia
   3종(58/2/4)·WASM build가 통과했다.
 - `src/wasm_api/subsecond_boundary.rs`의 compile-time registry 검증은 누적 build와 test에 포함돼,
   등록한 경계의 dispatcher·revision·export 배선 정합을 확인한다.
 - 원 head의 CI, CodeQL, Canvas visual diff는 모두 성공했다. 일반 Canvas visual diff는 production
   renderer 회귀를 확인하는 근거이고, `subsecond-dev` 실제 patch 적용 성공을 대신하지는 않는다.
-- 로컬에서 Dioxus `dx serve`는 `127.0.0.1:7711`, Studio Vite는 `0.0.0.0:7700`으로 기동했고,
+- rebase 전 후보에서 Dioxus `dx serve`는 `127.0.0.1:7711`, Studio Vite는 `0.0.0.0:7700`으로 기동했고,
   Vite·Dioxus·Vite WASM proxy 응답이 모두 `200`이었다.
 
 ## 한계와 권고

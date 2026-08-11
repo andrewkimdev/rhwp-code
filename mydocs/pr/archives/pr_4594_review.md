@@ -22,8 +22,9 @@ modifiers: intake_and_review.md, local_validation.md,
 | 원 head | `1b7acf0c9ced58034b61dae1364a50d24e177cbc` |
 | 규모 | 5 files, +565/-24 |
 | 원 PR 상태 | `MERGEABLE`, `CLEAN`; Build & Test 성공, CodeQL 언어별 Analyze 성공, 집계 `CodeQL`은 `neutral` |
-| 누적 적용 | `dc29e07c2`부터 `b4f938a33`까지 11 commits |
-| 누적 코드 후보 | `a08be5d1051016adb0378c40fc0010b677628c15` |
+| 누적 적용 | `081954d42`부터 `a44dcaa83`까지 11 commits |
+| 로컬 검증 후보 | rebase 전 `a08be5d1051016adb0378c40fc0010b677628c15` |
+| 현재 rebase 후보 | `ed8e0387ad249cacae8edab85dd2283ea559ba21` |
 
 ## 변경 판단
 
@@ -39,9 +40,9 @@ Subsecond revision watcher의 재도색 callback이 예외를 던지면 감시 �
 
 - #4584 다음, #4597 이전에 독립 단계로 누적 적용했다. #4597과 직접 충돌하지 않았고 누적 branch의
   source diff와 whitespace 검사가 통과했다.
-- `npm --prefix rhwp-studio test`를 누적 후보에서 실행해 847건 통과했다. watcher 수명, 재연결 backoff,
+- `npm --prefix rhwp-studio test`를 rebase 전 누적 후보에서 실행해 847건 통과했다. watcher 수명, 재연결 backoff,
   오류 보고와 patch 누적 경고의 Studio 회귀가 이 묶음에 포함된다.
-- 누적 후보에서 전체 nextest 5,764건 통과, fmt·clippy·release build·release lib test·Native Skia 3종과
+- rebase 전 누적 후보에서 전체 nextest 5,764건 통과, fmt·clippy·release build·release lib test·Native Skia 3종과
   WASM build가 모두 통과했다.
 - 원 head의 CI/Render Diff preflight와 Canvas visual diff는 성공했다. 최신 source head의 heavy Rust
   worker가 skipped인 것은 trailing 문서 변경에 따른 fast-pass 결과이며, Build & Test 집계 성공과

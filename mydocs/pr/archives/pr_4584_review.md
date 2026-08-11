@@ -22,9 +22,11 @@ modifiers: intake_and_review.md, local_validation.md,
 | 원 head | `692c546c2ed6af68f1843001fc04a444c1e19b63` |
 | 규모 | 5 files, +346/-18 |
 | 원 PR 상태 | `MERGEABLE`, `CLEAN`; source head CI·CodeQL·Canvas visual diff 성공 |
-| 누적 기준선 | `upstream/devel` `a70797db431e42cb29ee8140ddb0e3259eb99ae2` |
-| 누적 적용 | `60dd2fc6f`, `a4916e6ce`, `d1dac4ca2`, `ac61778ae` |
-| 누적 코드 후보 | `a08be5d1051016adb0378c40fc0010b677628c15` |
+| 최초 누적 기준선 | `upstream/devel` `a70797db431e42cb29ee8140ddb0e3259eb99ae2` |
+| rebase 기준선 | `upstream/devel` `4f9e4ae694d53162a1a8fd2e2606562d7635085d` |
+| 누적 적용 | `beec1758d`, `4d5a2fd2a`, `b83adc610`, `497011131` |
+| 로컬 검증 후보 | rebase 전 `a08be5d1051016adb0378c40fc0010b677628c15` |
+| 현재 rebase 후보 | `ed8e0387ad249cacae8edab85dd2283ea559ba21` |
 
 ## 변경 판단
 
@@ -44,10 +46,10 @@ modifiers: intake_and_review.md, local_validation.md,
 - `cargo nextest run --cargo-profile release-test --target-dir target/pr-review --lib
   issue_4576_rebuild_derived_state_recomputes_composition_and_pagination --no-fail-fast`를 실행해
   회귀 1건이 통과했다.
-- 누적 코드 후보에서 `cargo nextest run --cargo-profile release-test --target-dir target/pr-review
+- rebase 전 누적 후보에서 `cargo nextest run --cargo-profile release-test --target-dir target/pr-review
   --tests --test-threads 12 --no-fail-fast`를 실행해 5,764건 통과, slow 7건, 정책 skip 36건으로
   종료했다.
-- 같은 후보에서 `cargo fmt --check`, `cargo clippy --all-targets --target-dir target/pr-review --
+- 같은 rebase 전 후보에서 `cargo fmt --check`, `cargo clippy --all-targets --target-dir target/pr-review --
   -D warnings`, `cargo build --release --target-dir target/pr-review`, `cargo test --release
   --target-dir target/pr-review --lib`를 실행해 모두 통과했다. release lib는 3,498건 통과,
   13건 ignored였다.
