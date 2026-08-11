@@ -19,10 +19,11 @@ modifiers: intake_and_review.md, local_validation.md,
 | --- | --- |
 | PR | [#4602](https://github.com/edwardkim/rhwp/pull/4602) |
 | base | `devel` / `4f9e4ae694d53162a1a8fd2e2606562d7635085d` |
-| head | `5af35460e` |
+| code candidate | `5af35460e` |
+| trailing review head | 이 문서와 오늘할일을 포함한 후속 docs-only commit |
 | source branch | `pr/devel-subsecond-hotpatch-integration-20260811` |
 | 통합 원 PR | [#4584](https://github.com/edwardkim/rhwp/pull/4584), [#4590](https://github.com/edwardkim/rhwp/pull/4590), [#4594](https://github.com/edwardkim/rhwp/pull/4594), [#4597](https://github.com/edwardkim/rhwp/pull/4597) |
-| 작성 시점 상태 | Open; 최신 head의 GitHub CI 진행 중 |
+| 작성 시점 상태 | Open; trailing review head의 GitHub CI 진행 중 |
 
 ## 범위와 적용 순서
 
@@ -43,7 +44,8 @@ modifiers: intake_and_review.md, local_validation.md,
   review 문서의 내부 Markdown 링크 검사를 통과했다.
 - 기준선 전진분 뒤 시작한 전체 nextest는 작업지시자 지시에 따라 중단했다. 종료 코드 `130`은 성공
   결과로 취급하지 않는다.
-- 따라서 현재 `5af35460e` head의 GitHub CI·CodeQL·필요한 Render Diff가 최종 검증 게이트다.
+- 따라서 code candidate와 그 뒤 trailing review head의 GitHub CI·CodeQL·필요한 Render Diff가
+  최종 검증 게이트다.
   실제 browser hot-patch apply의 장시간 end-to-end 검증은 아직 자동화하지 않았다.
 
 ## 최종 권고
