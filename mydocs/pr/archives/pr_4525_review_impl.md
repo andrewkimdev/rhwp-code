@@ -1,6 +1,6 @@
 ---
 kind: review-implementation
-status: pending-push
+status: pending-fast-pass
 canonical: mydocs/manual/pr_review_workflow.md
 last_verified: 2026-08-11
 ---
@@ -12,6 +12,9 @@ last_verified: 2026-08-11
 - 원 PR: [#4525](https://github.com/edwardkim/rhwp/pull/4525)
 - 원 기여자 / source: @humdrum00001010 / `task_m100_4334_structural_node_id`
 - 원 code head: `dc42d10b5b2e52ce0bc455446ef3f2f72ba6dbdd`
+- 최신 `devel` 기준: `b66e3d79a93c048478c4737443084f9e7149bbb2`
+- 기준선 merge: `bd980c24b871843ac1eda5fce1de370b8e4fcef3`
+- 최종 code candidate: `6edb700d16c790d5394d2919898f5d7c71e799ba`
 - 로컬 가시성 브랜치: `review/humdrum00001010-4525-20260811`
 - 보정 권한: PR metadata의 `maintainerCanModify=true`
 
@@ -32,20 +35,27 @@ last_verified: 2026-08-11
 3. `wasm-pack build --target web --dev`를 실행해 Studio용 웹 WASM을 재생성했다.
 4. `VITE_URL=http://127.0.0.1:7702 node e2e/topmost-hittest.test.mjs --mode=headless`를
    실행해 `shapeStable=[0,0,2]`, `imageStable=[0,0,3]`, 겹침 클릭의 `shape` 선택을 확인했다.
-5. 최신 `upstream/devel`과 merge tree를 만들고 `git diff --check upstream/devel...HEAD`를 통과했다.
-6. `dc42d10..c4e3a0883`의 변경은 LFS 대상이 아닌
+5. 첫 Full CI는 최신 `devel`이 추가한 `TableNode` literal에 `cell_context`가 없어서 실패했다. Git
+   텍스트 충돌은 없었지만 source의 새 struct field와 최신 base test가 함께 컴파일되지 않는 current-base
+   호환 결함이었다.
+6. contributor commit을 재작성하지 않고 `bd980c24b`에서 최신 `devel`을 source에 merge한 뒤,
+   `6edb700d1`에서 해당 literal에 `cell_context: None`을 추가했다.
+7. `cargo test --profile release-test --lib collect_top_level_table_spans_domain -- --nocapture`와
+   `cargo build --workspace`를 실행해 모두 통과했다.
+8. 최종 candidate `6edb700d1`의 CI, CodeQL, Render Diff가 모두 성공했다.
+9. `dc42d10..c4e3a0883`의 E2E 보정은 LFS 대상이 아닌
    `rhwp-studio/e2e/topmost-hittest.test.mjs` 한 파일뿐임을 확인했다. 원격 source head와
-   PR head도 모두 `dc42d10`으로 일치한다.
+   PR head는 code candidate `6edb700d1`으로 일치한다.
 
 ## 원격 반영 단계
 
-1. 작업지시자의 push 승인 뒤에만 LFS dry-run을 수행하고 contributor source branch에
-   `c4e3a0883`을 push한다.
-2. 보정은 code/test commit이므로 review-only fast-pass를 적용하지 않고, 새 PR head의
-   Full CI를 확인한다.
-3. CI 뒤 최신 head, mergeability, 작업지시자 merge 승인을 다시 확인한다.
+1. `c4e3a0883`, `bd980c24b`, `6edb700d1`을 contributor source branch에 push했고,
+   LFS 대상이 없음을 확인했다.
+2. code/test 보정이므로 `6edb700d1`에서 Full CI를 실행해 성공을 확인했다.
+3. 이 review 기록·오늘할일·공식 workflow 보완만 별도 trailing docs-only commit으로 push해 fast-pass를
+   확인한다.
 
 ## 롤백 경계
 
-- 보정은 E2E assertion 한 곳에 한정한다. 검증 실패 시 이 commit을 source branch에 push하지 않는다.
+- 보정은 E2E assertion과 최신 base의 `TableNode` 테스트 초기화 한 곳에 한정한다.
 - 원 기여자 commit은 rebase, amend, reset, force-push하지 않는다.
