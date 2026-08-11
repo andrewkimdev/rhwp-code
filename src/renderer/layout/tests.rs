@@ -2956,11 +2956,20 @@ fn whitespace_tac_carrier_para() -> Paragraph {
     }
 }
 
+/// 실제 배치 경로에서는 compose 결과가 존재하고, 대상 표가 inline TAC 로 등록돼야 한다.
+fn whitespace_tac_carrier_composed(para: &Paragraph) -> ComposedParagraph {
+    let mut composed = compose_paragraph(para);
+    composed.tac_controls = vec![(0, 19_000, 0)];
+    composed
+}
+
 #[test]
 fn whitespace_tac_carrier_paint_y_rewinds_to_stored_vpos() {
     let para = whitespace_tac_carrier_para();
+    let composed = whitespace_tac_carrier_composed(&para);
     // 흐름 커서가 선행 자리차지 표 하단(1064px)까지 밀린 상태 — 저장 위치로 되돌린다.
-    let got = whitespace_tac_carrier_stored_paint_y(true, &para, None, 75.6, 1064.0, 96.0);
+    let got =
+        whitespace_tac_carrier_stored_paint_y(true, &para, Some(&composed), 75.6, 1064.0, 96.0);
     let expected = 75.6 + 13_575.0 / 75.0;
     assert!((got.unwrap() - expected).abs() < 0.1, "got {got:?}");
 }
@@ -2968,8 +2977,9 @@ fn whitespace_tac_carrier_paint_y_rewinds_to_stored_vpos() {
 #[test]
 fn whitespace_tac_carrier_paint_y_requires_hwpx_stored_profile() {
     let para = whitespace_tac_carrier_para();
+    let composed = whitespace_tac_carrier_composed(&para);
     assert_eq!(
-        whitespace_tac_carrier_stored_paint_y(false, &para, None, 75.6, 1064.0, 96.0),
+        whitespace_tac_carrier_stored_paint_y(false, &para, Some(&composed), 75.6, 1064.0, 96.0),
         None
     );
 }
@@ -2978,8 +2988,9 @@ fn whitespace_tac_carrier_paint_y_requires_hwpx_stored_profile() {
 fn whitespace_tac_carrier_paint_y_rejects_substantive_text_host() {
     let mut para = whitespace_tac_carrier_para();
     para.text = "본문 텍스트".into();
+    let composed = whitespace_tac_carrier_composed(&para);
     assert_eq!(
-        whitespace_tac_carrier_stored_paint_y(true, &para, None, 75.6, 1064.0, 96.0),
+        whitespace_tac_carrier_stored_paint_y(true, &para, Some(&composed), 75.6, 1064.0, 96.0),
         None
     );
 }
@@ -2996,8 +3007,9 @@ fn whitespace_tac_carrier_paint_y_rejects_float_host_para() {
         },
         ..Default::default()
     })));
+    let composed = whitespace_tac_carrier_composed(&para);
     assert_eq!(
-        whitespace_tac_carrier_stored_paint_y(true, &para, None, 75.6, 1064.0, 96.0),
+        whitespace_tac_carrier_stored_paint_y(true, &para, Some(&composed), 75.6, 1064.0, 96.0),
         None
     );
 }
@@ -3008,8 +3020,9 @@ fn whitespace_tac_carrier_paint_y_rejects_small_intra_gap() {
     // 세그 간 간격이 100px(7500HU) 미만이면 무동작.
     let mut para = whitespace_tac_carrier_para();
     para.line_segs[1].vertical_pos = 13_575 + 2_414 + 7_000;
+    let composed = whitespace_tac_carrier_composed(&para);
     assert_eq!(
-        whitespace_tac_carrier_stored_paint_y(true, &para, None, 75.6, 1064.0, 96.0),
+        whitespace_tac_carrier_stored_paint_y(true, &para, Some(&composed), 75.6, 1064.0, 96.0),
         None
     );
 }
@@ -3018,8 +3031,9 @@ fn whitespace_tac_carrier_paint_y_rejects_small_intra_gap() {
 fn whitespace_tac_carrier_paint_y_rejects_forward_displacement() {
     // 방향-한정: 흐름이 저장 위치보다 아래로 충분히 밀렸을 때만 되돌린다.
     let para = whitespace_tac_carrier_para();
+    let composed = whitespace_tac_carrier_composed(&para);
     assert_eq!(
-        whitespace_tac_carrier_stored_paint_y(true, &para, None, 75.6, 200.0, 96.0),
+        whitespace_tac_carrier_stored_paint_y(true, &para, Some(&composed), 75.6, 200.0, 96.0),
         None
     );
 }
@@ -3028,8 +3042,34 @@ fn whitespace_tac_carrier_paint_y_rejects_forward_displacement() {
 fn whitespace_tac_carrier_paint_y_rejects_synthetic_segs() {
     let mut para = whitespace_tac_carrier_para();
     para.line_segs[0].tag |= crate::model::paragraph::LineSeg::TAG_IMPLEMENTATION_PROPERTY;
+    let composed = whitespace_tac_carrier_composed(&para);
+    assert_eq!(
+        whitespace_tac_carrier_stored_paint_y(true, &para, Some(&composed), 75.6, 1064.0, 96.0),
+        None
+    );
+}
+
+#[test]
+fn whitespace_tac_carrier_paint_y_rejects_missing_or_block_tac() {
+    let para = whitespace_tac_carrier_para();
+    let block_composed = compose_paragraph(&para);
+    assert!(
+        block_composed.tac_controls.is_empty(),
+        "이 fixture의 표는 강제 inline 등록 없이 block 후보여야 한다"
+    );
     assert_eq!(
         whitespace_tac_carrier_stored_paint_y(true, &para, None, 75.6, 1064.0, 96.0),
+        None
+    );
+    assert_eq!(
+        whitespace_tac_carrier_stored_paint_y(
+            true,
+            &para,
+            Some(&block_composed),
+            75.6,
+            1064.0,
+            96.0,
+        ),
         None
     );
 }

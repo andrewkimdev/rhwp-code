@@ -848,15 +848,13 @@ fn whitespace_tac_carrier_stored_paint_y(
     if intra_gap_hu < 7500 {
         return None;
     }
-    // TAC 는 첫 줄에 타야 한다 (공백 전용 문단이라 char/UTF-16 인덱스 동일).
-    if let Some(comp) = composed {
-        if comp
-            .tac_controls
-            .first()
-            .is_some_and(|(pos, _, _)| *pos >= s1.text_start as usize)
-        {
-            return None;
-        }
+    // 실제 inline TAC 로 compose 되어 첫 줄에 타야 한다. 폭/줄 증거상 block 으로
+    // 취급된 표는 저장 vpos 페인트 변위의 대상이 아니다.
+    let comp = composed?;
+    let (pos, _, _) = comp.tac_controls.first()?;
+    // 공백 전용 문단이라 char/UTF-16 인덱스가 동일하다.
+    if *pos >= s1.text_start as usize {
+        return None;
     }
     let stored_y = col_area_y + hwpunit_to_px(s0.vertical_pos, dpi);
     let intra_gap_px = hwpunit_to_px(intra_gap_hu as i32, dpi);
