@@ -673,3 +673,404 @@ fn index_addressing_covers_the_same_chart() {
     assert_eq!(by_addr, by_index);
     assert!(core.get_chart_data_by_index_native(9).is_err(), "없는 순번");
 }
+
+// ---------------------------------------------------------------------------
+// Stage 4 — set_chart_data_native (①② 동시 기록)
+// ---------------------------------------------------------------------------
+
+/// 레거시 `Contents` 스트림 이름.
+const LEGACY_STREAM: &str = "Contents";
+/// EMF 프리뷰 스트림 이름.
+const EMF_STREAM: &str = "\u{2}OlePres000";
+
+/// 현재 값 그대로의 편집 입력 — 무편집 왕복의 재료.
+fn edits_from(core: &DocumentCore, index: usize) -> serde_json::Value {
+    let read: serde_json::Value =
+        serde_json::from_str(&core.get_chart_data_by_index_native(index).expect("읽기"))
+            .expect("JSON");
+    serde_json::json!({
+        "labels": read["labels"],
+        "series": read["series"]
+            .as_array()
+            .expect("series")
+            .iter()
+            .map(|s| serde_json::json!({"name": s["name"], "values": s["values"]}))
+            .collect::<Vec<_>>(),
+    })
+}
+
+fn slot_bytes(core: &DocumentCore) -> Vec<Vec<u8>> {
+    core.document()
+        .bin_data_content
+        .iter()
+        .map(|c| c.data.load())
+        .collect()
+}
+
+fn set_chart(core: &mut DocumentCore, edits: &serde_json::Value) -> serde_json::Value {
+    serde_json::from_str(
+        &core
+            .set_chart_data_by_index_native(0, &edits.to_string())
+            .expect("쓰기"),
+    )
+    .expect("JSON")
+}
+
+/// **편집이 ①②에 함께 실린다** (수용 기준 1 의 코어 층).
+///
+/// HWPX 는 두 표현 모두, HWP5 는 ②가 새 값이다. ③(레거시)·④(EMF)는 바이트 그대로 —
+/// B1 은 그것들을 쓰지 않는다.
+#[test]
+fn an_edit_lands_in_both_representations_and_leaves_the_others_alone() {
+    let mut checked = 0usize;
+    for hwpx in corpus() {
+        for path in [hwpx.with_extension("hwpx"), hwpx.with_extension("hwp")] {
+            let mut core = core_of(&path);
+            let chart = collect_charts(core.document())[0].clone();
+            let nested_idx = chart.nested_copy.expect("②");
+            let before_nested = core.document().bin_data_content[nested_idx].data.load();
+            let legacy_before = stream_of(&before_nested, LEGACY_STREAM);
+            let emf_before = stream_of(&before_nested, EMF_STREAM);
+
+            let mut edits = edits_from(&core, 0);
+            edits["series"][0]["values"][0] = serde_json::json!("91.7");
+            let out = set_chart(&mut core, &edits);
+
+            assert_eq!(out["ok"], true, "{}: {out}", path.display());
+            assert_eq!(out["changedCount"], 1, "{}: {out}", path.display());
+
+            let is_hwpx = path.extension().is_some_and(|e| e == "hwpx");
+            let wrote: Vec<&str> = out["wrote"]
+                .as_array()
+                .expect("wrote")
+                .iter()
+                .map(|v| v.as_str().expect("문자열"))
+                .collect();
+            if is_hwpx {
+                assert_eq!(wrote, ["zipPart", "nestedCopy"], "{}", path.display());
+                let zip = core.document().bin_data_content[chart.zip_part.expect("①")]
+                    .data
+                    .load();
+                assert!(
+                    String::from_utf8_lossy(&zip).contains("<c:v>91.7</c:v>"),
+                    "{}: ① 에 새 값이 없다",
+                    path.display()
+                );
+            } else {
+                assert_eq!(wrote, ["nestedCopy"], "{}", path.display());
+            }
+
+            let after_nested = core.document().bin_data_content[nested_idx].data.load();
+            let ooxml = stream_of(&after_nested, OOXML_STREAM).expect("②의 OOXML");
+            assert!(
+                String::from_utf8_lossy(&ooxml).contains("<c:v>91.7</c:v>"),
+                "{}: ② 에 새 값이 없다",
+                path.display()
+            );
+            assert_eq!(
+                stream_of(&after_nested, LEGACY_STREAM),
+                legacy_before,
+                "{}: ③ 레거시가 바뀌었다",
+                path.display()
+            );
+            assert_eq!(
+                stream_of(&after_nested, EMF_STREAM),
+                emf_before,
+                "{}: ④ EMF 가 바뀌었다",
+                path.display()
+            );
+            checked += 1;
+        }
+    }
+    assert_eq!(checked, CORPUS_FILES);
+}
+
+/// **무편집 왕복이 슬롯 바이트를 건드리지 않는다** (수용 기준 2 의 코어 층).
+#[test]
+fn writing_the_current_values_back_changes_nothing() {
+    let mut checked = 0usize;
+    for hwpx in corpus() {
+        for path in [hwpx.with_extension("hwpx"), hwpx.with_extension("hwp")] {
+            let mut core = core_of(&path);
+            let before = slot_bytes(&core);
+
+            let edits = edits_from(&core, 0);
+            let out = set_chart(&mut core, &edits);
+
+            assert_eq!(out["ok"], true, "{}", path.display());
+            assert_eq!(out["changedCount"], 0, "{}: {out}", path.display());
+            assert!(
+                out["wrote"].as_array().expect("wrote").is_empty(),
+                "{}",
+                path.display()
+            );
+            assert_eq!(slot_bytes(&core), before, "{}: 슬롯 바이트가 바뀌었다", path.display());
+            checked += 1;
+        }
+    }
+    assert_eq!(checked, CORPUS_FILES);
+}
+
+/// 편집이 저장·재파스를 넘어 살아남는다 — ②까지 함께.
+#[test]
+fn the_edit_survives_save_and_reparse() {
+    for name in [
+        "세로막대형/묶은세로막대형",
+        "원형/쪼개진원형",
+        "분산형/직선이있는분산형",
+    ] {
+        let path = manifest(&format!("samples/chart/{name}.hwpx"));
+        let mut core = core_of(&path);
+        let mut edits = edits_from(&core, 0);
+        edits["series"][0]["values"][0] = serde_json::json!("91.7");
+        assert_eq!(set_chart(&mut core, &edits)["ok"], true, "{name}");
+
+        let saved = core.export_hwpx_native().expect("HWPX 저장");
+        let reread = DocumentCore::from_bytes(&saved).expect("재파스");
+        let json: serde_json::Value =
+            serde_json::from_str(&reread.get_chart_data_by_index_native(0).expect("읽기"))
+                .expect("JSON");
+        assert_eq!(json["series"][0]["values"][0], "91.7", "{name}");
+
+        let chart = collect_charts(reread.document())[0].clone();
+        let nested = reread.document().bin_data_content[chart.nested_copy.expect("②")]
+            .data
+            .load();
+        let ooxml = stream_of(&nested, OOXML_STREAM).expect("②");
+        assert!(
+            String::from_utf8_lossy(&ooxml).contains("<c:v>91.7</c:v>"),
+            "{name}: 저장 후 ② 에 새 값이 없다"
+        );
+    }
+}
+
+/// **HWP5 저장에서도 편집이 살아남는다** — 패스스루 면제의 근거 (#2724 가드).
+///
+/// `issue_2724_passthrough_invalidation_guard` 는 문서 IR 을 바꾸는 `&mut self` 가
+/// `section.raw_stream`/`doc_info.raw_stream_dirty` 를 무효화하지 않으면 저장이 원본
+/// 바이트를 그대로 돌려줘 **편집이 조용히 사라진다**고 경고한다. 차트 편집은
+/// `bin_data_content` 만 바꾸고 그것은 BodyText·DocInfo 스트림이 아니라 BinData
+/// 저장소라 패스스루 대상이 아니다 — 그 주장을 말로 두지 않고 저장→재파스로 판정한다.
+#[test]
+fn the_edit_survives_hwp5_save_despite_stream_passthrough() {
+    for name in ["세로막대형/묶은세로막대형", "기타/고가저가종가"] {
+        let path = manifest(&format!("samples/chart/{name}.hwp"));
+        let mut core = core_of(&path);
+        let mut edits = edits_from(&core, 0);
+        edits["series"][0]["values"][0] = serde_json::json!("91.7");
+        assert_eq!(set_chart(&mut core, &edits)["ok"], true, "{name}");
+
+        let saved = core.export_hwp_native().expect("HWP5 저장");
+        let reread = DocumentCore::from_bytes(&saved).expect("재파스");
+        let json: serde_json::Value =
+            serde_json::from_str(&reread.get_chart_data_by_index_native(0).expect("읽기"))
+                .expect("JSON");
+        assert_eq!(
+            json["series"][0]["values"][0], "91.7",
+            "{name}: HWP5 저장에서 편집이 사라졌다"
+        );
+    }
+}
+
+/// **T4 — 편집이 HWPX→HWP5 변환을 넘어 살아남는다** (수용 기준 4).
+///
+/// B1 이 존재하는 이유 그 자체다. 대조군(①만 고친 문서)이 변환 후 **옛 값**이라는 것이
+/// ②를 함께 써야 하는 이유의 살아 있는 근거다.
+///
+/// `#[ignore]` 인 이유: `devel` 기준으로는 잴 대상이 없다. #4099 가 고치기 전의 변환은
+/// 차트를 통째로 잃으므로(`bin_data_id=60001` 이 그대로 나가 참조가 끊긴다) 새 값이든 옛
+/// 값이든 읽을 차트가 없다. PR #4499 머지 후 리베이스에서 `#[ignore]` 를 뗀다.
+///
+/// 머지 전 측정은 임시 워크트리에 `origin/task4099` 를 머지해 돌린다(계획서 R6):
+///
+/// ```text
+/// cargo test --profile release-test --test issue_4100_chart_data_edit -- --ignored
+/// ```
+#[test]
+#[ignore = "#4099(PR #4499) 미머지 — devel 의 변환은 차트를 통째로 잃어 잴 대상이 없다"]
+fn the_edit_survives_conversion_to_hwp5() {
+    for name in [
+        "세로막대형/묶은세로막대형",
+        "원형/쪼개진원형",
+        "분산형/직선이있는분산형",
+    ] {
+        let path = manifest(&format!("samples/chart/{name}.hwpx"));
+
+        let original: String = {
+            let core = core_of(&path);
+            let json: serde_json::Value =
+                serde_json::from_str(&core.get_chart_data_by_index_native(0).expect("읽기"))
+                    .expect("JSON");
+            json["series"][0]["values"][0]
+                .as_str()
+                .expect("값")
+                .to_string()
+        };
+        assert_ne!(original, "91.7", "{name}: 센티널이 원본과 같으면 판정이 공허하다");
+
+        // ── 본 시험 — ①② 함께 기록 → 변환 → 새 값이 남는다
+        let mut core = core_of(&path);
+        let mut edits = edits_from(&core, 0);
+        edits["series"][0]["values"][0] = serde_json::json!("91.7");
+        assert_eq!(set_chart(&mut core, &edits)["ok"], true, "{name}");
+
+        let hwp = core
+            .export_hwp_with_adapter_snapshot()
+            .expect("HWP5 변환 저장");
+        let converted = DocumentCore::from_bytes(&hwp).expect("변환본 재파스");
+        let json: serde_json::Value =
+            serde_json::from_str(&converted.get_chart_data_by_index_native(0).expect("읽기"))
+                .expect("JSON");
+        assert_eq!(
+            json["series"][0]["values"][0], "91.7",
+            "{name}: 변환 후 새 값이 사라졌다"
+        );
+
+        // ── 대조군 — ①만 고치면 변환 후 옛 값이다
+        let mut only_zip = core_of(&path);
+        {
+            let chart = collect_charts(only_zip.document())[0].clone();
+            let zip_idx = chart.zip_part.expect("① 은 HWPX 에만 있다");
+            let xml = only_zip.document().bin_data_content[zip_idx].data.load();
+            let scan = scan_chart_values(&xml).expect("스캔");
+            let patched = apply_value_edits(
+                &xml,
+                &scan,
+                &[ValueEdit {
+                    series: 0,
+                    point: 0,
+                    target: EditTarget::Value,
+                    text: "91.7".to_string(),
+                }],
+            )
+            .expect("패치");
+            only_zip.document_mut().bin_data_content[zip_idx].data = patched.into();
+        }
+        let hwp = only_zip
+            .export_hwp_with_adapter_snapshot()
+            .expect("HWP5 변환 저장");
+        let converted = DocumentCore::from_bytes(&hwp).expect("변환본 재파스");
+        let json: serde_json::Value =
+            serde_json::from_str(&converted.get_chart_data_by_index_native(0).expect("읽기"))
+                .expect("JSON");
+        assert_eq!(
+            json["series"][0]["values"][0], original,
+            "{name}: 대조군이 새 값이면 ①만 써도 된다는 뜻이라 설계 전제가 무너진다"
+        );
+    }
+}
+
+/// **T4 의 `#[ignore]` 를 스스로 회수한다.**
+///
+/// 위 T4 는 지금 잴 수 없어 잠들어 있는데, 잠든 게이트는 **조용히 잊힌다.** 그래서 조건이
+/// 사라지는 순간 시끄럽게 깨우는 짝을 둔다 — `stale_exemptions_are_reclaimed`(#2724 가드)와
+/// 같은 관용구다.
+///
+/// 편집 없이 변환만 해서 차트가 살아남으면 #4099 가 들어왔다는 뜻이고, 그러면 이 테스트가
+/// **실패하면서** T4 를 다시 재라고 알린다. #4099 가 머지·스쿼시·체리픽 중 무엇으로
+/// 들어오든, 메인테이너가 통합 중에 fold 설계를 고쳐도 마찬가지다 — 신호는 "#4099 가
+/// 들어왔는가"가 아니라 **"변환이 차트를 보존하는가"** 라는 관측이기 때문이다.
+///
+/// (이 저장소는 결함을 테스트로 못박는 관행이 있다 — #4097 이전의
+/// `mini_cfb_repack_drops_the_ole_class_id` 가 같은 모양이었고, 고쳐지면서 뒤집혔다.)
+#[test]
+fn the_conversion_gate_wakes_itself_when_4099_lands() {
+    let path = manifest("samples/chart/세로막대형/묶은세로막대형.hwpx");
+    let core = core_of(&path);
+    let hwp = core
+        .export_hwp_with_adapter_snapshot()
+        .expect("HWP5 변환 저장");
+    let converted = DocumentCore::from_bytes(&hwp).expect("변환본 재파스");
+
+    assert_eq!(
+        collect_charts(converted.document()).len(),
+        0,
+        "HWPX→HWP5 변환이 차트를 보존한다 — #4099 가 들어왔다는 뜻이다.\n\
+         `the_edit_survives_conversion_to_hwp5` 의 #[ignore] 를 떼고 수용 기준 4 를 \
+         **들어온 코드 기준으로 다시 재라.**\n\
+         (직전 측정은 `origin/task4099 = e34e6d8b1` 에 대한 것이고, 이 저장소는 기여자 PR 을 \
+         닫고 메인테이너가 보정해 재착지시키는 관행이 있다 — #4144 → #4171 선례)"
+    );
+}
+
+/// 검증에 걸리면 **한 칸도 쓰지 않는다** — `invalid[]` + `wrote: []`.
+#[test]
+fn every_refusal_writes_nothing() {
+    let path = manifest("samples/chart/세로막대형/묶은세로막대형.hwpx");
+    let good = edits_from(&core_of(&path), 0);
+
+    let mut cases: Vec<(&str, serde_json::Value)> = Vec::new();
+
+    let mut e = good.clone();
+    e["series"].as_array_mut().expect("series").pop();
+    cases.push(("seriesCountMismatch", e));
+
+    let mut e = good.clone();
+    e["series"][0]["values"].as_array_mut().expect("values").pop();
+    cases.push(("valueCountMismatch", e));
+
+    let mut e = good.clone();
+    e["series"][0]["values"][0] = serde_json::json!("칠십");
+    cases.push(("notANumber", e));
+
+    let mut e = good.clone();
+    e["series"][0]["name"] = serde_json::json!("다른 이름");
+    cases.push(("seriesNameMismatch", e));
+
+    let mut e = good.clone();
+    e["labels"][0] = serde_json::json!("다른 항목");
+    cases.push(("categoryMismatch", e));
+
+    for (reason, edits) in cases {
+        let mut core = core_of(&path);
+        let before = slot_bytes(&core);
+        let out = set_chart(&mut core, &edits);
+
+        assert_eq!(out["ok"], false, "{reason}: 거부되어야 한다 — {out}");
+        let reasons: Vec<&str> = out["invalid"]
+            .as_array()
+            .expect("invalid")
+            .iter()
+            .map(|v| v["reason"].as_str().expect("reason"))
+            .collect();
+        assert!(reasons.contains(&reason), "{reason} 가 없다: {reasons:?}");
+        assert!(out["wrote"].as_array().expect("wrote").is_empty(), "{reason}");
+        assert_eq!(slot_bytes(&core), before, "{reason}: 거부했는데 바이트가 바뀌었다");
+    }
+}
+
+/// `dryRun` 은 diff 만 내고 쓰지 않는다.
+#[test]
+fn dry_run_reports_the_diff_without_writing() {
+    let path = manifest("samples/chart/세로막대형/묶은세로막대형.hwpx");
+    let mut core = core_of(&path);
+    let before = slot_bytes(&core);
+
+    let mut edits = edits_from(&core, 0);
+    edits["series"][0]["values"][0] = serde_json::json!("91.7");
+    edits["dryRun"] = serde_json::json!(true);
+
+    let out = set_chart(&mut core, &edits);
+    assert_eq!(out["ok"], true);
+    assert_eq!(out["changedCount"], 1);
+    assert_eq!(out["dryRun"], true);
+    assert!(out["wrote"].as_array().expect("wrote").is_empty());
+    assert_eq!(slot_bytes(&core), before, "dry-run 이 바이트를 바꿨다");
+}
+
+/// 분산형은 X 도 편집 대상이다 — 계열이 X 를 공유하므로 두 칸이 함께 바뀐다.
+#[test]
+fn scatter_x_values_are_editable() {
+    let path = manifest("samples/chart/분산형/직선이있는분산형.hwpx");
+    let mut core = core_of(&path);
+    let mut edits = edits_from(&core, 0);
+    edits["labels"][0] = serde_json::json!("9.9");
+
+    let out = set_chart(&mut core, &edits);
+    assert_eq!(out["ok"], true, "{out}");
+    assert_eq!(out["changedCount"], 2, "{out}");
+
+    let json: serde_json::Value =
+        serde_json::from_str(&core.get_chart_data_by_index_native(0).expect("읽기")).expect("JSON");
+    assert_eq!(json["labels"][0], "9.9");
+}

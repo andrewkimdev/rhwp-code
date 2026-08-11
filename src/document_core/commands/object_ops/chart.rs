@@ -5,12 +5,19 @@
 //! 봉투(`{"ok":false,"invalid":[…]}`)로 돌려준다. 검증기를 코어와 CLI 두 곳으로 가르지
 //! 않기 위해서다 — CLI 는 이 봉투를 그대로 실어 나른다.
 
+use serde::Deserialize;
+
 use crate::document_core::queries::chart_extract::{
     chart_xml, collect_charts, ChartRef, ChartSource,
 };
 use crate::document_core::DocumentCore;
 use crate::error::HwpError;
 use crate::ooxml_chart::data::{scan_chart_values, ChartData, SeriesAxis};
+use crate::ooxml_chart::patch::{apply_value_edits, EditTarget, ValueEdit};
+use crate::serializer::ole_container::replace_ole_stream;
+
+/// 중첩 CFB 안 OOXML 차트 스트림 이름.
+const OOXML_STREAM: &str = "OOXMLChartContents";
 
 /// 부정 봉투 한 건. CLI `invalid[]` 와 같은 모양(`reason` + `message`)이다.
 fn invalid(reason: &str, message: String) -> serde_json::Value {
@@ -70,6 +77,229 @@ fn chart_data_json(chart: &ChartRef, data: &ChartData, source: ChartSource) -> s
             }))
             .collect::<Vec<_>>(),
     })
+}
+
+// ---------------------------------------------------------------------------
+// 쓰기 — 입력 형태와 검증
+// ---------------------------------------------------------------------------
+
+/// `set_chart_data_native` 입력.
+///
+/// **행렬 형태**다 — CSV 한 장과 같은 모양이라 `csv-to-chart` 가 얇아지고, 행·열 수
+/// 대조 같은 검증이 코어 한 곳에만 남는다(`agent_surface_playbook` 규칙 2).
+///
+/// 값은 **문자열**로만 받는다. JSON 숫자로 받으면 `4.3` 이 `4.30` 으로 되쓰일 수 있어
+/// 무편집 왕복의 바이트 동일이 깨진다.
+#[derive(Debug, Deserialize)]
+struct ChartEdits {
+    /// 카테고리 라벨(분산형이면 X). 주면 대조하고, **분산형에서만** 기록한다.
+    #[serde(default)]
+    labels: Option<Vec<String>>,
+    series: Vec<SeriesEdits>,
+    /// 검증과 diff 만 하고 쓰지 않는다.
+    #[serde(default, rename = "dryRun")]
+    dry_run: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct SeriesEdits {
+    /// 주면 계열명을 대조한다. B1 은 계열명을 **바꾸지 않는다**(구조 변경 = B2).
+    #[serde(default)]
+    name: Option<String>,
+    values: Vec<String>,
+}
+
+/// `<c:v>` 에 넣어도 되는 수치 표기인가.
+///
+/// 비유한(`inf`/`NaN`)과 빈 문자열은 거부한다. 빈 값은 결측 표현이라 요소 자체를 다시
+/// 써야 하고 그건 구조 변경이다.
+fn is_number(text: &str) -> bool {
+    !text.is_empty() && text.parse::<f64>().is_ok_and(f64::is_finite)
+}
+
+/// 검증 결과 — 하나라도 있으면 **한 칸도 쓰지 않는다**.
+fn validate(data: &ChartData, edits: &ChartEdits) -> Vec<serde_json::Value> {
+    let mut out = Vec::new();
+
+    if edits.series.len() != data.series.len() {
+        out.push(serde_json::json!({
+            "reason": "seriesCountMismatch",
+            "expected": data.series.len(),
+            "actual": edits.series.len(),
+            "message": format!(
+                "계열 수 {} 가 차트의 계열 수 {} 와 다릅니다 — 계열 신설·삭제는 하지 않습니다.",
+                edits.series.len(), data.series.len()
+            ),
+        }));
+        return out; // 계열 수가 다르면 이후 대조가 무의미하다.
+    }
+
+    let scatter = data.series.first().map(|s| s.axis) == Some(SeriesAxis::Scatter);
+
+    for (i, (want, have)) in edits.series.iter().zip(&data.series).enumerate() {
+        if want.values.len() != have.values.len() {
+            out.push(serde_json::json!({
+                "reason": "valueCountMismatch",
+                "series": i,
+                "expected": have.values.len(),
+                "actual": want.values.len(),
+                "message": format!(
+                    "계열 {} 의 값 개수 {} 가 차트의 {} 와 다릅니다 — 점 신설·삭제는 하지 않습니다.",
+                    i, want.values.len(), have.values.len()
+                ),
+            }));
+            continue;
+        }
+        if let Some(name) = &want.name {
+            if have.name.as_deref() != Some(name.as_str()) {
+                out.push(serde_json::json!({
+                    "reason": "seriesNameMismatch",
+                    "series": i,
+                    "expected": have.name,
+                    "actual": name,
+                    "message": format!("계열 {} 의 이름이 다릅니다 — B1 은 계열명을 바꾸지 않습니다.", i),
+                }));
+            }
+        }
+        for (p, (text, point)) in want.values.iter().zip(&have.values).enumerate() {
+            if !is_number(text) {
+                out.push(serde_json::json!({
+                    "reason": "notANumber", "series": i, "point": p, "value": text,
+                    "message": format!("계열 {} 점 {} 의 값 `{}` 이 수치가 아닙니다.", i, p, text),
+                }));
+            } else if text != &point.text && point.span.is_none() {
+                out.push(serde_json::json!({
+                    "reason": "valueNotPatchable", "series": i, "point": p,
+                    "message": format!(
+                        "계열 {} 점 {} 은 빈 값(<c:v/>)이라 제자리 치환 대상이 아닙니다.", i, p
+                    ),
+                }));
+            }
+        }
+    }
+
+    if let Some(labels) = &edits.labels {
+        validate_labels(data, labels, scatter, &mut out);
+    }
+    out
+}
+
+fn validate_labels(
+    data: &ChartData,
+    labels: &[String],
+    scatter: bool,
+    out: &mut Vec<serde_json::Value>,
+) {
+    // 분산형은 X 를 한 열로 표현하므로 계열 간 X 가 같아야 한다. 코퍼스는 전건
+    // 일치하지만 **포맷의 보장이 아니다** — 다르면 한 열이 한 계열만 조용히 바꾼다.
+    if scatter {
+        let head: Vec<&str> = data
+            .series
+            .first()
+            .map(|s| s.labels.iter().map(|p| p.text.as_str()).collect())
+            .unwrap_or_default();
+        if !data
+            .series
+            .iter()
+            .all(|s| s.labels.iter().map(|p| p.text.as_str()).eq(head.iter().copied()))
+        {
+            out.push(serde_json::json!({
+                "reason": "sharedXRequired",
+                "message": "계열마다 X 값이 달라 CSV 의 X 한 열로 표현할 수 없습니다.",
+            }));
+            return;
+        }
+    }
+
+    for (i, series) in data.series.iter().enumerate() {
+        if labels.len() != series.labels.len() {
+            out.push(serde_json::json!({
+                "reason": if scatter { "valueCountMismatch" } else { "categoryMismatch" },
+                "series": i,
+                "expected": series.labels.len(),
+                "actual": labels.len(),
+                "message": format!(
+                    "라벨 개수 {} 가 계열 {} 의 {} 와 다릅니다.", labels.len(), i, series.labels.len()
+                ),
+            }));
+            continue;
+        }
+        for (p, (text, point)) in labels.iter().zip(&series.labels).enumerate() {
+            if scatter {
+                if !is_number(text) {
+                    out.push(serde_json::json!({
+                        "reason": "notANumber", "series": i, "point": p, "value": text,
+                        "message": format!("분산형 X `{}` 이 수치가 아닙니다.", text),
+                    }));
+                } else if text != &point.text && point.span.is_none() {
+                    out.push(serde_json::json!({
+                        "reason": "valueNotPatchable", "series": i, "point": p,
+                        "message": format!("계열 {} X {} 는 빈 값이라 치환 대상이 아닙니다.", i, p),
+                    }));
+                }
+            } else if text != &point.text {
+                out.push(serde_json::json!({
+                    "reason": "categoryMismatch", "point": p,
+                    "expected": point.text, "actual": text,
+                    "message": format!(
+                        "카테고리 라벨 {} 이 다릅니다 — B1 은 라벨을 바꾸지 않습니다.", p
+                    ),
+                }));
+                break; // 라벨은 한 열이라 첫 불일치로 충분하다.
+            }
+        }
+        if !scatter {
+            break; // 카테고리 대조는 계열 0 하나면 된다.
+        }
+    }
+}
+
+/// 바뀐 칸만 골라 편집 목록과 `changed[]` 봉투를 만든다.
+fn plan_edits(
+    data: &ChartData,
+    edits: &ChartEdits,
+    scatter: bool,
+) -> (Vec<ValueEdit>, Vec<serde_json::Value>) {
+    let mut plan = Vec::new();
+    let mut changed = Vec::new();
+
+    for (i, (want, have)) in edits.series.iter().zip(&data.series).enumerate() {
+        for (p, (text, point)) in want.values.iter().zip(&have.values).enumerate() {
+            if text != &point.text {
+                plan.push(ValueEdit {
+                    series: i,
+                    point: p,
+                    target: EditTarget::Value,
+                    text: text.clone(),
+                });
+                changed.push(serde_json::json!({
+                    "series": i, "point": p, "from": point.text, "to": text,
+                }));
+            }
+        }
+    }
+
+    if scatter {
+        if let Some(labels) = &edits.labels {
+            for (i, series) in data.series.iter().enumerate() {
+                for (p, (text, point)) in labels.iter().zip(&series.labels).enumerate() {
+                    if text != &point.text {
+                        plan.push(ValueEdit {
+                            series: i,
+                            point: p,
+                            target: EditTarget::Label,
+                            text: text.clone(),
+                        });
+                        changed.push(serde_json::json!({
+                            "series": i, "x": p, "from": point.text, "to": text,
+                        }));
+                    }
+                }
+            }
+        }
+    }
+
+    (plan, changed)
 }
 
 impl DocumentCore {
@@ -133,6 +363,133 @@ impl DocumentCore {
             ))
         })?;
         Ok(self.chart_data_at(chart))
+    }
+
+    /// 차트의 숫자 데이터를 바꾼다 — **①②에 함께 쓴다**.
+    ///
+    /// ①만 고치면 HWP 변환에서 조용히 사라진다(#4055 한컴 실측, #4099 의 fold 로 계약
+    /// 확정). 두 표현을 특정하지 못하면 **아무것도 쓰지 않는다** — 반쪽만 새 값인 파일이
+    /// 나가는 것이 최악이라, 어디에 썼는지를 `wrote[]` 로 항상 드러낸다.
+    pub fn set_chart_data_native(
+        &mut self,
+        section_idx: usize,
+        parent_para_idx: usize,
+        control_idx: usize,
+        edits_json: &str,
+    ) -> Result<String, HwpError> {
+        let chart = self.resolve_chart_ref(section_idx, parent_para_idx, control_idx)?;
+        Ok(self.apply_chart_edits(&chart, edits_json))
+    }
+
+    /// 문서 순번(0-based)으로 차트를 바꾼다 — CLI `--chart N` 의 뒷면이자 **정본 주소**다.
+    pub fn set_chart_data_by_index_native(
+        &mut self,
+        index: usize,
+        edits_json: &str,
+    ) -> Result<String, HwpError> {
+        let charts = collect_charts(&self.document);
+        let chart = charts
+            .get(index)
+            .ok_or_else(|| {
+                HwpError::RenderError(format!(
+                    "차트 순번 {} 범위 초과 (차트 {}개)",
+                    index + 1,
+                    charts.len()
+                ))
+            })?
+            .clone();
+        Ok(self.apply_chart_edits(&chart, edits_json))
+    }
+
+    fn apply_chart_edits(&mut self, chart: &ChartRef, edits_json: &str) -> String {
+        let edits: ChartEdits = match serde_json::from_str(edits_json) {
+            Ok(v) => v,
+            Err(e) => return refused("editsParse", format!("편집 JSON 을 읽을 수 없습니다: {e}")),
+        };
+        let Some((xml, _)) = chart_xml(&self.document, chart) else {
+            return refused(
+                "chartStreamMissing",
+                "차트 XML 을 읽을 수 없습니다 — 두 표현 모두 비어 있습니다.".to_string(),
+            );
+        };
+        let data = match scan_chart_values(&xml) {
+            Ok(d) => d,
+            Err(e) => return refused("chartScan", e.to_string()),
+        };
+
+        // ② 를 특정하지 못하면 쓰기 전에 멈춘다. HWPX 에서 ①만 고치면 HWP 변환에서
+        // 사라지므로 "①만이라도 쓴다"는 선택지가 없다.
+        if chart.nested_copy.is_none() {
+            return refused(
+                "nestedCopyNotFound",
+                "중첩 CFB 사본을 특정하지 못했습니다 — <hp:switch> 의 fallback OLE 가 없습니다. \
+                 ①만 기록하면 HWP 변환에서 편집이 사라지므로 아무것도 쓰지 않습니다."
+                    .to_string(),
+            );
+        }
+
+        let invalid = validate(&data, &edits);
+        if !invalid.is_empty() {
+            return serde_json::json!({
+                "ok": false, "chart": chart.index + 1, "invalid": invalid, "wrote": [],
+            })
+            .to_string();
+        }
+
+        let scatter = data.series.first().map(|s| s.axis) == Some(SeriesAxis::Scatter);
+        let (plan, changed) = plan_edits(&data, &edits, scatter);
+
+        // 바뀐 칸이 없으면 **한 바이트도 건드리지 않는다.** 슬롯을 되쓰기만 해도
+        // 중첩 CFB 재포장이 섹터 배치를 바꿔 무편집 왕복의 바이트 동일이 깨진다.
+        if plan.is_empty() {
+            return serde_json::json!({
+                "ok": true, "chart": chart.index + 1,
+                "changedCount": 0, "changed": [], "wrote": [], "dryRun": edits.dry_run,
+            })
+            .to_string();
+        }
+
+        let patched = match apply_value_edits(&xml, &data, &plan) {
+            Ok(v) => v,
+            Err(e) => return refused("chartPatch", e.to_string()),
+        };
+
+        if edits.dry_run {
+            return serde_json::json!({
+                "ok": true, "chart": chart.index + 1,
+                "changedCount": changed.len(), "changed": changed,
+                "wrote": [], "dryRun": true,
+            })
+            .to_string();
+        }
+
+        // ② 재포장을 **먼저** 시도한다. 실패하면 ①도 쓰지 않아 문서가 원형으로 남는다.
+        let nested_idx = chart.nested_copy.expect("위에서 확인함");
+        let nested_original = self.document.bin_data_content[nested_idx].data.load();
+        let nested_new = match replace_ole_stream(&nested_original, OOXML_STREAM, &patched) {
+            Ok(v) => v,
+            Err(e) => return refused("nestedRepack", e.to_string()),
+        };
+
+        let mut wrote = Vec::new();
+        if let Some(zip_idx) = chart.zip_part {
+            self.document.bin_data_content[zip_idx].data = patched.clone().into();
+            wrote.push("zipPart");
+        }
+        self.document.bin_data_content[nested_idx].data = nested_new.into();
+        wrote.push("nestedCopy");
+
+        // [#4100] `bin_data_epoch` 는 "id→바이트가 세션 중 안정하다"를 전제로 렌더 캐시를
+        // 키잉한다. 이 편집이 **기존 id 의 바이트를 제자리에서 바꾸는 첫 연산**이라 그
+        // 전제를 깬다 — 올리지 않으면 재렌더가 옛 차트를 그린다.
+        self.bump_bin_data_epoch();
+
+        serde_json::json!({
+            "ok": true, "chart": chart.index + 1,
+            "changedCount": changed.len(), "changed": changed,
+            "wrote": wrote, "dryRun": false,
+        })
+        .to_string()
     }
 
     fn chart_data_at(&self, chart: &ChartRef) -> String {
