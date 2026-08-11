@@ -24,7 +24,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 PYPROJECT = ROOT / "bindings" / "python" / "pyproject.toml"
+PY_INIT = ROOT / "bindings" / "python" / "src" / "rhwp" / "__init__.py"
 NODE_PKG = ROOT / "bindings" / "node" / "package.json"
+NODE_INDEX = ROOT / "bindings" / "node" / "src" / "index.ts"
 CARGO = ROOT / "Cargo.toml"
 
 SEMVER = re.compile(r"^\d+\.\d+\.\d+(?:[-.+][0-9A-Za-z.-]+)?$")
@@ -37,18 +39,38 @@ def cargo_version() -> str:
     return m.group(1)
 
 
-def set_pyproject(version: str) -> None:
+def replace_once(path: Path, pattern: str, replacement: str, label: str) -> None:
+    text = path.read_text(encoding="utf-8")
+    new, n = re.subn(pattern, replacement, text, count=1)
+    if n != 1:
+        sys.exit(f"{label} 버전 선언을 찾지 못했습니다")
+    path.write_text(new, encoding="utf-8")
+
+
+def set_python(version: str) -> None:
     text = PYPROJECT.read_text(encoding="utf-8")
     new, n = re.subn(r'(?m)^version = "[^"]+"$', f'version = "{version}"', text, count=1)
     if n != 1:
         sys.exit("pyproject.toml 의 version 줄을 찾지 못했습니다")
     PYPROJECT.write_text(new, encoding="utf-8")
+    replace_once(
+        PY_INIT,
+        r'(?m)^__version__ = "[^"]+"$',
+        f'__version__ = "{version}"',
+        "bindings/python/src/rhwp/__init__.py",
+    )
 
 
 def set_node(version: str) -> None:
     data = json.loads(NODE_PKG.read_text(encoding="utf-8"))
     data["version"] = version
     NODE_PKG.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    replace_once(
+        NODE_INDEX,
+        r"(?m)^export const VERSION = '[^']+';$",
+        f"export const VERSION = '{version}';",
+        "bindings/node/src/index.ts",
+    )
 
 
 def main() -> None:
@@ -70,9 +92,9 @@ def main() -> None:
         print(f"일치: {cargo}")
         return
 
-    set_pyproject(args.version)
+    set_python(args.version)
     set_node(args.version)
-    print(f"정렬 완료: pyproject.toml·package.json → {args.version}")
+    print(f"정렬 완료: Python·Node 패키지 메타데이터와 런타임 버전 → {args.version}")
 
 
 if __name__ == "__main__":

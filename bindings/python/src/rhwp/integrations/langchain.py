@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional, Union
 
 from .. import commands
+from .._process import DEFAULT_TIMEOUT
 
 __all__ = ["RHWPLoader"]
 
@@ -59,7 +60,7 @@ class RHWPLoader:
         path: PathLike,
         *,
         per_page: bool = True,
-        timeout: Optional[float] = commands.DEFAULT_TIMEOUT,
+        timeout: Optional[float] = DEFAULT_TIMEOUT,
     ) -> None:
         self._path = Path(path)
         self._per_page = per_page

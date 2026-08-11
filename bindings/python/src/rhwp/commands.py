@@ -55,6 +55,26 @@ __all__ = [
     "replay",
     "audit",
     "lineage",
+    "keygen",
+    "verify_signature",
+    "harness_init",
+    "harness_wrap",
+    "harness_status",
+    "anchor_add",
+    "anchor_checkpoint",
+    "anchor_verify",
+    "gate",
+    "bundle_export",
+    "bundle_verify",
+    "disclose_redact",
+    "disclose_verify",
+    "disclose_restore",
+    "settle_propose",
+    "settle_verify",
+    "settle_record",
+    "audit_report",
+    "recall_scope",
+    "conformance",
 ]
 
 PathLike = Union[str, Path]
@@ -247,12 +267,338 @@ def lineage(
     head: PathLike,
     *,
     deep: bool = False,
+    keyring: Optional[PathLike] = None,
+    anchor_log: Optional[PathLike] = None,
     raise_on_verdict: bool = False,
     timeout: Optional[float] = DEFAULT_TIMEOUT,
 ) -> Envelope:
     """작업 캡슐 해시 체인의 파일 무결성과 입력·산출 연결을 판정한다."""
     args: List[Any] = ["lineage", head]
     _switch(args, "--deep", deep)
+    _flag(args, "--keyring", keyring)
+    _flag(args, "--anchor-log", anchor_log)
+    args.append("--json")
+    return Envelope(run_json(args, timeout=timeout, raise_on_verdict=raise_on_verdict))
+
+
+def keygen(
+    key_id: str,
+    out: PathLike,
+    *,
+    timeout: Optional[float] = DEFAULT_TIMEOUT,
+) -> Envelope:
+    """Ed25519 캡슐 서명키 파일을 새로 발급한다(기존 파일 덮어쓰기 금지)."""
+    return Envelope(
+        run_json(
+            ["keygen", "--key-id", key_id, "--out", out, "--json"],
+            timeout=timeout,
+        )
+    )
+
+
+def verify_signature(
+    capsule: PathLike,
+    keyring: PathLike,
+    *,
+    sig: Optional[PathLike] = None,
+    raise_on_verdict: bool = False,
+    timeout: Optional[float] = DEFAULT_TIMEOUT,
+) -> Envelope:
+    """캡슐 분리 서명을 파일 바이트와 키 등록부에 대조한다."""
+    args: List[Any] = ["verify-signature", capsule, "--keyring", keyring]
+    _flag(args, "--sig", sig)
+    args.append("--json")
+    return Envelope(run_json(args, timeout=timeout, raise_on_verdict=raise_on_verdict))
+
+
+def harness_init(
+    directory: PathLike,
+    *,
+    key_id: Optional[str] = None,
+    timeout: Optional[float] = DEFAULT_TIMEOUT,
+) -> Envelope:
+    """캡슐 작업장 규약을 만들고 선택적으로 키·키링을 함께 발급한다."""
+    args: List[Any] = ["harness", "init", directory]
+    _flag(args, "--key-id", key_id)
+    args.append("--json")
+    return Envelope(run_json(args, timeout=timeout))
+
+
+def harness_wrap(
+    plan: PathLike,
+    directory: PathLike,
+    *,
+    sign_key: Optional[PathLike] = None,
+    timeout: Optional[float] = DEFAULT_TIMEOUT,
+) -> Envelope:
+    """계획 실행·영수증·캡슐·부모 연결·선택 서명을 한 번에 수행한다."""
+    args: List[Any] = ["harness", "wrap", "--plan", plan, "--dir", directory]
+    _flag(args, "--sign-key", sign_key)
+    args.append("--json")
+    return Envelope(run_json(args, timeout=timeout))
+
+
+def harness_status(
+    directory: PathLike,
+    *,
+    keyring: Optional[PathLike] = None,
+    deep: bool = False,
+    raise_on_verdict: bool = False,
+    timeout: Optional[float] = DEFAULT_TIMEOUT,
+) -> Envelope:
+    """작업장의 계보·서명·선택적 재현 상태를 통합 판정한다."""
+    args: List[Any] = ["harness-status", directory]
+    _flag(args, "--keyring", keyring)
+    _switch(args, "--deep", deep)
+    args.append("--json")
+    return Envelope(run_json(args, timeout=timeout, raise_on_verdict=raise_on_verdict))
+
+
+def anchor_add(
+    capsule: PathLike,
+    log: PathLike,
+    *,
+    timeout: Optional[float] = DEFAULT_TIMEOUT,
+) -> Envelope:
+    """캡슐 해시를 append-only 투명성 로그에 등재한다."""
+    return Envelope(
+        run_json(["anchor", "add", capsule, "--log", log, "--json"], timeout=timeout)
+    )
+
+
+def anchor_checkpoint(
+    log: PathLike,
+    *,
+    out: Optional[PathLike] = None,
+    timeout: Optional[float] = DEFAULT_TIMEOUT,
+) -> Envelope:
+    """투명성 로그의 머클 체크포인트를 산출한다."""
+    args: List[Any] = ["anchor", "checkpoint", "--log", log]
+    _flag(args, "-o", out)
+    args.append("--json")
+    return Envelope(run_json(args, timeout=timeout))
+
+
+def anchor_verify(
+    capsule: PathLike,
+    log: PathLike,
+    *,
+    checkpoint: Optional[PathLike] = None,
+    raise_on_verdict: bool = False,
+    timeout: Optional[float] = DEFAULT_TIMEOUT,
+) -> Envelope:
+    """캡슐의 로그 등재·로그 무결·선택적 머클 경로를 판정한다."""
+    args: List[Any] = ["anchor", "verify", capsule, "--log", log]
+    _flag(args, "--checkpoint", checkpoint)
+    args.append("--json")
+    return Envelope(run_json(args, timeout=timeout, raise_on_verdict=raise_on_verdict))
+
+
+def gate(
+    capsule: PathLike,
+    policy: PathLike,
+    *,
+    keyring: Optional[PathLike] = None,
+    anchor_log: Optional[PathLike] = None,
+    policy_keyring: Optional[PathLike] = None,
+    deep: bool = False,
+    raise_on_verdict: bool = False,
+    timeout: Optional[float] = DEFAULT_TIMEOUT,
+) -> Envelope:
+    """반입 정책을 캡슐의 재계산된 판정 축에 적용한다."""
+    args: List[Any] = ["gate", capsule, "--policy", policy]
+    _flag(args, "--keyring", keyring)
+    _flag(args, "--anchor-log", anchor_log)
+    _flag(args, "--policy-keyring", policy_keyring)
+    _switch(args, "--deep", deep)
+    args.append("--json")
+    return Envelope(run_json(args, timeout=timeout, raise_on_verdict=raise_on_verdict))
+
+
+def bundle_export(
+    head: PathLike,
+    out: PathLike,
+    *,
+    anchor_log: Optional[PathLike] = None,
+    checkpoint: Optional[PathLike] = None,
+    domain: Optional[PathLike] = None,
+    timeout: Optional[float] = DEFAULT_TIMEOUT,
+) -> Envelope:
+    """계보 폐쇄집합·서명·머클 증명을 연합 교환 번들로 내보낸다."""
+    args: List[Any] = ["bundle", "export", head, "-o", out]
+    _flag(args, "--anchor-log", anchor_log)
+    _flag(args, "--checkpoint", checkpoint)
+    _flag(args, "--domain", domain)
+    args.append("--json")
+    return Envelope(run_json(args, timeout=timeout))
+
+
+def bundle_verify(
+    bundle: PathLike,
+    trust_domain: PathLike,
+    *,
+    raise_on_verdict: bool = False,
+    timeout: Optional[float] = DEFAULT_TIMEOUT,
+) -> Envelope:
+    """연합 번들을 수신자의 trust-domain 기준으로 오프라인 판정한다."""
+    args: List[Any] = ["bundle", "verify", bundle, "--trust-domain", trust_domain, "--json"]
+    return Envelope(run_json(args, timeout=timeout, raise_on_verdict=raise_on_verdict))
+
+
+def disclose_redact(
+    capsule: PathLike,
+    out: PathLike,
+    opening_out: PathLike,
+    *,
+    timeout: Optional[float] = DEFAULT_TIMEOUT,
+) -> Envelope:
+    """계획 문자열 잎을 salt 커밋으로 치환하고 비밀 개봉 파일을 분리한다."""
+    args: List[Any] = [
+        "disclose", "redact", capsule, "-o", out, "--opening-out", opening_out, "--json"
+    ]
+    return Envelope(run_json(args, timeout=timeout))
+
+
+def disclose_verify(
+    redacted: PathLike,
+    opening: PathLike,
+    *,
+    raise_on_verdict: bool = False,
+    timeout: Optional[float] = DEFAULT_TIMEOUT,
+) -> Envelope:
+    """선택적으로 개봉된 필드를 salt 커밋과 대조한다."""
+    args: List[Any] = ["disclose", "verify", redacted, "--opening", opening, "--json"]
+    return Envelope(run_json(args, timeout=timeout, raise_on_verdict=raise_on_verdict))
+
+
+def disclose_restore(
+    redacted: PathLike,
+    opening: PathLike,
+    out: PathLike,
+    *,
+    raise_on_verdict: bool = False,
+    timeout: Optional[float] = DEFAULT_TIMEOUT,
+) -> Envelope:
+    """전체 개봉으로 원본 캡슐 바이트를 복원한다."""
+    args: List[Any] = [
+        "disclose", "restore", redacted, "--opening", opening, "-o", out, "--json"
+    ]
+    return Envelope(run_json(args, timeout=timeout, raise_on_verdict=raise_on_verdict))
+
+
+def settle_propose(
+    workorder: PathLike,
+    capsule: PathLike,
+    gate_envelope: PathLike,
+    out: PathLike,
+    *,
+    sign_key: Optional[PathLike] = None,
+    timeout: Optional[float] = DEFAULT_TIMEOUT,
+) -> Envelope:
+    """명세서·캡슐·게이트 봉투의 3해시를 고정한 정산 청구를 발급한다."""
+    args: List[Any] = [
+        "settle", "propose", "--workorder", workorder, "--capsule", capsule,
+        "--gate-envelope", gate_envelope, "-o", out,
+    ]
+    _flag(args, "--sign-key", sign_key)
+    args.append("--json")
+    return Envelope(run_json(args, timeout=timeout))
+
+
+def settle_verify(
+    claim: PathLike,
+    workorder: PathLike,
+    capsule: PathLike,
+    gate_envelope: PathLike,
+    *,
+    keyring: Optional[PathLike] = None,
+    ledger: Optional[PathLike] = None,
+    sig: Optional[PathLike] = None,
+    raise_on_verdict: bool = False,
+    timeout: Optional[float] = DEFAULT_TIMEOUT,
+) -> Envelope:
+    """정산 청구의 3해시·게이트·선택적 서명·중복 축을 판정한다."""
+    args: List[Any] = [
+        "settle", "verify", claim, "--workorder", workorder, "--capsule", capsule,
+        "--gate-envelope", gate_envelope,
+    ]
+    _flag(args, "--keyring", keyring)
+    _flag(args, "--ledger", ledger)
+    _flag(args, "--sig", sig)
+    args.append("--json")
+    return Envelope(run_json(args, timeout=timeout, raise_on_verdict=raise_on_verdict))
+
+
+def settle_record(
+    claim: PathLike,
+    ledger: PathLike,
+    *,
+    verdict: Optional[str] = None,
+    raise_on_verdict: bool = False,
+    timeout: Optional[float] = DEFAULT_TIMEOUT,
+) -> Envelope:
+    """정산 청구를 append-only 원장에 기입하고 중복 청구를 판정한다."""
+    args: List[Any] = ["settle", "record", claim, "--ledger", ledger]
+    _flag(args, "--verdict", verdict)
+    args.append("--json")
+    return Envelope(run_json(args, timeout=timeout, raise_on_verdict=raise_on_verdict))
+
+
+def audit_report(
+    directory: PathLike,
+    out: PathLike,
+    *,
+    deep: bool = False,
+    keyring: Optional[PathLike] = None,
+    anchor_log: Optional[PathLike] = None,
+    policy: Optional[PathLike] = None,
+    sign_key: Optional[PathLike] = None,
+    timeout: Optional[float] = DEFAULT_TIMEOUT,
+) -> Envelope:
+    """캡슐 폴더의 기존 판정 축을 기계 합산한 감사 보고서를 만든다."""
+    args: List[Any] = ["audit-report", directory, "-o", out]
+    _switch(args, "--deep", deep)
+    _flag(args, "--keyring", keyring)
+    _flag(args, "--anchor-log", anchor_log)
+    _flag(args, "--policy", policy)
+    _flag(args, "--sign-key", sign_key)
+    args.append("--json")
+    return Envelope(run_json(args, timeout=timeout))
+
+
+def recall_scope(
+    contaminated: PathLike,
+    among: PathLike,
+    *,
+    ledger: Optional[PathLike] = None,
+    timeout: Optional[float] = DEFAULT_TIMEOUT,
+) -> Envelope:
+    """오염 캡슐의 후손 폐쇄집합과 선택적 정산 청구 좌표를 계산한다."""
+    args: List[Any] = ["recall-scope", "--contaminated", contaminated, "--among", among]
+    _flag(args, "--ledger", ledger)
+    args.append("--json")
+    return Envelope(run_json(args, timeout=timeout))
+
+
+def conformance(
+    directory: PathLike,
+    level: str,
+    *,
+    deep: bool = False,
+    keyring: Optional[PathLike] = None,
+    anchor_log: Optional[PathLike] = None,
+    policy: Optional[PathLike] = None,
+    ledger: Optional[PathLike] = None,
+    raise_on_verdict: bool = False,
+    timeout: Optional[float] = DEFAULT_TIMEOUT,
+) -> Envelope:
+    """작업장의 누적 적합성 요건(L1~L5)을 기존 판정기 재사용으로 검사한다."""
+    args: List[Any] = ["conformance", directory, "--level", level]
+    _switch(args, "--deep", deep)
+    _flag(args, "--keyring", keyring)
+    _flag(args, "--anchor-log", anchor_log)
+    _flag(args, "--policy", policy)
+    _flag(args, "--ledger", ledger)
     args.append("--json")
     return Envelope(run_json(args, timeout=timeout, raise_on_verdict=raise_on_verdict))
 

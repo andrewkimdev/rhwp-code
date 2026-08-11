@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
 from .. import commands
+from .._process import DEFAULT_TIMEOUT
 
 __all__ = ["RHWPReader"]
 
@@ -52,7 +53,7 @@ class RHWPReader:
         file: PathLike,
         extra_info: Optional[Dict[str, Any]] = None,
         *,
-        timeout: Optional[float] = commands.DEFAULT_TIMEOUT,
+        timeout: Optional[float] = DEFAULT_TIMEOUT,
     ) -> List[Any]:
         document = _document_cls()
         path = Path(file)
