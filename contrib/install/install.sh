@@ -2,7 +2,7 @@
 # [#4375] rhwp Linux/macOS 설치 스크립트 — 릴리스 tar.gz 를 받아 검증·배치한다.
 #
 #   curl -fsSL https://raw.githubusercontent.com/edwardkim/rhwp/devel/contrib/install/install.sh | bash
-#   # 또는: ./install.sh v0.8.2 ~/.local/bin
+#   # 또는: ./install.sh v0.8.3 ~/.local/bin
 #
 # ① 버전 해석(latest→GitHub API) ② tar.gz+SHA256SUMS 다운로드 ③ SHA-256 검증
 # ④ 해체(rhwp/rhwp) ⑤ 설치 디렉터리 배치(기본 ~/.local/bin, PATH 는 안내만).

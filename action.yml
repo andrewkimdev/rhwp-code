@@ -2,7 +2,7 @@
 #
 #   - uses: edwardkim/rhwp@devel        # 또는 릴리스 태그 고정
 #     with:
-#       version: v0.8.2                 # 생략하면 latest
+#       version: v0.8.3                 # 생략하면 latest
 #   - run: rhwp info 문서.hwp --json
 #
 # 릴리스 자산(release-binary.yml 산출: 4플랫폼 + SHA256SUMS)을 받아 무결성
@@ -16,7 +16,7 @@ branding:
 
 inputs:
   version:
-    description: '설치할 릴리스 태그 (예: v0.8.2). 기본은 latest.'
+    description: '설치할 릴리스 태그 (예: v0.8.3). 기본은 latest.'
     required: false
     default: 'latest'
   token:

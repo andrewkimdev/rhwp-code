@@ -1,7 +1,7 @@
 # [#4375] rhwp Windows 설치 스크립트 — 릴리스 zip 을 받아 검증·배치한다.
 #
 #   irm https://raw.githubusercontent.com/edwardkim/rhwp/devel/contrib/install/install.ps1 | iex
-#   # 또는: .\install.ps1 -Version v0.8.2 -InstallDir C:\tools\rhwp -NoPath
+#   # 또는: .\install.ps1 -Version v0.8.3 -InstallDir C:\tools\rhwp -NoPath
 #
 # 하는 일: ① 버전 해석(latest→GitHub API) ② zip+SHA256SUMS 다운로드
 # ③ 해시 검증 ④ 해체(rhwp\rhwp.exe) ⑤ 사용자 PATH 등록(옵트아웃 -NoPath).

@@ -146,7 +146,12 @@ def test_replay_audit_and_lineage_build_commands(captured: List[List[Any]]) -> N
     rhwp.replay({"input": "a.hwp", "output": "b.hwp"}, expect_output_sha256="a" * 64)
     rhwp.replay("plan.json")
     rhwp.audit("capsules")
-    rhwp.lineage("head.capsule.json", deep=True)
+    rhwp.lineage(
+        "head.capsule.json",
+        deep=True,
+        keyring="keyring.json",
+        anchor_log="anchor.log",
+    )
 
     replay_json = json.loads(str(captured[0][2]))
     assert replay_json == {"input": "a.hwp", "output": "b.hwp"}
@@ -154,7 +159,16 @@ def test_replay_audit_and_lineage_build_commands(captured: List[List[Any]]) -> N
     assert _as_strings(captured[0][3:]) == ["--expect-output-sha256", "a" * 64, "--json"]
     assert _as_strings(captured[1]) == ["replay", "plan.json", "--json"]
     assert _as_strings(captured[2]) == ["audit", "capsules", "--json"]
-    assert _as_strings(captured[3]) == ["lineage", "head.capsule.json", "--deep", "--json"]
+    assert _as_strings(captured[3]) == [
+        "lineage",
+        "head.capsule.json",
+        "--deep",
+        "--keyring",
+        "keyring.json",
+        "--anchor-log",
+        "anchor.log",
+        "--json",
+    ]
 
 
 def test_replay_audit_and_lineage_forward_verdict_option(
@@ -172,6 +186,191 @@ def test_replay_audit_and_lineage_forward_verdict_option(
     rhwp.lineage("head.capsule.json", raise_on_verdict=True)
 
     assert [call["raise_on_verdict"] for call in seen] == [True, True, True]
+
+
+def test_signing_and_harness_commands(captured: List[List[Any]]) -> None:
+    rhwp.keygen("org.example/agent#1", "agent.key.json")
+    rhwp.verify_signature("work.capsule.json", "keyring.json", sig="work.sig.json")
+    rhwp.harness_init("workspace", key_id="org.example/agent#1")
+    rhwp.harness_wrap("plan.json", "workspace", sign_key="agent.key.json")
+    rhwp.harness_status("workspace", keyring="keyring.json", deep=True)
+
+    assert _as_strings(captured[0]) == [
+        "keygen", "--key-id", "org.example/agent#1", "--out", "agent.key.json", "--json",
+    ]
+    assert _as_strings(captured[1]) == [
+        "verify-signature", "work.capsule.json", "--keyring", "keyring.json",
+        "--sig", "work.sig.json", "--json",
+    ]
+    assert _as_strings(captured[2]) == [
+        "harness", "init", "workspace", "--key-id", "org.example/agent#1", "--json",
+    ]
+    assert _as_strings(captured[3]) == [
+        "harness", "wrap", "--plan", "plan.json", "--dir", "workspace",
+        "--sign-key", "agent.key.json", "--json",
+    ]
+    assert _as_strings(captured[4]) == [
+        "harness-status", "workspace", "--keyring", "keyring.json", "--deep", "--json",
+    ]
+
+
+def test_anchor_and_gate_commands(captured: List[List[Any]]) -> None:
+    rhwp.anchor_add("work.capsule.json", "anchor.log")
+    rhwp.anchor_checkpoint("anchor.log", out="checkpoint.json")
+    rhwp.anchor_verify(
+        "work.capsule.json", "anchor.log", checkpoint="checkpoint.json"
+    )
+    rhwp.gate(
+        "work.capsule.json",
+        "policy.json",
+        keyring="keyring.json",
+        anchor_log="anchor.log",
+        policy_keyring="policy-keyring.json",
+        deep=True,
+    )
+
+    assert _as_strings(captured[0]) == [
+        "anchor", "add", "work.capsule.json", "--log", "anchor.log", "--json",
+    ]
+    assert _as_strings(captured[1]) == [
+        "anchor", "checkpoint", "--log", "anchor.log", "-o", "checkpoint.json", "--json",
+    ]
+    assert _as_strings(captured[2]) == [
+        "anchor", "verify", "work.capsule.json", "--log", "anchor.log",
+        "--checkpoint", "checkpoint.json", "--json",
+    ]
+    assert _as_strings(captured[3]) == [
+        "gate", "work.capsule.json", "--policy", "policy.json",
+        "--keyring", "keyring.json", "--anchor-log", "anchor.log",
+        "--policy-keyring", "policy-keyring.json", "--deep", "--json",
+    ]
+
+
+def test_bundle_and_disclosure_commands(captured: List[List[Any]]) -> None:
+    rhwp.bundle_export(
+        "head.capsule.json",
+        "work.bundle.zip",
+        anchor_log="anchor.log",
+        checkpoint="checkpoint.json",
+        domain="domain",
+    )
+    rhwp.bundle_verify("work.bundle.zip", "trust-domain")
+    rhwp.disclose_redact(
+        "work.capsule.json", "redacted.json", "opening.json"
+    )
+    rhwp.disclose_verify("redacted.json", "opening.json")
+    rhwp.disclose_restore("redacted.json", "opening.json", "restored.json")
+
+    assert _as_strings(captured[0]) == [
+        "bundle", "export", "head.capsule.json", "-o", "work.bundle.zip",
+        "--anchor-log", "anchor.log", "--checkpoint", "checkpoint.json",
+        "--domain", "domain", "--json",
+    ]
+    assert _as_strings(captured[1]) == [
+        "bundle", "verify", "work.bundle.zip", "--trust-domain", "trust-domain", "--json",
+    ]
+    assert _as_strings(captured[2]) == [
+        "disclose", "redact", "work.capsule.json", "-o", "redacted.json",
+        "--opening-out", "opening.json", "--json",
+    ]
+    assert _as_strings(captured[3]) == [
+        "disclose", "verify", "redacted.json", "--opening", "opening.json", "--json",
+    ]
+    assert _as_strings(captured[4]) == [
+        "disclose", "restore", "redacted.json", "--opening", "opening.json",
+        "-o", "restored.json", "--json",
+    ]
+
+
+def test_settlement_and_governance_commands(captured: List[List[Any]]) -> None:
+    rhwp.settle_propose(
+        "workorder.json",
+        "work.capsule.json",
+        "gate.json",
+        "claim.json",
+        sign_key="agent.key.json",
+    )
+    rhwp.settle_verify(
+        "claim.json",
+        "workorder.json",
+        "work.capsule.json",
+        "gate.json",
+        keyring="keyring.json",
+        ledger="ledger.jsonl",
+        sig="claim.sig.json",
+    )
+    rhwp.settle_record("claim.json", "ledger.jsonl", verdict="rejected")
+    rhwp.audit_report(
+        "workspace",
+        "audit.json",
+        deep=True,
+        keyring="keyring.json",
+        anchor_log="anchor.log",
+        policy="policy.json",
+        sign_key="agent.key.json",
+    )
+    rhwp.recall_scope("bad.capsule.json", "workspace", ledger="ledger.jsonl")
+    rhwp.conformance(
+        "workspace",
+        "L5",
+        deep=True,
+        keyring="keyring.json",
+        anchor_log="anchor.log",
+        policy="policy.json",
+        ledger="ledger.jsonl",
+    )
+
+    assert _as_strings(captured[0]) == [
+        "settle", "propose", "--workorder", "workorder.json", "--capsule",
+        "work.capsule.json", "--gate-envelope", "gate.json", "-o", "claim.json",
+        "--sign-key", "agent.key.json", "--json",
+    ]
+    assert _as_strings(captured[1]) == [
+        "settle", "verify", "claim.json", "--workorder", "workorder.json",
+        "--capsule", "work.capsule.json", "--gate-envelope", "gate.json",
+        "--keyring", "keyring.json", "--ledger", "ledger.jsonl",
+        "--sig", "claim.sig.json", "--json",
+    ]
+    assert _as_strings(captured[2]) == [
+        "settle", "record", "claim.json", "--ledger", "ledger.jsonl",
+        "--verdict", "rejected", "--json",
+    ]
+    assert _as_strings(captured[3]) == [
+        "audit-report", "workspace", "-o", "audit.json", "--deep",
+        "--keyring", "keyring.json", "--anchor-log", "anchor.log",
+        "--policy", "policy.json", "--sign-key", "agent.key.json", "--json",
+    ]
+    assert _as_strings(captured[4]) == [
+        "recall-scope", "--contaminated", "bad.capsule.json", "--among", "workspace",
+        "--ledger", "ledger.jsonl", "--json",
+    ]
+    assert _as_strings(captured[5]) == [
+        "conformance", "workspace", "--level", "L5", "--deep",
+        "--keyring", "keyring.json", "--anchor-log", "anchor.log",
+        "--policy", "policy.json", "--ledger", "ledger.jsonl", "--json",
+    ]
+
+
+def test_new_verdict_commands_forward_option(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen: List[Dict[str, Any]] = []
+
+    def fake_run_json(args, **kwargs):  # type: ignore[no-untyped-def]
+        seen.append({"args": list(args), **kwargs})
+        return {"schemaVersion": "1.0"}
+
+    monkeypatch.setattr(rhwp.commands, "run_json", fake_run_json)
+    rhwp.verify_signature("c.json", "k.json", raise_on_verdict=True)
+    rhwp.harness_status("dir", raise_on_verdict=True)
+    rhwp.anchor_verify("c.json", "log", raise_on_verdict=True)
+    rhwp.gate("c.json", "p.json", raise_on_verdict=True)
+    rhwp.bundle_verify("b.zip", "domain", raise_on_verdict=True)
+    rhwp.disclose_verify("r.json", "o.json", raise_on_verdict=True)
+    rhwp.disclose_restore("r.json", "o.json", "out.json", raise_on_verdict=True)
+    rhwp.settle_verify("c.json", "w.json", "x.json", "g.json", raise_on_verdict=True)
+    rhwp.settle_record("c.json", "ledger", raise_on_verdict=True)
+    rhwp.conformance("dir", "L1", raise_on_verdict=True)
+
+    assert [call["raise_on_verdict"] for call in seen] == [True] * 10
 
 
 def test_export_provenance_map_builds_command(captured: List[List[Any]]) -> None:

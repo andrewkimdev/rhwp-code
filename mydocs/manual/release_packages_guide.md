@@ -38,8 +38,9 @@ last_verified: 2026-08-09
 가 두 역할을 한다:
 
 - `--check` — version-gate 잡에서 태그와 `Cargo.toml` 불일치 시 전체 중단.
-- 정렬 — 빌드 직전 pyproject·package.json 버전을 태그로 일시 정렬(커밋하지
-  않음 — 저장소의 바인딩 버전은 개발 트리 표지이고, 배포 버전의 원천은 태그다).
+- 정렬 — 빌드 직전 pyproject·package.json과 Python `rhwp.__version__`·Node
+  `VERSION`을 태그로 일시 정렬(커밋하지 않음 — 저장소의 바인딩 버전은 개발 트리
+  표지이고, 배포 버전의 원천은 태그다).
 
 ## 3. 켜는 절차 (메인테이너)
 

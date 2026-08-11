@@ -262,6 +262,8 @@ def test_binding_covers_every_agent_value_command(wired_binary: Path) -> None:
             "export-capabilities-schema", "export-provenance-map", "csv-to-table",
             "explain", "export-plan-schema", "export-agent-manifest", "export-ontology",
             "replay", "audit", "lineage",
+            "keygen", "verify-signature", "harness", "anchor", "gate", "bundle",
+            "disclose", "settle", "audit-report", "recall-scope", "conformance",
     }
     missing = declared - exported
     assert not missing, (

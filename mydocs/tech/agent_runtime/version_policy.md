@@ -2,7 +2,7 @@
 kind: canonical
 status: active
 canonical: mydocs/tech/agent_runtime/version_policy.md
-last_verified: 2026-08-09
+last_verified: 2026-08-11
 ---
 
 # 버전 정책 — 릴리스 semver × 스키마 4축 (R67, #4329)
@@ -27,7 +27,7 @@ PR 로 함께 착지한다(두 트랙 문서의 착수 게이트가 서로를 �
 | **봉투** | `ENVELOPE_SCHEMA_VERSION` = 1.0 | 모든 `--json` 봉투 최상위 `schemaVersion` | python·node 바인딩(`SUPPORTED_SCHEMA_VERSION` 대조), 봉투 파싱 스크립트 |
 | **IR** | `IR_SCHEMA_VERSION` = 1.0 | `export-ir-schema` 봉투의 `irSchemaVersion` | 타입 생성기(python `gen_models.py`), IR 소비 코드 |
 | **capabilities** | `CAPABILITIES_SCHEMA_VERSION` = 1.3 | `export-capabilities-schema` 봉투의 `capabilitiesSchemaVersion` | 명령 래퍼 생성기(node `gen-types.ts`), MCP 클라이언트 |
-| **계획(plan)** | `PLAN_SCHEMA_VERSION` = 1.0 | `export-plan-schema` 봉투의 `planSchemaVersion` | `run` 계획서 작성기·검증기 |
+| **계획(plan)** | `PLAN_SCHEMA_VERSION` = 1.1 | `export-plan-schema` 봉투의 `planSchemaVersion` | `run` 계획서 작성기·검증기 |
 | **릴리스 semver** | `crate_version()` (= `CARGO_PKG_VERSION`) | `rhwp --version`, 모든 봉투의 `version`, 릴리스 태그 `v*` | 설치 채널(R38)·패키지 레지스트리(R63) |
 
 값의 유일한 정의처는 `src/schema_registry.rs` 다. `ir_schema`·

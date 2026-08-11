@@ -2,7 +2,7 @@
 kind: canonical
 status: active
 canonical: mydocs/manual/agent_knowledge_map.md
-last_verified: 2026-08-10
+last_verified: 2026-08-11
 ---
 
 # 에이전트 지식 지도 — rhwp 참조 문서의 단일 진입점
@@ -20,22 +20,22 @@ rhwp 를 도구로 부리는 AI 에이전트·스크립트가 **첫 번째로 �
 
 | 항목 | 값 |
 |---|---|
-| 바이너리 | `rhwp v0.8.2` (release 빌드, `native-skia` 미포함) |
-| 측정일 | 2026-08-10 |
+| 바이너리 | `rhwp v0.8.3` (release 빌드, `native-skia` 미포함) |
+| 측정일 | 2026-08-11 |
 | 자기서술 출처 | `rhwp capabilities` · `rhwp capabilities --mcp` · `mcp-serve` 의 `tools/list` |
-| 표면 규모 | CLI 명령 **71개**(그중 `--json` 계약 **40개**, batch 축 **9개**) · MCP 도구 **65개**(무상태 49 + 세션 전용 16) |
-| 봉투 필드 | `capabilities.commands[].recordFields` 합집합 **185개** · §2 전수 사전 **188개**(`recordFields` 밖 실측 필드 `assertions`·`docId`·`preview` 포함) |
+| 표면 규모 | CLI 명령 **83개**(그중 `--json` 계약 **52개**, batch 축 **9개**) · MCP 도구 **82개**(무상태 66 + 세션 전용 16) |
+| 봉투 필드 | `capabilities.commands[].recordFields` 합집합 **261개** · §2 전수 사전 **264개**(`recordFields` 밖 실측 필드 `assertions`·`docId`·`preview` 포함) |
 | 표본 | `samples/` tracked 파일 **781개** 중 실측한 것만 §7 에 적었다 |
 
 **재확인하는 법** — 이 지도를 믿기 전에 손에 든 바이너리로 다시 찍어 본다.
 
 ```
 rhwp capabilities                 # 명령·플래그·recordFields·종료 코드
-rhwp capabilities --mcp           # MCP 무상태 도구 선언(49)
+rhwp capabilities --mcp           # MCP 무상태 도구 선언(66)
 rhwp capabilities --mcp --profile <프로필>   # 역할별로 좁힌 도구 목록
 printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"x","version":"0"}}}' \
   '{"jsonrpc":"2.0","method":"notifications/initialized"}' \
-  '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}' | rhwp mcp-serve   # 세션 포함 65
+  '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}' | rhwp mcp-serve   # 세션 포함 82
 ```
 
 버전이 다르면 **바이너리가 이긴다**. 이 문서와 어긋나면 이 문서를 고친다.
@@ -240,14 +240,14 @@ IR·provenance·plan 네 축을 한 번에 조립하고, 빠진 축은 `missingA
 `rhwp export-capabilities-schema`를 코드 생성의 단일 출처로 쓴다. 두 가이드가 서로
 어긋나면 계약이 언어마다 갈린 것이므로 어긋난 쪽을 고친다.
 
-실측 규모(2026-08-10): `export-ir-schema` → `definitionCount:41`,
+실측 규모(2026-08-11): `export-ir-schema` → `definitionCount:41`,
 `irSchemaVersion:"1.0"`. `export-capabilities-schema` → `definitionCount:21`,
 `capabilitiesSchemaVersion:"1.3"`, 그리고 MCP 선언용 `mcpSchema` 를 함께 낸다.
 `export-plan-schema` → `definitionCount:11`, `planSchemaVersion:"1.1"` 이다.
 
 ### 1-5. 역할이 정해져 있는가 — 프로필 라우터
 
-65개를 전부 물리면 작은 모델은 도구 선택에서 진다. `--profile` 은 **역할별로 도구를
+82개를 전부 물리면 작은 모델은 도구 선택에서 진다. `--profile` 은 **역할별로 도구를
 좁히고 레시피를 함께 주는** 라우터다(실측: `capabilities --mcp --profile <이름>`,
 `mcp-serve --profile <이름>`).
 
@@ -258,8 +258,8 @@ IR·provenance·plan 네 축을 한 번에 조립하고, 빠진 축은 `missingA
 | `데이터분석` | 9 | 9 | 표 수확·아카이브 일괄 추출 |
 | `콘텐츠제작` | 9 | 9 | 명세로 새 문서를 만들고 배포 형식으로 |
 | `아카이브검색` | 11 | 23 (세션 전용 12 포함) | 수백 건 스윕과 근거 쪽 번호 인용 |
-| `품질검증` | 11 | 11 | 변환·편집 무손실 게이트 |
-| `개발통합` | 49 | 65 | 필터 없음 — rhwp 를 통합하는 개발 에이전트 |
+| `품질검증` | 28 | 28 | 변환·편집 무손실 게이트와 작업 계보·서명·감사 판정 |
+| `개발통합` | 66 | 82 | 필터 없음 — rhwp 를 통합하는 개발 에이전트 |
 
 각 프로필 봉투에는 `profile.recipe[]`(권장 호출 순서)와 `profile.session`·
 `profile.sessionTools[]` 가 함께 실린다. 예를 들어 `행정서식` 의 레시피는
@@ -306,8 +306,8 @@ IR·provenance·plan 네 축을 한 번에 조립하고, 빠진 축은 `missingA
 
 ### 2-2. 전수 사전 — 264개 필드
 
-`capabilities` 의 `recordFields` 고유 **185개**와 그 밖의 실측-only 필드
-`assertions`·`docId`·`preview` **3개**를 합친 188개다. `등장 명령` 은 자기서술
+`capabilities` 의 `recordFields` 고유 **261개**와 그 밖의 실측-only 필드
+`assertions`·`docId`·`preview` **3개**를 합친 264개다. `등장 명령` 은 자기서술
 기준이며, 실제 봉투에는 조건부로 더 실리는 필드가 있다(§2-5).
 
 #### 신원·스키마
@@ -1026,9 +1026,9 @@ exit 3 ↔ `isError:false` + `identical:false`. 상세는
 **`inspect` 하위 3개** — `hidden-text`·`injection`·`unicode`. 전부 읽기 전용이고
 문서를 고치지 않는다.
 
-## 6. MCP 도구 전수 지도 — 65개
+## 6. MCP 도구 전수 지도 — 82개
 
-### 6-1. 무상태 49개 (`capabilities --mcp` 선언 = `mcp-serve` 제공)
+### 6-1. 무상태 66개 (`capabilities --mcp` 선언 = `mcp-serve` 제공)
 
 | 도구 | CLI 대응 | 필수 인자 |
 |---|---|---|
@@ -1073,6 +1073,23 @@ exit 3 ↔ `isError:false` + `identical:false`. 상세는
 | `hwp_run_plan` | `run --plan-json --json` | `plan` |
 | `hwp_replay` | `replay --plan-json --json` | `plan` |
 | `hwp_lineage` | `lineage --json` | `capsule` |
+| `hwp_keygen` | `keygen --json` | `keyId`,`out` |
+| `hwp_verify_signature` | `verify-signature --json` | `capsule`,`keyring` |
+| `hwp_harness_wrap` | `harness wrap --json` | `plan`,`dir` |
+| `hwp_harness_status` | `harness-status --json` | `dir` |
+| `hwp_anchor_add` | `anchor add --json` | `capsule`,`log` |
+| `hwp_anchor_verify` | `anchor verify --json` | `capsule`,`log` |
+| `hwp_gate` | `gate --json` | `capsule`,`policy` |
+| `hwp_bundle_export` | `bundle export --json` | `head`,`out` |
+| `hwp_bundle_verify` | `bundle verify --json` | `bundle`,`trustDomain` |
+| `hwp_disclose_redact` | `disclose redact --json` | `capsule`,`out`,`openingOut` |
+| `hwp_disclose_verify` | `disclose verify --json` | `redacted`,`opening` |
+| `hwp_settle_propose` | `settle propose --json` | `workorder`,`capsule`,`gateEnvelope`,`out` |
+| `hwp_settle_verify` | `settle verify --json` | `claim`,`workorder`,`capsule`,`gateEnvelope` |
+| `hwp_settle_record` | `settle record --json` | `claim`,`ledger` |
+| `hwp_audit_report` | `audit-report --json` | `dir`,`out` |
+| `hwp_recall_scope` | `recall-scope --json` | `contaminated`,`among` |
+| `hwp_conformance` | `conformance --json` | `dir`,`level` |
 | `hwp_audit` | `audit --json` | `dir` |
 | `hwp_export_plan_schema` | `export-plan-schema --json` | (없음) |
 | `hwp_render_diff` | `render-diff --json` | `path` |

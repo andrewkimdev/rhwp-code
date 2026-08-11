@@ -66,6 +66,11 @@ NOT_WRAPPED_CATEGORIES = {"diagnostic", "internal", "serve"}
 # CLI 에서 서브커맨드로 갈라지는 명령 — 파이썬은 서브커맨드마다 함수를 둔다.
 SUBCOMMAND_WRAPPERS: Mapping[str, Tuple[str, ...]] = {
     "edit": ("fill_fields", "replace_text", "set_cell"),
+    "harness": ("harness_init", "harness_wrap"),
+    "anchor": ("anchor_add", "anchor_checkpoint", "anchor_verify"),
+    "bundle": ("bundle_export", "bundle_verify"),
+    "disclose": ("disclose_redact", "disclose_verify", "disclose_restore"),
+    "settle": ("settle_propose", "settle_verify", "settle_record"),
 }
 
 # 위층(Plan/run_plan)이 감싸는 명령 — 1층 무상태 함수로 다시 노출하지 않는다.
