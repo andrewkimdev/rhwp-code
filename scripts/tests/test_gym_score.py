@@ -14,6 +14,7 @@ from unittest import mock
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCORE_PATH = REPO_ROOT / "gym" / "score.py"
 T12_PATH = REPO_ROOT / "gym" / "tasks" / "T12.json"
+T12_BASELINE = REPO_ROOT / "gym" / "baselines" / "claude-fable-5" / "T12"
 
 
 def load_score_module():
@@ -108,6 +109,19 @@ class T12TaskContractTests(unittest.TestCase):
 
         diff_check = checks["변환물 IR 대조"]
         self.assertEqual(diff_check["expect_exits"], [0, 3])
+
+    def test_t12_baseline_records_false_verdict_and_runner_identity(self):
+        answer = json.loads((T12_BASELINE / "answer.json").read_text(encoding="utf-8"))
+        verification = json.loads(
+            (T12_BASELINE / "verification.json").read_text(encoding="utf-8")
+        )
+
+        self.assertEqual(answer, {"identical": False})
+        self.assertEqual(verification["artifactFormat"], "hwpx")
+        self.assertEqual(verification["answer"], answer)
+        self.assertTrue(verification["result"]["pass"])
+        self.assertEqual(len(verification["runner"]["rhwpCommit"]), 40)
+        self.assertEqual(len(verification["runner"]["capabilitiesSha256"]), 64)
 
 
 if __name__ == "__main__":

@@ -184,11 +184,18 @@
       "pass": true,
       "checks": [
         {
+          "name": "HWPX 형식 확인",
+          "op": "value_eq",
+          "ok": true,
+          "expected": "hwpx",
+          "actual": "hwpx"
+        },
+        {
           "name": "변환물 IR 대조",
           "op": "answer_eq",
           "ok": true,
-          "expected": true,
-          "actual": true
+          "expected": false,
+          "actual": false
         }
       ]
     },
