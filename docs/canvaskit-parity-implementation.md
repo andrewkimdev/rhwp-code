@@ -28,16 +28,23 @@ explicit `default` and `compat` policy modes. It dispatches the core layer node
 kinds, clips, basic page backgrounds, vector primitives, simple raster images,
 basic form objects, root `TextRun` compatibility payloads, horizontal text
 special visuals, and the currently supported `GlyphOutline` color-layer subset.
-It still treats vertical text, effect-heavy text, several image effects,
-page-background fills, and document-object families as fallback or diagnostic
-work until their payload contract is strict enough for direct replay.
+The standard solid, dash, dot, dash-dot, and dash-dot-dot stroke patterns are
+direct for line, shape, and path primitives and retain bounded native-effect
+lifetime.
+Root `TextRun` replay includes producer-positioned vertical text, vertical
+presentation punctuation, ratio scaling, shade, shadow, outline, emboss, and
+engrave for the nominal-glyph-safe subset. Several image effects, page-background fills,
+vertical or rotated special visual ops, and document-object families remain
+fallback or diagnostic work until their payload contract is strict enough for
+direct replay.
 
 `TextRun compatibility` remains the replay baseline for normal text. `GlyphRun`
 and `GlyphOutline` are additive sidecars, not a replacement authority by
-themselves. The browser CanvasKit runtime currently keeps `GlyphOutline` direct
-replay behind `glyph-outline-payload-status.ts`; Rust-side replay planning and
-future strict selection work should keep reporting why a sidecar was selected
-or rejected.
+themselves. Browser CanvasKit can directly replay the bounded portable
+`GlyphRun` subset whose exact embedded font blob, face index, glyph geometry,
+and diagnostics all pass verification. `GlyphOutline` direct replay remains
+behind `glyph-outline-payload-status.ts`; both paths keep deterministic reasons
+for selecting a sidecar or retaining `TextRun`.
 
 Schema-v1 text variants are exported as ordinary `glyphRun` and `glyphOutline`
 paint ops with variant metadata plus `text.variantGroups`. Those sidecar ops
@@ -63,6 +70,9 @@ through backend-local browser objects.
   until a phase changes the policy and adds proof fixtures.
 - `GlyphOutline` direct replay must remain guarded by
   `glyph-outline-payload-status.ts` before it reaches CanvasKit drawing code.
+- `GlyphRun` direct replay must remain guarded by verified font resources,
+  strict geometry/diagnostics, and exact face construction in
+  `canvaskit/glyph-run-fonts.ts` before it reaches `drawGlyphs`.
 - The renderer contract guard and render-diff CI should catch drift before a
   PR changes public rendering behavior.
 
@@ -108,16 +118,17 @@ Likely families:
 - raster image effects and crop preprocessing;
 - equation and form-object bounds;
 - placeholder and raw-SVG preview payloads;
-- remaining root `TextRun` effects such as vertical text, ratio scaling, shadow,
-  outline, emboss, engrave, and shade.
+- complex-script runs that still need explicit direction and positioned cluster
+  advances, plus old-Hangul or boxed-PUA combinations with ratio or paint effects.
 
 ### 3. Strict Text Variant Replay
 
-Keep `GlyphRun` and `GlyphOutline` behind explicit payload-status and selection
-diagnostics until the payload family has a proof fixture. Do not let CanvasKit
-select glyph ids against an arbitrary local font by family name. Do not allow
-color, bitmap, SVG, and stroke payload families to mix in one strict outline
-payload.
+Keep every `GlyphRun` and `GlyphOutline` subset behind explicit payload-status
+and selection diagnostics. The first portable nominal-glyph `GlyphRun` subset
+uses verified embedded bytes and an exact face; all other glyph runs still fall
+back. Never let CanvasKit select glyph ids against an arbitrary local font by
+family name. Do not allow color, bitmap, SVG, and stroke payload families to mix
+in one strict outline payload.
 
 This batch should widen strict variant replay only when the fallback behavior
 and reject reasons are exact.
@@ -147,10 +158,19 @@ document as an exact sidecar. That requires preserving the OpenType SVG em-box
 and baseline geometry in the paint payload; treating the fragment alone as
 page-positioned output would overstate parity.
 
-The additive JSON contract advances to layer schema `1.19` and resource table
-`1.5`. Bitmap and SVG sidecar IDs are accompanied by the encoded image bytes,
-static SVG fragments, and content-addressed keys in `resources`, so a consumer
-never receives an arena-local reference without its corresponding payload.
+P42 adds the first exact-font direct path for normal layer export. Matching
+embedded faces can produce a bounded horizontal nominal `GlyphRun` alongside
+the existing fallback. Layer resources export content-addressed font bytes;
+CanvasKit verifies BLAKE3 identity, extracts the requested TTC v1/v2 face,
+caches document-scoped native font objects, and draws producer positions with
+`drawGlyphs`. Complex shaping, variation instances, non-horizontal orientation,
+and glyph transforms remain fail-closed.
+
+The cumulative additive JSON contract is layer schema `1.22` and resource
+table `1.6`. Bitmap and SVG sidecar IDs are accompanied by encoded image bytes,
+static SVG fragments, and content-addressed keys in `resources`; portable
+GlyphRun faces additionally reference verified font blob bytes and stable keys.
+No consumer receives an arena-local reference without its corresponding payload.
 CanvasKit validates that key, decodes bitmap headers under the same pixel
 limits as ordinary images, and parses every static SVG path before selecting
 the sidecar. Selection is exclusive per `equivalenceGroup`: a verified sidecar
@@ -165,6 +185,18 @@ profiles and are suppressed for print-equivalent profiles across layered SVG,
 Canvas2D, CanvasKit, and native Skia; OLE placeholders keep the existing static
 replay. The `export-png` CLI defaults to the `high-quality` profile; callers
 must request `--profile screen` explicitly to include editor-only visuals.
+
+P40 makes that image boundary fail closed before CanvasKit's decoder is called.
+PNG, JPEG, GIF, WebP, and BMP payloads must have a structurally valid header
+whose encoded size, dimensions, and pixel count are within the browser limits.
+Layer schema `1.20` supplies an opaque, document-local `sourceImageKey`; the
+runtime preserves that identity byte-for-byte, scopes both positive and
+negative cache entries to the document generation, and falls back to a bounded
+payload fingerprint when no valid source key exists. Missing bytes, invalid
+base64, header rejection, decoder failure, and decoded-dimension mismatch are
+reported as separate bounded diagnostics. Baseline artifacts inventory those
+reasons and fail their replay contract when any image failure reaches a
+captured CanvasKit page.
 
 Equation ops now carry their bounded semantic `layoutBox` in the layer JSON.
 CanvasKit replays that tree directly, so a missing or malformed equation SVG
@@ -219,6 +251,14 @@ work budget; oversized or invalid browser image payloads are not reported as
 direct replay candidates. The reported page cost is the larger of the
 pre-lowering estimate and the lowered-tree cost.
 
+Text preflight uses `displayText` for the text that will actually be painted,
+including required-font and shaping decisions. The bounded lowering estimate
+still counts both the model-space source string and its optional display
+projection because both remain present in the transition payload. Special
+visual operations follow their serialized authority: character overlap and
+control marks use source text, while tab leaders and decorations use display
+text.
+
 The same report carries a bounded, sorted `requiredFontFamilies` list for text
 fallbacks that the selected replay plan will actually paint. A strict glyph
 outline variant does not require its source family. Each browser surface maps
@@ -233,6 +273,32 @@ closed. Eligible families are fetched under a 32 MiB per-face bound and
 registered before the first replay. A named family that still reaches replay
 without a prepared typeface is a document-wide resource failure, not a silent
 substitution with the default Noto face.
+
+The direct `TextRun` runtime consumes producer positions for nominal-glyph-safe
+horizontal and vertical runs. Vertical presentation forms such as `U+FE35` and `U+FE36` use
+their broadly available base punctuation and rotate that glyph around the
+producer cell center. Ratio scaling changes glyph shapes while preserving the
+serialized origins. Shade, shadow, outline, emboss, and engrave reuse the same
+bounded fallback spans, so a paint effect cannot silently change character
+placement. The legacy zero and white shade sentinels remain no-fill values.
+Old-Hangul clusters retain their bounded, producer-anchored paragraph shaper.
+Arabic, Indic, combining-mark, bidi-format, emoji-sequence, and other
+complex-script runs remain fail-closed as `scriptTextRequiresShaping` until the
+IR carries explicit direction and positioned cluster advances. Old-Hangul or
+boxed-PUA runs that
+also request ratio, shade, shadow, outline, emboss, or engrave use the same
+fail-closed route until CanvasKit can apply those paints to one exact shaped
+result.
+
+Forced CanvasKit replay also exposes bounded font-substitution diagnostics.
+They distinguish an unregistered authored family that reached the default face
+from per-glyph default, symbol, and old-Hangul coverage fallbacks. Automatic
+selection still requires all authored families to be prepared before replay;
+the diagnostics make explicit overrides observable without weakening that
+document-level admission rule.
+Known legacy aliases follow the existing web substitution contract during
+preparation. In particular, `한양중고딕` resolves through `HY중고딕` to the
+bundled Noto Sans KR face instead of being rejected as an unknown family.
 
 The decision is pinned for the whole document revision. Its key includes the
 document digest, edit revision, render profile, resource generation, requested
@@ -265,8 +331,9 @@ they never make a document eligible for CanvasKit selection in the VS Code
 webview.
 
 `CanvasKitRenderDiagnostics.passesRuntimeReadinessGate` means only that the
-selected page completed a CanvasKit surface flush without a render error or
-unexpected unsupported operation. Surface fallback remains explicit
+selected page completed a CanvasKit surface flush without a render error,
+unexpected unsupported operation, pending local font, or image replay failure.
+Surface fallback remains explicit
 telemetry because headless and constrained devices may legitimately use the
 software surface. `surfaceBackend` records whether the default or software
 factory actually succeeded. If CanvasKit replaces the DOM canvas during its
@@ -310,9 +377,17 @@ cache hit, so the producer and CanvasKit resource replay path cannot pass by
 rendering only the text fallback.
 
 The hard readiness set covers paragraph, table, image, positioned paragraph
-marks, PUA fallback, and font-native bitmap cases. Synthetic renderer-contract
-tests cover character overlap, tab leaders, and decorations; focused
-document-backed visual fixtures for those three operations remain a follow-up.
+marks, PUA fallback, font-native bitmap, and a real HWP table containing
+vertical text, presentation punctuation, and dashed borders. Synthetic
+renderer-contract tests cover character overlap, tab leaders, and decorations;
+focused document-backed visual fixtures for those three operations remain a
+follow-up.
+Readiness entries can declare minimum replay feature counts. The vertical-table
+gate currently requires the CanvasKit runtime to complete 14 vertical
+`TextRun` operations, two vertical presentation-form rotations, and 12 dashed
+strokes. These counters are recorded only after the corresponding draw path
+completes, so an unselected, unsupported, or non-drawing LayerTree operation
+cannot satisfy the gate.
 The readiness set checks requested mode/surface, page canvas
 ownership, expected/unexpected diagnostics, visual thresholds, declared layer
 payloads, warm cache hits, decoded-image pixel limits, synchronous warm replay,
@@ -382,9 +457,9 @@ The versioned corpus records a SHA-256 document digest and diagnostic axes for
 every sample. Browser and native comparisons require matching sample, digest,
 page, and profile identities before comparing pixels, while retaining backend
 and actual surface provenance. Identity mismatches are a separate result class,
-not visual noise. The default `representative` tier retains the existing 21-case
+not visual noise. The default `representative` tier retains a bounded 24-case
 runtime envelope. `--scope full` and the manual workflow's `corpus=full` input
-select the complete 120-case browser/native corpus; WebGPU/software surface
+select the complete 122-case browser/native corpus; WebGPU/software surface
 sweeps remain representative. The selected multi-profile sweep also collects
 verified print-profile PDF artifacts, while selected CanvasKit readiness cases
 remain the bounded visual hard gate.
@@ -426,6 +501,6 @@ work rather than being declared parity-complete.
 - This plan does not make CanvasKit a public default; automatic selection is an
   explicit opt-in and remains fail-closed and document-scoped.
 - This plan does not add a hidden Canvas2D overlay fallback.
-- This plan does not enable CanvasKit `GlyphRun` or `GlyphOutline` selection
+- This plan does not enable any CanvasKit `GlyphRun` or `GlyphOutline` subset
   without proof resources and deterministic diagnostics.
 - This plan does not claim native Skia or PDF export parity is complete.

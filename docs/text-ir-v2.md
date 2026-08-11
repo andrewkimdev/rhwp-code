@@ -32,6 +32,14 @@ shared backend selection diagnostic that can explain why CanvasKit/native-style
 replay selects a strict variant or falls back to `TextRun`. This is still a
 guarded contract, not a public default path switch.
 
+P42 opens the first portable `GlyphRun` direct-replay subset in browser
+CanvasKit. Normal lowering can attach a bounded, producer-positioned
+`GlyphRun` when an exact embedded font face proves one-to-one nominal glyph
+mapping. Layer JSON carries the referenced font bytes, CanvasKit verifies their
+content identity and constructs the exact face, and every unsupported or
+malformed case still selects the anchored `TextRun` fallback. Canvas2D remains
+the public default renderer.
+
 ## Export Contract
 
 Layer JSON now provides additive text metadata:
@@ -96,10 +104,11 @@ sidecar and use `TextRun`.
   cross-document or cross-export stable ids.
 - Field marker, paragraph-end, and line-break metadata also appear as source
   annotations.
-- P12 enables the `GlyphRun` schema contract and native Skia contract guard,
-  but native Skia selection remains disabled until it can instantiate the exact
-  referenced font blob/face. Normal layer lowering still emits `TextRun` only
-  unless a shaping pass explicitly inserts glyph alternatives.
+- P12 enables the `GlyphRun` schema contract and native Skia contract guard.
+  Native Skia selection remains disabled until it can instantiate the exact
+  referenced font blob/face. P42 adds a separate browser CanvasKit subset for
+  producer-positioned nominal glyphs; runs outside that subset remain
+  `TextRun`-only unless another shaping pass inserts a proven alternative.
 - P13 `textV2` diagnostics are additive and report-only for normal exports.
   They must not change renderer output or make `GlyphRun` the canonical path.
 - P14 `GlyphOutline` is a strict sidecar. It must carry `anchorOpId`, stay in
@@ -359,6 +368,36 @@ ink. The document-backed readiness set currently covers positioned paragraph
 marks and PUA fallback; character overlap, tab leaders, and decorations are
 held by synthetic replay contracts until focused source fixtures are added.
 
+## P42 Portable GlyphRun Direct Replay
+
+Layer schema `1.22` and resource table `1.6` add `resources.fontBlobs` and
+`resources.fontBlobKeys`. A portable `FontBlobResource.dataRef` resolves to one
+of those content-addressed payloads; the consumer must verify the declared
+length and BLAKE3 digest before constructing a typeface.
+
+Normal font-native lowering emits a `GlyphRun` only for a bounded horizontal,
+unrotated, fill-only run whose source and display projection are identical.
+Every scalar must be in the nominal-replay allowlist, use the same HWP language
+font slot, map to a nonzero glyph in the exact embedded face, and need no
+combining, bidi, complex-script, old-Hangul, emoji, variation, synthetic style,
+or per-glyph transform handling. Positions and advances come from the producer;
+the sidecar is marked `positionAdjusted`, while the original `TextRun` remains
+in the same equivalence group as the compatibility fallback.
+
+Browser CanvasKit verifies each font payload before variant selection, bounds
+individual and document-wide font bytes, normalizes an exact TTC v1/v2 face to
+a standalone SFNT when `faceIndex` is nonzero, and keeps bounded Typeface/Font
+caches for the document generation. Selection rejects malformed glyph counts,
+zero or out-of-range glyph ids, non-finite or Float32-overflowing geometry,
+unsupported paint effects, variations, oversized resource tables, missing
+resources, digest mismatch, and face construction failure before `drawGlyphs`
+runs. Document reset and renderer disposal release every cached native object.
+
+This phase does not make glyph ids the general text authority. Complex shaping,
+vertical and mixed orientation, glyph transforms, variable instances, and
+native Skia exact typeface construction remain guarded follow-ups. Canvas2D and
+layered SVG continue to use `TextRun`, and the browser default does not change.
+
 ## CanvasKit Parity Plan Link
 
 CanvasKit replay widening is tracked in
@@ -379,7 +418,7 @@ improvement rather than a Canvas2D compatibility match.
 
 ## Follow-Ups
 
-- Wire real document font blob extraction into `ResourceArena`.
+- Expand producer-side glyph shaping beyond the bounded nominal-glyph subset.
 - Expand CanvasKit glyph replay beyond the guarded COLRv1 solid/gradient subset.
 - Add native glyph outline replay behind the strict `GlyphOutline` variant.
 - Add document-backed resource table entries for image/SVG glyph payload bytes

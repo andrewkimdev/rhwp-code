@@ -502,6 +502,72 @@ pub fn roundtrip_ir_diff(hwpx_bytes: &[u8]) -> Result<IrDiff, SerializeError> {
 ///
 /// Stage 1~5에서 비교 대상 필드를 누적 확장한다 (문단 텍스트, 표·그림 속성 등).
 /// `hwpx-roundtrip` 배치 진단(Task #1315)에서도 사용한다.
+/// [#3505] 포맷을 넘는 변환에서 **비교할 수 없는 항목**을 걷어낸다.
+///
+/// `diff_documents` 는 HWPX 왕복(같은 포맷) 보존 가드로 만들어졌다. `convert` 처럼 포맷을
+/// 넘는 변환에 그대로 쓰면 **대상 포맷에 자리가 없는 필드**가 차이로 잡혀, 진짜 손실이
+/// 그 잡음에 묻힌다. 샘플 346건 실측에서 차이 224건 중 180건이 이 부류였다.
+///
+/// 걷어내는 것은 둘뿐이고, 각각 "내용이 보존됨"을 실측으로 확인한 것만 넣었다.
+///
+/// 1. **HWPX `<hp:parameters>` 원문**(`raw_parameters_xml`) — HWPX 전용 verbatim 필드(#1391)로
+///    HWP5 에는 대응 표현이 없다. 하이퍼링크·Clickhere 의 실제 payload 는 `command` 와
+///    필드 이름으로 보존된다(issue1893 fixture 11개 전수 확인: `command` 달라진 필드 0건).
+/// 2. **원본이 값을 안 가진 `imgDim`** — 원본 `(0, 0)` 에 왕복본이 실제 치수를 채우는
+///    방향이다. 잃은 것이 아니라 채운 것이라 손실이 아니다.
+///
+/// 같은 포맷 왕복(HWPX→HWPX, HWP5→HWP5)에는 **쓰지 않는다** — 그쪽에서는 두 필드 모두
+/// 보존돼야 할 진짜 계약이다.
+pub fn strip_cross_format_noise(diff: IrDiff) -> IrDiff {
+    IrDiff {
+        differences: diff
+            .differences
+            .into_iter()
+            .filter(|d| !is_cross_format_incomparable(d))
+            .collect(),
+    }
+}
+
+/// HWPX를 HWP5로 저장한 뒤에만 적용하는 추가 비교 불능 항목을 걷어낸다.
+///
+/// 한컴 2020은 HWPX 그림을 HWP5 `SC_PICTURE`로 저장할 때 extra의 original width/height
+/// 두 칸을 의도적으로 `0`으로 둔다. 이 값은 `curSz`나 `imgRect`처럼 실제 배치·자르기
+/// 기하를 뜻하지 않으며, HWPX `hp:imgDim`의 원본 이미지 메타와도 동등 비교할 수 없다.
+/// 실제 물리 크기·자르기 차이가 함께 있으면 `detail`에 세미콜론으로 남으므로 절대 걷지
+/// 않는다. HWP3/HML 등 다른 출처에는 적용하지 않는다.
+pub fn strip_hwpx_to_hwp_noise(diff: IrDiff) -> IrDiff {
+    let mut diff = strip_cross_format_noise(diff);
+    diff.differences
+        .retain(|difference| !is_hwpx_to_hwp_incomparable(difference));
+    diff
+}
+
+fn is_cross_format_incomparable(d: &IrDifference) -> bool {
+    match d {
+        // HWPX verbatim parameters 소실 — 대상 포맷에 자리가 없다.
+        IrDifference::FieldContent { detail, .. } => {
+            detail.contains("parameters:") && detail.contains("actual=None")
+        }
+        // 원본이 값을 안 가진 imgDim 만 — 다른 크기 필드가 섞여 있으면 남긴다.
+        IrDifference::PictureSize { detail, .. } => {
+            detail.starts_with("imgDim: expected=(0, 0)") && !detail.contains(';')
+        }
+        _ => false,
+    }
+}
+
+fn is_hwpx_to_hwp_incomparable(d: &IrDifference) -> bool {
+    match d {
+        // 한컴 HWPX→HWP5 저장 계약의 SC_PICTURE original dimension 0 sentinel만 허용한다.
+        // curSz/imgRect 등 다른 그림 기하가 함께 달라진 경우에는 세미콜론이 있으므로 남긴다.
+        IrDifference::PictureSize { detail, .. } => {
+            detail.starts_with("imgDim: expected=(")
+                && detail.ends_with(" actual=(0, 0)")
+                && !detail.contains(';')
+        }
+        _ => false,
+    }
+}
 pub fn diff_documents(a: &Document, b: &Document) -> IrDiff {
     let mut diff = IrDiff::default();
 
@@ -595,10 +661,22 @@ pub fn diff_documents(a: &Document, b: &Document) -> IrDiff {
     }
 
     // BinData
-    if a.bin_data_content.len() != b.bin_data_content.len() {
+    //
+    // [#3505] 바이트가 0인 항목은 세지 않는다. HWP3 파서는 그림 컨트롤마다 id·확장자·
+    // 바이트가 모두 빈 placeholder 를 만드는데(hwp3-sample10.hwp 3건), 저장기가 그것을
+    // 쓰지 않는 것은 손실이 아니다. 실제 이미지는 컨트롤 내부 경로로 실려 렌더된다.
+    // [#2550] 빈 판정에 전체 해제(`load()`)를 쓰지 않는다 — `is_empty()` 는 리졸버의
+    // bounded 경로를 타므로 deflate bomb 에도 안전하다.
+    let non_empty = |d: &Document| -> usize {
+        d.bin_data_content
+            .iter()
+            .filter(|c| !c.data.is_empty())
+            .count()
+    };
+    if non_empty(a) != non_empty(b) {
         diff.push(IrDifference::BinDataContentCount {
-            expected: a.bin_data_content.len(),
-            actual: b.bin_data_content.len(),
+            expected: non_empty(a),
+            actual: non_empty(b),
         });
     }
 
@@ -1768,6 +1846,47 @@ mod tests {
     }
 
     #[test]
+    fn issue4388_diff_documents_hyperlink_not_compared_as_control() {
+        // [#4388 후속] Hyperlink 도 Bookmark 와 동형으로 비교 제외해야 한다.
+        // is_hwpx_inline_slot 에 한때 등록했다가 되돌린 회귀 가드 — 등록하면
+        // `roundtrip::diff_documents`(포맷 비종속, `convert`(HWP5 대상) `--verify` 도
+        // 재사용)가 HWP5 직렬화기의 기존(이슈 범위 밖) Hyperlink ctrl_id=0 고정 손실을
+        // 새로 "검출"해, hwp3-sample16.hwp 를 쓰는
+        // `tests/issue_hwp3_bookmark_native.rs::bookmarks_survive_saving_to_hwp5` 처럼
+        // 하이퍼링크와 무관한 기존 테스트가 깨진다(실측 확인됨). Hyperlink 가
+        // 사라져도 diff 가 비어 있어야 한다 — HWPX 직렬화기 자체의 드롭 경고는
+        // `warn_if_unrepresentable_in_hwpx` 가 별도로 담당(section.rs).
+        use crate::model::control::{Control, Hyperlink};
+
+        let mut a = doc_with_control(Control::Hyperlink(Hyperlink {
+            url: "http://example.com".to_string(),
+            text: "example".to_string(),
+        }));
+        a.sections[0].paragraphs[0].controls.push(picture_control());
+        let b = doc_with_control(picture_control());
+        assert!(
+            diff_documents(&a, &b).is_empty(),
+            "Hyperlink 손실은 diff_documents 비교에서 제외되어야 함(is_hwpx_inline_slot 미등록)"
+        );
+    }
+
+    #[test]
+    fn issue4388_diff_documents_unknown_not_compared_as_control() {
+        // [#4388 후속] Unknown 도 동일 이유로 비교 제외.
+        use crate::model::control::{Control, UnknownControl};
+
+        let mut a = doc_with_control(Control::Unknown(UnknownControl {
+            ctrl_id: 0x1234_5678,
+        }));
+        a.sections[0].paragraphs[0].controls.push(picture_control());
+        let b = doc_with_control(picture_control());
+        assert!(
+            diff_documents(&a, &b).is_empty(),
+            "Unknown 손실은 diff_documents 비교에서 제외되어야 함(is_hwpx_inline_slot 미등록)"
+        );
+    }
+
+    #[test]
     fn diff_documents_same_cell_controls_is_empty() {
         let a = doc_with_control(table_control_with_cell_controls(vec![picture_control()]));
         let b = doc_with_control(table_control_with_cell_controls(vec![picture_control()]));
@@ -2377,6 +2496,130 @@ mod tests {
         }
     }
 
+    // ---------- #4319: 차트·OLE 캡션 (게이트 동승) ----------
+    //
+    // #1403 은 pic/line/group 캡션 소실 검출을 고정했지만 Chart/Ole 는 빠졌다.
+    // shape_caption() 자체는 이미 `Chart(x) => &x.caption, Ole(x) => &x.caption`
+    // 로 올바른 필드를 보므로(비교기는 문제 없음), 아래 두 테스트는 그 사실을
+    // 고정한다. 진짜 결함은 HWPX 파서가 `<hp:chart>`/`<hp:ole>` 의 `<hp:caption>`
+    // 을 애초에 파싱하지 않아 `x.caption` 이 원본 파싱 시점부터 항상 None 이었다는
+    // 것 — 그러면 저장 전/후 IR 비교(diff_documents)는 None==None 이라 손실이
+    // 보이지 않는다(이 파일의 게이트가 비교하는 두 IR 모두 같은 파서를 거치므로).
+    // 아래 issue4319_*_caption_roundtrips 는 실제 파서·직렬화기를 왕복시켜
+    // 그 손실 자체(및 재발 방지 수정)를 고정한다.
+
+    #[test]
+    fn issue4319_ole_caption_loss_in_gate() {
+        // OLE 개체(OleShape.caption) 경로 — #1403 에 빠졌던 변형을 채운다.
+        let mut oa = crate::model::shape::OleShape::default();
+        oa.caption = Some(caption_with_paras(1));
+        let ob = crate::model::shape::OleShape::default();
+        let a = doc_with_control(crate::model::control::Control::Shape(Box::new(
+            crate::model::shape::ShapeObject::Ole(Box::new(oa)),
+        )));
+        let b = doc_with_control(crate::model::control::Control::Shape(Box::new(
+            crate::model::shape::ShapeObject::Ole(Box::new(ob)),
+        )));
+        let diff = diff_documents(&a, &b);
+        assert_eq!(diff.differences.len(), 1, "{:?}", diff.differences);
+        match &diff.differences[0] {
+            IrDifference::ObjectCaption { path, detail, .. } => {
+                assert_eq!(path, "/ctrl[0]shape.caption");
+                assert_eq!(detail, "missing: expected=Some actual=None");
+            }
+            other => panic!("ObjectCaption 여야 함: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn issue4319_chart_caption_loss_in_gate() {
+        // HWPX 차트는 OleShape(chart_id_ref=Some) 로 모델링된다 — chart_id_ref 유무와
+        // 무관하게 같은 shape_caption() 분기(Ole)를 타는지 고정.
+        let mut oa = crate::model::shape::OleShape::default();
+        oa.chart_id_ref = Some("Chart/chart1.xml".to_string());
+        oa.caption = Some(caption_with_paras(1));
+        let mut ob = crate::model::shape::OleShape::default();
+        ob.chart_id_ref = Some("Chart/chart1.xml".to_string());
+        let a = doc_with_control(crate::model::control::Control::Shape(Box::new(
+            crate::model::shape::ShapeObject::Ole(Box::new(oa)),
+        )));
+        let b = doc_with_control(crate::model::control::Control::Shape(Box::new(
+            crate::model::shape::ShapeObject::Ole(Box::new(ob)),
+        )));
+        let diff = diff_documents(&a, &b);
+        assert_eq!(diff.differences.len(), 1, "{:?}", diff.differences);
+        match &diff.differences[0] {
+            IrDifference::ObjectCaption { path, detail, .. } => {
+                assert_eq!(path, "/ctrl[0]shape.caption");
+                assert_eq!(detail, "missing: expected=Some actual=None");
+            }
+            other => panic!("ObjectCaption 여야 함: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn issue4319_ole_caption_roundtrips() {
+        // 실제 파서·직렬화기 왕복(serialize_hwpx → parse_hwpx) — 종전엔
+        // parse_hp_ole_element 에 caption arm 이 없어 재파싱 후 캡션이 사라졌다
+        // (write_ole 자체는 이미 캡션을 써 왔다 — 파서만 못 읽었다).
+        let mut cap = caption_with_paras(1);
+        cap.paragraphs[0].text = "OLE 캡션".to_string();
+        cap.paragraphs[0].char_shapes = to_refs(&[(0, 0)]);
+        let mut ole = crate::model::shape::OleShape::default();
+        ole.caption = Some(cap);
+        let mut a = roundtrip_doc_with_control(crate::model::control::Control::Shape(Box::new(
+            crate::model::shape::ShapeObject::Ole(Box::new(ole)),
+        )));
+        a.sections[0].paragraphs[0].char_shapes = to_refs(&[(0, 0)]);
+        let out = serialize_hwpx(&a).expect("serialize");
+        let b = parse_hwpx(&out).expect("reparse");
+        let diff = diff_documents(&a, &b);
+        assert!(diff.is_empty(), "{:?}", diff.differences);
+        match &b.sections[0].paragraphs[1].controls[0] {
+            crate::model::control::Control::Shape(s) => match s.as_ref() {
+                crate::model::shape::ShapeObject::Ole(o2) => {
+                    let c2 = o2.caption.as_ref().expect("캡션 보존 (#4319)");
+                    assert_eq!(c2.paragraphs[0].text, "OLE 캡션");
+                }
+                other => panic!("Ole 여야 함: {other:?}"),
+            },
+            other => panic!("Shape 여야 함: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn issue4319_chart_caption_roundtrips() {
+        // hp:chart 재방출 경로(write_chart_element/parse_hp_chart_element) 왕복 —
+        // 파서 수정만으로는 부족하다: write_chart_element 는 종전 write_caption 호출이
+        // 없어 파서를 고쳐도 저장 시 다시 유실됐다(hp:ole 방출 경로와 달리 hp:chart
+        // 재방출 경로만 캡션을 안 썼다). 두 수정이 함께 있어야 왕복이 무손실이다.
+        let mut cap = caption_with_paras(1);
+        cap.paragraphs[0].text = "차트 캡션".to_string();
+        cap.paragraphs[0].char_shapes = to_refs(&[(0, 0)]);
+        let mut ole = crate::model::shape::OleShape::default();
+        ole.chart_id_ref = Some("Chart/chart1.xml".to_string());
+        ole.bin_data_id = 60001;
+        ole.caption = Some(cap);
+        let mut a = roundtrip_doc_with_control(crate::model::control::Control::Shape(Box::new(
+            crate::model::shape::ShapeObject::Ole(Box::new(ole)),
+        )));
+        a.sections[0].paragraphs[0].char_shapes = to_refs(&[(0, 0)]);
+        let out = serialize_hwpx(&a).expect("serialize");
+        let b = parse_hwpx(&out).expect("reparse");
+        let diff = diff_documents(&a, &b);
+        assert!(diff.is_empty(), "{:?}", diff.differences);
+        match &b.sections[0].paragraphs[1].controls[0] {
+            crate::model::control::Control::Shape(s) => match s.as_ref() {
+                crate::model::shape::ShapeObject::Ole(o2) => {
+                    let c2 = o2.caption.as_ref().expect("캡션 보존 (#4319)");
+                    assert_eq!(c2.paragraphs[0].text, "차트 캡션");
+                }
+                other => panic!("Ole(chart) 여야 함: {other:?}"),
+            },
+            other => panic!("Shape 여야 함: {other:?}"),
+        }
+    }
+
     // ---------- #1392: shapeComment(객체 설명) 게이트 동승 ----------
 
     #[test]
@@ -2547,6 +2790,37 @@ mod tests {
             }
             other => panic!("PictureSize 여야 함: {other:?}"),
         }
+    }
+
+    #[test]
+    fn hwpx_to_hwp_zero_img_dim_sentinel_is_not_a_layout_loss() {
+        let diff = IrDiff {
+            differences: vec![
+                IrDifference::PictureSize {
+                    section: 0,
+                    paragraph: 0,
+                    path: "/ctrl[0]pic".to_string(),
+                    detail: "imgDim: expected=(76800, 42240) actual=(0, 0)".to_string(),
+                },
+                IrDifference::PictureSize {
+                    section: 0,
+                    paragraph: 1,
+                    path: "/ctrl[1]pic".to_string(),
+                    detail: "curSz: expected=2400x1800 actual=0x0; imgDim: expected=(76800, 42240) actual=(0, 0)".to_string(),
+                },
+            ],
+        };
+
+        let filtered = strip_hwpx_to_hwp_noise(diff);
+        assert_eq!(
+            filtered.differences.len(),
+            1,
+            "실제 기하 손실은 남겨야 한다"
+        );
+        assert!(matches!(
+            &filtered.differences[0],
+            IrDifference::PictureSize { detail, .. } if detail.starts_with("curSz:")
+        ));
     }
 
     #[test]

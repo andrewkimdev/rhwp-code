@@ -2,7 +2,7 @@
 kind: canonical
 status: active
 canonical: mydocs/manual/codex/docs_and_git_workflow.md
-last_verified: 2026-07-16
+last_verified: 2026-08-07
 ---
 
 # Documentation And Git Workflow
@@ -77,9 +77,24 @@ mydocs/report/{주제}_{회차}_{YYYYMMDD}.md
 
 이슈 기반 작업의 기본 순서:
 
-1. GitHub Issue 확인 또는 생성
+1. GitHub Issue 확인 또는 생성 (**신규 등록 전 동일 증상 선행 검색** — 아래)
 2. 열린 PR 확인
-3. 이슈 assignee 지정
+3. 이슈 assignee 지정 — **이 단계가 곧 세션 간 잠금이다.** GitHub 에 별도 잠금
+   기제가 없어, assignee 가 비어 있으면 병렬로 도는 다른 세션이 같은 이슈를
+   합리적으로 "열린 작업"으로 보고 동시에 집는다(실제 재발 사고 기록:
+   [병렬 세션 규약](../../tech/autonomous_maintenance/parallel_session_protocol.md)
+   §4-2). 조사를 시작하기 **전에** 확인·할당한다:
+   ```bash
+   gh issue view <n> --repo edwardkim/rhwp --json assignees -q '.assignees[].login'
+   gh issue edit <n> --repo edwardkim/rhwp --add-assignee @me   # 권한 있는 계정만 성공
+   ```
+   `gh issue edit --add-assignee` 가 403 등으로 실패하면(외부 기여자는 보통
+   실패한다) 코멘트가 대체 잠금이다:
+   ```bash
+   gh issue comment <n> --repo edwardkim/rhwp --body "착수합니다 — <범위>"
+   ```
+   canonical 은 [병렬 세션 규약](../../tech/autonomous_maintenance/parallel_session_protocol.md)
+   §5-1 — 이 단계는 그 규약의 요약이지 대체가 아니다.
 4. 작업 브랜치 생성 또는 전환
 5. 역할별 절차에 따라 오늘할일 또는 PR review 문서 갱신
 6. 계획서 작성
@@ -88,6 +103,39 @@ mydocs/report/{주제}_{회차}_{YYYYMMDD}.md
 9. 단계별 보고서 작성
 10. 커밋
 11. 작업지시자 승인 후 이슈 close
+
+### 신규 이슈 등록 전 동일 증상 선행 검색
+
+내부에서 결함을 발견해 이슈를 새로 열기 전에, **같은 증상이 이미 외부 리포트로 열려
+있는지 먼저 검색한다.** 있으면 새 이슈를 만들지 말고 그 이슈에 원인 분석을 붙이거나,
+분리가 필요하면 원 이슈를 명시적으로 참조·연결한다.
+
+```bash
+# 증상 문자열·패닉 메시지·오류 코드로 열린 이슈 검색 (닫힌 것도 함께 보려면 state 제거)
+gh search issues --repo edwardkim/rhwp --state open "<증상 키워드>"
+gh search issues --repo edwardkim/rhwp "panicked at <파일명>"
+```
+
+**Why:** 다운스트림이 늘면 같은 결함이 **외부는 증상으로, 내부는 원인으로** 각각 등록된다.
+연결하지 않으면 내부 이슈만 처리되고 외부 리포터는 방치된다 — 수정이 배포됐는데도 그
+사실을 모른 채 우회 조치를 유지하게 된다.
+
+실제 사례: [#2519](https://github.com/edwardkim/rhwp/issues/2519)(외부 사용자, 각주 삽입
+패닉, 2026-07-20)와 [#3214](https://github.com/edwardkim/rhwp/issues/3214)(내부 발견, 같은
+원인, 2026-07-23)가 연결되지 않아, `597dabf07` 로 수정된 뒤에도 리포터는 11일간 응답을
+받지 못했고 배포에서 메뉴 세 개를 감춘 채 운영했다.
+
+이 사례는 검색으로 **잡혔을 것이다** — `gh search issues --repo edwardkim/rhwp "panicked at
+note.rs"` 한 번이면 두 이슈가 나란히 나온다(2026-07-31 실측). 비용은 명령 한 줄이다.
+
+**How to apply:**
+
+- 내부 이슈를 새로 열 때 증상 키워드로 최소 1회 검색한다. 패닉 메시지·오류 문자열은
+  외부 리포트에 원문 그대로 실리는 경우가 많아 검색어로 효과적이다.
+- 이미 외부 이슈가 있으면 **그 이슈를 주 트랙으로 삼는다.** 원인 분석은 코멘트로 붙이고,
+  범위가 달라 분리가 필요할 때만 새 이슈를 열되 양쪽을 상호 참조한다.
+- 수정이 merge되면 외부 리포트에 **해결 사실·적용 버전·확인 방법**을 회신한다.
+  auto-close 로 닫히더라도 외부 리포터에게는 별도 설명이 필요하다.
 
 ## GitHub CLI Usage
 
@@ -133,7 +181,17 @@ PR 댓글 톤은 과장하지 않는다. "정말 감사합니다", "정성스러
 내부 타스크 브랜치에서 PR은 작업지시자 별도 승인 후에만 생성한다.
 
 - "PR 준비"는 커밋, 검증 기록, PR 본문 초안, 생성 명령 준비까지를 의미한다.
-- `gh pr create` 실행, Open PR 생성, Draft/Open 상태 전환은 별도 승인을 받은 뒤 진행한다.
+- `gh pr create` 실행(Open 또는 Draft PR 생성)과 Draft의 Ready 전환은 각각 별도 승인을 받은 뒤
+  진행한다.
+- PR 번호는 원격 head branch를 push한 뒤 GitHub에서 PR 생성이 성공할 때 채번된다. Issue와
+  PR은 같은 번호 공간을 쓰지만, 아직 생성하지 않은 PR 번호를 예측해 `pr_N_*` 파일명으로
+  사용하지 않는다.
+- 구현과 로컬 검증이 끝난 merge 후보는 별도의 Draft 지시가 없으면 Open PR로 생성한다.
+  Draft는 완료되지 않은 WIP를 공유하거나 조기 검토를 받는 목적을 작업지시자가 명시적으로 승인한
+  경우에만 쓴다. 번호 확보 자체는 Draft 생성 근거가 아니다.
+- PR 생성으로 번호 `N`을 받으면 역할별 review 절차에 따라 `pr_N_review.md`와 필요한
+  오늘할일을 작성해 같은 PR branch의 후속 commit으로 push한다. 이 기록 commit을 포함한
+  최신 PR head가 CI와 최종 merge 판단의 기준이다.
 - 실수로 승인 없이 PR을 열었으면 작업지시자 지시에 따라 즉시 close하고, 후속 진행은 승인 대기 상태로 되돌린다.
 - PR 직전 전체 CI 성격의 긴 검증(`cargo test --verbose`, `cargo clippy -- -D warnings` 등)은
   focused test와 visual sweep 결과를 공유한 뒤 작업지시자 승인을 받은 경우에만 실행한다.

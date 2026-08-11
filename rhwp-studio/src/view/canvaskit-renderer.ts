@@ -25,6 +25,8 @@ import type {
   LayerFormObjectOp,
   LayerAffineTransform,
   LayerGlyphOutlineOp,
+  LayerGlyphRunOp,
+  LayerFontResources,
   LayerImageOp,
   LayerInfo,
   LayerLeafNode,
@@ -39,6 +41,7 @@ import type {
   LayerRenderProfile,
   LayerResources,
   LayerShapeStyle,
+  LayerStrokeDash,
   LayerTabLeaderOp,
   LayerTextControlMarkOp,
   LayerTextDecorationOp,
@@ -53,14 +56,23 @@ import {
   type CanvasKitSurfaceRequest,
 } from './render-backend';
 import {
+  boundedCanvasKitSourceImageKey,
   canvasKitImageCacheKey,
   canvasKitImageFillModeTiles,
   canvasKitImageFillModeStretches,
   canvasKitImagePlacement,
   canvasKitImageSourceRect,
 } from './canvaskit/image-replay';
-import { encodedImageDimensions } from './canvaskit/image-header';
+import {
+  CANVASKIT_MAX_ENCODED_IMAGE_BASE64_LENGTH,
+  decodedImageMatchesEncodedHeader,
+  replayableEncodedImageHeader,
+} from './canvaskit/image-header';
 import { canvaskitClipRightPad } from './canvaskit/policy';
+import {
+  CanvasKitGlyphRunFontCache,
+  drawCanvasKitGlyphRun,
+} from './canvaskit/glyph-run-fonts';
 import {
   selectLayerTextVariantsForLeaf,
   staticSvgPathLayersAreReplayable,
@@ -94,6 +106,30 @@ export interface CanvasKitLayerRendererOptions {
 }
 
 const OLD_HANGUL_FONT_FAMILY = 'Source Han Serif K Old Hangul';
+const VERTICAL_PRESENTATION_BASE_TEXT = new Map<string, string>([
+  ['\uFE19', '\u2026'],
+  ['\uFE31', '\u2014'],
+  ['\uFE32', '\u2013'],
+  ['\uFE33', '_'],
+  ['\uFE34', '~'],
+  ['\uFE35', '('],
+  ['\uFE36', ')'],
+  ['\uFE37', '{'],
+  ['\uFE38', '}'],
+  ['\uFE39', '['],
+  ['\uFE3A', ']'],
+  ['\uFE3B', '\u3010'],
+  ['\uFE3C', '\u3011'],
+  ['\uFE3D', '\u300A'],
+  ['\uFE3E', '\u300B'],
+  ['\uFE3F', '\u3008'],
+  ['\uFE40', '\u3009'],
+  ['\uFE41', '\u300C'],
+  ['\uFE42', '\u300D'],
+  ['\uFE43', '\u300E'],
+  ['\uFE44', '\u300F'],
+]);
+const COMPLEX_SHAPING_UNICODE_CATEGORY = /[\p{M}\p{Cf}]/u;
 type MutablePath = Path & Pick<PathBuilder, 'arcToRotated' | 'close' | 'cubicTo' | 'lineTo' | 'moveTo'>;
 type LayerColorGraph = NonNullable<NonNullable<LayerGlyphOutlineOp['colorLayers']>['paintGraph']>;
 type LayerColorGraphNode = NonNullable<LayerColorGraph['nodes']>[number];
@@ -124,8 +160,53 @@ function normalizedFontFamily(value: string | null | undefined): string {
     .toLocaleLowerCase('en-US');
 }
 
+function textRequiresComplexShaping(text: string): boolean {
+  for (const character of text) {
+    const codePoint = character.codePointAt(0) ?? 0;
+    const isOldHangul = (codePoint >= 0x1100 && codePoint <= 0x11ff)
+      || (codePoint >= 0xa960 && codePoint <= 0xa97f)
+      || (codePoint >= 0xd7b0 && codePoint <= 0xd7ff);
+    const isBoxedPua = codePoint >= 0xf02b1 && codePoint <= 0xf02c4;
+    if (isOldHangul || isBoxedPua) continue;
+
+    const nominalGlyphReplayIsSafe = codePoint <= 0x02ff
+      || (codePoint >= 0x0370 && codePoint <= 0x058f)
+      || (codePoint >= 0x1e00 && codePoint <= 0x1fff)
+      || (codePoint >= 0x2000 && codePoint <= 0x2fff)
+      || (codePoint >= 0x2e80 && codePoint <= 0xd7af)
+      || (codePoint >= 0xe000 && codePoint <= 0xf8ff)
+      || (codePoint >= 0xf900 && codePoint <= 0xfb06)
+      || (codePoint >= 0xfe10 && codePoint <= 0xfe1f)
+      || (codePoint >= 0xfe30 && codePoint <= 0xfe6f)
+      || (codePoint >= 0xff00 && codePoint <= 0xffef)
+      || (codePoint >= 0x1d400 && codePoint <= 0x1d7ff)
+      || (codePoint >= 0x20000 && codePoint <= 0x323af);
+    if (!nominalGlyphReplayIsSafe || COMPLEX_SHAPING_UNICODE_CATEGORY.test(character)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function textRunHasPaintEffects(style: NonNullable<LayerTextRunOp['style']>): boolean {
+  const shadeColor = (style.shadeColor ?? '#ffffff').toLowerCase();
+  return (style.outlineType ?? 0) !== 0
+    || (style.shadowType ?? 0) !== 0
+    || style.emboss === true
+    || style.engrave === true
+    || (shadeColor !== '#ffffff' && shadeColor !== '#000000')
+    || Math.abs((style.ratio ?? 1) - 1) > Number.EPSILON;
+}
+
 interface EquationRenderBudget {
   remainingNodes: number;
+}
+
+export interface CanvasKitReplayFeatureCounts {
+  dashedStrokes: number;
+  glyphRuns: number;
+  verticalPresentationPunctuation: number;
+  verticalTextRuns: number;
 }
 
 export interface CanvasKitRenderDiagnostics {
@@ -150,17 +231,50 @@ export interface CanvasKitRenderDiagnostics {
   imageCacheHits: number;
   imageCacheMisses: number;
   imageCacheEvictions: number;
+  imageFailureCacheHits: number;
+  imageFailures: CanvasKitImageFailureDiagnostic[];
   localTypefaceCount: number;
   localTypefaceLoadFailureCount: number;
   localTypefacePendingCount: number;
   bundledTypefaceCount: number;
   bundledTypefaceLoadFailureCount: number;
+  glyphRunFontBlobCount: number;
+  glyphRunFontBlobBytes: number;
+  glyphRunTypefaceCount: number;
+  glyphRunFontCount: number;
+  fontSubstitutionLimit: number;
+  unregisteredFontFallbacks: number;
+  fontSubstitutions: CanvasKitFontSubstitutionDiagnostic[];
+  replayFeatureCounts: CanvasKitReplayFeatureCounts;
+}
+
+export interface CanvasKitFontSubstitutionDiagnostic {
+  requestedFamily: string;
+  resolvedFamily: string;
+  source: 'unregisteredDefault' | 'missingGlyphDefault' | 'missingGlyphSymbol' | 'oldHangul';
+  kind: 'unregisteredFallback' | 'glyphCoverageFallback';
+}
+
+export type CanvasKitImageFailureReason =
+  | 'dataMissing'
+  | 'cacheKeyMissing'
+  | 'base64DecodeFailed'
+  | 'encodedImageRejected'
+  | 'imageDecodeFailed'
+  | 'decodedDimensionsMismatch';
+
+export interface CanvasKitImageFailureDiagnostic {
+  source: 'sourceKey' | 'resource' | 'inline' | 'missing';
+  sourceImageKey: string | null;
+  imageRef: number | string | null;
+  reason: CanvasKitImageFailureReason;
 }
 
 export type CanvasKitReadinessBlocker =
   | 'renderNotCompleted'
   | 'renderError'
   | 'unexpectedUnsupportedOps'
+  | 'imageReplayFailure'
   | 'localFontsPending';
 
 export class CanvasKitLayerRenderer {
@@ -169,8 +283,6 @@ export class CanvasKitLayerRenderer {
   private static readonly MAX_IMAGE_CACHE_ENTRIES = 128;
   private static readonly MAX_IMAGE_FAILURE_CACHE_ENTRIES = 128;
   private static readonly MAX_SVG_GLYPH_CACHE_ENTRIES = 128;
-  private static readonly MAX_ENCODED_IMAGE_BASE64_LENGTH = 24 * 1024 * 1024;
-  private static readonly MAX_DECODED_IMAGE_PIXELS = 32 * 1024 * 1024;
   private static readonly MAX_IMAGE_CACHE_PIXELS = 64 * 1024 * 1024;
   private static readonly MAX_BITMAP_GLYPH_BASE64_LENGTH = Math.ceil(4 * 1024 * 1024 / 3) * 4;
   private static readonly MAX_STATIC_SVG_GLYPH_BYTES = 1024 * 1024;
@@ -180,13 +292,16 @@ export class CanvasKitLayerRenderer {
   private static readonly MAX_EQUATION_TEXT_LENGTH = 4096;
   private static readonly MAX_TEXT_VISUAL_WAVE_SEGMENTS = 4096;
   private static readonly MAX_TEXT_SPECIAL_VISUAL_ITEMS = 4096;
+  private static readonly MAX_TEXT_RUN_CODE_POINTS = 4096;
   private static readonly MAX_TEXT_RUN_FALLBACK_SPANS = 4096;
+  private static readonly MAX_FONT_SUBSTITUTION_DIAGNOSTICS = 4096;
   // 단일 text run은 줄바꿈 없이 문서가 지정한 위치에 재생한다.
   private static readonly MAX_SHAPED_TEXT_WIDTH = 1_000_000;
   private static readonly MAX_BUNDLED_FONT_BYTES = 32 * 1024 * 1024;
 
   private readonly imageCache = new Map<string, { image: SkImage; pixels: number }>();
-  private readonly imageDecodeFailures = new Set<string>();
+  private readonly imageDecodeFailures = new Map<string, CanvasKitImageFailureReason>();
+  private readonly currentImageFailures = new Map<string, CanvasKitImageFailureDiagnostic>();
   private readonly svgGlyphPathCache = new Map<string, StaticSvgPathLayer[]>();
   private readonly svgGlyphParseFailures = new Set<string>();
   private readonly localTypefaces = new Map<string, CanvasKitLocalTypeface>();
@@ -195,7 +310,9 @@ export class CanvasKitLayerRenderer {
   private readonly bundledTypefaces = new Map<string, CanvasKitLocalTypeface>();
   private readonly bundledTypefaceAliases = new Map<string, CanvasKitLocalTypeface>();
   private readonly bundledTypefaceLoadFailures = new Set<string>();
+  private readonly currentFontSubstitutions = new Map<string, CanvasKitFontSubstitutionDiagnostic>();
   private readonly bundledFontRequests = new Set<AbortController>();
+  private readonly glyphRunFonts: CanvasKitGlyphRunFontCache;
   private readonly unsupportedOps = new Set<string>();
   private surfaceBackend: 'default' | 'software' | null = null;
   private surfaceFallbackReason: string | null = null;
@@ -206,10 +323,18 @@ export class CanvasKitLayerRenderer {
   private imageCacheHits = 0;
   private imageCacheMisses = 0;
   private imageCacheEvictions = 0;
+  private imageFailureCacheHits = 0;
   private imageCachePixels = 0;
   private currentResources: LayerResources | undefined;
+  private currentFontResources: LayerFontResources | undefined;
   private currentShowParagraphMarks = false;
   private currentShowControlCodes = false;
+  private currentReplayFeatureCounts: CanvasKitReplayFeatureCounts = {
+    dashedStrokes: 0,
+    glyphRuns: 0,
+    verticalPresentationPunctuation: 0,
+    verticalTextRuns: 0,
+  };
   private selectedTextVariantOps = new WeakSet<LayerPaintOp>();
   private documentGeneration = 0;
   private disposed = false;
@@ -226,7 +351,9 @@ export class CanvasKitLayerRenderer {
     private readonly requirePreparedFontFamilies: boolean = false,
     private readonly oldHangulTypeface: CanvasKitLocalTypeface | null = null,
     private readonly oldHangulFontUrl: string = 'fonts/SourceHanSerifK-OldHangul-subset.woff2',
-  ) {}
+  ) {
+    this.glyphRunFonts = new CanvasKitGlyphRunFontCache(canvasKit);
+  }
 
   static async create(
     renderMode: CanvasKitRenderMode = 'default',
@@ -473,6 +600,9 @@ export class CanvasKitLayerRenderer {
       throw new Error('CanvasKit renderer가 이미 dispose되었습니다');
     }
     this.unsupportedOps.clear();
+    this.currentImageFailures.clear();
+    this.currentFontSubstitutions.clear();
+    this.resetReplayFeatureCounts();
     this.lastRenderError = null;
     this.lastRenderCompleted = false;
     let surface: SkSurface | null = null;
@@ -484,6 +614,8 @@ export class CanvasKitLayerRenderer {
       renderedCanvas = surfaceTarget.canvas;
       const canvas = surface.getCanvas();
       this.currentResources = tree.resources;
+      this.currentFontResources = tree.fontResources;
+      this.glyphRunFonts.registerResources(tree.fontResources, tree.resources);
       this.currentShowParagraphMarks = tree.outputOptions?.showParagraphMarks === true;
       this.currentShowControlCodes = tree.outputOptions?.showControlCodes === true;
       if (this.currentShowControlCodes) {
@@ -537,6 +669,7 @@ export class CanvasKitLayerRenderer {
     } finally {
       surface?.delete();
       this.currentResources = undefined;
+      this.currentFontResources = undefined;
       this.currentShowParagraphMarks = false;
       this.currentShowControlCodes = false;
       this.lastRenderDurationMs = performance.now() - renderStartedAt;
@@ -559,7 +692,9 @@ export class CanvasKitLayerRenderer {
     this.svgGlyphPathCache.clear();
     this.svgGlyphParseFailures.clear();
     this.currentResources = undefined;
+    this.currentFontResources = undefined;
     this.selectedTextVariantOps = new WeakSet<LayerPaintOp>();
+    this.glyphRunFonts.clear();
     for (const { typeface, fontManager } of this.localTypefaces.values()) {
       typeface?.delete?.();
       fontManager?.delete?.();
@@ -577,6 +712,10 @@ export class CanvasKitLayerRenderer {
     this.imageCacheHits = 0;
     this.imageCacheMisses = 0;
     this.imageCacheEvictions = 0;
+    this.imageFailureCacheHits = 0;
+    this.currentImageFailures.clear();
+    this.currentFontSubstitutions.clear();
+    this.resetReplayFeatureCounts();
     this.renderCount = 0;
     this.lastRenderDurationMs = null;
   }
@@ -595,10 +734,14 @@ export class CanvasKitLayerRenderer {
       (op) => !isExpectedCanvasKitUnsupportedOp(op),
     );
     const surfaceFallbackReason = this.surfaceFallbackReason ?? this.surfaceRequest.unsupportedReason ?? null;
+    const fontSubstitutions = [...this.currentFontSubstitutions.values()]
+      .map((substitution) => ({ ...substitution }));
+    const glyphRunFontDiagnostics = this.glyphRunFonts.diagnostics();
     const readinessBlockers: CanvasKitReadinessBlocker[] = [];
     if (!this.lastRenderCompleted) readinessBlockers.push('renderNotCompleted');
     if (this.lastRenderError !== null) readinessBlockers.push('renderError');
     if (lastUnexpectedUnsupportedOps.length > 0) readinessBlockers.push('unexpectedUnsupportedOps');
+    if (this.currentImageFailures.size > 0) readinessBlockers.push('imageReplayFailure');
     if (this.localTypefacePending.size > 0) readinessBlockers.push('localFontsPending');
     return {
       mode: this.renderMode,
@@ -622,17 +765,41 @@ export class CanvasKitLayerRenderer {
       imageCacheHits: this.imageCacheHits,
       imageCacheMisses: this.imageCacheMisses,
       imageCacheEvictions: this.imageCacheEvictions,
+      imageFailureCacheHits: this.imageFailureCacheHits,
+      imageFailures: [...this.currentImageFailures.values()].map((failure) => ({ ...failure })),
       localTypefaceCount: this.localTypefaces.size,
       localTypefaceLoadFailureCount: this.localTypefaceLoadFailures.size,
       localTypefacePendingCount: this.localTypefacePending.size,
       bundledTypefaceCount: this.bundledTypefaces.size,
       bundledTypefaceLoadFailureCount: this.bundledTypefaceLoadFailures.size,
+      glyphRunFontBlobCount: glyphRunFontDiagnostics.blobs,
+      glyphRunFontBlobBytes: glyphRunFontDiagnostics.bytes,
+      glyphRunTypefaceCount: glyphRunFontDiagnostics.typefaces,
+      glyphRunFontCount: glyphRunFontDiagnostics.fonts,
+      fontSubstitutionLimit: CanvasKitLayerRenderer.MAX_FONT_SUBSTITUTION_DIAGNOSTICS,
+      unregisteredFontFallbacks: fontSubstitutions.filter(
+        (substitution) => substitution.kind === 'unregisteredFallback',
+      ).length,
+      fontSubstitutions,
+      replayFeatureCounts: { ...this.currentReplayFeatureCounts },
+    };
+  }
+
+  private resetReplayFeatureCounts(): void {
+    this.currentReplayFeatureCounts = {
+      dashedStrokes: 0,
+      glyphRuns: 0,
+      verticalPresentationPunctuation: 0,
+      verticalTextRuns: 0,
     };
   }
 
   recordRenderFailure(error: unknown, resetReplayState = false): void {
     if (resetReplayState) {
       this.unsupportedOps.clear();
+      this.currentImageFailures.clear();
+      this.currentFontSubstitutions.clear();
+      this.resetReplayFeatureCounts();
       this.surfaceBackend = null;
       this.surfaceFallbackReason = null;
     }
@@ -734,10 +901,15 @@ export class CanvasKitLayerRenderer {
     const selected = selectLayerTextVariantsForLeaf(
       node.ops,
       op => this.glyphOutlineVariantReplayable(op),
+      op => this.glyphRunVariantReplayable(op),
     );
     for (const op of selected) {
       this.selectedTextVariantOps.add(op);
     }
+  }
+
+  private glyphRunVariantReplayable(op: LayerGlyphRunOp): boolean {
+    return this.glyphRunFonts.replayStatus(op, this.currentFontResources).replayable;
   }
 
   private glyphOutlineVariantReplayable(op: LayerGlyphOutlineOp): boolean {
@@ -991,7 +1163,7 @@ export class CanvasKitLayerRenderer {
         this.renderTextDecoration(canvas, op);
         return;
       case 'glyphRun':
-        this.unsupportedOps.add(op.type);
+        this.renderGlyphRun(canvas, op);
         return;
       case 'glyphOutline': {
         const status = glyphOutlinePayloadStatus(op, {
@@ -1044,8 +1216,13 @@ export class CanvasKitLayerRenderer {
 
   private renderLine(canvas: SkCanvas, op: LayerLineOp): void {
     const paint = this.makeStrokePaint(op.style?.color ?? '#000000', op.style?.width ?? 1);
-    canvas.drawLine(op.x1, op.y1, op.x2, op.y2, paint);
-    paint.delete?.();
+    try {
+      this.drawStrokeWithDash(op.style?.dash, paint, () => {
+        canvas.drawLine(op.x1, op.y1, op.x2, op.y2, paint);
+      });
+    } finally {
+      paint.delete?.();
+    }
   }
 
   private renderPath(canvas: SkCanvas, op: LayerPathOp): void {
@@ -1055,10 +1232,16 @@ export class CanvasKitLayerRenderer {
     for (const command of op.commands ?? []) {
       [currentX, currentY] = this.applyPathCommand(path, command, currentX, currentY);
     }
-    const style = op.style ?? {
-      strokeColor: op.lineStyle?.color ?? '#000000',
-      strokeWidth: op.lineStyle?.width ?? 1,
+    const style: LayerShapeStyle = op.style ?? (op.lineStyle ? {} : {
+      strokeColor: '#000000',
+      strokeWidth: 1,
       fillColor: null,
+    });
+    const replayStyle: LayerShapeStyle = {
+      ...style,
+      strokeColor: style.strokeColor ?? op.lineStyle?.color,
+      strokeWidth: op.lineStyle?.width ?? style.strokeWidth,
+      strokeDash: op.lineStyle?.dash ?? style.strokeDash,
     };
 
     // [Task #1067] HWPX/HWP 도형의 회전 + flip 변환 적용.
@@ -1083,7 +1266,7 @@ export class CanvasKitLayerRenderer {
         canvas.rotate(rotation, cx, cy);
       }
     }
-    this.drawStyledPath(canvas, path, style);
+    this.drawStyledPath(canvas, path, replayStyle);
     if (needsTransform) {
       canvas.restore();
     }
@@ -1115,13 +1298,36 @@ export class CanvasKitLayerRenderer {
   }
 
   private renderImage(canvas: SkCanvas, op: LayerImageOp): void {
+    if (!op.base64) {
+      this.recordImageFailure(op, 'dataMissing', null);
+      this.unsupportedOps.add('image:dataMissing');
+      return;
+    }
     const image = this.imageForOp(op);
     if (!image) {
-      this.unsupportedOps.add(op.base64 ? 'image:decodeFailed' : 'image:dataMissing');
+      this.unsupportedOps.add('image:decodeFailed');
       return;
     }
     this.recordImageCoverageGaps(op);
     this.withImageTransform(canvas, op.bbox, op.transform, () => this.drawImageOp(canvas, image, op));
+  }
+
+  private renderGlyphRun(canvas: SkCanvas, op: LayerGlyphRunOp): void {
+    const font = this.glyphRunFonts.font(op, this.currentFontResources);
+    if (!font) {
+      this.unsupportedOps.add('glyphRun:replayInvariant');
+      return;
+    }
+    const paint = this.makeFillPaint(op.paintStyle.color ?? '#000000');
+    try {
+      if (drawCanvasKitGlyphRun(canvas, op, font, paint)) {
+        this.currentReplayFeatureCounts.glyphRuns += 1;
+      } else {
+        this.unsupportedOps.add('glyphRun:replayFailed');
+      }
+    } finally {
+      paint.delete?.();
+    }
   }
 
   private renderGlyphOutline(canvas: SkCanvas, op: LayerGlyphOutlineOp): void {
@@ -1606,12 +1812,9 @@ export class CanvasKitLayerRenderer {
     }
   }
 
-  private recordTextRunCoverageGaps(op: LayerTextRunOp): void {
+  private recordTextRunCoverageGaps(op: LayerTextRunOp, codePoints: readonly string[]): boolean {
     const style = op.style ?? {};
     const decorationsAreExternal = op.legacyVisuals?.decorations === 'mirror';
-    if (op.isVertical) {
-      this.unsupportedOps.add('textRun:verticalText');
-    }
     if (!decorationsAreExternal && style.underline && style.underline !== 'none') {
       this.unsupportedOps.add('textRun:textDecoration');
     }
@@ -1621,24 +1824,23 @@ export class CanvasKitLayerRenderer {
     if (!decorationsAreExternal && style.emphasisDot && style.emphasisDot !== 0) {
       this.unsupportedOps.add('textRun:emphasisDot');
     }
-    if (style.outlineType && style.outlineType !== 0) {
-      this.unsupportedOps.add('textRun:outlineTextEffect');
+    const replayText = op.displayText ?? op.text;
+    const hasOldHangul = codePoints.some((character) => {
+      const codePoint = character.codePointAt(0) ?? 0;
+      return (codePoint >= 0x1100 && codePoint <= 0x11ff)
+        || (codePoint >= 0xa960 && codePoint <= 0xa97f)
+        || (codePoint >= 0xd7b0 && codePoint <= 0xd7ff);
+    });
+    const hasBoxedPua = codePoints.some((character) => {
+      const codePoint = character.codePointAt(0) ?? 0;
+      return codePoint >= 0xf02b1 && codePoint <= 0xf02c4;
+    });
+    const requiresUnsupportedShaping = textRequiresComplexShaping(replayText)
+      || (textRunHasPaintEffects(style) && (hasOldHangul || hasBoxedPua));
+    if (requiresUnsupportedShaping) {
+      this.unsupportedOps.add('textRun:scriptTextRequiresShaping');
     }
-    if (style.shadowType && style.shadowType !== 0) {
-      this.unsupportedOps.add('textRun:shadowTextEffect');
-    }
-    if (style.emboss) {
-      this.unsupportedOps.add('textRun:embossTextEffect');
-    }
-    if (style.engrave) {
-      this.unsupportedOps.add('textRun:engraveTextEffect');
-    }
-    if (style.shadeColor && style.shadeColor.toLowerCase() !== '#ffffff') {
-      this.unsupportedOps.add('textRun:shadeTextEffect');
-    }
-    if (style.ratio !== undefined && Math.abs(style.ratio - 1) > Number.EPSILON) {
-      this.unsupportedOps.add('textRun:ratioTextEffect');
-    }
+    return requiresUnsupportedShaping;
   }
 
   private boundsAreDrawable(bounds: LayerBounds): boolean {
@@ -1672,10 +1874,54 @@ export class CanvasKitLayerRenderer {
     const replayText = op.displayText ?? op.text;
     const replayPositions = op.displayText !== undefined ? op.displayPositions : op.positions;
     if (!replayText) return;
+    const replayCodePoints: string[] = [];
+    for (const character of replayText) {
+      if (replayCodePoints.length >= CanvasKitLayerRenderer.MAX_TEXT_RUN_CODE_POINTS) {
+        this.unsupportedOps.add('textRun:visualItemLimitExceeded');
+        return;
+      }
+      replayCodePoints.push(character);
+    }
     const style = op.style ?? {};
-    this.recordTextRunCoverageGaps(op);
-    const paint = this.makeFillPaint(style.color ?? '#000000');
+    if (this.recordTextRunCoverageGaps(op, replayCodePoints)) return;
+    const ratio = style.ratio ?? 1;
+    const outlineType = style.outlineType ?? 0;
+    const shadowType = style.shadowType ?? 0;
+    const shadowOffsetX = style.shadowOffsetX ?? 0;
+    const shadowOffsetY = style.shadowOffsetY ?? 0;
+    const shadeColor = (style.shadeColor ?? '#ffffff').toLowerCase();
     const baseFontSize = style.fontSize ?? Math.max(1, op.bbox.height || 12);
+    const baseline = op.baseline ?? baseFontSize;
+    const rotation = op.rotation ?? 0;
+    if (![op.bbox.x, op.bbox.y, op.bbox.width, op.bbox.height, ratio, outlineType,
+      shadowType, shadowOffsetX, shadowOffsetY, baseFontSize, baseline, rotation]
+      .every(Number.isFinite)
+      || op.bbox.width < 0
+      || op.bbox.height < 0
+      || ratio <= 0
+      || baseFontSize <= 0
+      || !Number.isInteger(outlineType)
+      || outlineType < 0
+      || !Number.isInteger(shadowType)
+      || shadowType < 0) {
+      this.unsupportedOps.add('textRun:invalidGeometry');
+      return;
+    }
+    const verticalPresentationText = op.isVertical
+      && op.orientation !== 'vertical-sideways'
+      ? VERTICAL_PRESENTATION_BASE_TEXT.get(replayText)
+      : undefined;
+    const glyphReplayText = verticalPresentationText ?? replayText;
+    const codePoints = verticalPresentationText === undefined
+      ? replayCodePoints
+      : [verticalPresentationText];
+    const hasOldHangul = codePoints.some((codePoint) => {
+      const code = codePoint.codePointAt(0) ?? 0;
+      return (code >= 0x1100 && code <= 0x11ff)
+        || (code >= 0xa960 && code <= 0xa97f)
+        || (code >= 0xd7b0 && code <= 0xd7ff);
+    });
+    const effectPaints: SkPaint[] = [];
     let fontSize = baseFontSize;
     let baselineShift = 0;
     if (style.superscript) {
@@ -1689,14 +1935,8 @@ export class CanvasKitLayerRenderer {
     const originX = placementMatrix ? 0 : op.bbox.x;
     const originY = placementMatrix
       ? (op.placement?.baselineY ?? 0)
-      : op.bbox.y + (op.baseline ?? baseFontSize);
-    const rotation = op.rotation ?? 0;
-    const codePoints = Array.from(replayText);
+      : op.bbox.y + baseline;
     const needsPreservedAdvances = style.superscript || style.subscript;
-    const hasSimpleScriptText = codePoints.every((codePoint) => {
-      const code = codePoint.charCodeAt(0);
-      return codePoint.length === 1 && code >= 0x20 && code <= 0x7e;
-    });
     const hasLayoutPositions = replayPositions?.length === codePoints.length + 1
       && replayPositions.every(Number.isFinite);
     const requestedFontFamily = primaryFontFamily(style.fontFamily);
@@ -1704,9 +1944,17 @@ export class CanvasKitLayerRenderer {
     if (requestedFontFamily && !preparedTypeface && this.requirePreparedFontFamilies) {
       throw new Error(`CanvasKit font family가 준비되지 않았습니다: ${requestedFontFamily}`);
     }
+    if (requestedFontFamily && !preparedTypeface) {
+      this.recordFontSubstitution({
+        requestedFamily: requestedFontFamily,
+        resolvedFamily: this.defaultFontFamily ?? 'CanvasKit default',
+        source: 'unregisteredDefault',
+        kind: 'unregisteredFallback',
+      });
+    }
     const typeface = preparedTypeface?.typeface ?? this.defaultTypeface;
     const fontManager = preparedTypeface?.fontManager ?? this.defaultFontManager;
-    const fontFamily = preparedTypeface?.fontFamily ?? this.defaultFontFamily;
+    const paint = this.makeFillPaint(style.color ?? '#000000');
     let font: Font | null = null;
     const fallbackFonts: Font[] = [];
     let boxedPuaFont: Font | null = null;
@@ -1727,83 +1975,86 @@ export class CanvasKitLayerRenderer {
         canvas.rotate(rotation, originX, originY);
       }
 
-      if (needsPreservedAdvances && !hasSimpleScriptText) {
-        if (!this.renderShapedScriptText(
-          canvas,
-          replayText,
-          style.color ?? '#000000',
-          fontSize,
-          originX,
-          originY,
-          baselineShift,
-          fontManager,
-          fontFamily,
-          style.bold === true,
-          style.italic === true,
-        )) {
-          this.unsupportedOps.add('textRun:scriptTextRequiresShaping');
-        }
-      } else {
-        font = new this.canvasKit.Font(typeface, fontSize);
-        const adjustableFont = font as Font & {
-          setEmbolden?: (enabled: boolean) => void;
-          setSkewX?: (skew: number) => void;
+      {
+        const adjustFont = (target: Font) => {
+          const adjustable = target as Font & {
+            setEmbolden?: (enabled: boolean) => void;
+            setSkewX?: (skew: number) => void;
+            setScaleX?: (scale: number) => void;
+          };
+          adjustable.setEmbolden?.(style.bold === true);
+          adjustable.setSkewX?.(style.italic === true ? -0.2 : 0);
+          adjustable.setScaleX?.(ratio);
         };
-        adjustableFont.setEmbolden?.(style.bold === true);
-        adjustableFont.setSkewX?.(style.italic === true ? -0.2 : 0);
+        font = new this.canvasKit.Font(typeface, fontSize);
+        adjustFont(font);
+        const candidateFonts = [font];
+        const candidateFontSources: CanvasKitFontSubstitutionDiagnostic['source'][] = [
+          'unregisteredDefault',
+        ];
+        const candidateFontFamilies = [
+          preparedTypeface?.fontFamily ?? this.defaultFontFamily ?? 'CanvasKit default',
+        ];
+        let candidateGlyphIds: Uint16Array[] = [];
+        const fallbackSpans: Array<{ start: number; end: number; fontIndex: number }> = [];
+        let oldHangulTypeface: CanvasKitLocalTypeface | null = null;
         if (hasLayoutPositions) {
-          const primaryGlyphIds = font.getGlyphIDs(replayText, codePoints.length);
-          const candidateFonts = [font];
-          const candidateGlyphIds = [primaryGlyphIds];
-          const oldHangulTypeface = codePoints.some((codePoint) => {
-            const code = codePoint.codePointAt(0) ?? 0;
-            return (code >= 0x1100 && code <= 0x11FF)
-              || (code >= 0xA960 && code <= 0xA97F)
-              || (code >= 0xD7B0 && code <= 0xD7FF);
-          })
+          const primaryGlyphIds = font.getGlyphIDs(glyphReplayText, codePoints.length);
+          candidateGlyphIds = [primaryGlyphIds];
+          oldHangulTypeface = hasOldHangul
             ? this.findPreparedTypeface(OLD_HANGUL_FONT_FAMILY)
             : null;
           if (primaryGlyphIds.some(glyphId => glyphId === 0)
             && this.defaultTypeface !== null
             && typeface !== this.defaultTypeface) {
             const defaultFont = new this.canvasKit.Font(this.defaultTypeface, fontSize);
-            const adjustableDefault = defaultFont as Font & {
-              setEmbolden?: (enabled: boolean) => void;
-              setSkewX?: (skew: number) => void;
-            };
-            adjustableDefault.setEmbolden?.(style.bold === true);
-            adjustableDefault.setSkewX?.(style.italic === true ? -0.2 : 0);
+            adjustFont(defaultFont);
             fallbackFonts.push(defaultFont);
             candidateFonts.push(defaultFont);
-            candidateGlyphIds.push(defaultFont.getGlyphIDs(replayText, codePoints.length));
+            candidateFontSources.push('missingGlyphDefault');
+            candidateFontFamilies.push(this.defaultFontFamily ?? 'CanvasKit default');
+            candidateGlyphIds.push(defaultFont.getGlyphIDs(glyphReplayText, codePoints.length));
           }
           if (codePoints.some((_, index) => candidateGlyphIds.every(ids => (ids[index] ?? 0) === 0))
             && this.symbolFallbackTypeface !== null
             && typeface !== this.symbolFallbackTypeface
             && this.defaultTypeface !== this.symbolFallbackTypeface) {
             const symbolFont = new this.canvasKit.Font(this.symbolFallbackTypeface, fontSize);
-            const adjustableSymbol = symbolFont as Font & {
-              setEmbolden?: (enabled: boolean) => void;
-              setSkewX?: (skew: number) => void;
-            };
-            adjustableSymbol.setEmbolden?.(style.bold === true);
-            adjustableSymbol.setSkewX?.(style.italic === true ? -0.2 : 0);
+            adjustFont(symbolFont);
             fallbackFonts.push(symbolFont);
             candidateFonts.push(symbolFont);
-            candidateGlyphIds.push(symbolFont.getGlyphIDs(replayText, codePoints.length));
+            candidateFontSources.push('missingGlyphSymbol');
+            candidateFontFamilies.push('CanvasKit symbol fallback');
+            candidateGlyphIds.push(symbolFont.getGlyphIDs(glyphReplayText, codePoints.length));
           }
           const selectedFontIndices = codePoints.map((codePoint, index) => {
             const code = codePoint.codePointAt(0) ?? 0;
-            if ((code >= 0x1100 && code <= 0x11FF)
-              || (code >= 0xA960 && code <= 0xA97F)
-              || (code >= 0xD7B0 && code <= 0xD7FF)) {
+            if ((code >= 0x1100 && code <= 0x11ff)
+              || (code >= 0xa960 && code <= 0xa97f)
+              || (code >= 0xd7b0 && code <= 0xd7ff)) {
               return -2;
             }
             const candidateIndex = candidateGlyphIds.findIndex(ids => (ids[index] ?? 0) !== 0);
             if (candidateIndex >= 0) return candidateIndex;
             return code >= 0xF02B1 && code <= 0xF02C4 ? -1 : 0;
           });
-          const fallbackSpans: Array<{ start: number; end: number; fontIndex: number }> = [];
+          for (const fontIndex of new Set(selectedFontIndices)) {
+            if (fontIndex > 0) {
+              this.recordFontSubstitution({
+                requestedFamily: requestedFontFamily || this.defaultFontFamily || 'CanvasKit default',
+                resolvedFamily: candidateFontFamilies[fontIndex],
+                source: candidateFontSources[fontIndex],
+                kind: 'glyphCoverageFallback',
+              });
+            } else if (fontIndex === -2 && oldHangulTypeface?.fontManager) {
+              this.recordFontSubstitution({
+                requestedFamily: requestedFontFamily || this.defaultFontFamily || 'CanvasKit default',
+                resolvedFamily: oldHangulTypeface.fontFamily ?? OLD_HANGUL_FONT_FAMILY,
+                source: 'oldHangul',
+                kind: 'glyphCoverageFallback',
+              });
+            }
+          }
           let spanStart = 0;
           while (spanStart < codePoints.length) {
             const fontIndex = selectedFontIndices[spanStart];
@@ -1820,6 +2071,69 @@ export class CanvasKitLayerRenderer {
             }
             spanStart = spanEnd;
           }
+        }
+
+        const drawPass = (
+          fillPaint: SkPaint,
+          offsetX = 0,
+          offsetY = 0,
+          strokePaint?: SkPaint,
+        ) => {
+          if (verticalPresentationText !== undefined) {
+            const selectedFont = hasLayoutPositions
+              ? candidateFonts[fallbackSpans[0]?.fontIndex ?? 0] ?? font!
+              : font!;
+            const glyphIds = selectedFont.getGlyphIDs(verticalPresentationText, 1);
+            const glyphBounds = (
+              selectedFont as Font & {
+                getGlyphBounds?: (ids: Uint16Array) => Float32Array;
+              }
+            ).getGlyphBounds?.(glyphIds) ?? new Float32Array();
+            const left = glyphBounds[0] ?? 0;
+            const top = glyphBounds[1] ?? -fontSize;
+            const right = glyphBounds[2] ?? fontSize;
+            const bottom = glyphBounds[3] ?? 0;
+            const advance = hasLayoutPositions
+              ? replayPositions![1] - replayPositions![0]
+              : op.bbox.width;
+            const targetCenterX = originX
+              + (Number.isFinite(advance) ? advance : op.bbox.width) / 2;
+            const targetCenterY = originY - baseline + baselineShift + op.bbox.height / 2;
+            canvas.save();
+            try {
+              canvas.translate(targetCenterX + offsetX, targetCenterY + offsetY);
+              canvas.rotate(90, 0, 0);
+              canvas.drawText(
+                verticalPresentationText,
+                -(left + right) / 2,
+                -(top + bottom) / 2,
+                fillPaint,
+                selectedFont,
+              );
+              if (strokePaint) {
+                canvas.drawText(
+                  verticalPresentationText,
+                  -(left + right) / 2,
+                  -(top + bottom) / 2,
+                  strokePaint,
+                  selectedFont,
+                );
+              }
+            } finally {
+              canvas.restore();
+            }
+            return;
+          }
+
+          if (!hasLayoutPositions) {
+            const y = originY + baselineShift + offsetY;
+            canvas.drawText(glyphReplayText, originX + offsetX, y, fillPaint, font!);
+            if (strokePaint) {
+              canvas.drawText(glyphReplayText, originX + offsetX, y, strokePaint, font!);
+            }
+            return;
+          }
+
           let hasMissingGlyph = false;
           for (const { start: runStart, end: runEnd, fontIndex } of fallbackSpans) {
             if (fontIndex === -2) {
@@ -1828,8 +2142,8 @@ export class CanvasKitLayerRenderer {
                 codePoints.slice(runStart, runEnd).join(''),
                 style.color ?? '#000000',
                 fontSize,
-                originX + replayPositions![runStart],
-                originY,
+                originX + replayPositions![runStart] + offsetX,
+                originY + offsetY,
                 baselineShift,
                 oldHangulTypeface?.fontManager ?? null,
                 oldHangulTypeface?.fontFamily ?? OLD_HANGUL_FONT_FAMILY,
@@ -1854,12 +2168,7 @@ export class CanvasKitLayerRenderer {
                 this.symbolFallbackTypeface ?? this.defaultTypeface ?? typeface,
                 Math.max(1, fontSize * 0.5),
               );
-              const boxedAdjustable = boxedPuaFont as Font & {
-                setEmbolden?: (enabled: boolean) => void;
-                setSkewX?: (skew: number) => void;
-              };
-              boxedAdjustable.setEmbolden?.(style.bold === true);
-              boxedAdjustable.setSkewX?.(style.italic === true ? -0.2 : 0);
+              adjustFont(boxedPuaFont);
               const numberGlyphIds = boxedPuaFont.getGlyphIDs(
                 displayNumber,
                 displayNumber.length,
@@ -1867,14 +2176,19 @@ export class CanvasKitLayerRenderer {
               const numberWidth = (boxedPuaFont.getGlyphWidths(numberGlyphIds) ?? [])
                 .reduce((sum, width) => sum + width, 0);
               canvas.drawRect(
-                this.canvasKit.XYWHRect(boxX, boxY, boxSize, boxSize),
+                this.canvasKit.XYWHRect(
+                  boxX + offsetX,
+                  boxY + offsetY,
+                  boxSize,
+                  boxSize,
+                ),
                 boxedPuaStrokePaint,
               );
               canvas.drawText(
                 displayNumber,
-                boxX + (boxSize - numberWidth) / 2,
-                boxY + boxSize * 0.72,
-                paint,
+                boxX + (boxSize - numberWidth) / 2 + offsetX,
+                boxY + boxSize * 0.72 + offsetY,
+                fillPaint,
                 boxedPuaFont,
               );
               continue;
@@ -1891,18 +2205,72 @@ export class CanvasKitLayerRenderer {
             canvas.drawGlyphs(
               runGlyphIds,
               runPositions,
-              originX,
-              originY,
+              originX + offsetX,
+              originY + offsetY,
               candidateFonts[fontIndex],
-              paint,
+              fillPaint,
             );
+            if (strokePaint) {
+              canvas.drawGlyphs(
+                runGlyphIds,
+                runPositions,
+                originX + offsetX,
+                originY + offsetY,
+                candidateFonts[fontIndex],
+                strokePaint,
+              );
+            }
           }
           if (hasMissingGlyph) this.unsupportedOps.add('textRun:glyphMapping');
-        } else if (needsPreservedAdvances) {
+        };
+
+        if (!hasLayoutPositions && needsPreservedAdvances) {
           this.unsupportedOps.add('textRun:layoutPositions');
-          canvas.drawText(replayText, originX, originY + baselineShift, paint, font);
+        }
+        const textWidth = hasLayoutPositions
+          ? replayPositions!.at(-1) ?? op.bbox.width
+          : op.bbox.width;
+        if (textWidth > 0 && shadeColor !== '#ffffff' && shadeColor !== '#000000') {
+          const shadePaint = this.makeFillPaint(shadeColor);
+          effectPaints.push(shadePaint);
+          canvas.drawRect(
+            this.canvasKit.XYWHRect(
+              originX,
+              originY + baselineShift - fontSize,
+              textWidth,
+              fontSize * 1.2,
+            ),
+            shadePaint,
+          );
+        }
+
+        if (style.emboss || style.engrave) {
+          const offset = Math.max(fontSize / 20, 1);
+          const firstPaint = this.makeFillPaint(style.emboss ? '#ffffff' : '#808080');
+          effectPaints.push(firstPaint);
+          const secondPaint = this.makeFillPaint(style.emboss ? '#808080' : '#ffffff');
+          effectPaints.push(secondPaint);
+          drawPass(firstPaint, -offset, -offset);
+          drawPass(secondPaint, offset, offset);
+          drawPass(paint);
         } else {
-          canvas.drawText(replayText, originX, originY, paint, font);
+          if (shadowType > 0) {
+            const shadowPaint = this.makeFillPaint(style.shadowColor ?? style.color ?? '#000000');
+            effectPaints.push(shadowPaint);
+            drawPass(shadowPaint, shadowOffsetX, shadowOffsetY);
+          }
+          if (outlineType > 0) {
+            const outlineFillPaint = this.makeFillPaint('#ffffff');
+            effectPaints.push(outlineFillPaint);
+            const outlineStrokePaint = this.makeStrokePaint(
+              style.color ?? '#000000',
+              Math.max(fontSize / 25, 0.5),
+            );
+            effectPaints.push(outlineStrokePaint);
+            drawPass(outlineFillPaint, 0, 0, outlineStrokePaint);
+          } else {
+            drawPass(paint);
+          }
         }
       }
     } finally {
@@ -1911,10 +2279,17 @@ export class CanvasKitLayerRenderer {
       } finally {
         font?.delete?.();
         for (const fallbackFont of fallbackFonts) fallbackFont.delete?.();
-        boxedPuaFont?.delete?.();
-        boxedPuaStrokePaint?.delete?.();
+        (boxedPuaFont as Font | null)?.delete?.();
+        (boxedPuaStrokePaint as SkPaint | null)?.delete?.();
+        for (const effectPaint of effectPaints) effectPaint.delete?.();
         paint.delete?.();
       }
+    }
+    if (op.isVertical) {
+      this.currentReplayFeatureCounts.verticalTextRuns += 1;
+    }
+    if (verticalPresentationText !== undefined) {
+      this.currentReplayFeatureCounts.verticalPresentationPunctuation += 1;
     }
   }
 
@@ -2568,6 +2943,18 @@ export class CanvasKitLayerRenderer {
     return null;
   }
 
+  private recordFontSubstitution(diagnostic: CanvasKitFontSubstitutionDiagnostic): void {
+    const key = JSON.stringify([
+      diagnostic.requestedFamily,
+      diagnostic.resolvedFamily,
+      diagnostic.source,
+    ]);
+    if (this.currentFontSubstitutions.has(key)
+      || this.currentFontSubstitutions.size < CanvasKitLayerRenderer.MAX_FONT_SUBSTITUTION_DIAGNOSTICS) {
+      this.currentFontSubstitutions.set(key, diagnostic);
+    }
+  }
+
   private renderEquation(canvas: SkCanvas, op: LayerEquationOp): void {
     if (!op.layoutBox || !this.boundsAreDrawable(op.bbox)) {
       this.unsupportedOps.add('equation:unsupportedDirectReplay');
@@ -3102,8 +3489,11 @@ export class CanvasKitLayerRenderer {
     }
     if (style?.strokeColor && (style.strokeWidth ?? 0) > 0) {
       const paint = this.makeStrokePaint(style.strokeColor, style.strokeWidth ?? 1, style.opacity);
-      draw(paint);
-      paint.delete?.();
+      try {
+        this.drawStrokeWithDash(style.strokeDash, paint, () => draw(paint));
+      } finally {
+        paint.delete?.();
+      }
     }
     if (!style?.fillColor && !style?.strokeColor) {
       const paint = this.makeStrokePaint('#000000', 1);
@@ -3122,8 +3512,11 @@ export class CanvasKitLayerRenderer {
     }
     if (style.strokeColor && (style.strokeWidth ?? 0) > 0) {
       const paint = this.makeStrokePaint(style.strokeColor, style.strokeWidth ?? 1, style.opacity);
-      canvas.drawPath(path, paint);
-      paint.delete?.();
+      try {
+        this.drawStrokeWithDash(style.strokeDash, paint, () => canvas.drawPath(path, paint));
+      } finally {
+        paint.delete?.();
+      }
       drawn = true;
     }
     if (!drawn) {
@@ -3133,13 +3526,59 @@ export class CanvasKitLayerRenderer {
     }
   }
 
+  private drawStrokeWithDash(
+    dash: LayerStrokeDash | undefined,
+    paint: SkPaint,
+    draw: () => void,
+  ): void {
+    const intervals = dash === undefined || dash === 'solid'
+      ? null
+      : dash === 'dash'
+        ? [6, 3]
+        : dash === 'dot'
+          ? [2, 2]
+          : dash === 'dashDot'
+            ? [6, 3, 2, 3]
+            : dash === 'dashDotDot'
+              ? [6, 3, 2, 3, 2, 3]
+              : undefined;
+    if (intervals === undefined) {
+      this.unsupportedOps.add(`strokeDash:${String(dash)}`);
+      return;
+    }
+    if (intervals === null) {
+      draw();
+      return;
+    }
+
+    const effect = this.canvasKit.PathEffect.MakeDash(intervals, 0);
+    if (!effect) {
+      this.unsupportedOps.add('strokeDash:pathEffectUnavailable');
+      return;
+    }
+    try {
+      paint.setPathEffect(effect);
+      draw();
+      this.currentReplayFeatureCounts.dashedStrokes += 1;
+    } finally {
+      effect.delete?.();
+    }
+  }
+
   private imageForOp(op: LayerImageOp): SkImage | null {
     const base64 = op.base64 ?? '';
-    if (!base64 || base64.length > CanvasKitLayerRenderer.MAX_ENCODED_IMAGE_BASE64_LENGTH) {
+    if (!base64) {
       return null;
     }
-    const key = canvasKitImageCacheKey(op);
-    if (!key) return null;
+    if (base64.length > CANVASKIT_MAX_ENCODED_IMAGE_BASE64_LENGTH) {
+      this.recordImageFailure(op, 'encodedImageRejected', null);
+      return null;
+    }
+    const key = canvasKitImageCacheKey(op, this.documentGeneration);
+    if (!key) {
+      this.recordImageFailure(op, 'cacheKeyMissing', null);
+      return null;
+    }
     const cached = this.imageCache.get(key);
     if (cached) {
       this.imageCache.delete(key);
@@ -3147,8 +3586,11 @@ export class CanvasKitLayerRenderer {
       this.imageCacheHits += 1;
       return cached.image;
     }
-    if (this.imageDecodeFailures.has(key)) {
+    const cachedFailure = this.imageDecodeFailures.get(key);
+    if (cachedFailure) {
       this.imageCacheHits += 1;
+      this.imageFailureCacheHits += 1;
+      this.recordImageFailure(op, cachedFailure, key);
       return null;
     }
     this.imageCacheMisses += 1;
@@ -3156,29 +3598,23 @@ export class CanvasKitLayerRenderer {
     try {
       bytes = base64ToBytes(base64);
     } catch {
-      this.rememberImageDecodeFailure(key);
+      this.recordImageFailure(op, 'base64DecodeFailed', key);
       return null;
     }
-    const encodedDimensions = encodedImageDimensions(bytes);
-    if (!encodedDimensions) {
-      this.rememberImageDecodeFailure(key);
-      return null;
-    }
-    const encodedPixels = encodedDimensions.width * encodedDimensions.height;
-    if (!Number.isSafeInteger(encodedPixels)
-      || encodedPixels > CanvasKitLayerRenderer.MAX_DECODED_IMAGE_PIXELS) {
-      this.rememberImageDecodeFailure(key);
+    const encodedHeader = replayableEncodedImageHeader(bytes);
+    if (!encodedHeader) {
+      this.recordImageFailure(op, 'encodedImageRejected', key);
       return null;
     }
     let image: SkImage | null = null;
     try {
       image = this.canvasKit.MakeImageFromEncoded(bytes);
     } catch {
-      this.rememberImageDecodeFailure(key);
+      this.recordImageFailure(op, 'imageDecodeFailed', key);
       return null;
     }
     if (!image) {
-      this.rememberImageDecodeFailure(key);
+      this.recordImageFailure(op, 'imageDecodeFailed', key);
       return null;
     }
     const imageWithDimensions = image as SkImage & { width?: (() => number) | number; height?: (() => number) | number };
@@ -3187,12 +3623,9 @@ export class CanvasKitLayerRenderer {
     const decodedPixels = typeof width === 'number' && typeof height === 'number'
       ? width * height
       : Number.POSITIVE_INFINITY;
-    if (!Number.isSafeInteger(decodedPixels)
-      || width !== encodedDimensions.width
-      || height !== encodedDimensions.height
-      || decodedPixels > CanvasKitLayerRenderer.MAX_DECODED_IMAGE_PIXELS) {
+    if (!decodedImageMatchesEncodedHeader(encodedHeader, width, height)) {
       image.delete?.();
-      this.rememberImageDecodeFailure(key);
+      this.recordImageFailure(op, 'decodedDimensionsMismatch', key);
       return null;
     }
     while (this.imageCache.size >= CanvasKitLayerRenderer.MAX_IMAGE_CACHE_ENTRIES
@@ -3210,12 +3643,49 @@ export class CanvasKitLayerRenderer {
     return image;
   }
 
-  private rememberImageDecodeFailure(key: string): void {
-    if (this.imageDecodeFailures.size >= CanvasKitLayerRenderer.MAX_IMAGE_FAILURE_CACHE_ENTRIES) {
-      const oldestKey = this.imageDecodeFailures.values().next().value as string | undefined;
-      if (oldestKey !== undefined) this.imageDecodeFailures.delete(oldestKey);
+  private recordImageFailure(
+    op: LayerImageOp,
+    reason: CanvasKitImageFailureReason,
+    key: string | null,
+  ): void {
+    if (key) {
+      if (!this.imageDecodeFailures.has(key)
+        && this.imageDecodeFailures.size >= CanvasKitLayerRenderer.MAX_IMAGE_FAILURE_CACHE_ENTRIES) {
+        const oldestKey = this.imageDecodeFailures.keys().next().value as string | undefined;
+        if (oldestKey !== undefined) this.imageDecodeFailures.delete(oldestKey);
+      }
+      this.imageDecodeFailures.set(key, reason);
     }
-    this.imageDecodeFailures.add(key);
+
+    const sourceImageKey = boundedCanvasKitSourceImageKey(op.sourceImageKey);
+    const imageRef = (
+      (typeof op.imageRef === 'number' && Number.isSafeInteger(op.imageRef))
+      || (
+        typeof op.imageRef === 'string'
+        && op.imageRef.length > 0
+        && op.imageRef.length <= 256
+        && !/[\u0000-\u001f\u007f]/.test(op.imageRef)
+      )
+    ) ? op.imageRef : null;
+    const source = sourceImageKey
+      ? 'sourceKey'
+      : imageRef !== null
+        ? 'resource'
+        : op.base64
+          ? 'inline'
+          : 'missing';
+    const diagnosticKey = key
+      ?? `${source}:${sourceImageKey ?? String(imageRef ?? op.base64?.length ?? 0)}:${reason}`;
+    if (this.currentImageFailures.has(diagnosticKey)
+      || this.currentImageFailures.size >= CanvasKitLayerRenderer.MAX_IMAGE_FAILURE_CACHE_ENTRIES) {
+      return;
+    }
+    this.currentImageFailures.set(diagnosticKey, {
+      source,
+      sourceImageKey,
+      imageRef,
+      reason,
+    });
   }
 
   private makeFillPaint(color: string, opacity = 1): SkPaint {

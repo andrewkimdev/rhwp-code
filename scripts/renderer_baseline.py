@@ -240,6 +240,7 @@ def load_manifest(
             if readiness_expectations is not None:
                 allowed_expectation_keys = {
                     "glyphOutlinePayloadKinds",
+                    "minLayerFeatureCounts",
                     "minWarmImageCacheHits",
                 }
                 if (
@@ -265,6 +266,25 @@ def load_manifest(
                 ):
                     raise SystemExit(
                         f"readiness sample {sample_id} has invalid warm image cache expectations"
+                    )
+                min_feature_counts = readiness_expectations.get(
+                    "minLayerFeatureCounts", {}
+                )
+                allowed_feature_counts = {
+                    "dashedStrokes",
+                    "verticalPresentationPunctuation",
+                    "verticalTextRuns",
+                }
+                if (
+                    not isinstance(min_feature_counts, dict)
+                    or not set(min_feature_counts).issubset(allowed_feature_counts)
+                    or any(
+                        type(value) is not int or value <= 0
+                        for value in min_feature_counts.values()
+                    )
+                ):
+                    raise SystemExit(
+                        f"readiness sample {sample_id} has invalid layer feature expectations"
                     )
         if filter_text and not (
             filter_text in str(sample_id).lower()
@@ -1124,8 +1144,8 @@ def write_reports(
                 f"- mode: `{browser_replay_diagnostics.get('mode', '-')}`",
                 f"- hard-gate violations: {browser_replay_diagnostics.get('hardGateViolationCount', 0)}",
                 "",
-                "| Backend | Profile | Captures | Items | Direct | Direct Required | Text Fallback | Unsupported | Compat Overlay | Hidden Overlay Violations | Runtime Errors | Unexpected Runtime Ops |",
-                "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+                "| Backend | Profile | Captures | Items | Direct | Direct Required | Text Fallback | Unsupported | Compat Overlay | Hidden Overlay Violations | Runtime Errors | Unexpected Runtime Ops | Image Replay Failures |",
+                "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
             ]
         )
         for item in replay_summary_rows:
@@ -1145,6 +1165,7 @@ def write_reports(
                         format_count(item.get("hiddenOverlayViolations")),
                         format_count(item.get("runtimeRenderErrors")),
                         format_count(item.get("runtimeUnexpectedUnsupportedOps")),
+                        format_count(item.get("runtimeImageReplayFailures")),
                     ]
                 )
                 + " |"
@@ -1155,8 +1176,8 @@ def write_reports(
                 "",
                 "### Replay Diagnostic Inventory",
                 "",
-                "| Backend | Profile | Plan Statuses | Plan Reasons | Plan Features | Expected Runtime Ops | Unexpected Runtime Ops |",
-                "| --- | --- | --- | --- | --- | --- | --- |",
+                "| Backend | Profile | Plan Statuses | Plan Reasons | Plan Features | Expected Runtime Ops | Unexpected Runtime Ops | Image Failure Reasons | Image Failure Sources |",
+                "| --- | --- | --- | --- | --- | --- | --- | --- | --- |",
             ]
         )
         for item in replay_summary_rows:
@@ -1167,6 +1188,8 @@ def write_reports(
                 "planFeatureCounts",
                 "expectedUnsupportedOpCounts",
                 "unexpectedUnsupportedOpCounts",
+                "imageFailureReasonCounts",
+                "imageFailureSourceCounts",
             ):
                 counts = item.get(field) or {}
                 inventory_columns.append(

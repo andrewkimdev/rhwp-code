@@ -35,6 +35,9 @@ pub struct HwpExportVerification {
     pub recovered: bool,
 }
 
+type PageBorderFillExtras = Vec<crate::model::page::PageBorderFill>;
+type HwpPageBorderFillOverlay = Vec<(PageBorderFillExtras, Vec<Vec<Option<PageBorderFillExtras>>>)>;
+
 impl DocumentCore {
     /// [Task #741 후속] 외부 file path 그림 영역 의 binary 영역 영역 base_dir 영역 영역 자동 load.
     ///
@@ -53,9 +56,28 @@ impl DocumentCore {
     }
 
     pub fn from_bytes(data: &[u8]) -> Result<DocumentCore, HwpError> {
+        Self::from_bytes_inner(data, None)
+    }
+
+    /// 비밀번호로 보호된 HWP/HWPX 파일을 비밀번호와 함께 로드한다.
+    ///
+    /// HWP5 EncryptVersion 4, 압축 HWP3 및 ODF AES-256-CBC HWPX 비밀번호 암호 문서를 연다.
+    /// 비밀번호가 틀리면 `HwpError::InvalidFile`로 래핑된 암호 불일치/손상 오류가
+    /// 반환된다. 암호화되지 않은 HWPX는 기존 파서 경로로 열린다.
+    pub fn from_bytes_with_password(
+        data: &[u8],
+        password: &[u8],
+    ) -> Result<DocumentCore, HwpError> {
+        Self::from_bytes_inner(data, Some(password))
+    }
+
+    fn from_bytes_inner(data: &[u8], password: Option<&[u8]>) -> Result<DocumentCore, HwpError> {
         let source_format = crate::parser::detect_format(data);
-        let parsed = crate::parser::parse_document_with_metadata(data)
-            .map_err(|e| HwpError::InvalidFile(e.to_string()))?;
+        let parsed = match password {
+            Some(pwd) => crate::parser::parse_document_with_metadata_password(data, pwd),
+            None => crate::parser::parse_document_with_metadata(data),
+        }
+        .map_err(|e| HwpError::InvalidFile(e.to_string()))?;
         let mut document = parsed.document;
         let hml_metadata = parsed.hml_metadata;
 
@@ -163,6 +185,7 @@ impl DocumentCore {
             pending_pagination_job: None,
             page_tree_cache: RefCell::new(Vec::new()),
             layer_tree_json_cache: RefCell::new(Vec::new()),
+            bin_data_epoch: 0,
             batch_mode: false,
             event_log: Vec::new(),
             overflow_links_cache: RefCell::new(HashMap::new()),
@@ -1103,6 +1126,7 @@ impl DocumentCore {
         let sec_count = document.sections.len();
 
         self.document = document;
+        self.bump_bin_data_epoch();
         self.styles = styles;
         self.composed = composed;
         self.clipboard = None;
@@ -1130,16 +1154,155 @@ impl DocumentCore {
             .map_err(|e| HwpError::RenderError(e.to_string()))
     }
 
+    /// HWPX 원본의 pageBorderFill XML 구조를 저장 전 보관한다.
+    ///
+    /// 한컴 HWP5 출력은 구역마다 세 PAGE_BORDER_FILL record가 필요하다. 하지만 HWPX
+    /// 원본은 일반적으로 BOTH 하나만 가지므로, adapter가 채운 EVEN/ODD는 저장 직후
+    /// `SectionDef`와 serializer가 읽는 `Control::SectionDef`에서 함께 복원한다.
+    fn snapshot_hwpx_page_border_fill_overlay(&self) -> Option<HwpPageBorderFillOverlay> {
+        (self.source_format == crate::parser::FileFormat::Hwpx).then(|| {
+            self.document
+                .sections
+                .iter()
+                .map(|section| {
+                    (
+                        section.section_def.extra_page_border_fills.clone(),
+                        section
+                            .paragraphs
+                            .iter()
+                            .map(|paragraph| {
+                                paragraph
+                                    .controls
+                                    .iter()
+                                    .map(|control| match control {
+                                        Control::SectionDef(section_def) => {
+                                            Some(section_def.extra_page_border_fills.clone())
+                                        }
+                                        _ => None,
+                                    })
+                                    .collect::<Vec<_>>()
+                            })
+                            .collect::<Vec<_>>(),
+                    )
+                })
+                .collect::<Vec<_>>()
+        })
+    }
+
+    fn restore_hwpx_page_border_fill_overlay(&mut self, saved_extras: HwpPageBorderFillOverlay) {
+        debug_assert_eq!(saved_extras.len(), self.document.sections.len());
+        for (section, (section_extras, control_extras)) in
+            self.document.sections.iter_mut().zip(saved_extras)
+        {
+            section.section_def.extra_page_border_fills = section_extras.clone();
+            for (paragraph_idx, paragraph) in section.paragraphs.iter_mut().enumerate() {
+                for (control_idx, control) in paragraph.controls.iter_mut().enumerate() {
+                    if let Control::SectionDef(section_def) = control {
+                        let original_extras = control_extras
+                            .get(paragraph_idx)
+                            .and_then(|paragraph_controls| paragraph_controls.get(control_idx))
+                            .and_then(|extras| extras.as_ref())
+                            .unwrap_or(&section_extras);
+                        section_def.extra_page_border_fills = original_extras.clone();
+                    }
+                }
+            }
+        }
+    }
+
+    /// Adapter 적용 뒤 직렬화하고, HWPX 원본에 한해 pageBorderFill overlay를 되돌린다.
+    /// 다른 adapter materialization은 기존처럼 live IR에 유지한다.
+    fn serialize_hwp_after_adapter<T>(
+        &mut self,
+        saved_hwpx_page_border_fills: Option<HwpPageBorderFillOverlay>,
+        serialize: impl FnOnce(&Document) -> Result<T, crate::serializer::SerializeError>,
+    ) -> Result<T, HwpError> {
+        let result = serialize(&self.document);
+        if let Some(saved_extras) = saved_hwpx_page_border_fills {
+            self.restore_hwpx_page_border_fill_overlay(saved_extras);
+        }
+        result.map_err(|error| HwpError::RenderError(error.to_string()))
+    }
+
     /// HWPX 출처 IR 을 HWP 호환 형태로 변환 후 HWP 5.0 CFB 바이너리로 직렬화한다 (#178).
     ///
     /// HWP 출처는 어댑터가 no-op 이므로 `export_hwp_native` 와 동일 결과.
     /// 사용자 시나리오: HWPX 로 연 문서를 편집 후 HWP 로 저장하는 모든 경로의 단일 진입점.
     ///
-    /// 어댑터 호출은 IR 자체를 변경하므로 `&mut self` 를 요구한다.
+    /// HWPX 원본의 단일 BOTH pageBorderFill은 HWP 저장에는 세 record로 materialize하고,
+    /// 저장 후 live IR에서는 원래 구조로 복원한다.
     pub fn export_hwp_with_adapter(&mut self) -> Result<Vec<u8>, HwpError> {
         use crate::document_core::converters::hwpx_to_hwp::convert_if_hwpx_source;
+
+        let saved_hwpx_page_border_fills = self.snapshot_hwpx_page_border_fill_overlay();
         let _report = convert_if_hwpx_source(&mut self.document, self.source_format);
-        self.export_hwp_native()
+        self.serialize_hwp_after_adapter(
+            saved_hwpx_page_border_fills,
+            crate::serializer::serialize_document,
+        )
+    }
+
+    /// 어댑터를 **복제본에 적용해** HWP5 를 낸다 — 호출자의 IR 은 그대로다.
+    ///
+    /// `export_hwp_with_adapter` 는 살아 있는 IR 을 직접 정규화한다. 저장 직후 종료하는
+    /// CLI 에서는 관측되지 않지만, 저장 뒤에도 계속 쓰이는 핸들(MCP 세션)에서는 저장이
+    /// 문서를 바꿔 버린다. 특히 어댑터는 `Hwpx | Hwp3` 양쪽에서 돌면서 각 구역 첫 문단의
+    /// `controls[0]` 에 `Control::SectionDef` 를 끼워 넣는데, 같은 문단의
+    /// `field_ranges[].control_idx` 는 밀어 주지 않는다 — 저장 한 번에 누름틀이 가리키는
+    /// 컨트롤이 한 칸씩 어긋난다. 저장은 스냅숏이어야 하므로 복제본에만 어댑터를 태운다.
+    ///
+    /// 비용은 `Document` 1회 clone 이다. 그 값을 치를 이유가 없는 CLI 경로는
+    /// `export_hwp_with_adapter` 를 계속 쓴다.
+    pub fn export_hwp_with_adapter_snapshot(&self) -> Result<Vec<u8>, HwpError> {
+        use crate::document_core::converters::hwpx_to_hwp::convert_if_hwpx_source;
+        let mut snapshot = self.document.clone();
+        let _report = convert_if_hwpx_source(&mut snapshot, self.source_format);
+        crate::serializer::serialize_document(&snapshot)
+            .map_err(|e| HwpError::RenderError(e.to_string()))
+    }
+
+    /// 스냅숏 HWP 저장 바이트와 바로 그 산출물의 내용 손실을 함께 반환한다 (#4430).
+    ///
+    /// 명시적 WASM 저장은 이 경로를 사용한다. 어댑터와 직렬화가 복제본에서 실행되므로
+    /// 성공/실패와 무관하게 live Document IR은 바뀌지 않는다. MCP 등 byte-only 보조
+    /// 소비자는 이 이슈의 보고서 전달 범위 밖이다.
+    pub fn export_hwp_with_adapter_snapshot_with_report(
+        &self,
+    ) -> Result<crate::serializer::SerializedDocument, HwpError> {
+        use crate::document_core::converters::hwpx_to_hwp::convert_if_hwpx_source;
+        let mut snapshot = self.document.clone();
+        let _adapter_report = convert_if_hwpx_source(&mut snapshot, self.source_format);
+        crate::serializer::serialize_document_with_report(&snapshot)
+            .map_err(|error| HwpError::RenderError(error.to_string()))
+    }
+
+    /// 비밀번호 HWP 스냅숏 저장 + 내용 손실 보고 (#4430).
+    pub fn export_hwp_with_adapter_snapshot_with_password_and_report(
+        &self,
+        password: &[u8],
+    ) -> Result<crate::serializer::SerializedDocument, HwpError> {
+        use crate::document_core::converters::hwpx_to_hwp::convert_if_hwpx_source;
+        let mut snapshot = self.document.clone();
+        let _adapter_report = convert_if_hwpx_source(&mut snapshot, self.source_format);
+        crate::serializer::serialize_hwp_with_password_and_report(&snapshot, password)
+            .map_err(|error| HwpError::RenderError(error.to_string()))
+    }
+
+    /// HWPX 출처 어댑터를 적용한 뒤 HWP5 EncryptVersion 4 비밀번호 문서로 저장한다.
+    ///
+    /// 일반 HWP 저장과 마찬가지로 HWPX 출처는 반드시 adapter를 먼저 통과한다. 암호화만
+    /// 별도 serializer로 우회하면 차트·그림 HWPX IR이 HWP5 계약으로 정규화되지 않는다.
+    pub fn export_hwp_with_adapter_with_password(
+        &mut self,
+        password: &[u8],
+    ) -> Result<Vec<u8>, HwpError> {
+        use crate::document_core::converters::hwpx_to_hwp::convert_if_hwpx_source;
+
+        let saved_hwpx_page_border_fills = self.snapshot_hwpx_page_border_fill_overlay();
+        let _report = convert_if_hwpx_source(&mut self.document, self.source_format);
+        self.serialize_hwp_after_adapter(saved_hwpx_page_border_fills, |document| {
+            crate::serializer::serialize_hwp_with_password(document, password)
+        })
     }
 
     /// 어댑터 적용 + 직렬화 + 자기 재로드 검증을 한 번에 수행한다 (#178 Stage 6).
@@ -1176,6 +1339,39 @@ impl DocumentCore {
 
     /// Document IR을 HWPX(ZIP+XML)로 직렬화 (네이티브 에러 타입)
     pub fn export_hwpx_native(&self) -> Result<Vec<u8>, HwpError> {
+        self.hwpx_document_for_export(|document| crate::serializer::serialize_hwpx(document))
+    }
+
+    /// HWPX 저장 바이트와 바로 그 산출물의 내용 손실을 함께 반환한다 (#4430).
+    pub fn export_hwpx_native_with_report(
+        &self,
+    ) -> Result<crate::serializer::SerializedDocument, HwpError> {
+        self.hwpx_document_for_export(crate::serializer::serialize_hwpx_with_report)
+    }
+
+    /// Document IR을 ODF AES-256-CBC 비밀번호 보호 HWPX로 직렬화한다.
+    pub fn export_hwpx_native_with_password(&self, password: &[u8]) -> Result<Vec<u8>, HwpError> {
+        self.hwpx_document_for_export(|document| {
+            crate::serializer::serialize_hwpx_with_password(document, password)
+        })
+    }
+
+    /// 비밀번호 HWPX 저장 바이트 + 내용 손실 보고 (#4430).
+    pub fn export_hwpx_native_with_password_and_report(
+        &self,
+        password: &[u8],
+    ) -> Result<crate::serializer::SerializedDocument, HwpError> {
+        self.hwpx_document_for_export(|document| {
+            crate::serializer::serialize_hwpx_with_password_and_report(document, password)
+        })
+    }
+
+    fn hwpx_document_for_export<T>(
+        &self,
+        serialize: impl FnOnce(
+            &crate::model::document::Document,
+        ) -> Result<T, crate::serializer::SerializeError>,
+    ) -> Result<T, HwpError> {
         let serialized = if matches!(self.source_format, crate::parser::FileFormat::Hwp) {
             let mut doc = self.document.clone();
             if !doc
@@ -1189,9 +1385,9 @@ impl DocumentCore {
                 ));
             }
             Self::materialize_hwp5_missing_linesegs_for_hwpx_export(&mut doc);
-            crate::serializer::serialize_hwpx(&doc)
+            serialize(&doc)
         } else {
-            crate::serializer::serialize_hwpx(&self.document)
+            serialize(&self.document)
         };
         serialized.map_err(|e| HwpError::RenderError(e.to_string()))
     }
@@ -1449,6 +1645,7 @@ impl DocumentCore {
     /// 문서 IR을 직접 설정한다 (테스트/네이티브 전용).
     pub fn set_document(&mut self, doc: Document) {
         self.document = doc;
+        self.bump_bin_data_epoch();
         self.styles = resolve_styles(&self.document.doc_info, self.dpi);
         self.composed = self
             .document
@@ -1497,6 +1694,16 @@ impl DocumentCore {
         id
     }
 
+    /// 그림 신원 키의 세대를 올린다 (Task #3315).
+    ///
+    /// `bin_data_id` 등록은 append-only 라 세션 중 id→바이트가 안정하다. 그 안정성을 깨는
+    /// 것은 **문서를 통째로 갈아끼우는 연산**뿐이므로 — 스냅샷 복원, 새 문서 생성,
+    /// `set_document` — 그 세 곳에서만 올린다. 그림 추가에서 올리면 바이트가 그대로인
+    /// 다른 그림의 키까지 바뀌어, 키를 두는 이유(편집 사이 안정성)가 사라진다.
+    pub(crate) fn bump_bin_data_epoch(&mut self) {
+        self.bin_data_epoch = self.bin_data_epoch.wrapping_add(1);
+    }
+
     /// 지정 ID의 스냅샷으로 Document를 복원한다.
     /// 스타일 재해소 + 문단 구성 + 페이지네이션까지 수행.
     pub fn restore_snapshot_native(&mut self, id: u32) -> Result<String, HwpError> {
@@ -1507,22 +1714,9 @@ impl DocumentCore {
             .ok_or_else(|| HwpError::RenderError(format!("스냅샷 {} 없음", id)))?;
         let (_, doc) = self.snapshot_store[idx].clone();
         self.document = doc;
-        // 캐시 전체 재구성
-        self.styles = resolve_styles(&self.document.doc_info, self.dpi);
-        self.composed = self
-            .document
-            .sections
-            .iter()
-            .map(|s| compose_section(s))
-            .collect();
-        self.mark_all_sections_dirty();
-        self.measured_tables.clear();
-        self.measured_sections.clear();
-        self.dirty_paragraphs.clear();
-        self.para_column_map.clear();
-        self.page_tree_cache.borrow_mut().clear();
-        self.overflow_links_cache.borrow_mut().clear();
-        self.paginate();
+        self.bump_bin_data_epoch();
+        // 문서를 통째로 갈아끼웠으므로 파생 상태는 전부 새 원본에서 다시 만든다.
+        self.rebuild_derived_state();
         Ok(super::super::helpers::json_ok())
     }
 
@@ -1776,6 +1970,26 @@ impl DocumentCore {
                 // 필드의 end 마커를 컨트롤로 오산해 begin 갭을 유실 — 필드쌍 교차 페어링 유발).
                 if offsets_valid && start < end && end <= orig_offsets.len() {
                     let u_start = orig_offsets[start];
+                    // [#3545] 지워진 본문 run 을 HWPX 저장에서 되살리기 위한 잔재 기록.
+                    // 한컴 정준형은 미기입 누름틀의 안내문을 파일에 본문 run 으로 남기므로
+                    // (form-01.hwpx), 기록 없이 저장하면 파일에서 영구 소실된다. 서식까지
+                    // 되살리도록 그 텍스트를 담던 run 의 char shape 도 함께 남긴다 — 아래
+                    // 수술이 zero-width 로 접기 전의 원본 좌표에서 조회해야 정확하다.
+                    let residue_shape_id = para
+                        .char_shapes
+                        .iter()
+                        .rev()
+                        .find(|cs| cs.start_pos <= u_start)
+                        .map(|cs| cs.char_shape_id)
+                        .unwrap_or(0);
+                    let residue_text: String = orig_chars[start..end].iter().collect();
+                    let ctrl_idx = para.field_ranges[fri].control_idx;
+                    if let Some(Control::Field(f)) = para.controls.get_mut(ctrl_idx) {
+                        f.guide_residue = Some(crate::model::control::GuideResidue {
+                            text: residue_text,
+                            char_shape_id: residue_shape_id,
+                        });
+                    }
                     // 삭제 폭 = 삭제 문자들의 utf16 폭만. orig_offsets[end] 는 필드 end
                     // 마커의 8유닛 갭을 건너뛴 다음 문자 위치라 갭까지 폭에 포함되어
                     // 후속 오프셋에서 마커 갭이 소실된다(슬롯 방출 위치 붕괴).
@@ -1799,7 +2013,11 @@ impl DocumentCore {
                     }
                 }
             }
-            let _ = any_removed;
+            if any_removed {
+                // [#4149] text/char_shapes 직접 수술 — 단일줄 과밀 memo 무효화
+                // (process_table 경유로 셀 문단에도 적용된다).
+                para.invalidate_single_line_overflow_memo();
+            }
         }
 
         fn process_table(table: &mut crate::model::table::Table) {

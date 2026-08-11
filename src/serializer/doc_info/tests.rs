@@ -1,7 +1,7 @@
 use super::*;
 use crate::model::bin_data::{BinDataCompression, BinDataStatus};
 use crate::model::style::{
-    Alignment, BorderLine, CenterLine, DiagonalLine, Fill, ImageFill, ImageFillMode,
+    Alignment, BorderLine, CenterLine, CharShape, DiagonalLine, Fill, ImageFill, ImageFillMode,
     LineSpacingType, NumberingHead, SolidFill,
 };
 use crate::parser::doc_info::parse_doc_info;
@@ -196,6 +196,46 @@ fn test_serialize_char_shape_roundtrip() {
     }
     assert_eq!(r.read_i32().unwrap(), 1000);
     assert_eq!(r.read_u32().unwrap(), 0x03);
+}
+
+#[test]
+fn serialize_char_shape_preserves_inactive_model_fields() {
+    let cs = CharShape {
+        bold: true,
+        shadow_color: 0x00b2_b2b2,
+        ..Default::default()
+    };
+
+    let data = serialize_char_shape(&cs);
+    let attr = u32::from_le_bytes(data[46..50].try_into().unwrap());
+    let shadow_color = u32::from_le_bytes(data[64..68].try_into().unwrap());
+
+    assert_eq!(attr, 0x02);
+    assert_eq!(shadow_color, 0x00b2_b2b2);
+}
+
+#[test]
+fn serialize_char_shape_preserves_active_line_and_shadow_fields() {
+    let cs = CharShape {
+        underline_type: crate::model::style::UnderlineType::Bottom,
+        underline_shape: 3,
+        strikethrough: true,
+        strike_shape: 4,
+        shadow_type: 1,
+        shadow_color: 0x0012_3456,
+        ..Default::default()
+    };
+
+    let data = serialize_char_shape(&cs);
+    let attr = u32::from_le_bytes(data[46..50].try_into().unwrap());
+    let shadow_color = u32::from_le_bytes(data[64..68].try_into().unwrap());
+
+    assert_eq!((attr >> 2) & 0x03, 1);
+    assert_eq!((attr >> 4) & 0x0f, 3);
+    assert_eq!((attr >> 18) & 0x07, 2);
+    assert_eq!((attr >> 26) & 0x0f, 4);
+    assert_eq!((attr >> 11) & 0x03, 1);
+    assert_eq!(shadow_color, 0x0012_3456);
 }
 
 #[test]

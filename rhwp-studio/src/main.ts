@@ -22,7 +22,6 @@ import { pageCommands } from '@/command/commands/page';
 import { toolCommands } from '@/command/commands/tool';
 import { installPwaFileHandling, type FileHandlingWindowLike } from '@/command/pwa-file-handling';
 import {
-  captureDroppedFileHandle,
   isSupportedDocumentFileName,
   type FileSystemFileHandleLike,
 } from '@/command/file-system-access';
@@ -34,6 +33,7 @@ import { showLocalFontsModalIfNeeded } from '@/ui/local-fonts-modal';
 import { showToast } from '@/ui/toast';
 import { addRecentDoc, listRecentDocs } from '@/recent/recent-store';
 import { showDropConfirmDialog } from '@/ui/drop-confirm-dialog';
+import { showHwpPasswordDialog } from '@/ui/hwp-password-dialog';
 import { initRhwpDev } from '@/core/rhwp-dev';
 import { DocumentDirtyState } from '@/core/document-dirty-state';
 import { initThemeSync, setThemeMode, getThemeMode, getEffectiveTheme } from '@/core/theme';
@@ -171,6 +171,7 @@ const commandServices: CommandServices = {
   getContext,
   getInputHandler: () => inputHandler,
   getViewportManager: () => canvasView?.getViewportManager() ?? null,
+  gotoPage: (globalPage) => canvasView?.gotoPage(globalPage) ?? false,
   setEditMode,
 };
 
@@ -263,8 +264,9 @@ async function updateLoadProgress(percent: number, label: string): Promise<void>
 }
 
 /**
- * CanvasKit은 browser CSS font fallback을 사용하지 않는다. 초기 페이지를 먼저 표시한 뒤,
- * 저장된 권한 범위 안에서 필요한 local face를 준비하고 등록된 경우에만 다시 그린다.
+ * CanvasKit은 browser CSS font fallback을 사용하지 않는다. 첫 replay의 preflight가 요구한
+ * face는 prepareCanvasKitDocument에서 먼저 준비하고, 여기서는 문서 전체 face 및 사용자가
+ * 새로 승인한 local face를 보충한 뒤 현재 뷰만 다시 그린다.
  */
 function prepareCanvasKitLocalFonts(fontNames: readonly string[] | undefined): void {
   const renderer = canvasView?.getRenderBackend() === 'canvaskit'
@@ -362,6 +364,18 @@ async function initialize(): Promise<void> {
           if (plan.unavailableFonts.length > 0) {
             throw new Error(`CanvasKit font family가 준비되지 않았습니다: ${plan.unavailableFonts.join(', ')}`);
           }
+          try {
+            // 저장된 Local Font Access 권한이 있으면 첫 replay부터 원 face의 SFNT bytes를
+            // CanvasKit에 전달한다. CSS local()에서 EBDT face가 두부로 바뀌는 경로를 타지 않는다.
+            await loadStoredLocalFonts();
+            await renderer.prepareLocalFonts(report.requiredFontFamilies);
+          } catch (error) {
+            // 로컬 권한이 만료됐거나 face 읽기에 실패해도 portable bundled face로 계속 연다.
+            console.warn(
+              '[CanvasKit] 저장된 로컬 Typeface 사전 준비 실패, bundled fallback으로 계속합니다:',
+              error,
+            );
+          }
           await renderer.prepareBundledFonts(plan.sources);
         },
       },
@@ -400,6 +414,18 @@ async function initialize(): Promise<void> {
       canvasView.getViewportManager(),
     );
     inputHandler.setEditMode(editMode);
+
+    // [#4180] 저장 시점 캐럿 스탬핑 — 셀/글상자 캐럿은 현행 캐럿 필드(list_id 를
+    // 구역 인덱스로 쓰는 rhwp 관례)로 표현 불가 → 호스트 문단 시작으로 강등.
+    wasm.onBeforeExport = () => {
+      const p = inputHandler?.getCursorPosition();
+      if (!p) return;
+      wasm.setCaretPosition(
+        p.sectionIndex,
+        p.parentParaIndex ?? p.paragraphIndex,
+        p.parentParaIndex !== undefined ? 0 : p.charOffset,
+      );
+    };
 
     toolbar = new Toolbar(document.getElementById('style-bar')!, wasm, eventBus, dispatcher);
     toolbar.setEnabled(false);
@@ -489,7 +515,7 @@ async function initialize(): Promise<void> {
         showLoadError(new Error(`지원하지 않는 파일 형식입니다: ${fileName}. HWP/HWPX/HML 파일만 지원합니다.`));
       },
       notifyError(error) {
-        showLoadError(error);
+        showLoadErrorUnlessCancelled(error);
       },
       notifyMultipleFiles(count) {
         console.warn(`[pwa-file-handling] 여러 파일(${count}개)이 전달되어 첫 번째 파일만 엽니다.`);
@@ -594,12 +620,6 @@ function setupFileInput(): void {
       return;
     }
 
-    // #3259: Chromium은 getAsFileSystemHandle을 drop event와 같은 tick에 호출해야 한다.
-    // 아직 bytes를 읽거나 handle을 저장하지 않으며, 아래 사용자 확인이 승인된 뒤에만 사용한다.
-    const droppedFileHandle = isDoc
-      ? captureDroppedFileHandle(e.dataTransfer?.items, file)
-      : Promise.resolve<FileSystemFileHandleLike | null>(null);
-
     // [#1439] 보안: 드롭으로 로컬 파일을 읽는 동작은 기본에서 제외하고, 사용자가
     // 명시적으로 [열기]를 눌러 동의한 경우에만 진행한다 (확장/웹 공통).
     const confirmed = await showDropConfirmDialog(file.name);
@@ -641,8 +661,10 @@ function setupFileInput(): void {
       return;
     }
 
-    // HWP/HWPX/HML — loadFile 내부 unsaved 가드는 드롭 확인 이후에 동작한다.
-    await loadFile(file, { fileHandle: await droppedFileHandle });
+    // HWP/HWPX/HML — Finder/Explorer drop에서는 File System Access handle을 capture하지
+    // 않는다. macOS Chromium에서 encrypted HWPX drag/drop 시 해당 IPC가 renderer를 종료시키는
+    // 사례가 있어, 열기에 충분한 File bytes만 사용한다. 저장은 이후 save-as 경로로 진행한다.
+    await loadFile(file);
   });
 }
 
@@ -714,6 +736,10 @@ function setupZoomControls(): void {
 let totalSections = 1;
 
 function setupEventListeners(): void {
+  sbPage().addEventListener('click', () => {
+    dispatcher.dispatch('edit:goto');
+  });
+
   eventBus.on('current-page-changed', (page, _total) => {
     const pageIdx = page as number;
     sbPage().textContent = `${pageIdx + 1} / ${_total} 쪽`;
@@ -957,6 +983,93 @@ async function promptLocalFontsIfNeeded(docInfo: DocumentInfo, displayName: stri
   }
 }
 
+/**
+ * 사용자가 암호 입력 대화상자에서 취소한 경우다. 일반 파싱 실패와 달리 오류 토스트나
+ * 최근 문서·자동저장 변경을 만들지 않는다 (#3474).
+ */
+class DocumentOpenCancelledError extends Error {
+  constructor() {
+    super('문서 열기가 취소되었습니다.');
+    this.name = 'DocumentOpenCancelledError';
+  }
+}
+
+const PASSWORD_REQUIRED_MESSAGE = '비밀번호가 필요한 암호 문서';
+const PASSWORD_REJECTED_MESSAGE = '비밀번호가 일치하지 않거나 암호화 데이터가 손상되었습니다';
+
+function isDocumentOpenCancelled(error: unknown): error is DocumentOpenCancelledError {
+  return error instanceof DocumentOpenCancelledError;
+}
+
+function isPasswordRequiredError(error: unknown): boolean {
+  return String(error).includes(PASSWORD_REQUIRED_MESSAGE);
+}
+
+function isPasswordRejectedError(error: unknown): boolean {
+  return String(error).includes(PASSWORD_REJECTED_MESSAGE);
+}
+
+function passwordOpenFailure(error: unknown): Error {
+  const message = String(error);
+  if (message.includes('지원하지 않는 암호화 방식')) {
+    return new Error('지원하지 않는 암호화 방식의 문서입니다. 지원되는 HWP3/HWP5 암호 문서만 열 수 있습니다.');
+  }
+  if (message.includes('DRM')) {
+    return new Error('DRM으로 보호된 문서는 지원하지 않습니다.');
+  }
+  // 입력값이 포함될 수 있는 원본 오류는 사용자 화면이나 콘솔에 전달하지 않는다. 현재
+  // 암호화 포맷은 오입력과 암호문 훼손을 암호학적으로 판별할 수 없으므로 안전한 일반
+  // 안내로 축약한다.
+  return new Error('암호화된 문서를 열 수 없습니다. 문서가 손상되었는지 확인하세요.');
+}
+
+/**
+ * 일반 열기를 먼저 시도하고, 지원되는 HWP3/HWP5 암호 문서가 감지된 경우에만 암호
+ * 입력 UI로 전환한다. 암호 문자열은 이 함수의 단일 시도 범위를 벗어나 보관하지 않는다.
+ */
+async function loadPasswordProtectedDocument(data: Uint8Array, fileName: string): Promise<DocumentInfo> {
+  let retryMessage: string | undefined;
+
+  while (true) {
+    let password = await showHwpPasswordDialog(fileName, retryMessage);
+    if (password === null) throw new DocumentOpenCancelledError();
+
+    try {
+      return wasm.loadDocumentWithPassword(data, password, fileName);
+    } catch (error) {
+      // CFB 암호문은 인증 태그가 없으므로 오입력과 암호화 데이터 손상을 완전히 구분할 수
+      // 없다. 두 경우만 재입력 상태로 안내하고, 지원하지 않는 암호화/DRM 등은 원래의
+      // 명시적 거부 오류를 유지한다.
+      if (isPasswordRejectedError(error)) {
+        retryMessage = '암호가 일치하지 않거나 문서가 손상되었습니다. 다시 입력하세요.';
+        continue;
+      }
+      throw passwordOpenFailure(error);
+    } finally {
+      // JavaScript 문자열을 확실히 zeroize할 수는 없지만, 대화상자 DOM과 이 지역 참조는
+      // 시도 직후 해제한다. 최근 문서·URL·저장소·문서 메타데이터에는 전달하지 않는다.
+      password = '';
+    }
+  }
+}
+
+async function loadDocumentForOpen(data: Uint8Array, fileName: string): Promise<DocumentInfo> {
+  try {
+    return wasm.loadDocument(data, fileName);
+  } catch (error) {
+    if (!isPasswordRequiredError(error)) throw error;
+    return loadPasswordProtectedDocument(data, fileName);
+  }
+}
+
+function showLoadErrorUnlessCancelled(error: unknown): void {
+  if (isDocumentOpenCancelled(error)) {
+    sbMessage().textContent = '문서 열기를 취소했습니다.';
+    return;
+  }
+  showLoadError(error);
+}
+
 async function loadFile(
   file: File,
   options: { skipUnsavedGuard?: boolean; fileHandle?: FileSystemFileHandleLike | null } = {},
@@ -973,7 +1086,7 @@ async function loadFile(
     await loadBytes(data, file.name, options.fileHandle ?? null, startTime, { dataReadProgressShown: true });
     return true;
   } catch (error) {
-    showLoadError(error);
+    showLoadErrorUnlessCancelled(error);
     return false;
   }
 }
@@ -993,7 +1106,7 @@ async function loadBytes(
     await updateLoadProgress(0, '문서 데이터 준비 중...');
   }
   await updateLoadProgress(25, '문서 파싱 및 쪽 계산 중...');
-  const docInfo = wasm.loadDocument(data, fileName);
+  const docInfo = await loadDocumentForOpen(data, fileName);
   prepareCanvasRendererDocument();
   await updateLoadProgress(45, '자동 저장 준비 중...');
   forgetConvertedHmlSaveHandle(fileHandle);
@@ -1116,7 +1229,7 @@ async function offerAutosaveRecoveryIfIdle(): Promise<void> {
     try {
       await restoreAutosaveDraft(draft);
     } catch (error) {
-      showLoadError(error);
+      showLoadErrorUnlessCancelled(error);
     }
   } catch (error) {
     console.warn('[autosave] 복구 후보 확인 실패:', error);
@@ -1186,8 +1299,10 @@ eventBus.on('open-document-bytes', async (payload) => {
     notifyDone(true);
   } catch (error) {
     // #265: WASM 파서 에러 (예: HWP 3.0 미지원) 를 사용자에게 전파
-    showLoadError(error);
-    const msg = error instanceof Error ? error.message : String(error);
+    showLoadErrorUnlessCancelled(error);
+    const msg = isDocumentOpenCancelled(error)
+      ? '문서 열기가 취소되었습니다.'
+      : error instanceof Error ? error.message : String(error);
     notifyDone(false, msg);
   }
 });
@@ -1239,6 +1354,10 @@ async function loadFromUrlParam(): Promise<void> {
     assertRemoteDocumentBytes(data, contentType);
     await loadBytes(data, fileName, null);
   } catch (error) {
+    if (isDocumentOpenCancelled(error)) {
+      showLoadErrorUnlessCancelled(error);
+      return;
+    }
     // 로컬 file:// 로드 실패 + "파일 URL 액세스 허용" 미허용 → 전용 안내 (#1131)
     if (fileUrl.startsWith('file:') && typeof chrome !== 'undefined') {
       const allowed = await isFileSchemeAccessAllowed();
@@ -1247,7 +1366,7 @@ async function loadFromUrlParam(): Promise<void> {
         return;
       }
     }
-    showLoadError(error);
+    showLoadErrorUnlessCancelled(error);
   }
 }
 

@@ -305,13 +305,7 @@ impl Renderer for HtmlRenderer {
         };
 
         // 위첨자/아래첨자: y좌표·font_size 직접 조정 (absolute 위치이므로 vertical-align 불가)
-        let (draw_y, draw_size) = if style.superscript {
-            (y - font_size * 0.3, font_size * 0.7)
-        } else if style.subscript {
-            (y + font_size * 0.15, font_size * 0.7)
-        } else {
-            (y, font_size)
-        };
+        let (draw_size, draw_y) = style.script_draw_metrics(font_size, y);
 
         let mut css = format!(
             "position:absolute;left:{}px;top:{}px;font-family:{};font-size:{}px;color:{};",
@@ -374,8 +368,7 @@ impl Renderer for HtmlRenderer {
         }
 
         // 형광펜 배경 (CharShape.shade_color 기반 — 편집기에서 적용한 형광펜)
-        let shade_rgb = style.shade_color & 0x00FFFFFF;
-        if shade_rgb != 0x00FFFFFF && shade_rgb != 0 {
+        if crate::model::color::char_shade(style.shade_color).is_some() {
             css.push_str(&format!(
                 "background-color:{};",
                 color_to_css(style.shade_color)
@@ -472,6 +465,11 @@ impl Renderer for HtmlRenderer {
                     Some(svg_bytes) => (std::borrow::Cow::Owned(svg_bytes), "image/svg+xml"),
                     None => (std::borrow::Cow::Borrowed(data), mime_type),
                 }
+            } else if mime_type == "image/x-emf" {
+                match crate::emf::convert_to_standalone_svg(data) {
+                    Some(svg_bytes) => (std::borrow::Cow::Owned(svg_bytes), "image/svg+xml"),
+                    None => (std::borrow::Cow::Borrowed(data), mime_type),
+                }
             } else if mime_type == "image/bmp" {
                 match bmp_bytes_to_png_bytes(data) {
                     Some(png_bytes) => (std::borrow::Cow::Owned(png_bytes), "image/png"),
@@ -485,6 +483,11 @@ impl Renderer for HtmlRenderer {
             } else if mime_type == "image/tiff" {
                 match tiff_bytes_to_png_bytes(data) {
                     Some(png_bytes) => (std::borrow::Cow::Owned(png_bytes), "image/png"),
+                    None => (std::borrow::Cow::Borrowed(data), mime_type),
+                }
+            } else if mime_type == "application/postscript" {
+                match crate::renderer::image_resolver::dos_eps_preview_bytes(data) {
+                    Some((mime, bytes)) => (std::borrow::Cow::Owned(bytes), mime),
                     None => (std::borrow::Cow::Borrowed(data), mime_type),
                 }
             } else {

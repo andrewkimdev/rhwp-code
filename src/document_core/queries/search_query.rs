@@ -16,6 +16,20 @@ struct SearchHit {
     length: usize,
     /// 표 셀 등 중첩 컨텍스트: (parent_para, ctrl_idx, cell_idx, cell_para)
     cell_context: Option<(usize, usize, usize, usize)>,
+    /// `cell_context`가 표 셀이 아니라 글상자 문단을 가리키는지 여부.
+    /// Find/F3의 새 opt-in은 표 셀 좌표만 이동·치환할 수 있으므로 이 둘을 구분한다.
+    is_text_box: bool,
+    /// 수식 script 안의 매치이면, 해당 문단 controls 안의 Equation 인덱스.
+    /// `cell_context`가 있으면 그 셀/글상자 문단 안의 인덱스이고, 없으면 본문 문단 인덱스다.
+    equation_control: Option<usize>,
+}
+
+fn replace_char_range(text: &mut String, offset: usize, length: usize, replacement: &str) {
+    let mut chars: Vec<char> = text.chars().collect();
+    let start = offset.min(chars.len());
+    let end = start.saturating_add(length).min(chars.len());
+    chars.splice(start..end, replacement.chars());
+    *text = chars.into_iter().collect();
 }
 
 /// 문단 텍스트에서 query를 검색하여 모든 매치 오프셋을 반환한다.
@@ -87,6 +101,8 @@ fn search_first_body(doc: &DocumentCore, query: &str, case_sensitive: bool) -> O
                     char_offset: offset,
                     length: qlen,
                     cell_context: None,
+                    is_text_box: false,
+                    equation_control: None,
                 });
             }
         }
@@ -109,6 +125,8 @@ fn search_all(doc: &DocumentCore, query: &str, case_sensitive: bool) -> Vec<Sear
                     char_offset: offset,
                     length: qlen,
                     cell_context: None,
+                    is_text_box: false,
+                    equation_control: None,
                 });
             }
 
@@ -130,7 +148,33 @@ fn search_all(doc: &DocumentCore, query: &str, case_sensitive: bool) -> Vec<Sear
                                             cell_idx,
                                             cell_para_idx,
                                         )),
+                                        is_text_box: false,
+                                        equation_control: None,
                                     });
+                                }
+                                for (equation_index, control) in
+                                    cell_para.controls.iter().enumerate()
+                                {
+                                    if let Control::Equation(equation) = control {
+                                        for offset in
+                                            find_in_text(&equation.script, query, case_sensitive)
+                                        {
+                                            results.push(SearchHit {
+                                                sec: sec_idx,
+                                                para: para_idx,
+                                                char_offset: offset,
+                                                length: qlen,
+                                                cell_context: Some((
+                                                    para_idx,
+                                                    ctrl_idx,
+                                                    cell_idx,
+                                                    cell_para_idx,
+                                                )),
+                                                is_text_box: false,
+                                                equation_control: Some(equation_index),
+                                            });
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -145,9 +189,50 @@ fn search_all(doc: &DocumentCore, query: &str, case_sensitive: bool) -> Vec<Sear
                                         char_offset: offset,
                                         length: qlen,
                                         cell_context: Some((para_idx, ctrl_idx, 0, tb_para_idx)),
+                                        is_text_box: true,
+                                        equation_control: None,
                                     });
                                 }
+                                for (equation_index, control) in tb_para.controls.iter().enumerate()
+                                {
+                                    if let Control::Equation(equation) = control {
+                                        for offset in
+                                            find_in_text(&equation.script, query, case_sensitive)
+                                        {
+                                            results.push(SearchHit {
+                                                sec: sec_idx,
+                                                para: para_idx,
+                                                char_offset: offset,
+                                                length: qlen,
+                                                cell_context: Some((
+                                                    para_idx,
+                                                    ctrl_idx,
+                                                    0,
+                                                    tb_para_idx,
+                                                )),
+                                                is_text_box: true,
+                                                equation_control: Some(equation_index),
+                                            });
+                                        }
+                                    }
+                                }
                             }
+                        }
+                    }
+                    // 수식 스크립트 — 렌더 트리(EquationNode)가 아니라 IR을 직접 순회하므로
+                    // #3419(export-text/markdown 쪽 수식 텍스트화)와는 별개 경로. 셀/글상자와
+                    // 별도 equation_control 로 표시해 커서 이동 대상에서는 제외한다.
+                    Control::Equation(eq) => {
+                        for offset in find_in_text(&eq.script, query, case_sensitive) {
+                            results.push(SearchHit {
+                                sec: sec_idx,
+                                para: para_idx,
+                                char_offset: offset,
+                                length: qlen,
+                                cell_context: None,
+                                is_text_box: false,
+                                equation_control: Some(ctrl_idx),
+                            });
                         }
                     }
                     _ => {}
@@ -175,6 +260,7 @@ impl DocumentCore {
         from_char: usize,
         forward: bool,
         case_sensitive: bool,
+        include_cells: bool,
     ) -> Result<String, HwpError> {
         if query.is_empty() {
             return Ok(r#"{"found":false}"#.to_string());
@@ -185,11 +271,29 @@ impl DocumentCore {
             return Ok(r#"{"found":false}"#.to_string());
         }
 
-        // 본문 결과만 필터 (셀/글상자 내부 제외 — 커서 이동 불가)
-        let body_hits: Vec<&SearchHit> = all_hits
-            .iter()
-            .filter(|h| h.cell_context.is_none())
-            .collect();
+        // [#3865] 표 셀 안에만 있는 단어가 "결과 없음"으로 나오던 원인이 이 필터였다.
+        // 종전 주석의 사유는 "커서 이동 불가"였지만, 그 뒤 편집기가 셀 좌표를 다루게 되어
+        // (getCursorRectInCell·DocumentPosition 의 cellIndex 계열) 더는 성립하지 않는다.
+        // 다만 셀 히트를 받으면 호출자가 셀 좌표로 이동할 수 있어야 하므로, 옵트인으로 연다 —
+        // 기본값은 종전 동작 그대로라 기존 호출자는 무회귀다.
+        //
+        // 셀 히트의 sec·para 는 표가 놓인 **바깥 문단** 좌표이고, 셀 안 위치는 cellContext
+        // (parentPara·ctrlIdx·cellIdx·cellPara)로 따로 실린다. 그래서 아래 전/후 판정은
+        // 셀 히트에서도 그대로 성립한다(표가 놓인 문단 기준으로 정렬된다).
+        let body_hits: Vec<&SearchHit> = if include_cells {
+            // Find/F3가 이동·치환할 수 있는 것은 표 셀의 일반 텍스트뿐이다. 글상자와
+            // 수식은 `cellContext`만으로는 표와 구분하거나 안전하게 편집할 수 없으므로
+            // 기존 제외 범위를 유지한다.
+            all_hits
+                .iter()
+                .filter(|h| !h.is_text_box && h.equation_control.is_none())
+                .collect()
+        } else {
+            all_hits
+                .iter()
+                .filter(|h| h.cell_context.is_none() && h.equation_control.is_none())
+                .collect()
+        };
         if body_hits.is_empty() {
             return Ok(r#"{"found":false}"#.to_string());
         }
@@ -243,7 +347,7 @@ impl DocumentCore {
         } else {
             all_hits
                 .iter()
-                .filter(|h| h.cell_context.is_none())
+                .filter(|h| h.cell_context.is_none() && h.equation_control.is_none())
                 .collect()
         };
 
@@ -256,9 +360,13 @@ impl DocumentCore {
                 ),
                 None => String::new(),
             };
+            let equation_ctx = h
+                .equation_control
+                .map(|control| format!(",\"equationControl\":{}", control))
+                .unwrap_or_default();
             json_parts.push(format!(
-                "{{\"sec\":{},\"para\":{},\"charOffset\":{},\"length\":{}{}}}",
-                h.sec, h.para, h.char_offset, h.length, cell_ctx
+                "{{\"sec\":{},\"para\":{},\"charOffset\":{},\"length\":{}{}{}}}",
+                h.sec, h.para, h.char_offset, h.length, cell_ctx, equation_ctx
             ));
         }
 
@@ -326,16 +434,47 @@ impl DocumentCore {
         new_text: &str,
         case_sensitive: bool,
     ) -> Result<String, HwpError> {
+        self.replace_matches_native(query, new_text, case_sensitive, None)
+    }
+
+    /// [#3395] 문서 순서 k번째(0 기준) 매치 **하나만** 치환한다. 실물 서식의 체크박스
+    /// (□ 19개 중 k번째만 ☑)처럼 같은 문자가 여럿일 때 전량 치환은 문서를 망가뜨린다.
+    /// 몸통은 replace_all_native 와 동일 경로를 재사용한다 — 새 편집 로직 없음.
+    pub fn replace_nth_native(
+        &mut self,
+        query: &str,
+        new_text: &str,
+        case_sensitive: bool,
+        occurrence: usize,
+    ) -> Result<String, HwpError> {
+        self.replace_matches_native(query, new_text, case_sensitive, Some(occurrence))
+    }
+
+    fn replace_matches_native(
+        &mut self,
+        query: &str,
+        new_text: &str,
+        case_sensitive: bool,
+        occurrence: Option<usize>,
+    ) -> Result<String, HwpError> {
         if query.is_empty() {
             return Ok(r#"{"ok":true,"count":0}"#.to_string());
         }
 
         // 모든 매치를 찾되, 역순으로 치환 (오프셋 변동 방지)
         let mut all_hits = search_all(self, query, case_sensitive);
+        if let Some(n) = occurrence {
+            // 문서 순서 k번째 하나만 남긴다. 범위를 벗어나면 count 0 (판정은 데이터).
+            all_hits = match all_hits.into_iter().nth(n) {
+                Some(hit) => vec![hit],
+                None => Vec::new(),
+            };
+        }
         // 역순 정렬: 뒤에서부터 치환하여 앞쪽 오프셋에 영향 없도록
         all_hits.reverse();
 
-        let count = all_hits.len();
+        let mut count = 0usize;
+        let mut affected_sections: Vec<usize> = Vec::new();
 
         for hit in &all_hits {
             if let Some((parent_para, ctrl_idx, cell_idx, cell_para_idx)) = hit.cell_context {
@@ -350,7 +489,7 @@ impl DocumentCore {
                     .get_mut(parent_para)
                     .ok_or_else(|| HwpError::RenderError("문단 범위 초과".into()))?;
 
-                let cell_para = match para.controls.get_mut(ctrl_idx) {
+                let nested_para = match para.controls.get_mut(ctrl_idx) {
                     Some(Control::Table(table)) => {
                         let cell = table
                             .cells
@@ -369,8 +508,43 @@ impl DocumentCore {
                     }
                     _ => continue,
                 };
-                cell_para.delete_text_at(hit.char_offset, hit.length);
-                cell_para.insert_text_at(hit.char_offset, new_text);
+                if let Some(equation_index) = hit.equation_control {
+                    let equation = match nested_para.controls.get_mut(equation_index) {
+                        Some(Control::Equation(equation)) => equation,
+                        _ => {
+                            return Err(HwpError::RenderError(
+                                "수식 검색 결과의 컨트롤 경로가 유효하지 않음".into(),
+                            ));
+                        }
+                    };
+                    replace_char_range(&mut equation.script, hit.char_offset, hit.length, new_text);
+                } else {
+                    nested_para.delete_text_at(hit.char_offset, hit.length);
+                    nested_para.insert_text_at(hit.char_offset, new_text);
+                }
+                count += 1;
+                affected_sections.push(hit.sec);
+            } else if let Some(equation_index) = hit.equation_control {
+                let section = self
+                    .document
+                    .sections
+                    .get_mut(hit.sec)
+                    .ok_or_else(|| HwpError::RenderError("구역 범위 초과".into()))?;
+                let para = section
+                    .paragraphs
+                    .get_mut(hit.para)
+                    .ok_or_else(|| HwpError::RenderError("문단 범위 초과".into()))?;
+                let equation = match para.controls.get_mut(equation_index) {
+                    Some(Control::Equation(equation)) => equation,
+                    _ => {
+                        return Err(HwpError::RenderError(
+                            "수식 검색 결과의 컨트롤 경로가 유효하지 않음".into(),
+                        ));
+                    }
+                };
+                replace_char_range(&mut equation.script, hit.char_offset, hit.length, new_text);
+                count += 1;
+                affected_sections.push(hit.sec);
             } else {
                 // 본문 문단 치환 — delete_text_native + insert_text_native는 recompose를 호출하므로
                 // 성능을 위해 직접 문단 수준 조작 후 마지막에 일괄 recompose
@@ -385,12 +559,13 @@ impl DocumentCore {
                     .ok_or_else(|| HwpError::RenderError("문단 범위 초과".into()))?;
                 para.delete_text_at(hit.char_offset, hit.length);
                 para.insert_text_at(hit.char_offset, new_text);
+                count += 1;
+                affected_sections.push(hit.sec);
             }
         }
 
         // 변경된 섹션들 recompose
         if count > 0 {
-            let mut affected_sections: Vec<usize> = all_hits.iter().map(|h| h.sec).collect();
             affected_sections.sort();
             affected_sections.dedup();
             for sec_idx in affected_sections {
@@ -478,9 +653,13 @@ fn format_search_hit(hit: &SearchHit, wrapped: bool) -> String {
         ),
         None => String::new(),
     };
+    let equation_ctx = hit
+        .equation_control
+        .map(|control| format!(",\"equationControl\":{}", control))
+        .unwrap_or_default();
     format!(
-        "{{\"found\":true,\"wrapped\":{},\"sec\":{},\"para\":{},\"charOffset\":{},\"length\":{}{}}}",
-        wrapped, hit.sec, hit.para, hit.char_offset, hit.length, cell_ctx
+        "{{\"found\":true,\"wrapped\":{},\"sec\":{},\"para\":{},\"charOffset\":{},\"length\":{}{}{}}}",
+        wrapped, hit.sec, hit.para, hit.char_offset, hit.length, cell_ctx, equation_ctx
     )
 }
 
@@ -524,5 +703,65 @@ mod tests {
     fn find_in_text_korean() {
         assert_eq!(find_in_text("안녕하세요 세계", "세계", true), vec![6]);
         assert_eq!(find_in_text("가나가나", "가나", true), vec![0, 2]);
+    }
+
+    /// [#3413] `search` 가 수식(Equation) 컨트롤의 script 텍스트를 검색 대상에서
+    /// 빠뜨리던 버그 회귀 테스트. 실제 표본(`samples/exam_math.hwp`)의 수식에는
+    /// `lim` 이 포함돼 있는데도 이전 코드는 matchCount=0 을 반환했다.
+    #[test]
+    fn search_all_text_finds_equation_script() {
+        let data = std::fs::read("samples/exam_math.hwp").expect("샘플 파일 읽기 실패");
+        let doc = DocumentCore::from_bytes(&data).expect("샘플 파일 파싱 실패");
+        let json = doc
+            .search_all_text_native("lim", true, true)
+            .expect("검색 실패");
+        assert!(
+            json.contains("\"charOffset\""),
+            "수식 스크립트 내 'lim' 매치를 찾지 못함: {json}"
+        );
+        assert_ne!(json, "[]", "수식 스크립트 내 'lim' 매치가 비어있음");
+        assert!(
+            json.contains("\"equationControl\""),
+            "수식 매치는 일반 셀 텍스트와 구분되는 주소를 제공해야 함: {json}"
+        );
+    }
+
+    #[test]
+    fn replace_all_updates_equation_scripts_and_reports_actual_count() {
+        let data = std::fs::read("samples/exam_math.hwp").expect("샘플 파일 읽기 실패");
+        let mut doc = DocumentCore::from_bytes(&data).expect("샘플 파일 파싱 실패");
+        let before: serde_json::Value = serde_json::from_str(
+            &doc.search_all_text_native("lim", true, true)
+                .expect("수식 검색 실패"),
+        )
+        .expect("수식 검색 JSON 파싱 실패");
+        let expected = before.as_array().expect("검색 결과 배열").len();
+        assert!(expected > 0, "교체 전 lim 수식이 있어야 함");
+        assert_eq!(
+            doc.grep("lim", true, None).len(),
+            expected,
+            "CLI dry-run(grep)과 실제 replace-all의 수식 검색 범위가 같아야 함"
+        );
+
+        let result: serde_json::Value = serde_json::from_str(
+            &doc.replace_all_native("lim", "LIMIT", true)
+                .expect("수식 치환 실패"),
+        )
+        .expect("수식 치환 JSON 파싱 실패");
+        assert_eq!(result["count"].as_u64(), Some(expected as u64));
+        assert_eq!(
+            doc.search_all_text_native("lim", true, true)
+                .expect("치환 후 원문 검색 실패"),
+            "[]"
+        );
+        let replaced: serde_json::Value = serde_json::from_str(
+            &doc.search_all_text_native("LIMIT", true, true)
+                .expect("치환 후 새 텍스트 검색 실패"),
+        )
+        .expect("치환 후 검색 JSON 파싱 실패");
+        assert_eq!(
+            replaced.as_array().expect("치환 후 검색 결과 배열").len(),
+            expected
+        );
     }
 }

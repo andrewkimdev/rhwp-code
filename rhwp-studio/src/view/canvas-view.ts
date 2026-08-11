@@ -170,6 +170,9 @@ export class CanvasView {
     this.cancelAutoRendererReselection();
     this.rendererFallbackScheduled = false;
     this.rendererSession.beginDocument(this.wasm.documentDigest);
+    // [#3315] 문서 범위 object URL 도 같은 경계에서 넘긴다 — 새 문서가 flow 그림을 조회하지
+    // 않으면 옛 문서의 URL 을 거둘 기회가 다시 오지 않는다.
+    this.pageRenderer.beginDocument();
     this.activeRendererDecisionKey = null;
     this.reset();
   }
@@ -291,6 +294,43 @@ export class CanvasView {
 
     // 그리드 모드 CSS 클래스 토글
     this.scrollContent.classList.toggle('grid-mode', this.virtualScroll.isGridMode());
+
+    // [#3377] 좌표계가 바뀌어도 기렌더 캔버스·오버레이는 renderCanvas 밖에서 재배치되지
+    // 않아, 첫 로딩 중 스크롤바 등장(clientWidth −15px) 같은 재계산 뒤에 신·구 좌표계가
+    // 공존했다. 활성 페이지 전체에 현재 좌표를 재적용한다. 줌 애니메이션 중에는 preview
+    // 변환(scale 동반)이 위치를 관리하므로 그 경로를 재사용한다.
+    if (this.viewportManager.isZoomAnimating()) {
+      this.updateRenderedPageZoomPreview();
+    } else {
+      this.repositionActivePages();
+    }
+  }
+
+  /** 페이지 요소(캔버스·오버레이)에 현재 레이아웃 좌표를 적용하는 단일 관문. */
+  private positionPageElement(element: HTMLElement, pageIdx: number): void {
+    element.style.top = `${this.virtualScroll.getPageOffset(pageIdx)}px`;
+
+    // 그리드/광폭 팬: 고정 left 좌표, 단일 열: CSS 중앙 정렬
+    const pageLeft = this.virtualScroll.getPageLeft(pageIdx);
+    if (pageLeft >= 0) {
+      element.style.left = `${pageLeft}px`;
+      element.style.transform = 'none';
+    } else {
+      element.style.left = '50%';
+      element.style.transform = 'translateX(-50%)';
+    }
+    element.style.transformOrigin = '';
+  }
+
+  /** [#3377] 이미 렌더된 페이지의 캔버스와 오버레이를 현재 레이아웃 좌표로 재배치한다. */
+  private repositionActivePages(): void {
+    for (const pageIdx of this.canvasPool.activePages) {
+      const canvas = this.canvasPool.getCanvas(pageIdx);
+      if (canvas) this.positionPageElement(canvas, pageIdx);
+      this.scrollContent.querySelectorAll<HTMLElement>(
+        `[data-rhwp-overlay-page="${pageIdx}"], [data-rhwp-grid-page="${pageIdx}"]`,
+      ).forEach((element) => this.positionPageElement(element, pageIdx));
+    }
   }
 
   /** 스크롤/리사이즈 시 보이는 페이지를 갱신한다 */
@@ -417,18 +457,7 @@ export class CanvasView {
     const dpr = renderScale / (zoom > 0 ? zoom : 1);
 
     // Canvas를 DOM에 추가하고 위치를 설정한다
-    canvas.style.top = `${this.virtualScroll.getPageOffset(pageIdx)}px`;
-
-    // 그리드 모드: 고정 left 좌표, 단일 열: CSS 중앙 정렬
-    const pageLeft = this.virtualScroll.getPageLeft(pageIdx);
-    if (pageLeft >= 0) {
-      canvas.style.left = `${pageLeft}px`;
-      canvas.style.transform = 'none';
-    } else {
-      canvas.style.left = '50%';
-      canvas.style.transform = 'translateX(-50%)';
-    }
-    canvas.style.transformOrigin = '';
+    this.positionPageElement(canvas, pageIdx);
 
     // WASM이 Canvas 크기를 자동 설정한다 (물리 픽셀 = 페이지크기 × zoom × DPR)
     let renderResult: PageRenderResult = { needsTextEditStaticLayerVerification: false };
@@ -556,7 +585,7 @@ export class CanvasView {
         CENTER_ZOOM_ANCHOR,
         nextViewport,
       );
-      this.viewportManager.setScrollLeft(nextScroll.scrollLeft);
+      this.viewportManager.setScrollLeft(this.clampScrollLeft(nextScroll.scrollLeft));
       this.viewportManager.setScrollTop(nextScroll.scrollTop);
     } else {
       this.viewportManager.setScrollLeft(
@@ -572,6 +601,20 @@ export class CanvasView {
       this.pageRenderer.cancelAll();
     }
     this.updateVisiblePages();
+  }
+
+  /**
+   * [#3591] 앵커 계산 결과를 실제 스크롤 가능 범위로 가둔다.
+   *
+   * 팬 여백이 창 폭 100% 이던 시절에는 오버슈트를 여백이 흡수했지만, 여백이
+   * 얇아지면 계산값이 범위를 넘을 수 있다(브라우저는 대입 시 클램프하므로 화면은
+   * 안전하나, 이후 계산이 어긋난 값을 근거로 삼는 것을 막는다). 콘텐츠가 창보다
+   * 좁으면 스크롤 여지가 없으므로 0 이다.
+   */
+  private clampScrollLeft(value: number): number {
+    const viewportWidth = this.viewportManager.getViewportSize().width;
+    const maxScroll = Math.max(0, this.virtualScroll.getTotalWidth() - viewportWidth);
+    return Math.max(0, Math.min(value, maxScroll));
   }
 
   private getZoomPageBox(pageIdx: number, viewportWidth: number): ZoomPageBox {
@@ -610,7 +653,7 @@ export class CanvasView {
       },
       anchor,
     );
-    this.viewportManager.setScrollLeft(nextScroll.scrollLeft);
+    this.viewportManager.setScrollLeft(this.clampScrollLeft(nextScroll.scrollLeft));
     this.viewportManager.setScrollTop(nextScroll.scrollTop);
 
     this.eventBus.emit('zoom-level-display', zoom);
@@ -698,9 +741,44 @@ export class CanvasView {
       typeof payload === 'object' && payload !== null && 'reason' in payload
         ? (payload as { reason?: unknown }).reason
         : undefined;
+    const focusedPagePatch =
+      typeof payload === 'object' && payload !== null && 'focusedPagePatch' in payload
+        ? (payload as { focusedPagePatch?: unknown }).focusedPagePatch
+        : undefined;
+    const validFocusedPagePatch = (() => {
+      if (!focusedPagePatch || typeof focusedPagePatch !== 'object') return undefined;
+      const candidate = focusedPagePatch as {
+        pageIndex?: unknown;
+        x?: unknown;
+        y?: unknown;
+        width?: unknown;
+        height?: unknown;
+      };
+      const numbers = [candidate.x, candidate.y, candidate.width, candidate.height];
+      if (
+        !Number.isSafeInteger(candidate.pageIndex)
+        || candidate.pageIndex !== pageIndex
+        || !numbers.every((value) => typeof value === 'number' && Number.isFinite(value))
+        || (candidate.width as number) <= 0
+        || (candidate.height as number) <= 0
+      ) {
+        return undefined;
+      }
+      return {
+        pageIndex: candidate.pageIndex as number,
+        x: candidate.x as number,
+        y: candidate.y as number,
+        width: candidate.width as number,
+        height: candidate.height as number,
+      };
+    })();
     const renderContext: PageRenderContext =
       reason === 'text-edit'
-        ? { reason: 'text-edit', allowStaticOverlayReuse: true }
+        ? {
+            reason: 'text-edit',
+            allowStaticOverlayReuse: true,
+            ...(validFocusedPagePatch ? { focusedPagePatch: validFocusedPagePatch } : {}),
+          }
         : { reason: 'unknown', allowStaticOverlayReuse: false };
 
     if (!Number.isInteger(pageIndex) || pageIndex < 0) {
@@ -892,6 +970,15 @@ export class CanvasView {
 
   getViewportManager(): ViewportManager {
     return this.viewportManager;
+  }
+
+  /** 전역 쪽 번호를 뷰포트 상단으로 이동한다. */
+  gotoPage(pageIndex: number): boolean {
+    if (!Number.isInteger(pageIndex) || pageIndex < 0 || pageIndex >= this.virtualScroll.pageCount) {
+      return false;
+    }
+    this.viewportManager.setScrollTop(this.virtualScroll.getPageOffset(pageIndex));
+    return true;
   }
 
   getRenderBackend(): RenderBackend {

@@ -15,7 +15,7 @@ use quick_xml::Writer;
 
 use crate::model::control::{Bookmark, Field, FieldType, Hyperlink};
 
-use super::utils::{empty_tag, end_tag, start_tag, start_tag_attrs, text};
+use super::utils::{empty_tag, end_tag, filter_xml_1_0_chars, start_tag, start_tag_attrs, text};
 use super::SerializeError;
 
 // =====================================================================
@@ -42,25 +42,30 @@ pub fn field_begin_open_tag(field: &Field) -> String {
     // 왕복 시 영구 손실된다. 없으면(None) 속성 자체를 생략(#1391 자기닫힘 태그 호환).
     match field.instance_id {
         Some(fieldid) => format!(
-            r#"<hp:fieldBegin id="{}" type="{}" name="{}" editable="{}" fieldid="{}""#,
+            r#"<hp:fieldBegin id="{}" type="{}" name="{}" editable="{}" dirty="{}" fieldid="{}""#,
             id_str,
             ft,
             name,
             bool01(field.is_editable_in_form()),
+            bool01(field.is_dirty()),
             fieldid,
         ),
         None => format!(
-            r#"<hp:fieldBegin id="{}" type="{}" name="{}" editable="{}""#,
+            r#"<hp:fieldBegin id="{}" type="{}" name="{}" editable="{}" dirty="{}""#,
             id_str,
             ft,
             name,
             bool01(field.is_editable_in_form()),
+            bool01(field.is_dirty()),
         ),
     }
 }
 
 fn xml_escape_attr(s: &str) -> String {
-    s.replace('&', "&amp;")
+    // XML 1.0 이 담을 수 없는 문자(제어문자 등)를 먼저 제거한다 — 남겨 두면 저장된 HWPX 안의
+    // XML 이 불법이 되어 한컴·뷰어가 파일 자체를 열지 못한다 (#3382 계열).
+    filter_xml_1_0_chars(s)
+        .replace('&', "&amp;")
         .replace('<', "&lt;")
         .replace('>', "&gt;")
         .replace('"', "&quot;")
@@ -74,6 +79,7 @@ pub fn write_field_begin<W: Write>(w: &mut Writer<W>, field: &Field) -> Result<(
     let ft = field_type_str(field.field_type);
     let fieldid_str = field.instance_id.map(|v| v.to_string());
     let editable_str = bool01(field.is_editable_in_form());
+    let dirty_str = bool01(field.is_dirty());
     match &fieldid_str {
         Some(fieldid_str) => empty_tag(
             w,
@@ -83,6 +89,7 @@ pub fn write_field_begin<W: Write>(w: &mut Writer<W>, field: &Field) -> Result<(
                 ("type", ft),
                 ("name", field.ctrl_data_name.as_deref().unwrap_or("")),
                 ("editable", editable_str),
+                ("dirty", dirty_str),
                 ("fieldid", fieldid_str),
             ],
         ),
@@ -94,6 +101,7 @@ pub fn write_field_begin<W: Write>(w: &mut Writer<W>, field: &Field) -> Result<(
                 ("type", ft),
                 ("name", field.ctrl_data_name.as_deref().unwrap_or("")),
                 ("editable", editable_str),
+                ("dirty", dirty_str),
             ],
         ),
     }

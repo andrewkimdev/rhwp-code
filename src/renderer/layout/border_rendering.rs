@@ -268,19 +268,21 @@ pub(crate) fn collect_cell_borders(
 /// 이중선/삼중선의 교차점 렌더링을 깔끔하게 처리한다.
 /// row_col_x: 행별 열 누적 위치 (셀별 독립 너비 지원)
 pub(crate) fn render_edge_borders(
-    tree: &mut PageRenderTree,
+    tree: &mut LayoutFrame,
     h_edges: &[Vec<Option<BorderLine>>],
     v_edges: &[Vec<Option<BorderLine>>],
     row_col_x: &[Vec<f64>],
     row_y: &[f64],
     table_x: f64,
     table_y: f64,
+    top_clip_y: Option<f64>,
 ) -> Vec<RenderNode> {
     let mut nodes = Vec::new();
     let row_count = if row_y.len() > 1 { row_y.len() - 1 } else { 0 };
 
     // 수평 엣지 렌더링
     for (ri, h_row) in h_edges.iter().enumerate() {
+        let row_node_start = nodes.len();
         let y = table_y + row_y.get(ri).copied().unwrap_or(0.0);
         // 행 경계의 열 위치: 경계 아래 행 (또는 마지막 행) 기준
         let ref_row = ri.min(row_count.saturating_sub(1));
@@ -324,6 +326,11 @@ pub(crate) fn render_edge_borders(
             let x1 = table_x + ref_cx[start];
             let x2 = table_x + ref_cx.get(h_row.len()).copied().unwrap_or(ref_cx[start]);
             nodes.extend(create_border_line_nodes(tree, &sb, x1, y, x2, y));
+        }
+        if ri == 0 {
+            if let Some(clip_y) = top_clip_y {
+                inset_horizontal_border_group_at_top_clip(&mut nodes[row_node_start..], clip_y);
+            }
         }
     }
 
@@ -382,10 +389,48 @@ pub(crate) fn render_edge_borders(
     nodes
 }
 
+/// Keep only a table's physical top-frame paint inside an owning Body clip.
+///
+/// SVG, Web Canvas, and native Canvas all clip a stroke by its painted extent.
+/// A horizontal centreline exactly on the Body top therefore loses half of its
+/// stroke.  Move the complete top-border group by one common delta so compound
+/// borders retain their internal spacing.  The caller passes only the nodes
+/// emitted for row boundary 0; table/cell boxes and every non-table line remain
+/// unchanged.
+fn inset_horizontal_border_group_at_top_clip(nodes: &mut [RenderNode], clip_y: f64) {
+    const PAINT_INSET_EPSILON_PX: f64 = 0.05;
+
+    let painted_top = nodes
+        .iter()
+        .filter_map(|node| match &node.node_type {
+            RenderNodeType::Line(line) if (line.y1 - line.y2).abs() <= 0.01 => {
+                Some(line.y1.min(line.y2) - line.style.width.max(0.0) / 2.0)
+            }
+            _ => None,
+        })
+        .fold(f64::INFINITY, f64::min);
+    if !painted_top.is_finite() || painted_top >= clip_y + PAINT_INSET_EPSILON_PX {
+        return;
+    }
+
+    let delta_y = clip_y + PAINT_INSET_EPSILON_PX - painted_top;
+    for node in nodes {
+        let RenderNodeType::Line(line) = &mut node.node_type else {
+            continue;
+        };
+        if (line.y1 - line.y2).abs() > 0.01 {
+            continue;
+        }
+        line.y1 += delta_y;
+        line.y2 += delta_y;
+        node.bbox.y += delta_y;
+    }
+}
+
 /// 투명 테두리를 빨간색 점선 Line 노드로 생성한다.
 /// 엣지 그리드에서 None 슬롯(투명 테두리)을 찾아 연속 구간을 병합한다.
 pub(crate) fn render_transparent_borders(
-    tree: &mut PageRenderTree,
+    tree: &mut LayoutFrame,
     h_edges: &[Vec<Option<BorderLine>>],
     v_edges: &[Vec<Option<BorderLine>>],
     row_col_x: &[Vec<f64>],
@@ -478,7 +523,7 @@ pub(crate) fn render_transparent_borders(
 /// 테두리선 Line 노드 생성 (이중선/삼중선 지원)
 /// None 타입이면 빈 벡터 반환
 pub(crate) fn create_border_line_nodes(
-    tree: &mut PageRenderTree,
+    tree: &mut LayoutFrame,
     border: &BorderLine,
     x1: f64,
     y1: f64,
@@ -589,7 +634,7 @@ pub(crate) fn create_border_line_nodes(
 /// 평행선 노드 생성 (이중선/삼중선용)
 /// lines: &[(offset, width)] — offset은 선 중심의 수직 이동량
 fn create_parallel_lines(
-    tree: &mut PageRenderTree,
+    tree: &mut LayoutFrame,
     color: u32,
     x1: f64,
     y1: f64,
@@ -637,7 +682,7 @@ fn create_parallel_lines(
 
 /// 임의 방향 평행선 노드 생성 (대각선 이중선/삼중선용)
 fn create_parallel_lines_perpendicular(
-    tree: &mut PageRenderTree,
+    tree: &mut LayoutFrame,
     color: u32,
     x1: f64,
     y1: f64,
@@ -691,7 +736,7 @@ fn create_parallel_lines_perpendicular(
 
 /// 단일선 노드 생성
 fn create_single_line(
-    tree: &mut PageRenderTree,
+    tree: &mut LayoutFrame,
     color: u32,
     width: f64,
     dash: StrokeDash,
@@ -725,7 +770,7 @@ fn create_single_line(
 }
 
 fn create_editor_only_line(
-    tree: &mut PageRenderTree,
+    tree: &mut LayoutFrame,
     color: u32,
     width: f64,
     dash: StrokeDash,
@@ -765,7 +810,7 @@ fn border_line_type_from_code(code: u8) -> BorderLineType {
 }
 
 fn create_diagonal_line_nodes(
-    tree: &mut PageRenderTree,
+    tree: &mut LayoutFrame,
     line_type: BorderLineType,
     color: u32,
     width_index: u8,
@@ -865,7 +910,7 @@ fn create_diagonal_line_nodes(
 }
 
 fn create_crooked_diagonal_line_nodes(
-    tree: &mut PageRenderTree,
+    tree: &mut LayoutFrame,
     line_type: BorderLineType,
     color: u32,
     width_index: u8,
@@ -978,7 +1023,7 @@ fn border_line_type_to_dash(lt: BorderLineType) -> Option<StrokeDash> {
 ///   bit 10: BackSlash 대각선 꺾은선
 ///   bit 13: 중심선
 pub(crate) fn render_cell_diagonal(
-    tree: &mut PageRenderTree,
+    tree: &mut LayoutFrame,
     border_style: &ResolvedBorderStyle,
     cell_x: f64,
     cell_y: f64,
@@ -1172,7 +1217,7 @@ mod tests {
 
     #[test]
     fn render_hwpx_vertical_center_line_as_horizontal_bar() {
-        let mut tree = PageRenderTree::new(0, 200.0, 100.0);
+        let mut tree = LayoutFrame::new(0, 200.0, 100.0);
         let nodes = render_cell_diagonal(
             &mut tree,
             &center_line_style(CenterLine::Vertical),
@@ -1193,7 +1238,7 @@ mod tests {
 
     #[test]
     fn render_hwpx_horizontal_center_line_as_vertical_bar() {
-        let mut tree = PageRenderTree::new(0, 200.0, 100.0);
+        let mut tree = LayoutFrame::new(0, 200.0, 100.0);
         let nodes = render_cell_diagonal(
             &mut tree,
             &center_line_style(CenterLine::Horizontal),
@@ -1213,7 +1258,7 @@ mod tests {
 
     #[test]
     fn render_cross_center_line_creates_vertical_and_horizontal_lines() {
-        let mut tree = PageRenderTree::new(0, 200.0, 100.0);
+        let mut tree = LayoutFrame::new(0, 200.0, 100.0);
         let nodes = render_cell_diagonal(
             &mut tree,
             &center_line_style(CenterLine::Cross),
@@ -1238,7 +1283,7 @@ mod tests {
 
     #[test]
     fn render_nonzero_diagonal_shape_codes_as_basic_x() {
-        let mut tree = PageRenderTree::new(0, 200.0, 100.0);
+        let mut tree = LayoutFrame::new(0, 200.0, 100.0);
         let nodes = render_cell_diagonal(
             &mut tree,
             &diagonal_style((0b111 << 2) | (0b111 << 5)),
@@ -1263,7 +1308,7 @@ mod tests {
 
     #[test]
     fn render_slash_crooked_with_backslash_as_bent_backslash() {
-        let mut tree = PageRenderTree::new(0, 200.0, 100.0);
+        let mut tree = LayoutFrame::new(0, 200.0, 100.0);
         let nodes = render_cell_diagonal(
             &mut tree,
             &diagonal_style((2 << 8) | (0b010 << 5)),
@@ -1293,7 +1338,7 @@ mod tests {
 
     #[test]
     fn render_thick_slim_diagonal_as_parallel_lines() {
-        let mut tree = PageRenderTree::new(0, 200.0, 100.0);
+        let mut tree = LayoutFrame::new(0, 200.0, 100.0);
         let mut style = diagonal_style(0b010 << 2);
         style.diagonal.diagonal_type = 10;
         style.diagonal.width = 13;
@@ -1305,5 +1350,129 @@ mod tests {
         assert!(thick.style.width > thin.style.width);
         assert_ne!((thick.x1, thick.y1), (thin.x1, thin.y1));
         assert_ne!((thick.x2, thick.y2), (thin.x2, thin.y2));
+    }
+
+    fn table_border_grid(
+        border: BorderLine,
+    ) -> (
+        Vec<Vec<Option<BorderLine>>>,
+        Vec<Vec<Option<BorderLine>>>,
+        Vec<Vec<f64>>,
+        Vec<f64>,
+    ) {
+        (
+            vec![vec![Some(border)], vec![Some(border)]],
+            vec![vec![None], vec![None]],
+            vec![vec![0.0, 100.0]],
+            vec![0.0, 20.0],
+        )
+    }
+
+    #[test]
+    fn body_top_table_frame_keeps_compound_strokes_inside_clip_with_one_delta() {
+        let border = BorderLine {
+            line_type: BorderLineType::Double,
+            width: 6,
+            color: 0,
+        };
+        let (h_edges, v_edges, row_col_x, row_y) = table_border_grid(border);
+        let mut baseline_tree = PageRenderTree::new(0, 200.0, 100.0);
+        let baseline = render_edge_borders(
+            &mut baseline_tree,
+            &h_edges,
+            &v_edges,
+            &row_col_x,
+            &row_y,
+            10.0,
+            30.0,
+            None,
+        );
+        let mut clipped_tree = PageRenderTree::new(0, 200.0, 100.0);
+        let clipped = render_edge_borders(
+            &mut clipped_tree,
+            &h_edges,
+            &v_edges,
+            &row_col_x,
+            &row_y,
+            10.0,
+            30.0,
+            Some(30.0),
+        );
+
+        assert_eq!(baseline.len(), clipped.len());
+        let mut top_deltas = Vec::new();
+        for (before, after) in baseline.iter().zip(&clipped) {
+            let (RenderNodeType::Line(before_line), RenderNodeType::Line(after_line)) =
+                (&before.node_type, &after.node_type)
+            else {
+                panic!("table border output must contain only Line nodes");
+            };
+            if before_line.y1 < 40.0 {
+                top_deltas.push(after_line.y1 - before_line.y1);
+                assert!(
+                    after_line.y1 - after_line.style.width / 2.0 >= 30.0,
+                    "top border paint must stay inside Body clip: {:?}",
+                    after_line,
+                );
+            } else {
+                assert_eq!(after_line.y1, before_line.y1, "bottom frame must not move");
+                assert_eq!(after.bbox.y, before.bbox.y, "bottom bbox must not move");
+            }
+        }
+        assert!(!top_deltas.is_empty());
+        let common_delta = top_deltas[0];
+        assert!(common_delta > 0.0);
+        assert!(
+            top_deltas
+                .iter()
+                .all(|delta| (*delta - common_delta).abs() <= f64::EPSILON),
+            "compound top-border lines must retain spacing with one common delta: {top_deltas:?}",
+        );
+    }
+
+    #[test]
+    fn body_top_table_frame_inset_changes_only_emitted_lines_not_owner_boxes() {
+        let border = BorderLine {
+            line_type: BorderLineType::Solid,
+            width: 6,
+            color: 0,
+        };
+        let (h_edges, v_edges, row_col_x, row_y) = table_border_grid(border);
+        let mut tree = PageRenderTree::new(0, 200.0, 100.0);
+        let table_bbox = BoundingBox::new(10.0, 30.0, 100.0, 20.0);
+        let cell_bbox = BoundingBox::new(10.0, 30.0, 100.0, 20.0);
+        let table_bbox_before = table_bbox;
+        let cell_bbox_before = cell_bbox;
+
+        let nodes = render_edge_borders(
+            &mut tree,
+            &h_edges,
+            &v_edges,
+            &row_col_x,
+            &row_y,
+            table_bbox.x,
+            table_bbox.y,
+            Some(table_bbox.y),
+        );
+        let top = nodes
+            .iter()
+            .find_map(|node| match &node.node_type {
+                RenderNodeType::Line(line) if line.y1 < 40.0 => Some(line),
+                _ => None,
+            })
+            .expect("top border line");
+
+        assert!(
+            top.y1 > table_bbox.y,
+            "only the paint centreline moves inward"
+        );
+        assert_eq!(table_bbox.x, table_bbox_before.x);
+        assert_eq!(table_bbox.y, table_bbox_before.y);
+        assert_eq!(table_bbox.width, table_bbox_before.width);
+        assert_eq!(table_bbox.height, table_bbox_before.height);
+        assert_eq!(cell_bbox.x, cell_bbox_before.x);
+        assert_eq!(cell_bbox.y, cell_bbox_before.y);
+        assert_eq!(cell_bbox.width, cell_bbox_before.width);
+        assert_eq!(cell_bbox.height, cell_bbox_before.height);
     }
 }

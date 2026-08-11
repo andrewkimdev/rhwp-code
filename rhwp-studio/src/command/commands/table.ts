@@ -711,6 +711,87 @@ export const tableCommands: CommandDef[] = [
     },
   },
   {
+    id: 'table:split',
+    label: '표 나누기',
+    shortcutLabel: 'Ctrl+M,A',
+    canExecute: (ctx) => ctx.inTable,
+    execute(services) {
+      const ih = services.getInputHandler();
+      if (!ih) return;
+      const pos = ih.getCursorPosition();
+      if (pos?.parentParaIndex === undefined || pos.controlIndex === undefined || pos.cellIndex === undefined) return;
+      // 중첩 표(cellPath 깊이 2+)는 flat 인덱스가 바깥 표를 가리켜 오동작한다 —
+      // path 기반 API 가 생기기 전까지는 최상위 표에서만 허용.
+      if ((pos.cellPath?.length ?? 0) > 1) return;
+      const { sectionIndex: sec, parentParaIndex: ppi, controlIndex: ci, cellIndex } = pos;
+      safeTableOp(() => {
+        // Rust 쪽에서도 첫 행을 거부하지만, snapshot 을 뜬 뒤 실패하면 빈 undo
+        // 항목이 남으므로 확정 실패는 executeOperation 전에 걸러낸다.
+        const info = services.wasm.getCellInfo(sec, ppi, ci, cellIndex);
+        if (info.row === 0) {
+          console.warn('[table:split] 첫 번째 줄에서는 표 나누기를 할 수 없습니다.');
+          return;
+        }
+        ih.executeOperation({
+          kind: 'snapshot',
+          operationType: 'splitTable',
+          operation: (wasm) => {
+            // 커서 셀(row >= 분할행)은 예외 없이 뒤 표로 옮겨지므로, 작업 전
+            // 위치를 그대로 반환하면 앞 표의 범위 밖 cellIndex 가 된다
+            // (redo 시에도 같은 무효 위치로 복원). 뒤 표 기준으로 재계산한다.
+            const res = wasm.splitTable(sec, ppi, ci, info.row);
+            const frontCells = wasm.getTableDimensions(sec, ppi, ci).cellCount;
+            return {
+              sectionIndex: sec,
+              paragraphIndex: 0,
+              charOffset: 0,
+              parentParaIndex: res.backParaIdx,
+              controlIndex: 0,
+              cellIndex: Math.max(0, cellIndex - frontCells),
+              cellParaIndex: 0,
+            };
+          },
+        });
+      }, '표 나누기');
+    },
+  },
+  {
+    // 한컴 용어는 '붙이기'(attach)지만 의미는 다음 표와의 행 병합이라
+    // WASM API 는 mergeTableWithNext, 이벤트는 TablesMerged 를 쓴다.
+    id: 'table:attach',
+    label: '표 붙이기',
+    shortcutLabel: 'Ctrl+M,Z',
+    canExecute: (ctx) => ctx.inTable || ctx.inTableObjectSelection,
+    execute(services) {
+      const ih = services.getInputHandler();
+      if (!ih) return;
+      // 셀 컨텍스트가 필요 없는 명령이라 표 객체 선택 상태도 지원한다
+      // (table:delete 와 같은 패턴 — 테두리 클릭 진입 시 커서는 셀 밖이다).
+      let sec: number, ppi: number, ci: number;
+      const ref = ih.getSelectedTableRef();
+      if (ref) {
+        sec = ref.sec; ppi = ref.ppi; ci = ref.ci;
+      } else {
+        const pos = ih.getCursorPosition();
+        if (pos?.parentParaIndex === undefined || pos.controlIndex === undefined) return;
+        // 중첩 표(cellPath 깊이 2+)는 flat 인덱스가 바깥 표를 가리켜 오동작한다 —
+        // path 기반 API 가 생기기 전까지는 최상위 표에서만 허용.
+        if ((pos.cellPath?.length ?? 0) > 1) return;
+        sec = pos.sectionIndex; ppi = pos.parentParaIndex; ci = pos.controlIndex;
+      }
+      safeTableOp(() => {
+        ih.executeOperation({
+          kind: 'snapshot',
+          operationType: 'mergeTableWithNext',
+          operation: (wasm) => {
+            wasm.mergeTableWithNext(sec, ppi, ci);
+            return ih.getCursorPosition()!;
+          },
+        });
+      }, '표 붙이기');
+    },
+  },
+  {
     id: 'table:delete',
     label: '표 지우기',
     canExecute: (ctx) => ctx.inTable || ctx.inTableObjectSelection,
@@ -947,7 +1028,10 @@ export const tableCommands: CommandDef[] = [
         // [#2344] delete+insert 를 하나의 snapshot 으로 원자화해 라우팅 — 미기록 시 셀 문자
         // 수가 바뀌어 후속 undo 오프셋이 오염되고 텍스트가 손상된다("1234567"→쉼표→Ctrl+Z="67").
         // 라우터가 refresh 하므로 수동 document-changed emit 은 제거.
-        safeTableOp(() => ih.executeOperation({
+        // [Task #2370] 종전에는 여기를 safeTableOp 으로 한 겹 더 감쌌으나, 이 문장이 바깥
+        // try 의 마지막이라 바깥 catch 는 도달할 수 없었다. 관측 차이는 로그뿐이고 바깥
+        // catch 의 메시지가 더 구체적이므로 한 겹만 남긴다.
+        ih.executeOperation({
           kind: 'snapshot',
           operationType: 'cellNumberFormat',
           operation: (wasm) => {
@@ -955,7 +1039,7 @@ export const tableCommands: CommandDef[] = [
             wasm.insertTextInCell(sec, ppi, ci, cei, cpi, 0, result);
             return pos;
           },
-        }), '셀 숫자 서식');
+        });
       } catch (err) {
         console.warn('[table:thousand-sep] 구분 쉼표 변환 실패:', err);
       }
@@ -989,7 +1073,10 @@ export const tableCommands: CommandDef[] = [
         // [#2344] delete+insert 를 하나의 snapshot 으로 원자화해 라우팅 — 미기록 시 셀 문자
         // 수가 바뀌어 후속 undo 오프셋이 오염되고 텍스트가 손상된다("1234567"→쉼표→Ctrl+Z="67").
         // 라우터가 refresh 하므로 수동 document-changed emit 은 제거.
-        safeTableOp(() => ih.executeOperation({
+        // [Task #2370] 종전에는 여기를 safeTableOp 으로 한 겹 더 감쌌으나, 이 문장이 바깥
+        // try 의 마지막이라 바깥 catch 는 도달할 수 없었다. 관측 차이는 로그뿐이고 바깥
+        // catch 의 메시지가 더 구체적이므로 한 겹만 남긴다.
+        ih.executeOperation({
           kind: 'snapshot',
           operationType: 'cellNumberFormat',
           operation: (wasm) => {
@@ -997,7 +1084,7 @@ export const tableCommands: CommandDef[] = [
             wasm.insertTextInCell(sec, ppi, ci, cei, cpi, 0, result);
             return pos;
           },
-        }), '셀 숫자 서식');
+        });
       } catch (err) {
         console.warn('[table:decimal-add] 자릿점 넣기 실패:', err);
       }
@@ -1031,7 +1118,10 @@ export const tableCommands: CommandDef[] = [
         // [#2344] delete+insert 를 하나의 snapshot 으로 원자화해 라우팅 — 미기록 시 셀 문자
         // 수가 바뀌어 후속 undo 오프셋이 오염되고 텍스트가 손상된다("1234567"→쉼표→Ctrl+Z="67").
         // 라우터가 refresh 하므로 수동 document-changed emit 은 제거.
-        safeTableOp(() => ih.executeOperation({
+        // [Task #2370] 종전에는 여기를 safeTableOp 으로 한 겹 더 감쌌으나, 이 문장이 바깥
+        // try 의 마지막이라 바깥 catch 는 도달할 수 없었다. 관측 차이는 로그뿐이고 바깥
+        // catch 의 메시지가 더 구체적이므로 한 겹만 남긴다.
+        ih.executeOperation({
           kind: 'snapshot',
           operationType: 'cellNumberFormat',
           operation: (wasm) => {
@@ -1039,7 +1129,7 @@ export const tableCommands: CommandDef[] = [
             wasm.insertTextInCell(sec, ppi, ci, cei, cpi, 0, result);
             return pos;
           },
-        }), '셀 숫자 서식');
+        });
       } catch (err) {
         console.warn('[table:decimal-remove] 자릿점 빼기 실패:', err);
       }

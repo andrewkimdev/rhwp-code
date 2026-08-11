@@ -567,8 +567,15 @@ export interface ControlLayoutItem {
   plane?: number;
   /** [Task #1280 v2] 개체 z-order (작을수록 먼저 그림 = 아래). */
   zOrder?: number;
-  /** [Task #1280 v2] 같은 plane/zOrder 내 안정 정렬 tie-breaker. */
-  stableIndex?: number;
+  /**
+   * [Task #1280 v2] 같은 plane/zOrder 내 안정 정렬 tie-breaker.
+   * [#4334] 더 이상 스칼라가 아니다 — 문서 경로 배열
+   * `[secIdx, paraIdx, ...셀 경로(controlIdx,cellIdx,cellParaIdx)*, controlIdx]`
+   * (`doc_path_for_node`, render_tree.rs). `next_id()` 카운터에도, layer 유무에 따라
+   * 서로 다른 자릿수 공간을 쓰던 예전 패킹된 u32 에도 의존하지 않는다. 사전식 비교
+   * (`compareLexArrays`, input-handler-picture.ts) 로 정렬한다.
+   */
+  stableIndex?: number[];
   /** [Task #1280 v2] 텍스트 어울림 모드(이미지뿐 아니라 shape/line/group에도 노출). */
   wrap?: string;
   /**
@@ -954,6 +961,7 @@ export interface PageLayerTree {
     /** Compatibility mirror; prefer debugOptions.debugOverlay. */
     debugOverlay?: boolean;
   };
+  fontResources?: LayerFontResources;
   resources?: LayerResources;
   root: LayerNode;
 }
@@ -966,6 +974,43 @@ export interface LayerResources {
   svgFragments?: Array<string | undefined>;
   svgHashes?: string[];
   svgKeys?: string[];
+  fontBlobs?: Array<Uint8Array | number[] | string | undefined>;
+  fontBlobKeys?: string[];
+}
+
+export interface LayerFontResources {
+  blobs: LayerFontBlobResource[];
+  faces: LayerFontFaceResource[];
+}
+
+export interface LayerFontDigest {
+  algorithm: string;
+  value: string;
+}
+
+export interface LayerFontBlobResource {
+  id: string;
+  source: 'embedded' | 'bundled' | 'systemResolved' | 'externalUrl' | 'unresolvedFallback';
+  portability:
+    | 'portableBlob'
+    | 'externalVerified'
+    | 'resolvedButNotEmbedded'
+    | 'systemNameOnly'
+    | 'unresolvedFallback';
+  digest?: LayerFontDigest;
+  dataRef?: { kind: 'fontBlob' | 'externalFont'; id: string };
+}
+
+export interface LayerFontFaceResource {
+  id: string;
+  blobKey: string;
+  faceIndex: number;
+  postscriptName?: string;
+  familyNames?: Array<{ value: string; locale?: string }>;
+  styleNames?: Array<{ value: string; locale?: string }>;
+  weightClass?: number;
+  widthClass?: number;
+  italic?: boolean;
 }
 
 export interface LayerInfo {
@@ -1102,6 +1147,7 @@ export interface LayerTextRunOp {
   baseline?: number;
   rotation?: number;
   isVertical?: boolean;
+  orientation?: 'horizontal' | 'vertical-upright' | 'vertical-sideways';
   style?: LayerTextStyle;
   placement?: { runToPage?: LayerAffineTransform; baselineY?: number };
   positions?: number[];
@@ -1126,10 +1172,12 @@ export interface LayerFootnoteMarkerOp {
   color?: string;
 }
 
+export type LayerStrokeDash = 'solid' | 'dash' | 'dot' | 'dashDot' | 'dashDotDot';
+
 export interface LayerLineStyle {
   color?: string;
   width?: number;
-  dash?: string;
+  dash?: LayerStrokeDash;
   lineType?: string;
   startArrow?: string;
   endArrow?: string;
@@ -1139,7 +1187,7 @@ export interface LayerShapeStyle {
   fillColor?: string | null;
   strokeColor?: string | null;
   strokeWidth?: number;
-  strokeDash?: string;
+  strokeDash?: LayerStrokeDash;
   opacity?: number;
 }
 
@@ -1203,6 +1251,8 @@ export interface LayerImageOp {
   mime?: string;
   base64?: string;
   imageRef?: number | string;
+  /** 문서 세대와 BinData ID에서 만든 원본 그림 신원 키 (schema minor 20+). */
+  sourceImageKey?: string;
   fillMode?: string;
   originalSize?: { width: number; height: number };
   crop?: { left: number; top: number; right: number; bottom: number };
@@ -1375,7 +1425,21 @@ export interface LayerCharOverlapOp {
 export interface LayerGlyphRunOp {
   type: 'glyphRun';
   bbox: LayerBounds;
-  variant?: LayerTextVariantMeta;
+  source: LayerTextSourceSpan;
+  variant: LayerTextVariantMeta;
+  paintStyle: LayerTextStyle;
+  shapeKey: LayerShapeKey;
+  placement: LayerTextRunPlacement;
+  glyphIds: number[];
+  positions: LayerPoint[];
+  advances?: LayerVector[];
+  clusters: LayerGlyphCluster[];
+  direction: LayerTextDirection;
+  bidiLevel?: number;
+  writingMode: LayerWritingMode;
+  orientation: LayerGlyphRunOrientation;
+  glyphTransforms?: LayerGlyphTransform[];
+  diagnostics: LayerGlyphRunDiagnostics;
 }
 
 export interface LayerGlyphOutlineOp {
@@ -1405,6 +1469,88 @@ export interface LayerTextVariantMeta {
   quality?: string;
   anchorOpId?: string;
   localPaintOrder?: number;
+}
+
+export interface LayerTextSourceRange {
+  start: number;
+  end: number;
+}
+
+export interface LayerTextSourceSpan {
+  id: number;
+  utf8Range: LayerTextSourceRange;
+  utf16Range: LayerTextSourceRange;
+  stableSourceKey?: string;
+}
+
+export interface LayerTextRunPlacement {
+  runToPage: LayerAffineTransform;
+  baselineY?: number;
+}
+
+export interface LayerPoint {
+  x: number;
+  y: number;
+}
+
+export interface LayerVector {
+  dx: number;
+  dy: number;
+}
+
+export interface LayerShapeKey {
+  fontInstance: {
+    faceKey: string;
+    sizePx: number;
+    variations?: Array<{ tag: string; value: number }>;
+    syntheticBold?: boolean;
+    syntheticItalic?: boolean;
+  };
+  direction: LayerTextDirection;
+  writingMode: LayerWritingMode;
+  script?: string;
+  language?: string;
+  features?: Array<{ tag: string; enabled: boolean; value?: number }>;
+  shapingEngine: string;
+  fallbackPolicy: string;
+}
+
+export type LayerTextDirection = 'ltr' | 'rtl' | 'auto';
+export type LayerWritingMode = 'horizontal-tb' | 'vertical-rl' | 'vertical-lr';
+export type LayerGlyphRunOrientation =
+  | 'horizontal'
+  | 'vertical-upright'
+  | 'vertical-sideways'
+  | 'mixedPerGlyph';
+
+export interface LayerGlyphCluster {
+  sourceRangeUtf8: LayerTextSourceRange;
+  sourceRangeUtf16?: LayerTextSourceRange;
+  textRangeUtf8?: LayerTextSourceRange;
+  glyphRange: LayerTextSourceRange;
+  flags?: Array<'ligature' | 'fallbackBoundary'>;
+}
+
+export interface LayerGlyphTransform {
+  xx: number;
+  xy: number;
+  yx: number;
+  yy: number;
+  tx: number;
+  ty: number;
+}
+
+export interface LayerGlyphRunDiagnostics {
+  quality: 'exact' | 'positionAdjusted' | 'approximate' | 'diagnosticOnly' | 'omitted';
+  replayEligibility: 'portable' | 'conditionalExternalFont' | 'localDiagnosticOnly' | 'notReplayable';
+  strictVisualEligible: boolean;
+  maxOriginDeltaPx: number;
+  maxAdvanceDeltaPx: number;
+  maxResidualAfterAdjustmentPx: number;
+  clusterMismatchCount: number;
+  missingGlyphCount: number;
+  usedFallbackFontCount: number;
+  reason?: string;
 }
 
 export type LayerGlyphOutlinePayloadKind =

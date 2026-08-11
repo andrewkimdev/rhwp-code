@@ -4,17 +4,24 @@
 
 use wasm_bindgen::prelude::*;
 
+pub mod capabilities_schema;
 pub mod diagnostics;
 pub mod doclang;
 pub mod document_core;
 pub mod emf;
 pub mod error;
+pub mod ir_schema;
 pub mod model;
 pub mod ole_chart;
+pub mod ontology;
 pub mod ooxml_chart;
 pub mod paint;
 pub mod parser;
+pub mod password_crypto;
+pub mod plan_schema;
+pub mod provenance;
 pub mod renderer;
+pub mod schema_registry;
 pub mod serializer;
 #[cfg(feature = "subsecond-dev")]
 pub mod subsecond_dev;
@@ -24,7 +31,7 @@ pub mod wmf;
 pub use document_core::DocumentCore;
 pub use error::HwpError;
 pub use model::event::DocumentEvent;
-pub use parser::{parse_document, DocumentParser};
+pub use parser::{parse_document, parse_document_with_password, DocumentParser};
 pub use serializer::{serialize_document, DocumentSerializer};
 
 /// WASM panic hook 초기화 (한 번만 실행)

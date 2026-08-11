@@ -12,6 +12,7 @@ use super::text_measurement::{
 };
 use super::utils::{
     drawing_to_line_style, drawing_to_shape_style, extract_shape_transform, find_bin_data,
+    find_bin_data_bytes,
 };
 use super::LayoutEngine;
 use super::{CellContext, CellPathEntry};
@@ -118,7 +119,7 @@ fn should_suppress_group_child_construction_stroke(drawing: &DrawingObjAttr) -> 
 }
 
 fn push_placeholder_render_node(
-    tree: &mut PageRenderTree,
+    tree: &mut LayoutFrame,
     parent: &mut RenderNode,
     bbox: BoundingBox,
     fill_color: u32,
@@ -139,7 +140,7 @@ fn push_placeholder_render_node(
 }
 
 fn push_ole_placeholder_render_node(
-    tree: &mut PageRenderTree,
+    tree: &mut LayoutFrame,
     parent: &mut RenderNode,
     bbox: BoundingBox,
     fill_color: u32,
@@ -166,7 +167,7 @@ fn push_ole_placeholder_render_node(
 }
 
 fn push_raw_svg_render_node(
-    tree: &mut PageRenderTree,
+    tree: &mut LayoutFrame,
     parent: &mut RenderNode,
     bbox: BoundingBox,
     svg: String,
@@ -181,7 +182,7 @@ fn push_raw_svg_render_node(
 }
 
 fn push_ole_raw_svg_render_node(
-    tree: &mut PageRenderTree,
+    tree: &mut LayoutFrame,
     parent: &mut RenderNode,
     bbox: BoundingBox,
     svg: String,
@@ -204,7 +205,7 @@ fn push_ole_raw_svg_render_node(
 }
 
 fn push_ole_empty_para_end_anchor(
-    tree: &mut PageRenderTree,
+    tree: &mut LayoutFrame,
     parent: &mut RenderNode,
     anchor_x: f64,
     anchor_y: f64,
@@ -440,7 +441,7 @@ fn reflow_matrix_textbox_para(
 impl LayoutEngine {
     fn push_hwpx_hmapsi_preview_clip_node(
         &self,
-        tree: &mut PageRenderTree,
+        tree: &mut LayoutFrame,
         parent: &mut RenderNode,
         bbox: BoundingBox,
         cfb_data: &[u8],
@@ -453,10 +454,11 @@ impl LayoutEngine {
         {
             return false;
         }
-        let (page_width, page_height) = match &tree.root.node_type {
-            RenderNodeType::Page(page) if page.page_index == 0 => (page.width, page.height),
-            _ => return false,
-        };
+        // [#4277] 페이지 기하는 프레임에서 읽는다 — 페인트 root 를 거치지 않는다.
+        if tree.page_index() != 0 {
+            return false;
+        }
+        let (page_width, page_height) = tree.page_size();
         let preview = self.hwpx_page_preview.borrow();
         let Some(preview) = preview.as_ref() else {
             return false;
@@ -606,7 +608,7 @@ impl LayoutEngine {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn layout_shape(
         &self,
-        tree: &mut PageRenderTree,
+        tree: &mut LayoutFrame,
         parent: &mut RenderNode,
         paragraphs: &[Paragraph],
         para_index: usize,
@@ -673,6 +675,7 @@ impl LayoutEngine {
                     layout_box,
                     color_str,
                     color: eq.color,
+                    script: eq.script.clone(),
                     font_size: font_size_px,
                     section_index: Some(section_index),
                     para_index: Some(para_index),
@@ -926,7 +929,7 @@ impl LayoutEngine {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn layout_group_child_affine(
         &self,
-        tree: &mut PageRenderTree,
+        tree: &mut LayoutFrame,
         parent: &mut RenderNode,
         child: &crate::model::shape::ShapeObject,
         group_origin_x: f64,
@@ -1127,7 +1130,7 @@ impl LayoutEngine {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn layout_shape_object(
         &self,
-        tree: &mut PageRenderTree,
+        tree: &mut LayoutFrame,
         parent: &mut RenderNode,
         shape: &crate::model::shape::ShapeObject,
         base_x: f64,
@@ -1171,7 +1174,7 @@ impl LayoutEngine {
     #[allow(clippy::too_many_arguments)]
     fn layout_shape_object_with_group_origin(
         &self,
-        tree: &mut PageRenderTree,
+        tree: &mut LayoutFrame,
         parent: &mut RenderNode,
         shape: &crate::model::shape::ShapeObject,
         base_x: f64,
@@ -1899,8 +1902,7 @@ impl LayoutEngine {
             ShapeObject::Picture(pic) => {
                 // 그룹 내 그림: common이 비어있으므로 w, h(shape_attr 기반)를 직접 사용
                 let bin_data_id = pic.image_attr.bin_data_id;
-                let image_data =
-                    find_bin_data(bin_data_content, bin_data_id).map(|c| c.data.load());
+                let image_data = find_bin_data_bytes(bin_data_content, bin_data_id);
                 let img_id = tree.next_id();
                 let img_node = RenderNode::new(
                     img_id,
@@ -1938,12 +1940,19 @@ impl LayoutEngine {
             ShapeObject::Ole(ole) => {
                 // Task #195 단계 8: BinData에서 OOXML 차트 시도 → 성공 시 네이티브 SVG 렌더
                 let mut rendered = false;
-                if let Some(content) = find_bin_data(bin_data_content, ole.bin_data_id as u16) {
+                // [#2550] 상한 로드 1회 — 이하 분기가 같은 바이트를 공유한다 (기존 3중
+                // 해제 제거 겸). 상한 초과는 아래 placeholder 폴백으로 접힌다.
+                if let Some((content, ole_bytes)) =
+                    find_bin_data(bin_data_content, ole.bin_data_id as u16).and_then(|content| {
+                        content
+                            .data
+                            .load_limited(crate::model::bin_data::MAX_BIN_DATA_BYTES)
+                            .map(|bytes| (content, bytes))
+                    })
+                {
                     // HWPX에서 주입된 OOXML 차트 XML 직접 경로 (CFB 컨테이너 없음)
                     if content.extension == "ooxml_chart" {
-                        if let Some(chart) =
-                            crate::ooxml_chart::OoxmlChart::parse(&content.data.load())
-                        {
+                        if let Some(chart) = crate::ooxml_chart::OoxmlChart::parse(&ole_bytes) {
                             let svg_fragment =
                                 chart.render_svg(render_x, render_y, render_w, render_h);
                             push_ole_raw_svg_render_node(
@@ -1960,7 +1969,7 @@ impl LayoutEngine {
                     }
                     if !rendered {
                         if let Some(container) =
-                            crate::parser::ole_container::parse_ole_container(&content.data.load())
+                            crate::parser::ole_container::parse_ole_container(&ole_bytes)
                         {
                             if let Some(ooxml_bytes) = container.ooxml_chart.as_ref() {
                                 if let Some(chart) =
@@ -2137,7 +2146,7 @@ impl LayoutEngine {
                                 tree,
                                 parent,
                                 BoundingBox::new(render_x, render_y, render_w, render_h),
-                                &content.data.load(),
+                                &ole_bytes,
                                 section_index,
                                 para_index,
                                 control_index,
@@ -2170,7 +2179,7 @@ impl LayoutEngine {
     /// 도형의 이미지 채우기를 자식 이미지 노드로 추가한다.
     pub(crate) fn add_image_fill_node(
         &self,
-        tree: &mut PageRenderTree,
+        tree: &mut LayoutFrame,
         parent: &mut RenderNode,
         drawing: &crate::model::shape::DrawingObjAttr,
         base_x: f64,
@@ -2183,8 +2192,7 @@ impl LayoutEngine {
         if drawing.fill.fill_type == FillType::Image {
             if let Some(ref img_fill) = drawing.fill.image {
                 let bin_data_id = img_fill.bin_data_id;
-                let image_data =
-                    find_bin_data(bin_data_content, bin_data_id).map(|c| c.data.load());
+                let image_data = find_bin_data_bytes(bin_data_content, bin_data_id);
                 // 이미지 원본 크기: shape_attr의 original_width/height (HWPUNIT)
                 let original_size = {
                     let ow = drawing.shape_attr.original_width;
@@ -2258,7 +2266,7 @@ impl LayoutEngine {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn layout_textbox_content(
         &self,
-        tree: &mut PageRenderTree,
+        tree: &mut LayoutFrame,
         shape_node: &mut RenderNode,
         drawing: &crate::model::shape::DrawingObjAttr,
         base_x: f64,
@@ -2557,6 +2565,25 @@ impl LayoutEngine {
                 }) {
                     if let Some(comp) = composed_paras.get_mut(pi) {
                         self.substitute_page_auto_numbers_in_composed(para, comp, current_pn);
+                    }
+                }
+            }
+        }
+
+        // AutoNumber(TotalPage) 치환: 글상자 안의 총쪽수 필드를 문서 전체 쪽수로 변환
+        let total_pages = self.total_pages.get();
+        if total_pages > 0 {
+            for (pi, para) in textbox_paragraphs[..para_count].iter().enumerate() {
+                if para.controls.iter().any(|c| {
+                    matches!(c, crate::model::control::Control::AutoNumber(an)
+                        if an.number_type == crate::model::control::AutoNumberType::TotalPage)
+                }) {
+                    if let Some(comp) = composed_paras.get_mut(pi) {
+                        self.substitute_total_page_auto_numbers_in_composed(
+                            para,
+                            comp,
+                            total_pages,
+                        );
                     }
                 }
             }
@@ -3015,6 +3042,7 @@ impl LayoutEngine {
                                     layout_box,
                                     color_str,
                                     color: eq.color,
+                                    script: eq.script.clone(),
                                     font_size: font_size_px,
                                     section_index: Some(section_index),
                                     para_index: Some(para_index),
@@ -3089,7 +3117,7 @@ impl LayoutEngine {
     #[allow(clippy::too_many_arguments)]
     fn layout_vertical_textbox_text_with_paras(
         &self,
-        tree: &mut PageRenderTree,
+        tree: &mut LayoutFrame,
         shape_node: &mut RenderNode,
         paragraphs: &[Paragraph],
         text_box: &crate::model::shape::TextBox,

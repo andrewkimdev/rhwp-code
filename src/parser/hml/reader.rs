@@ -1,7 +1,7 @@
 use quick_xml::events::{BytesStart, Event};
 use quick_xml::Reader;
 
-use crate::model::page::PageDef;
+use crate::model::page::{ColumnDef, ColumnDirection, ColumnType, PageDef};
 use crate::model::paragraph::{CharShapeRef, ColumnBreakType};
 use crate::model::shape::{
     CommonObjAttr, HorzAlign, HorzRelTo, ShapeComponentAttr, TextWrap, VertAlign, VertRelTo,
@@ -10,6 +10,7 @@ use crate::model::style::{
     border_width_index, Alignment, BorderFill, BorderLineType, CharShape, Fill, FillType, Font,
     LineSpacingType, ParaShape, ShapeBorderLine, SolidFill, Style, TabDef,
 };
+use crate::model::table::VerticalAlign;
 use crate::model::Padding;
 
 use super::envelope::PreservedFragment;
@@ -111,6 +112,7 @@ pub(crate) enum HmlControl {
     Equation(HmlEquation),
     Rectangle(HmlRectangle),
     Table(HmlTable),
+    ColumnDef(ColumnDef),
 }
 
 #[derive(Debug, Default)]
@@ -168,6 +170,12 @@ pub(crate) struct HmlCell {
     pub height: u32,
     pub padding: Padding,
     pub border_fill_id: u16,
+    /// [#3189] `<PARALIST VertAlign="...">` 의 셀 세로 정렬.
+    /// `VerticalAlign::default()` 는 `Top` 이지만 HML 경로의 실효 기본값은 `Center`
+    /// 다(종전 adapter 가 모든 셀을 Center 로 하드코딩했다). 그래서 `start_cell` 이
+    /// `..Default::default()` 에 맡기지 않고 Center 를 명시로 넣는다 — 이 필드를
+    /// 파생 기본값으로 두면 PARALIST 가 없는 기존 문서의 정렬이 통째로 바뀐다.
+    pub vertical_align: VerticalAlign,
     pub paragraphs: Vec<HmlParagraph>,
 }
 
@@ -435,6 +443,7 @@ impl<'a> ReadState<'a> {
             }
             "SCRIPT" => self.start_equation_script(element),
             "RECTANGLE" => self.start_rectangle(element),
+            "COLDEF" => self.capture_col_def(element),
             "SHAPEOBJECT" => self.capture_shape_object(element),
             "SHAPECOMPONENT" => self.capture_shape_component(element),
             "LINESHAPE" => self.capture_line_shape(element),
@@ -442,6 +451,7 @@ impl<'a> ReadState<'a> {
             "TEXTMARGIN" => self.capture_text_margin(element),
             "TABLE" => self.start_table(element),
             "CELL" => self.start_cell(element),
+            "PARALIST" => self.capture_paralist(element),
             "SIZE" => self.capture_object_size(element),
             "POSITION" => self.capture_object_position(element),
             "INSIDEMARGIN" => self.capture_table_padding(element),
@@ -592,7 +602,9 @@ impl<'a> ReadState<'a> {
             base_size: parse_attribute(element, b"Height")?.unwrap_or(1000),
             border_fill_id: parse_attribute(element, b"BorderFillId")?.unwrap_or(0),
             text_color: parse_attribute(element, b"TextColor")?.unwrap_or(0),
-            shade_color: parse_attribute(element, b"ShadeColor")?.unwrap_or(0),
+            // 속성 부재 = 음영 없음. 한/글 산출 HML 은 4294967295 를 명시한다 (#4155)
+            shade_color: parse_attribute(element, b"ShadeColor")?
+                .unwrap_or(crate::model::color::NONE),
             ..Default::default()
         };
         if !set_indexed(
@@ -879,6 +891,33 @@ impl<'a> ReadState<'a> {
         Ok(())
     }
 
+    /// [#4386] `TEXT` 직계 `COLDEF`(다단 정의) → `Control::ColumnDef`.
+    ///
+    /// `COLDEF`는 `RECTANGLE`/`TABLE`/`EQUATION`과 달리 자식 요소가 없는 빈 태그라
+    /// (`<COLDEF .../>`, 실물 관찰: `samples/hml/aligns.hml`) 시작·종료를 나눠 스테이징할
+    /// 필요가 없다 — 속성만으로 완성된 `ColumnDef`를 만들어 그 자리에서 바로
+    /// `controls`에 넣는다. 다른 인라인 컨트롤과 마찬가지로 원본 텍스트 스트림에서
+    /// 8-utf16 자리를 차지하므로 `reserve_control_slot`으로 `raw_pos`를 맞춘다.
+    ///
+    /// HWPX `hwpx/section.rs::parse_col_pr`가 같은 IR 필드를 채우는 방식을 참고했다:
+    /// `SameGap`(간격 수치)→`spacing`, `SameSize`(bool)→`same_width`. HML은 간격을
+    /// `SECDEF`가 아니라 `COLDEF` 자신의 `SameGap`에 싣는다(HWPX의 `sameGap`과 동형).
+    fn capture_col_def(&mut self, element: &BytesStart<'_>) -> Result<(), HmlError> {
+        self.reserve_control_slot()?;
+        let column_def = ColumnDef {
+            column_type: parse_column_type(attribute(element, b"Type")?.as_deref()),
+            column_count: parse_attribute(element, b"Count")?.unwrap_or(1),
+            direction: parse_column_direction(attribute(element, b"Layout")?.as_deref()),
+            same_width: parse_bool_attribute(element, b"SameSize")?,
+            spacing: parse_attribute(element, b"SameGap")?.unwrap_or(0),
+            ..Default::default()
+        };
+        self.current_paragraph()?
+            .controls
+            .push(HmlControl::ColumnDef(column_def));
+        Ok(())
+    }
+
     fn start_table(&mut self, element: &BytesStart<'_>) -> Result<(), HmlError> {
         self.reserve_control_slot()?;
         self.tables.push(HmlTable {
@@ -900,8 +939,27 @@ impl<'a> ReadState<'a> {
             width: parse_attribute(element, b"Width")?.unwrap_or(0),
             height: parse_attribute(element, b"Height")?.unwrap_or(0),
             border_fill_id: parse_attribute(element, b"BorderFill")?.unwrap_or(0),
+            // [#3189] PARALIST 가 아예 없는 셀도 종전 동작(Center)을 유지해야 한다.
+            vertical_align: VerticalAlign::Center,
             ..Default::default()
         });
+        Ok(())
+    }
+
+    /// [#3189] `<PARALIST VertAlign="...">` 의 셀 세로 정렬을 가장 안쪽 셀에 귀속한다.
+    ///
+    /// PARALIST 는 셀뿐 아니라 글상자(`DRAWTEXT`) 아래에도 나오므로, 셀 안 글상자의
+    /// PARALIST 가 바깥 셀 값을 덮어쓰지 않도록 문단 귀속과 같은
+    /// `nearest_paragraph_owner_is_cell` 판정을 재사용한다(#2723 과 동일한 규칙).
+    fn capture_paralist(&mut self, element: &BytesStart<'_>) -> Result<(), HmlError> {
+        if !self.nearest_paragraph_owner_is_cell() {
+            return Ok(());
+        }
+        let vertical_align =
+            parse_cell_vertical_align(attribute(element, b"VertAlign")?.as_deref());
+        if let Some(cell) = self.cells.last_mut() {
+            cell.vertical_align = vertical_align;
+        }
         Ok(())
     }
 
@@ -1568,6 +1626,29 @@ fn parse_alignment(value: Option<&str>) -> Alignment {
     }
 }
 
+/// [#4386] `COLDEF@Type`. 실물(`samples/hml/aligns.hml` 등)에서 관찰된 값은
+/// `"Newspaper"`(신문형=일반 흐름) 뿐이다. `Distribute`/`Parallel`은 HWPX
+/// `colPr@type`(`BalancedNewspaper`/`Parallel`)과 이 파일의 다른 속성들(예:
+/// `parse_alignment`의 `"Distribute"`)이 이미 따르는 PascalCase 열거값 표기 관례를
+/// 그대로 적용한 것으로, 실물로 확인되지 않았다 — 문서 밖 값은 전부 `Normal`로 접는다.
+fn parse_column_type(value: Option<&str>) -> ColumnType {
+    match value {
+        Some("Distribute") => ColumnType::Distribute,
+        Some("Parallel") => ColumnType::Parallel,
+        _ => ColumnType::Normal,
+    }
+}
+
+/// [#4386] `COLDEF@Layout`. 실물 관찰값은 `"Left"`뿐이다. HWPX
+/// `colPr@layout`(`"RIGHT"` → `RightToLeft`)과 동일한 fallback 방향으로 `"Right"`를
+/// `RightToLeft`에 매핑한다.
+fn parse_column_direction(value: Option<&str>) -> ColumnDirection {
+    match value {
+        Some("Right") => ColumnDirection::RightToLeft,
+        _ => ColumnDirection::LeftToRight,
+    }
+}
+
 fn parse_vert_rel_to(value: Option<&str>) -> VertRelTo {
     match value {
         Some("Page") => VertRelTo::Page,
@@ -1583,6 +1664,16 @@ fn parse_vert_align(value: Option<&str>) -> VertAlign {
         Some("Inside") => VertAlign::Inside,
         Some("Outside") => VertAlign::Outside,
         _ => VertAlign::Top,
+    }
+}
+
+/// [#3189] 셀 세로 정렬(`PARALIST@VertAlign`). 개체 위치용 `parse_vert_align` 과 달리
+/// 속성이 없으면 `Top` 이 아니라 `Center` 로 접는다 — HML 경로의 실효 기본값이다.
+fn parse_cell_vertical_align(value: Option<&str>) -> VerticalAlign {
+    match value {
+        Some("Top") => VerticalAlign::Top,
+        Some("Bottom") => VerticalAlign::Bottom,
+        _ => VerticalAlign::Center,
     }
 }
 

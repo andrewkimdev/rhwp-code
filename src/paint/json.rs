@@ -1,8 +1,8 @@
 use std::fmt::Write as _;
 
-use base64::Engine;
-
-use crate::document_core::helpers::{color_ref_to_css, json_escape as raw_json_escape};
+use crate::document_core::helpers::{
+    color_ref_to_css, json_escape as raw_json_escape, write_json_base64,
+};
 use crate::model::control::FormType;
 use crate::model::image::ImageEffect;
 use crate::model::style::{ImageFillMode, UnderlineType};
@@ -68,13 +68,46 @@ const KNOWN_TEXT_FEATURES: &[&str] = &[
     "text.vertical.mixedPerGlyph",
 ];
 
+/// 레이어 트리 JSON 직렬화 옵션 (Task #3315).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct LayerJsonOptions {
+    /// 그림 바이트를 base64 로 싣지 않는다.
+    ///
+    /// `sourceImageKey` 를 낼 수 있는 op 만 대상이다 — 키가 없으면 소비자가 바이트를 되찾을
+    /// 길이 없으므로 그 op 은 종전대로 base64 를 싣는다.
+    ///
+    /// 그래서 **한 문서 안에 생략된 op 과 인라인 op 이 섞일 수 있다.** 최상위 `imageBytes` 는
+    /// "이렇게 요청했다"는 **모드**이고, op 마다 실제로 생략됐는지는 `imageBytesOmitted` 가
+    /// 말한다 — 소비자는 후자를 봐야 한다. `imageBytes:"byKey"` 를 "모든 op 에 base64 가
+    /// 없다"로 읽으면 키 없는 합성 그림에서 어긋난다.
+    ///
+    /// 기본값은 `false` 이고, 그때 그림 op 의 payload(`mime`·`base64`)는 종전과 같다. 다만
+    /// **JSON 전체가 종전과 같지는 않다** — 이 기능이 최상위 `imageBytes` 를 더하고 schema
+    /// minor 를 21 로 올렸다. 계약은 "기존 그림 payload 유지 + schema minor 상승과 새 메타데이터"
+    /// 이지 바이트 동일이나 모든 기존 필드 불변이 아니다.
+    pub omit_image_bytes: bool,
+}
+
+/// 직렬화 도중 트리 아래로 흘려야 하는 값. 그림 op 하나를 쓰려면 문서 세대(키 발급)와
+/// 생략 여부가 함께 필요해 한 덩이로 옮겼다.
+#[derive(Debug, Clone, Copy)]
+struct JsonWriteContext {
+    bin_data_epoch: u32,
+    options: LayerJsonOptions,
+}
+
 impl PageLayerTree {
     pub fn to_json(&self) -> String {
+        self.to_json_with_options(LayerJsonOptions::default())
+    }
+
+    /// [Task #3315] 그림 base64 생략을 켤 수 있는 직렬화. `to_json()` 은 기본 옵션 위임이다.
+    pub fn to_json_with_options(&self, options: LayerJsonOptions) -> String {
         let mut buf = String::with_capacity(32_768);
         buf.push('{');
         let _ = write!(
             buf,
-            "\"schemaVersion\":{},\"schemaMinorVersion\":{},\"schema\":{{\"major\":{},\"minor\":{}}},\"resourceTableVersion\":{},\"resourceTableMinorVersion\":{},\"resourceTable\":{{\"major\":{},\"minor\":{}}},\"unit\":{},\"coordinateSystem\":{},\"profile\":{},\"buildOptions\":{{\"showTransparentBorders\":{},\"clipEnabled\":{}}},\"debugOptions\":{{\"debugOverlay\":{}}},\"outputOptions\":{{\"showParagraphMarks\":{},\"showControlCodes\":{},\"showTransparentBorders\":{},\"clipEnabled\":{},\"debugOverlay\":{}}},\"pageWidth\":{:.3},\"pageHeight\":{:.3},\"root\":",
+            "\"schemaVersion\":{},\"schemaMinorVersion\":{},\"schema\":{{\"major\":{},\"minor\":{}}},\"resourceTableVersion\":{},\"resourceTableMinorVersion\":{},\"resourceTable\":{{\"major\":{},\"minor\":{}}},\"unit\":{},\"coordinateSystem\":{},\"profile\":{},\"imageBytes\":{},\"buildOptions\":{{\"showTransparentBorders\":{},\"clipEnabled\":{}}},\"debugOptions\":{{\"debugOverlay\":{}}},\"outputOptions\":{{\"showParagraphMarks\":{},\"showControlCodes\":{},\"showTransparentBorders\":{},\"clipEnabled\":{},\"debugOverlay\":{}}},\"pageWidth\":{:.3},\"pageHeight\":{:.3},\"root\":",
             LAYER_TREE_SCHEMA.schema_version,
             LAYER_TREE_SCHEMA.schema_minor_version,
             LAYER_TREE_SCHEMA.schema_version,
@@ -86,6 +119,17 @@ impl PageLayerTree {
             json_escape(LAYER_TREE_SCHEMA.unit),
             json_escape(LAYER_TREE_SCHEMA.coordinate_system),
             json_escape(render_profile_str(self.profile)),
+            // [#3315] 이 문서를 어떤 **모드**로 요청했는지 — `inline` 이면 바이트가 op 안에,
+            // `byKey` 면 키로 따로 받는다.
+            //
+            // op 단위의 사실은 `imageBytesOmitted` 다. 키를 낼 수 없는 합성 그림은 `byKey`
+            // 모드에서도 base64 를 싣기 때문에, 이 값만 보고 "base64 가 하나도 없다"고 단정할
+            // 수 없다. 모드와 op 단위 사실을 한 필드에 겹쳐 담지 않는다.
+            json_escape(if options.omit_image_bytes {
+                "byKey"
+            } else {
+                "inline"
+            }),
             self.output_options.show_transparent_borders,
             self.output_options.clip_enabled,
             self.output_options.debug_overlay,
@@ -98,8 +142,15 @@ impl PageLayerTree {
             self.page_height
         );
         let mut text_source_state = TextSourceExportState::default();
-        self.root
-            .write_json(&mut buf, &mut text_source_state, &self.resources);
+        self.root.write_json(
+            &mut buf,
+            &mut text_source_state,
+            &self.resources,
+            JsonWriteContext {
+                bin_data_epoch: self.resources.source_image_epoch(),
+                options,
+            },
+        );
         buf.push_str(",\"textSources\":");
         write_text_source_entries(&mut buf, &self.text_sources);
         buf.push_str(",\"fontResources\":");
@@ -378,6 +429,7 @@ impl LayerNode {
         buf: &mut String,
         text_sources: &mut TextSourceExportState,
         resources: &ResourceArena,
+        ctx: JsonWriteContext,
     ) {
         buf.push('{');
         buf.push_str("\"bounds\":");
@@ -407,7 +459,7 @@ impl LayerNode {
                     if idx > 0 {
                         buf.push(',');
                     }
-                    child.write_json(buf, text_sources, resources);
+                    child.write_json(buf, text_sources, resources, ctx);
                 }
                 buf.push(']');
             }
@@ -424,7 +476,7 @@ impl LayerNode {
                     json_escape(clip_kind_str(*clip_kind))
                 );
                 buf.push_str(",\"child\":");
-                child.write_json(buf, text_sources, resources);
+                child.write_json(buf, text_sources, resources, ctx);
             }
             LayerNodeKind::Leaf { ops } => {
                 buf.push_str(",\"kind\":\"leaf\",\"ops\":[");
@@ -433,7 +485,7 @@ impl LayerNode {
                     if idx > 0 {
                         buf.push(',');
                     }
-                    op.write_json(buf, text_sources, &leaf_visuals, resources);
+                    op.write_json(buf, text_sources, &leaf_visuals, resources, ctx);
                 }
                 buf.push(']');
             }
@@ -449,6 +501,7 @@ impl PaintOp {
         text_sources: &mut TextSourceExportState,
         leaf_visuals: &LeafTextVisualOps,
         resources: &ResourceArena,
+        ctx: JsonWriteContext,
     ) {
         match self {
             PaintOp::PageBackground { bbox, background } => {
@@ -475,13 +528,13 @@ impl PaintOp {
                     write_gradient(buf, gradient);
                 }
                 if let Some(image) = &background.image {
-                    let base64_data = base64::engine::general_purpose::STANDARD.encode(&image.data);
                     let _ = write!(
                         buf,
-                        ",\"image\":{{\"fillMode\":{},\"base64\":{}}}",
+                        ",\"image\":{{\"fillMode\":{},\"base64\":",
                         json_escape(image_fill_mode_str(image.fill_mode)),
-                        json_escape(&base64_data),
                     );
+                    write_json_base64(buf, &image.data[..]);
+                    buf.push('}');
                 }
                 buf.push('}');
             }
@@ -828,57 +881,48 @@ impl PaintOp {
                 buf.push('{');
                 buf.push_str("\"type\":\"image\",\"bbox\":");
                 write_bbox(buf, *bbox);
+                // [#3315] 키가 있는 op 만 base64 를 생략할 수 있다 — 소비자가 그 키로
+                // `getSourceImageBytes` 를 불러 같은 바이트를 받는다. 키를 낼 수 없는 합성
+                // 그림(`bin_data_id == 0`)은 되찾을 길이 없으므로 종전대로 싣는다.
+                let source_image_key = crate::paint::source_image_key(ctx.bin_data_epoch, image);
+                let omit_bytes = ctx.options.omit_image_bytes && source_image_key.is_some();
                 if let Some(payload) = resolved.as_deref() {
-                    let base64_data =
-                        base64::engine::general_purpose::STANDARD.encode(&payload.data);
-                    let _ = write!(
-                        buf,
-                        ",\"mime\":\"{}\",\"base64\":{}",
-                        payload.mime,
-                        json_escape(&base64_data)
-                    );
+                    if omit_bytes {
+                        let _ = write!(
+                            buf,
+                            ",\"mime\":\"{}\",\"imageBytesOmitted\":true",
+                            payload.mime
+                        );
+                    } else {
+                        let _ = write!(buf, ",\"mime\":\"{}\",\"base64\":", payload.mime);
+                        write_json_base64(buf, &payload.data[..]);
+                    }
                     if matches!(payload.kind, ResolvedImageKind::BakedWatermark) {
                         buf.push_str(",\"bakedWatermark\":true");
                     }
                 } else if let Some(data) = &image.data {
                     // Task #516 Stage 5.2: overlay layer 의 <img> data URL 생성용 mime 노출.
                     // PCX 등 비표준은 PNG 변환 후 emit (CLI SVG 와 동일 정책 적용).
-                    let mime = crate::renderer::svg::detect_image_mime_type(data);
-                    let (final_mime, final_data): (&str, std::borrow::Cow<[u8]>) = if mime
-                        == "image/x-pcx"
-                    {
-                        match crate::renderer::svg::pcx_bytes_to_png_bytes(data) {
-                            Some(png) => ("image/png", std::borrow::Cow::Owned(png)),
-                            None => (mime, std::borrow::Cow::Borrowed(data.as_slice())),
-                        }
-                    } else if mime == "image/bmp" {
-                        match crate::renderer::svg::bmp_bytes_to_png_bytes(data) {
-                            Some(png) => ("image/png", std::borrow::Cow::Owned(png)),
-                            None => (mime, std::borrow::Cow::Borrowed(data.as_slice())),
-                        }
-                    } else if mime == "image/tiff" {
-                        match crate::renderer::image_resolver::tiff_bytes_to_png_bytes(data) {
-                            Some(png) => ("image/png", std::borrow::Cow::Owned(png)),
-                            None => (mime, std::borrow::Cow::Borrowed(data.as_slice())),
-                        }
-                    } else if mime == "image/jpeg" {
-                        match crate::renderer::image_resolver::grayscale_jpeg_bytes_to_png_bytes(
+                    // [#3315] 변환 사슬의 단일 권위는 `emitted_image_bytes` 다 — 키로 바이트를
+                    // 되돌려주는 경로가 같은 함수를 써야 두 결과가 갈라지지 않는다.
+                    let (final_mime, final_data) =
+                        crate::renderer::image_resolver::emitted_image_bytes(
                             data,
-                        ) {
-                            Some(png) => ("image/png", std::borrow::Cow::Owned(png)),
-                            None => (mime, std::borrow::Cow::Borrowed(data.as_slice())),
-                        }
+                            crate::renderer::image_resolver::is_watermark_image(image),
+                        );
+                    if omit_bytes {
+                        let _ = write!(
+                            buf,
+                            ",\"mime\":\"{}\",\"imageBytesOmitted\":true",
+                            final_mime
+                        );
                     } else {
-                        (mime, std::borrow::Cow::Borrowed(data.as_slice()))
-                    };
-                    let base64_data =
-                        base64::engine::general_purpose::STANDARD.encode(&*final_data);
-                    let _ = write!(
-                        buf,
-                        ",\"mime\":\"{}\",\"base64\":{}",
-                        final_mime,
-                        json_escape(&base64_data)
-                    );
+                        let _ = write!(buf, ",\"mime\":\"{}\",\"base64\":", final_mime);
+                        write_json_base64(buf, &final_data);
+                    }
+                }
+                if let Some(key) = source_image_key {
+                    let _ = write!(buf, ",\"sourceImageKey\":{}", json_escape(&key));
                 }
                 if let Some(fill_mode) = image.fill_mode {
                     let _ = write!(
@@ -1177,8 +1221,7 @@ fn write_visual_resources(buf: &mut String, resources: &ResourceArena) {
         if index > 0 {
             buf.push(',');
         }
-        let encoded = base64::engine::general_purpose::STANDARD.encode(bytes);
-        buf.push_str(&json_escape(&encoded));
+        write_json_base64(buf, bytes);
     }
     buf.push_str("],\"imageKeys\":[");
     for index in 0..resources.image_count() {
@@ -1204,6 +1247,23 @@ fn write_visual_resources(buf: &mut String, resources: &ResourceArena) {
         }
         let key = resources
             .svg_resource_key(crate::paint::SvgResourceId(index))
+            .unwrap_or("");
+        buf.push_str(&json_escape(key));
+    }
+    buf.push_str("],\"fontBlobs\":[");
+    for (index, (_, bytes)) in resources.font_blob_resources().enumerate() {
+        if index > 0 {
+            buf.push(',');
+        }
+        write_json_base64(buf, bytes);
+    }
+    buf.push_str("],\"fontBlobKeys\":[");
+    for index in 0..resources.font_blob_count() {
+        if index > 0 {
+            buf.push(',');
+        }
+        let key = resources
+            .font_blob_resource_key(crate::paint::FontBlobResourceId(index))
             .unwrap_or("");
         buf.push_str(&json_escape(key));
     }
@@ -1544,13 +1604,7 @@ fn effective_text_font_size_and_baseline(run: &TextRunNode) -> (f64, f64) {
     } else {
         12.0
     };
-    if run.style.superscript {
-        (base_font_size * 0.7, run.baseline - base_font_size * 0.3)
-    } else if run.style.subscript {
-        (base_font_size * 0.7, run.baseline + base_font_size * 0.15)
-    } else {
-        (base_font_size, run.baseline)
-    }
+    run.style.script_draw_metrics(base_font_size, run.baseline)
 }
 
 fn write_tab_leaders(buf: &mut String, leaders: &[TabLeaderInfo]) {
@@ -3085,10 +3139,12 @@ mod tests {
     use crate::renderer::composer::CharOverlapInfo;
     use crate::renderer::equation::layout::{LayoutBox, LayoutKind};
     use crate::renderer::render_tree::{
-        EquationNode, FieldMarkerType, ImageNode, PathNode, PlaceholderNode, RawSvgNode,
-        RenderLayerInfo, TextRunNode,
+        EquationNode, FieldMarkerType, ImageNode, PageBackgroundImage, PageBackgroundNode,
+        PathNode, PlaceholderNode, RawSvgNode, RenderLayerInfo, TextRunNode,
     };
     use serde_json::Value;
+
+    const FIXTURE_TTC: &[u8] = include_bytes!("../../tests/fixtures/fonts/RHWPExactFaceSmoke.ttc");
 
     #[test]
     fn serializes_text_and_shape_ops_for_browser_replay() {
@@ -3751,7 +3807,7 @@ mod tests {
                     flags: Vec::new(),
                 }],
                 direction: TextDirection::Ltr,
-                bidi_level: None,
+                bidi_level: Some(0),
                 writing_mode: WritingMode::HorizontalTb,
                 orientation: GlyphRunOrientation::Horizontal,
                 glyph_transforms: None,
@@ -3782,8 +3838,8 @@ mod tests {
     }
 
     fn add_portable_font_resources(resources: &mut ResourceArena) {
-        let font_bytes = [0_u8, 1, 2, 3];
-        resources.intern_font_blob_bytes(&font_bytes);
+        let font_bytes = FIXTURE_TTC;
+        resources.intern_font_blob_bytes(font_bytes);
         let blob_key = FontBlobKey("blob-0".to_string());
         let face_key = FontFaceKey("face-0".to_string());
         let digest_value = resource_digest_hex(font_bytes);
@@ -3846,6 +3902,8 @@ mod tests {
         assert!(json.contains("\"fontResources\":{\"blobs\":["));
         assert!(json.contains("\"portability\":\"portableBlob\""));
         assert!(json.contains("\"faces\":["));
+        assert!(json.contains("\"fontBlobs\":[\"dHRjZg"));
+        assert!(json.contains("\"fontBlobKeys\":[\"font:blake3:1752:"));
         assert!(json.contains("\"optionalFeatures\":[\"fontResources\",\"text.glyphRun\"]"));
         assert!(json.contains("\"variants\":[\"textRun\",\"glyphRun\"]"));
         assert!(json.contains("\"strictVariantAvailable\":true"));
@@ -4300,7 +4358,11 @@ mod tests {
 
         let json = tree.to_json();
 
-        assert!(json.contains("\"schemaMinorVersion\":19"));
+        // 상수에서 끌어온다 — 숫자를 박아 두면 schema minor 를 올릴 때마다 무관한 테스트가 깨진다.
+        assert!(json.contains(&format!(
+            "\"schemaMinorVersion\":{}",
+            LAYER_TREE_SCHEMA.schema_minor_version
+        )));
         assert!(json.contains("\"payloadResourceKey\":\"glyphPayload:bitmapGlyph:imageRef:0"));
         assert!(json.contains("placement:0.123,0.568,10.988,10.543"));
         assert!(json.contains(&format!(":resource:{image_resource_key}\"")));
@@ -4322,6 +4384,59 @@ mod tests {
         assert!(json.contains("\"svgFragments\":[\"<path d=\\\"M0 0H10V10Z\\\"/>\"]"));
     }
 
+    /// 그림 바이트는 base64 로 나가므로 이스케이프 대상이 없다 — 그 전제로 이스케이프
+    /// 스캔을 없앴으니, 제어문자·따옴표·역슬래시를 포함한 바이트도 JSON 파서를 통과해
+    /// 원본으로 되돌아오는지 왕복으로 고정한다 (Task #3315).
+    #[test]
+    fn image_bytes_survive_json_round_trip_for_every_byte_value() {
+        use base64::Engine;
+
+        let image_bytes: Vec<u8> = (0..=255u8).collect();
+        let background = PageBackgroundNode {
+            background_color: None,
+            border_color: None,
+            border_width: 0.0,
+            gradient: None,
+            image: Some(PageBackgroundImage {
+                data: image_bytes.clone(),
+                fill_mode: ImageFillMode::FitToSize,
+                brightness: 0,
+                contrast: 0,
+                effect: ImageEffect::RealPic,
+            }),
+        };
+
+        let tree = PageLayerTree::new(
+            120.0,
+            80.0,
+            LayerNode::leaf(
+                BoundingBox::new(0.0, 0.0, 120.0, 80.0),
+                None,
+                vec![
+                    PaintOp::page_background(BoundingBox::new(0.0, 0.0, 120.0, 80.0), background),
+                    PaintOp::image(
+                        BoundingBox::new(3.0, 4.0, 30.0, 20.0),
+                        ImageNode::new(7, Some(image_bytes.clone())),
+                        None,
+                    ),
+                ],
+            ),
+        );
+
+        let value: Value = serde_json::from_str(&tree.to_json()).expect("valid layer JSON");
+        let ops = value["root"]["ops"].as_array().expect("ops");
+
+        let decode = |op: &Value, pointer: &str| {
+            let encoded = op.pointer(pointer).and_then(Value::as_str).expect(pointer);
+            base64::engine::general_purpose::STANDARD
+                .decode(encoded)
+                .expect("base64 왕복")
+        };
+
+        assert_eq!(decode(&ops[0], "/image/base64"), image_bytes);
+        assert_eq!(decode(&ops[1], "/base64"), image_bytes);
+    }
+
     #[test]
     fn known_text_features_are_unique() {
         let mut seen = std::collections::BTreeSet::new();
@@ -4341,7 +4456,12 @@ mod tests {
             None,
         );
         path.connector_endpoints = Some((1.0, 2.0, 3.0, 4.0));
-        path.line_style = Some(LineStyle::default());
+        path.line_style = Some(LineStyle {
+            color: 0x0056_3412,
+            width: 2.0,
+            dash: StrokeDash::DashDot,
+            ..Default::default()
+        });
 
         let mut image = ImageNode::new(7, Some(vec![1, 2, 3]));
         image.effect = ImageEffect::BlackWhite;
@@ -4374,6 +4494,7 @@ mod tests {
                             color_str: "#000000".to_string(),
                             color: 0x00000000,
                             font_size: 12.0,
+                            script: String::new(),
                             section_index: None,
                             para_index: None,
                             control_index: None,
@@ -4395,9 +4516,14 @@ mod tests {
         );
 
         let json = tree.to_json();
+        let value: Value = serde_json::from_str(&json).expect("valid layer JSON");
+        let path_op = &value["root"]["ops"][0];
 
         assert!(json.contains("\"connectorEndpoints\":{\"x1\":1.000"));
         assert!(json.contains("\"lineStyle\":"));
+        assert_eq!(path_op["lineStyle"]["color"], "#123456");
+        assert_eq!(path_op["lineStyle"]["width"], 2.0);
+        assert_eq!(path_op["lineStyle"]["dash"], "dashDot");
         assert!(json.contains("\"effect\":\"blackWhite\""));
         assert!(json.contains("\"brightness\":-50"));
         assert!(json.contains("\"contrast\":70"));
@@ -4500,5 +4626,99 @@ mod tests {
             parsed["outputOptions"]["debugOverlay"].as_bool(),
             Some(true)
         );
+    }
+}
+
+#[cfg(test)]
+mod image_bytes_mode_tests {
+    //! Task #3315: `imageBytes` 최상위 값과 op 단위 `imageBytesOmitted` 의 관계를 못박는다.
+    //!
+    //! 생략은 신원 키를 낼 수 있는 op 만 대상이므로 **한 문서 안에 두 종류가 섞일 수 있다.**
+    //! 그 상태에서 최상위 값이 무엇을 뜻하는지가 열려 있었다 — 요청 모드인가, 모든 op 의 실제
+    //! 저장 방식인가. 여기서 **요청 모드**로 확정하고, 그러므로 소비자는 op 단위 표식을 봐야
+    //! 한다는 것을 고정한다.
+    //!
+    //! samples 전수에 키 없는 그림이 섞인 문서가 없어(전 표본 `cacheable:true`) 문서 단위
+    //! 테스트로는 이 상태를 만들 수 없다. 그래서 트리를 직접 조립한다.
+
+    use super::LayerJsonOptions;
+    use crate::paint::{LayerNode, PageLayerTree, PaintOp};
+    use crate::renderer::render_tree::{BoundingBox, ImageNode};
+    use serde_json::Value;
+
+    /// 키를 낼 수 있는 그림(`bin_data_id != 0`)과 낼 수 없는 합성 그림(`0`)을 함께 담은 트리.
+    fn mixed_tree() -> PageLayerTree {
+        let png = vec![0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a];
+        PageLayerTree::new(
+            120.0,
+            80.0,
+            LayerNode::leaf(
+                BoundingBox::new(0.0, 0.0, 120.0, 80.0),
+                None,
+                vec![
+                    PaintOp::image(
+                        BoundingBox::new(0.0, 0.0, 10.0, 10.0),
+                        ImageNode::new(7, Some(png.clone())),
+                        None,
+                    ),
+                    PaintOp::image(
+                        BoundingBox::new(20.0, 0.0, 10.0, 10.0),
+                        ImageNode::new(0, Some(png)),
+                        None,
+                    ),
+                ],
+            ),
+        )
+    }
+
+    fn image_ops(json: &str) -> Vec<Value> {
+        let value: Value = serde_json::from_str(json).expect("valid layer JSON");
+        value["root"]["ops"]
+            .as_array()
+            .expect("ops")
+            .iter()
+            .filter(|op| op.get("type").and_then(Value::as_str) == Some("image"))
+            .cloned()
+            .collect()
+    }
+
+    #[test]
+    fn issue_3315_top_level_image_bytes_is_the_requested_mode_not_a_per_op_guarantee() {
+        let json = mixed_tree().to_json_with_options(LayerJsonOptions {
+            omit_image_bytes: true,
+        });
+        let ops = image_ops(&json);
+        assert_eq!(ops.len(), 2);
+
+        assert!(
+            json.contains("\"imageBytes\":\"byKey\""),
+            "요청한 모드를 최상위에 싣는다"
+        );
+
+        // 키가 있는 op — 생략됐고 키로 받아야 한다.
+        assert!(ops[0].get("base64").is_none(), "키 있는 op 은 생략된다");
+        assert_eq!(ops[0]["imageBytesOmitted"].as_bool(), Some(true));
+        assert!(ops[0].get("sourceImageKey").is_some());
+
+        // 키가 없는 합성 op — 되찾을 길이 없으므로 base64 를 유지한다.
+        assert!(
+            ops[1].get("base64").is_some(),
+            "키 없는 op 의 바이트를 빼면 소비자가 그 그림을 되찾을 방법이 없다"
+        );
+        assert!(
+            ops[1].get("imageBytesOmitted").is_none(),
+            "생략하지 않은 op 에 생략 표식을 달면 소비자가 헛되게 키를 찾는다"
+        );
+        assert!(ops[1].get("sourceImageKey").is_none());
+    }
+
+    #[test]
+    fn issue_3315_inline_mode_marks_no_op_as_omitted() {
+        let json = mixed_tree().to_json();
+        assert!(json.contains("\"imageBytes\":\"inline\""));
+        assert!(!json.contains("\"imageBytesOmitted\""));
+        for op in image_ops(&json) {
+            assert!(op.get("base64").is_some());
+        }
     }
 }

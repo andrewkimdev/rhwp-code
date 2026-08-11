@@ -2,17 +2,22 @@
 
 이 파일은 저장소 안에서 재현 가능한 작업 부트스트랩이다. 세부 절차는 아래 권위 문서를 우선한다.
 
+> **에이전트 진입점**: rhwp 를 도구로 부리는 에이전트는 루트 [`llms.txt`](llms.txt)와
+> [에이전트 지식 지도](mydocs/manual/agent_knowledge_map.md)에서 시작한다.
+
 ## 문서 로딩 순서
 
 1. `CLAUDE.md`
-2. `mydocs/README.md`
-3. 작업 성격에 맞는 `mydocs/manual/README.md` 또는 `mydocs/tech/README.md`
-4. 개발·문서·Git 작업은 `mydocs/manual/codex/docs_and_git_workflow.md`
-5. PR 검토·merge·후속 처리는 `mydocs/manual/pr_review_workflow.md`를 먼저 읽고,
+2. Codex는 프로젝트 메모리 덤프 `mydocs/manual/codex/MEMORY.md`
+3. `mydocs/README.md`
+4. 작업 성격에 맞는 `mydocs/manual/README.md` 또는 `mydocs/tech/README.md`
+5. 개발·문서·Git 작업은 `mydocs/manual/codex/docs_and_git_workflow.md`
+6. PR 검토·merge·후속 처리는 `mydocs/manual/pr_review_workflow.md`를 먼저 읽고,
    `mydocs/manual/pr_review/README.md`의 선택표가 지정한 기본·보조 자식 문서를 작업 전에 모두 읽는다.
-6. 로컬 빌드·WASM 검증은 `mydocs/manual/dev_environment_guide.md`
-7. CLI 작업은 `mydocs/manual/cli_commands.md`
-8. 시각 검증은 `mydocs/manual/verification/visual_verification_governance.md`와 `mydocs/manual/verification/visual_sweep_guide.md`
+7. 로컬 빌드·WASM 검증은 `mydocs/manual/dev_environment_guide.md`,
+   변경 범위별 검증 게이트는 `mydocs/manual/pr_review/local_validation.md`의 4.3
+8. CLI 작업은 `mydocs/manual/cli_commands.md`
+9. 시각 검증은 `mydocs/manual/verification/visual_verification_governance.md`와 `mydocs/manual/verification/visual_sweep_guide.md`
 
 더 구체적인 문서가 이 요약과 다르면 그 문서를 따른다.
 
@@ -32,3 +37,26 @@
 - 문서 이동·정보구조 리팩토링의 링크와 메타데이터 검사는
   `mydocs/manual/markdown_link_check_guide.md`를 따른다. 일반 Markdown 추가·수정에는 자동 CI를 실행하지 않는다.
 - 렌더링·레이아웃 변경은 시각 검증 정책에 따라 PDF/SVG 또는 동등한 근거를 남긴다.
+
+## 작업 증빙 — 에이전트 기본 경로 (권장)
+
+LLM 에이전트가 이 저장소에서 문서를 실제로 편집·생성하는 작업의 기본 경로다.
+전부 devel 에 병합된 기능이며, **권장이지 제출 조건이 아니다**. 도구별 지침 파일
+(`.github/copilot-instructions.md`·`.cursor/rules/rhwp.mdc`·`GEMINI.md`·
+`.windsurfrules`·`.clinerules`)은 전부 이 절을 가리키는 얇은 포인터다 — 실질
+내용은 여기 한 곳에서만 고친다.
+
+- **영수증**: 편집 계획을 세우고 실행은 캡슐과 함께 남긴다 —
+  `rhwp replay --plan-json <계획> --capsule work.capsule.json --json`.
+  캡슐 하나가 "어떤 입력에서 어떤 계획으로 어떤 산출이 나왔나"를 3해시
+  (입력·계획·산출)로 고정하고, 제3자가 재실행으로 검증할 수 있다.
+- **계보**: 연속 작업은 `--parent 이전.capsule.json` 으로 잇고
+  `rhwp lineage <머리캡슐> --json` 으로 검증한다.
+- **회계**: 캡슐 폴더의 전수 재검증은 `rhwp audit <폴더> --json` — 재현율이
+  수치로 나온다.
+- **PR 증빙**: 관련 `--json` 봉투 원문 또는 캡슐 파일을 PR 본문에 붙인다
+  (PR 템플릿 체크리스트). 리뷰어는 주장 대신 재계산으로 확인한다.
+- **확장 축**: 서명·앵커·게이트·연합·선택적 공개·정산·감사 표준은 검증 사다리
+  좌표 [#4463](https://github.com/edwardkim/rhwp/issues/4463)를 본다 — 병합 전
+  기능은 규약이 아니라 로드맵이다.
+- 기여 절차 전체는 Claude Code 스킬 `rhwp-contributor` 가 체크리스트로 안내한다.

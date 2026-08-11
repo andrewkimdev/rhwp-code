@@ -56,6 +56,80 @@ pub struct Paragraph {
     /// None = 앞 번호 목록에 이어 (기본)
     /// Some(NumberingRestart) = 이전 번호 이어 / 새 번호 시작
     pub numbering_restart: Option<NumberingRestart>,
+    /// [#4149] 셀 단일줄 과밀 판정 memo — `recompose_stored_single_line_if_overflowing`
+    /// 전용 파생 캐시. 판정 입력은 (text, char_shapes, 셀 내폭)뿐이다. 제약:
+    /// - 직렬화 금지: `Paragraph` 는 serde derive 가 없고 HWP/HWPX 저장기는 필드를
+    ///   명시 기록하므로 파일로 새지 않는다. 새 직렬화 경로를 추가하면 이 필드를 제외할 것.
+    /// - 스레드: `DocumentCore` 의 `Send` 단언이 `Arc<Vec<Paragraph>>`
+    ///   (document_core/mod.rs render normalization 캐시) 경유로 `Paragraph: Sync` 를
+    ///   요구한다 — `Cell` 불가, `AtomicU64` 패킹 사용.
+    /// - text/char_shapes 를 바꾸는 모든 경로는 `invalidate_single_line_overflow_memo`
+    ///   호출 필수 (Clone 은 memo 를 함께 복제하지만, 복제본도 자기 상태 기준으로
+    ///   유효하므로 안전 — 이후 변이 시 무효화 규약은 동일하게 적용).
+    pub single_line_overflow_memo: SingleLineOverflowMemo,
+}
+
+/// [#4149] 단일줄 과밀 판정 memo 저장소 — `AtomicU64` 1개에 (폭 키, 판정) 패킹.
+///
+/// 인코딩: `0` = 미판정. 그 외 `(width_key as u64) << 1 | overflowed`.
+/// `width_key` 는 셀 내폭의 `f32` 비트 — guard 가 내폭 > 0 을 보장하므로 키가 0 이
+/// 될 수 없어 유효 인코딩은 sentinel `0` 과 충돌하지 않는다. 폭이 바뀌면(셀 크기
+/// 조정) 키 불일치로 자연 재판정된다. f32 축약의 키 충돌은 인접 ulp 폭(상대 ~2⁻²⁴)
+/// 뿐이라 ×1.8 임계 판정에 영향이 없다.
+///
+/// `Relaxed` 순서로 충분하다 — 값은 (문단, 폭)의 결정적 함수라 경합 시 최악이
+/// 중복 측정일 뿐 오답이 없다.
+#[derive(Debug, Default)]
+pub struct SingleLineOverflowMemo(std::sync::atomic::AtomicU64);
+
+impl SingleLineOverflowMemo {
+    /// 셀 내폭(px) → memo 폭 키.
+    #[inline]
+    pub fn width_key(cell_inner_width_px: f64) -> u32 {
+        (cell_inner_width_px as f32).to_bits()
+    }
+
+    /// 저장된 판정 조회 — 폭 키가 일치할 때만 `Some(overflowed)`.
+    #[inline]
+    pub fn get(&self, width_key: u32) -> Option<bool> {
+        let v = self.0.load(std::sync::atomic::Ordering::Relaxed);
+        if v != 0 && (v >> 1) as u32 == width_key {
+            Some(v & 1 == 1)
+        } else {
+            None
+        }
+    }
+
+    /// 판정 저장. `width_key == 0`(내폭 ≤ 0)은 sentinel 과 겹치므로 저장하지 않는다.
+    #[inline]
+    pub fn set(&self, width_key: u32, overflowed: bool) {
+        if width_key == 0 {
+            return;
+        }
+        let v = ((width_key as u64) << 1) | (overflowed as u64);
+        self.0.store(v, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// 미판정 상태로 되돌린다.
+    #[inline]
+    pub fn clear(&self) {
+        self.0.store(0, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// 미판정 여부 (invalidation 검증용).
+    #[inline]
+    pub fn is_unjudged(&self) -> bool {
+        self.0.load(std::sync::atomic::Ordering::Relaxed) == 0
+    }
+}
+
+impl Clone for SingleLineOverflowMemo {
+    fn clone(&self) -> Self {
+        // 파생 캐시 복제 — 복제본도 자기 (text, char_shapes) 기준으로 유효하다.
+        Self(std::sync::atomic::AtomicU64::new(
+            self.0.load(std::sync::atomic::Ordering::Relaxed),
+        ))
+    }
 }
 
 /// 문단 스코프 메타데이터 — 문단 병합의 역연산(undo)에서 복원해야 하는 값들.
@@ -322,6 +396,26 @@ pub struct OrphanFieldEnd {
 }
 
 impl Paragraph {
+    /// `ctrl_data_records` 를 `controls` 길이에 맞춰 `None` 으로 패딩한다.
+    ///
+    /// [#3214] `ctrl_data_records[i]` 는 `controls[i]` 대응이지만, **두 배열의 길이가 항상
+    /// 같지는 않다**. CTRL_DATA 는 HWP5 바이너리 전용 레코드라 HWPX 파서는 이 배열을 채우지
+    /// 않고(`parser/hwpx` 에 적재 지점이 없다), HWP3 파서와 편집 커맨드만 쌍으로 관리한다.
+    /// 즉 HWPX 로 연 문서는 `ctrl_data_records.len() < controls.len()` 이 정상 상태다.
+    ///
+    /// 그런데 컨트롤 삽입 경로는 삽입 위치를 `controls` 기준으로 계산한 뒤 그 인덱스를 그대로
+    /// `ctrl_data_records.insert(idx, None)` 에 넘긴다. 두 길이가 어긋나 있으면
+    /// `insertion index (is N) should be <= len (is M)` 로 패닉하고, WASM 에서는 패닉이
+    /// 객체 borrow 를 오염시켜 이후 모든 호출이 `recursive use of an object` 로 실패한다.
+    ///
+    /// 인덱스 대응에 기대는 쓰기를 하기 전에 이 함수로 정렬한다. 삽입 **전에** 호출하면
+    /// `insert_idx <= ctrl_data_records.len()` 이 보장된다.
+    pub fn align_ctrl_data_records(&mut self) {
+        while self.ctrl_data_records.len() < self.controls.len() {
+            self.ctrl_data_records.push(None);
+        }
+    }
+
     pub(crate) fn is_split_movable_control(ctrl: &Control) -> bool {
         matches!(
             ctrl,
@@ -477,6 +571,12 @@ impl Paragraph {
         }
     }
 
+    /// [#4149] 단일줄 과밀 판정 memo 무효화 — text/char_shapes 를 바꾸는 경로 필수.
+    #[inline]
+    pub fn invalidate_single_line_overflow_memo(&self) {
+        self.single_line_overflow_memo.clear();
+    }
+
     /// 문자의 UTF-16 코드 유닛 수를 반환한다.
     fn char_utf16_len(c: char) -> u32 {
         if (c as u32) > 0xFFFF {
@@ -491,14 +591,20 @@ impl Paragraph {
     /// 문단 메타데이터를 일괄 시프트한다.
     ///
     /// `char_offsets[safe_offset..]` 를 +8 하고, 삽입 지점(UTF-16) 이후의
-    /// `char_shapes.start_pos` 와 `range_tags.start/end` 도 +8 시프트한다. 종전에는
-    /// 각 삽입 경로가 char_offsets 만 밀고 char_shapes/range_tags 를 그대로 둬서, 삽입
-    /// 지점 이후 글자모양 run 경계가 텍스트와 어긋났다(글자모양 오염). `insert_text_at`
-    /// 의 시프트 규약과 동형이다.
+    /// `char_shapes.start_pos`·`range_tags.start/end`·`line_segs.text_start` 도 +8
+    /// 시프트한다. 종전에는 각 삽입 경로가 char_offsets 만 밀고 char_shapes/range_tags 를
+    /// 그대로 둬서, 삽입 지점 이후 글자모양 run 경계가 텍스트와 어긋났다(글자모양 오염).
+    /// `insert_text_at` 의 시프트 규약과 동형이다.
+    ///
+    /// **이 문단의 UTF-16 좌표를 들고 있는 것은 전부 여기서 함께 민다.** 하나라도 빠지면
+    /// 그것만 8 만큼 어긋난 채 남아, 다음에 그 문단을 다시 조판할 때 값이 튀어 원인이
+    /// 삽입이 아닌 곳에서 찾아진다(#4347 에서 line_segs 가 그랬다).
     pub(crate) fn shift_for_inline_control_insert(&mut self, char_offset: usize) {
         if self.char_offsets.is_empty() {
             return;
         }
+        // [#4149] 인라인 컨트롤 삽입은 char_shapes 경계를 옮긴다 — memo 무효화 (보수적).
+        self.invalidate_single_line_overflow_memo();
         let text_len = self.text.chars().count();
         let safe_offset = char_offset.min(text_len);
         // 컨트롤이 삽입되는 UTF-16 위치 — char_offsets 시프트 전에 계산한다.
@@ -531,6 +637,15 @@ impl Paragraph {
                 rt.end += 8;
             }
         }
+        // [#4347] 줄 시작도 같은 좌표계(UTF-16 code unit)를 쓴다 — 함께 밀지 않으면 저장된
+        // 줄 나눔이 삽입 지점 뒤로 8 만큼 어긋난다. 눈에 안 띄다가 문단을 다시 조판하는
+        // 순간(그림 배치 토글 따위) 값이 갑자기 8 뛰어 "왕복이 원복을 깼다"로 보인다.
+        // 첫 줄은 문단 시작에 고정한다 — 넣은 컨트롤이 그 줄에 든다(char_shapes 와 같은 규약).
+        for seg in &mut self.line_segs {
+            if seg.text_start > insert_pos || (seg.text_start == insert_pos && seg.text_start > 0) {
+                seg.text_start += 8;
+            }
+        }
     }
 
     ///
@@ -547,6 +662,8 @@ impl Paragraph {
         if new_text.is_empty() {
             return char_offset.min(self.text.chars().count());
         }
+        // [#4149] text 변이 — 단일줄 과밀 memo 무효화.
+        self.invalidate_single_line_overflow_memo();
 
         let text_chars: Vec<char> = self.text.chars().collect();
         let text_len = text_chars.len();
@@ -700,6 +817,9 @@ impl Paragraph {
             return 0;
         }
 
+        // [#4149] text 변이 — 단일줄 과밀 memo 무효화.
+        self.invalidate_single_line_overflow_memo();
+
         // 실제 삭제할 문자 수 (범위 클램핑)
         let actual_count = count.min(text_len - char_offset);
         let del_end = char_offset + actual_count;
@@ -741,6 +861,28 @@ impl Paragraph {
                 cs.start_pos = utf16_start;
             }
         }
+        // [#3576, #4271] 클램핑으로 같은 start_pos 에 몰린 ref 를 정리한다.
+        // char_shapes 는 start_pos 오름차순의 '서로 다른' 경계여야 한다.
+        //
+        // 삭제 뒤 오른쪽 텍스트가 남으면 utf16_end 의 ref 도 utf16_start 로 이동한다.
+        // 이때는 마지막 ref 가 살아남은 오른쪽 텍스트의 글자모양이므로 마지막 것을
+        // 보존해야 한다. 첫 ref 를 남기면 삽입+서식 적용을 undo 한 뒤 삽입 런의 서식이
+        // 원문 오른쪽에 새어 남는다. 반대로 문단 끝까지 삭제한 경우에는 오른쪽 텍스트가
+        // 없으므로 기존 동작대로 첫 ref 를 보존한다.
+        let preserve_right_shape = del_end < text_len;
+        let mut deduped = Vec::<CharShapeRef>::with_capacity(self.char_shapes.len());
+        for cs in self.char_shapes.drain(..) {
+            if let Some(previous) = deduped.last_mut() {
+                if previous.start_pos == cs.start_pos {
+                    if preserve_right_shape && cs.start_pos == utf16_start {
+                        *previous = cs;
+                    }
+                    continue;
+                }
+            }
+            deduped.push(cs);
+        }
+        self.char_shapes = deduped;
 
         // 4. line_segs: 삭제 범위 이후 → utf16_delta만큼 감소
         for ls in &mut self.line_segs {
@@ -822,6 +964,9 @@ impl Paragraph {
     /// 분할의 시맨틱이다. 병합의 역연산으로 쓰는 호출부는 `apply_meta` 로 사라진
     /// 문단의 원래 값을 되돌려야 한다 (Task #2342).
     pub fn split_at(&mut self, char_offset: usize) -> Paragraph {
+        // [#4149] 분할은 양쪽 text 를 모두 바꾼다 — 앞 절반 memo 무효화.
+        // 새 절반은 아래 구성에서 미판정(None)으로 시작한다.
+        self.invalidate_single_line_overflow_memo();
         let control_positions = self.split_logical_control_positions();
         let split_pos = self.split_text_pos_for_logical_offset(char_offset, &control_positions);
         let text_chars: Vec<char> = self.text.chars().collect();
@@ -1073,6 +1218,8 @@ impl Paragraph {
             has_para_text: new_has_para_text,
             tab_extended: Vec::new(),
             numbering_restart: None,
+            // [#4149] 분할 산출 문단은 미판정으로 시작한다.
+            single_line_overflow_memo: SingleLineOverflowMemo::default(),
         }
     }
 
@@ -1085,6 +1232,8 @@ impl Paragraph {
         if other.text.is_empty() && other.controls.is_empty() {
             return self.text.chars().count();
         }
+        // [#4149] 병합은 text/char_shapes 를 바꾼다 — memo 무효화 (미판정 재시작).
+        self.invalidate_single_line_overflow_memo();
 
         let self_text_len = self.text.chars().count();
 
@@ -1320,6 +1469,31 @@ impl Paragraph {
             } else {
                 1
             };
+            // [#3466] 자동번호(제어문자 0x12)는 8 코드 유닛을 점유하면서 가시 placeholder 를
+            // **한 글자 남긴다**(파서 두 경로 공통). 그래서 그 글자 뒤에는 8 갭이 남지 않고
+            // (8 − 1 = 7 → 7/8 = 0) 갭 분배에서 누락돼, 뒤따르는 컨트롤이 한 칸씩 앞당겨졌다
+            // — 수식 k 가 수식 k+1 자리로 가고 마지막 수식은 폴백으로 문단 끝에 붙었다.
+            //
+            // 판별자는 셋을 **모두** 요구한다. stride 8 하나로는 부족하다 — 탭도 가시 글자를
+            // 남기며 8 코드 유닛을 점유하지만(HWP5 `0x09`, HWPX `'\t'` 폭 8) `controls[]` 에는
+            // 들어가지 않으므로, stride 만 보면 탭이 컨트롤 자리를 가로채 반대 방향으로 어순이
+            // 깨진다.
+            //   (1) 이 글자의 stride 가 정확히 8 — 일반 글자는 자기 폭 + 8k 라 8 이 될 수 없다
+            //   (2) 그 글자가 자동번호 placeholder 인 공백
+            //   (3) 지금 자리를 기다리는 컨트롤이 번호 컨트롤
+            // (3) 덕분에 HWPX `newNum`(placeholder 없이 순수 8 갭)은 종전 경로를 그대로 탄다.
+            let pending_is_number_control = matches!(
+                self.controls.get(positions.len()),
+                Some(Control::AutoNumber(_) | Control::NewNumber(_))
+            );
+            if pending_is_number_control
+                && char_width == 1
+                && chars.get(i) == Some(&' ')
+                && next_off == current_off + 8
+            {
+                positions.push(i);
+                continue;
+            }
             if next_off > current_off + char_width {
                 let gap = next_off - current_off - char_width;
                 let n_ctrls = gap / 8;
@@ -1362,6 +1536,38 @@ impl Paragraph {
         positions
     }
 
+    /// 편집/커서 이동용 control position 을 반환한다.
+    ///
+    /// [`Self::control_text_positions`] 는 HWP/HWPX record stream 의 raw text position 을
+    /// 보존한다. 반면 커서 이동은 `SectionDef`, `ColumnDef` 같은 구조 컨트롤을 건너뛰고,
+    /// Shape/Table/Picture/Equation/Footnote/Endnote 같은 인라인 개체만 한 글자 폭으로 센다.
+    pub fn logical_control_positions(&self) -> Vec<usize> {
+        if self.text.is_empty() && self.char_offsets.is_empty() {
+            let mut inline_seen = 0usize;
+            let mut positions = Vec::with_capacity(self.controls.len());
+            for ctrl in &self.controls {
+                positions.push(inline_seen);
+                if ctrl.is_logical_inline() {
+                    inline_seen += 1;
+                }
+            }
+            return positions;
+        }
+
+        let text_positions = self.control_text_positions();
+        let text_len = self.text.chars().count();
+        let mut inline_seen = 0usize;
+        let mut positions = Vec::with_capacity(self.controls.len());
+        for (ci, ctrl) in self.controls.iter().enumerate() {
+            let text_pos = text_positions.get(ci).copied().unwrap_or(text_len);
+            positions.push(text_pos + inline_seen);
+            if ctrl.is_logical_inline() {
+                inline_seen += 1;
+            }
+        }
+        positions
+    }
+
     /// `char_offsets` 중 UTF-16 위치 `utf16_pos` 이상인 첫 번째 codepoint 의
     /// 인덱스를 반환한다. 모든 entry 가 작으면 `char_offsets.len()` (텍스트 끝).
     ///
@@ -1398,6 +1604,8 @@ impl Paragraph {
         if start_char_offset >= end_char_offset || self.char_offsets.is_empty() {
             return;
         }
+        // [#4149] char_shapes 변이 — 단일줄 과밀 memo 무효화.
+        self.invalidate_single_line_overflow_memo();
         if self.char_shapes.is_empty() {
             self.char_shapes.push(CharShapeRef {
                 start_pos: 0,
@@ -1521,6 +1729,8 @@ impl Paragraph {
 
     /// 문단의 글자 모양을 단일 CharShapeRef로 초기화한다.
     pub fn set_single_char_shape(&mut self, char_shape_id: u32) {
+        // [#4149] char_shapes 변이 — 단일줄 과밀 memo 무효화.
+        self.invalidate_single_line_overflow_memo();
         self.char_shapes.clear();
         self.char_shapes.push(CharShapeRef {
             start_pos: 0,
@@ -1548,6 +1758,8 @@ impl Paragraph {
         }
 
         if replaced {
+            // [#4149] char_shapes 변이 — 단일줄 과밀 memo 무효화.
+            self.invalidate_single_line_overflow_memo();
             self.merge_adjacent_char_shapes();
         }
     }

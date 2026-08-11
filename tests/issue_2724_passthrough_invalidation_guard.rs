@@ -118,6 +118,20 @@ const EXEMPT: &[(&str, &str, Exempt, &str)] = &[
         "pending job을 drain하거나 기존 paginate로 fallback. 편집 IR은 선행 뮤테이터가 이미 무효화.",
     ),
     (
+        "queries/rendering.rs",
+        "repaginate_if_needed",
+        Exempt::SessionState,
+        "dirty 구역을 다시 쪽으로 나눌 뿐(pagination·측정 캐시). 문서 IR 무변경 — \
+         선행 편집 뮤테이터가 이미 무효화했다.",
+    ),
+    (
+        "queries/changed_pages.rs",
+        "pages_covering_paragraphs",
+        Exempt::SessionState,
+        "조판 커버리지를 읽어 페이지 번호만 돌려주는 조회. `&mut` 는 paginate_if_needed \
+         한 줄 때문이며 문서 IR 무변경 — 편집 IR은 선행 뮤테이터가 이미 무효화.",
+    ),
+    (
         "commands/clipboard.rs",
         "clear_clipboard_native",
         Exempt::SessionState,
@@ -134,6 +148,12 @@ const EXEMPT: &[(&str, &str, Exempt, &str)] = &[
         "copy_selection_in_cell_native",
         Exempt::SessionState,
         "복사 — 읽기 후 `self.clipboard` 에만 기록.",
+    ),
+    (
+        "commands/clipboard.rs",
+        "copy_selection_in_cell_by_path_native",
+        Exempt::SessionState,
+        "경로 기반 복사 — 읽기 후 `self.clipboard` 에만 기록.",
     ),
     (
         "commands/clipboard.rs",
@@ -275,6 +295,13 @@ const EXEMPT: &[(&str, &str, Exempt, &str)] = &[
     ),
     (
         "commands/document.rs",
+        "export_hwp_with_adapter_with_password",
+        Exempt::DelegatesTo("convert_if_hwpx_source"),
+        "암호 HWP 저장도 평문 저장과 같은 HWPX-to-HWP 어댑터만 IR을 변경한다. \
+         어댑터가 `raw_stream_dirty` 를 세우고, 비밀번호 직렬화는 IR을 변경하지 않는다.",
+    ),
+    (
+        "commands/document.rs",
         "serialize_hwp_with_verify",
         Exempt::DelegatesTo("export_hwp_with_adapter"),
         "export 후 재로드 검증만 수행. 자체 IR 변경 없음.",
@@ -296,6 +323,14 @@ const EXEMPT: &[(&str, &str, Exempt, &str)] = &[
         "insert_text_in_cell_native",
         Exempt::DelegatesTo("replace_text_in_cell_native_impl"),
         "얇은 래퍼 — 실제 삽입·무효화는 `_impl` 이 수행.",
+    ),
+    (
+        "commands/page_extract.rs",
+        "extract_page_range",
+        Exempt::DelegatesTo("delete_paragraph_native"),
+        "[#3565] 지우는 일은 전부 문단 삭제 뮤테이터에 위임하고, 그쪽이 손댄 구역의 \
+         `raw_stream` 을 무효화한다. 한 문단도 지우지 않은 구역은 원본이 그대로 \
+         유효하므로 통과를 남기는 것이 맞다.",
     ),
     (
         "commands/text_editing.rs",
@@ -328,6 +363,12 @@ const EXEMPT: &[(&str, &str, Exempt, &str)] = &[
         "필드 위치를 조회한 뒤 텍스트 치환 헬퍼에 위임.",
     ),
     (
+        "queries/field_query.rs",
+        "set_field_value_by_name",
+        Exempt::DelegatesTo("set_field_value_by_name_at"),
+        "첫 occurrence를 선택하는 호환 래퍼. 실제 필드 치환·section raw_stream 무효화는 occurrence 경로가 수행.",
+    ),
+    (
         "queries/rendering.rs",
         "set_section_def_native",
         Exempt::DelegatesTo("apply_section_def_json"),
@@ -350,6 +391,93 @@ const EXEMPT: &[(&str, &str, Exempt, &str)] = &[
         "replace_one_native",
         Exempt::DelegatesTo("delete_text_native"),
         "검색 후 삭제 + 삽입 조합. 두 뮤테이터가 각각 무효화한다.",
+    ),
+    (
+        "queries/search_query.rs",
+        "replace_all_native",
+        Exempt::DelegatesTo("replace_matches_native"),
+        "[#3395] 전량 치환 몸통이 공통 헬퍼로 이관됨. 무효화(`raw_stream = None`)는 헬퍼가 수행.",
+    ),
+    (
+        "queries/search_query.rs",
+        "replace_nth_native",
+        Exempt::DelegatesTo("replace_matches_native"),
+        "[#3395] k번째 매치 치환 — replace_all_native 와 같은 공통 헬퍼에 위임. 무효화는 헬퍼가 수행.",
+    ),
+    (
+        "queries/field_query.rs",
+        "insert_click_here_field_at_cursor",
+        Exempt::DelegatesTo("insert_click_here_field_at"),
+        "웹한글컨트롤 커서 좌표(list/para/pos)를 구역·문단·글자 번호로 옮겨 넘길 뿐이다. \
+         삽입과 무효화는 본문 경로(`insert_click_here_field_at`)와 셀 경로 \
+         (`insert_click_here_field_at_by_path`)가 한다.",
+    ),
+    (
+        "queries/hwpctrl_sets.rs",
+        "apply_char_format_at_cursor",
+        Exempt::DelegatesTo("apply_char_format_native"),
+        "좌표만 옮긴다(코드 유닛 → 글자 번호). 서식 적용과 무효화는 본문 경로 \
+         (`apply_char_format_native`)와 셀 경로(`apply_char_format_in_cell_by_path`)가 한다.",
+    ),
+    (
+        "queries/hwpctrl_sets.rs",
+        "split_para_at_cursor",
+        Exempt::DelegatesTo("split_paragraph_native"),
+        "좌표만 옮긴다(코드 유닛 → 글자 번호). 가르기와 무효화는 본문 경로 \
+         (`split_paragraph_native`)와 셀 경로(`split_paragraph_in_cell_by_path`)가 한다.",
+    ),
+    (
+        "commands/table_ops.rs",
+        "delete_table_control_native",
+        Exempt::DelegatesTo("delete_control_native_impl"),
+        "표만 받는지 검사하고 넘긴다. 지우기와 무효화는 `delete_control_native_impl` 이 한다.",
+    ),
+    (
+        "commands/table_ops.rs",
+        "delete_control_native",
+        Exempt::DelegatesTo("delete_control_native_impl"),
+        "갈래 검사 없이 넘길 뿐이다. 지우기와 무효화는 `delete_control_native_impl` 이 한다.",
+    ),
+    (
+        "queries/hwpctrl_sets.rs",
+        "delete_control_at",
+        Exempt::DelegatesTo("delete_control_native"),
+        "본문 문단 번호를 구역·문단으로 풀어 넘길 뿐이다. 지우기와 무효화는 아래가 한다.",
+    ),
+    (
+        "queries/hwpctrl_sets.rs",
+        "insert_text_at_cursor",
+        Exempt::DelegatesTo("insert_text_native"),
+        "좌표만 옮긴다(코드 유닛 → 글자 번호). 끼우기와 무효화는 본문 경로 \
+         (`insert_text_native`)와 셀 경로(`insert_text_in_cell_by_path`)가 한다.",
+    ),
+    (
+        "queries/hwpctrl_sets.rs",
+        "table_merge_at_cursor",
+        Exempt::DelegatesTo("merge_table_cells_native"),
+        "리스트 아이디를 구역·문단·컨트롤·행·열로 풀어 넘길 뿐이다. 합치는 것과 무효화는 \
+         `merge_table_cells_native` 가 한다.",
+    ),
+    (
+        "queries/hwpctrl_sets.rs",
+        "table_edit_at_cursor",
+        Exempt::DelegatesTo("insert_table_row_native"),
+        "리스트 아이디를 구역·문단·컨트롤·행·열로 풀어 넘길 뿐이다. 표를 고치는 것과 무효화는 \
+         `insert_table_row_native`·`delete_table_row_native` 같은 표 편집 API 가 한다.",
+    ),
+    (
+        "queries/hwpctrl_sets.rs",
+        "delete_at_cursor",
+        Exempt::DelegatesTo("delete_text_native"),
+        "좌표만 옮긴다(코드 유닛 → 글자 번호). 삭제와 무효화는 본문 경로 \
+         (`delete_text_native`)와 셀 경로(`delete_range_in_cell_by_path`)가 한다.",
+    ),
+    (
+        "queries/hwpctrl_sets.rs",
+        "apply_para_format_at_cursor",
+        Exempt::DelegatesTo("apply_para_format_native"),
+        "리스트 아이디를 구역·문단으로 풀어 넘길 뿐이다. 서식 적용과 무효화는 본문 경로 \
+         (`apply_para_format_native`)와 셀 경로(`apply_para_format_in_cell_native`)가 한다.",
     ),
     // ── 판정 보류 ──────────────────────────────────────────────────────────
     (

@@ -1,10 +1,12 @@
 /**
- * Issue #2214 focused GREEN regression and optional diagnostic.
+ * Issue #2214 focused GREEN regression, #3815 stack integration, and optional diagnostic.
  *
  * The default path is a focused HWP/HWPX regression that verifies the 56th
  * cell-flow boundary, pre-cursor pagination, exact tree/caret state, and the
  * absence of an additional flush through the 62nd input. The original
- * timeline/PNG controls remain available behind --diagnose.
+ * timeline/PNG controls remain available behind --diagnose. `--continuous-only` is the local
+ * production-WASM + Chrome integration gate for #3815 on top of #3937/#3822; CI only syntax-checks
+ * this browser scenario, so its measured timings and page/revision assertions are local evidence.
  *
  * [#2430] 한양·휴먼 HFT ASCII 실측 교정으로 대상 셀의 줄 채움 임계가 44→56,
  * 관측 범위가 50→62 로 이동했다 (native 계약: tests/issue_2214_page_local_repaint.rs
@@ -13,6 +15,7 @@
  * Usage:
  *   node e2e/issue-2214-page-local-repaint.test.mjs --mode=headless
  *   node e2e/issue-2214-page-local-repaint.test.mjs --mode=headless --runs=1  # local smoke
+ *   node e2e/issue-2214-page-local-repaint.test.mjs --mode=headless --continuous-only
  *   node e2e/issue-2214-page-local-repaint.test.mjs --mode=headless --review-only
  *   node e2e/issue-2214-page-local-repaint.test.mjs --mode=headless --diagnose
  *   node e2e/issue-2214-page-local-repaint.test.mjs --mode=headless --diagnose \
@@ -49,6 +52,9 @@ const TARGET = Object.freeze({
   cellPath: [{ controlIndex: 2, cellIndex: 2, cellParaIndex: 5 }],
 });
 const MAX_INSERTS = 128;
+const CONTINUOUS_WRAP_MAX_INSERTS = 160;
+const CONTINUOUS_WRAP_TAIL_INPUTS = 4;
+const CONTINUOUS_INPUT_MIN_GAP_MS = 8;
 
 const SAMPLES = Object.freeze({
   hwp: path.join(REPO_ROOT, 'samples/issue1949_giant_cell_nested_tables_perf.hwp'),
@@ -82,6 +88,12 @@ function summarizeDurations(values) {
     p95Ms: percentile(values, 0.95),
     maxMs: values.length ? Math.max(...values) : null,
   };
+}
+
+function traceDurations(trace, type) {
+  return trace.events
+    .filter((event) => event.type === type && typeof event.durationMs === 'number')
+    .map((event) => event.durationMs);
 }
 
 function writeJson(filePath, value) {
@@ -344,6 +356,22 @@ async function installTrace(page) {
       paginationDeferred: result?.paginationDeferred ?? null,
       cellFlowChanged: result?.cellFlowChanged ?? null,
     }));
+    // [#3412] #3254 가 도입한 단일 호출 치환 경로. IME 조합 갱신은 이제 delete+insert 가
+    // 아니라 이 한 번의 replace 로 처리된다 — 계측하지 않으면 흐름이 통째로 안 보인다.
+    wrap(wasm, 'replaceTextInCellDeferredPagination', 'wasm.replaceTextInCellDeferredPagination', (args) => ({
+      sectionIndex: args[0],
+      parentParaIndex: args[1],
+      controlIndex: args[2],
+      cellIndex: args[3],
+      cellParaIndex: args[4],
+      charOffset: args[5],
+      deleteCount: args[6],
+      textLength: String(args[7] ?? '').length,
+    }), (result) => ({
+      resultCharOffset: result?.charOffset ?? null,
+      paginationDeferred: result?.paginationDeferred ?? null,
+      cellFlowChanged: result?.cellFlowChanged ?? null,
+    }));
     wrap(wasm, 'deleteTextInCellDeferredPagination', 'wasm.deleteTextInCellDeferredPagination', (args) => ({
       sectionIndex: args[0],
       parentParaIndex: args[1],
@@ -362,6 +390,12 @@ async function installTrace(page) {
     wrap(wasm, 'exportHwp', 'wasm.exportHwp');
     wrap(wasm, 'exportHwpx', 'wasm.exportHwpx');
     wrap(wasm, 'renderPageSvg', 'wasm.renderPageSvg', (args) => ({ pageIndex: args[0] }));
+    // [#3412] 인쇄/PDF 경로는 b7234ed07 부터 profile 인자를 받는 변형을 쓴다.
+    // 옛 이름만 계측하면 인쇄 barrier 가 렌더 이벤트를 하나도 못 본다.
+    wrap(wasm, 'renderPageSvgWithProfile', 'wasm.renderPageSvgWithProfile', (args) => ({
+      pageIndex: args[0],
+      profile: args[1],
+    }));
     wrap(wasm, 'getCursorRectByPathNear', 'wasm.getCursorRectByPathNear', (args) => ({
       sectionIndex: args[0],
       parentParaIndex: args[1],
@@ -390,9 +424,12 @@ async function installTrace(page) {
       kind: args[0]?.kind,
       commandType: args[0]?.command?.type,
     }));
+    // [#3412] TextMutationEffects 의 필드는 documentPaginationPending/flowChanged 다.
+    // 예전 이름(deferredPagination/cellFlowChanged)으로 읽으면 항상 undefined→null 이
+    // 기록돼, 아래 단언들이 실제 값과 무관하게 null 로 비교된다.
     wrap(input, 'prepareTextMutationBeforeCursor', 'InputHandler.prepareTextMutationBeforeCursor', (args) => ({
-      deferredPagination: args[0]?.deferredPagination ?? null,
-      cellFlowChanged: args[0]?.cellFlowChanged ?? null,
+      deferredPagination: args[0]?.documentPaginationPending ?? null,
+      cellFlowChanged: args[0]?.flowChanged ?? null,
       paginationCompleted: args[0]?.paginationCompleted ?? null,
     }), (result) => ({ result }));
     wrap(input, 'refreshAfterOperation', 'InputHandler.refreshAfterOperation', (args) => ({
@@ -447,11 +484,12 @@ async function collectTrace(page) {
         refreshNow: count('CanvasView.refreshInvalidatedPageNow'),
         deferredInsert: count('wasm.insertTextInCellDeferredPagination'),
         deferredDelete: count('wasm.deleteTextInCellDeferredPagination'),
+        deferredReplace: count('wasm.replaceTextInCellDeferredPagination'),
         immediateDelete: count('wasm.deleteTextInCell'),
         pathDelete: count('wasm.deleteTextInCellByPath'),
         exportHwp: count('wasm.exportHwp'),
         exportHwpx: count('wasm.exportHwpx'),
-        renderPageSvg: count('wasm.renderPageSvg'),
+        renderPageSvg: count('wasm.renderPageSvg') + count('wasm.renderPageSvgWithProfile'),
         cursorRectNear: count('wasm.getCursorRectByPathNear'),
         cursorRect: count('wasm.getCursorRectByPath'),
         cursorRectInCell: count('wasm.getCursorRectInCell'),
@@ -500,6 +538,28 @@ async function resolveCompositedClip(page) {
   });
   assert.ok(clip.targetOpCount > 0, 'target paragraph textRun ops were not found');
   return clip;
+}
+
+async function resolveCaretGlyphClip(page) {
+  return page.evaluate(() => {
+    const canvasView = window.__canvasView;
+    const cursorRect = window.__inputHandler.cursor.getRect();
+    const pageIndex = Number.isInteger(cursorRect?.pageIndex) ? cursorRect.pageIndex : 0;
+    const canvas = canvasView.canvasPool.getCanvas(pageIndex);
+    if (!canvas || !cursorRect) throw new Error('caret glyph canvas unavailable');
+    const canvasRect = canvas.getBoundingClientRect();
+    const tree = window.__wasm.getPageLayerTreeObject(pageIndex);
+    const scale = tree.pageWidth > 0 ? canvasRect.width / tree.pageWidth : 1;
+    const glyphWidth = Math.max(cursorRect.height * 1.5, 24);
+    return {
+      x: Math.max(0, Math.floor(canvasRect.left + (cursorRect.x - glyphWidth) * scale)),
+      y: Math.max(0, Math.floor(canvasRect.top + (cursorRect.y - 2) * scale)),
+      width: Math.max(1, Math.ceil(glyphWidth * scale)),
+      height: Math.max(1, Math.ceil((cursorRect.height + 4) * scale)),
+      pageIndex,
+      scale,
+    };
+  });
 }
 
 async function captureCompositedCrop(page, filePath, clip) {
@@ -714,6 +774,17 @@ async function waitForDeferredPaginationCompletion(page, timeoutMs = 5_000) {
     { timeout: timeoutMs, polling: 25 },
   );
   return performance.now() - startedAt;
+}
+
+async function waitForDeferredPaginationBegin(page, timeoutMs = 1_000) {
+  await page.waitForFunction(
+    () => (
+      window.__inputHandler.hasDeferredPaginationPending()
+      && (window.__issue2214Trace?.events ?? [])
+        .some((event) => event.type === 'wasm.beginDeferredPagination')
+    ),
+    { timeout: timeoutMs, polling: 10 },
+  );
 }
 
 async function runTimeline(page, format, bytes, transitionAt) {
@@ -1053,13 +1124,15 @@ function assertExactFocusedState(
   expectedLineCount,
   expectedBoundsHeight,
   expectedPending,
+  expectedCaretVisible = true,
+  expectedPageCount = 115,
 ) {
   const prefix = `${format} run ${runNumber} ${state.label}`;
   const expectedLength = expectedText.length;
   assert.equal(state.model.length, expectedLength, `${prefix}: model length`);
   assert.equal(state.model.text, expectedText, `${prefix}: model text`);
   assert.equal(state.model.lineCount, expectedLineCount, `${prefix}: line count`);
-  assert.equal(state.pagination.pageCount, 115, `${prefix}: page count`);
+  assert.equal(state.pagination.pageCount, expectedPageCount, `${prefix}: page count`);
   if (expectedPending !== null) {
     assert.equal(state.pagination.pending, expectedPending, `${prefix}: pending state`);
   }
@@ -1098,10 +1171,71 @@ function assertExactFocusedState(
   assertApprox(rect?.y, lastOp.bbox.y, `${prefix}: cursor y at tree end`);
   assertApprox(rect?.height, lastOp.bbox.height, `${prefix}: cursor height`);
 
-  assert.ok(state.caret, `${prefix}: DOM caret`);
-  assert.equal(state.caret.display, 'block', `${prefix}: DOM caret display`);
-  assert.ok(state.caret.clientRect?.width > 0, `${prefix}: DOM caret width`);
-  assertApprox(state.caret.clientRect?.height, rect.height, `${prefix}: DOM caret height`);
+  if (expectedCaretVisible) {
+    assert.ok(state.caret, `${prefix}: DOM caret`);
+    assert.equal(state.caret.display, 'block', `${prefix}: DOM caret display`);
+    assert.ok(state.caret.clientRect?.width > 0, `${prefix}: DOM caret width`);
+    assertApprox(state.caret.clientRect?.height, rect.height, `${prefix}: DOM caret height`);
+  }
+}
+
+function assertContinuousFlowGeometry(format, label, state, digitTokenStart) {
+  const prefix = `${format} ${label}`;
+  const bounds = state.cursor.rect?.cellBounds;
+  assert.ok(bounds, `${prefix}: cell bounds`);
+  const left = bounds.x;
+  const right = bounds.x + bounds.w;
+  const digitOps = [];
+  const suffixBands = [];
+  for (const [index, op] of state.layerTree.targetOps.entries()) {
+    const start = targetRunStart(op, `${prefix} op ${index}`);
+    const textLength = String(op.text ?? '').length;
+    // Existing justified source lines in this fixture carry their original ink
+    // envelope. Validate every run that contains or follows the edited suffix.
+    if (start + textLength <= TARGET.charOffset) continue;
+    assert.ok(
+      op.bbox.x >= left - 0.2,
+      `${prefix}: TextRun ${index} left=${op.bbox.x}, cellLeft=${left}`,
+    );
+    assert.ok(
+      op.bbox.x + op.bbox.width <= right + 0.2,
+      `${prefix}: TextRun ${index} right=${op.bbox.x + op.bbox.width}, cellRight=${right}, `
+        + `key=${op.stableSourceKey}, text=${JSON.stringify(op.text)}`,
+    );
+    if (start + textLength > digitTokenStart) {
+      suffixBands.push({ top: op.bbox.y, bottom: op.bbox.y + op.bbox.height });
+    }
+    if (start >= digitTokenStart && /^1+$/.test(op.text)) digitOps.push(op);
+  }
+  assert.ok(state.model.lines.length > 0, `${prefix}: line ranges`);
+  assert.equal(state.model.lines[0].charStart, 0, `${prefix}: first line start`);
+  for (let index = 1; index < state.model.lines.length; index += 1) {
+    assert.equal(
+      state.model.lines[index - 1].charEnd,
+      state.model.lines[index].charStart,
+      `${prefix}: line ${index - 1}→${index} UTF-16 continuity`,
+    );
+  }
+  assert.equal(state.model.lines.at(-1).charEnd, state.model.length, `${prefix}: final line end`);
+  assert.ok(digitOps.length >= 2, `${prefix}: numeric suffix line runs`);
+  const naturalAdvance = digitOps.at(-1).bbox.width / digitOps.at(-1).text.length;
+  assert.ok(naturalAdvance <= state.cursor.rect.height, `${prefix}: final digit advance`);
+  for (const [index, op] of digitOps.entries()) {
+    const advance = op.bbox.width / op.text.length;
+    assert.ok(advance <= naturalAdvance * 1.5 + 0.2, `${prefix}: digit run ${index} stretch ${advance}`);
+  }
+  const bands = [];
+  for (const band of suffixBands.sort((a, b) => a.top - b.top)) {
+    const previous = bands.at(-1);
+    if (previous && Math.abs(band.top - previous.top) <= 0.2) {
+      previous.bottom = Math.max(previous.bottom, band.bottom);
+    } else {
+      bands.push({ ...band });
+    }
+  }
+  for (let index = 1; index < bands.length; index += 1) {
+    assert.ok(bands[index].top >= bands[index - 1].bottom - 0.2, `${prefix}: suffix line overlap`);
+  }
 }
 
 function assertFocusedTrace(format, runNumber, trace) {
@@ -1150,8 +1284,8 @@ function assertFocusedTrace(format, runNumber, trace) {
     `${prefix}: mutation result must precede resumable begin`,
   );
   assert.ok(
-    boundaryBegin.sequence < firstCursorAfterBoundary.sequence,
-    `${prefix}: resumable begin must precede cursor query`,
+    firstCursorAfterBoundary.sequence < boundaryBegin.sequence,
+    `${prefix}: cursor query and input paint must precede async resumable begin`,
   );
 
   const operationDurations = operations.map((event) => event.durationMs);
@@ -1327,6 +1461,272 @@ async function runFocusedFormat(page, format, bytes, runNumber) {
   };
 }
 
+async function runContinuousImeDigitSmoke(page, format, bytes) {
+  await restoreTrace(page);
+  await openDocumentThroughApp(page, format, bytes);
+  await moveToTarget(page);
+  const initial = await readFocusedSnapshot(page);
+  const initialText = initial.model.text;
+  const clip = await resolveCompositedClip(page);
+  const directory = path.join(OUTPUT_ROOT, 'continuous-ime-digit', format);
+  const timelineStart = await page.evaluate(() => performance.now());
+  await installTrace(page);
+
+  const stableKeyboardDurationsMs = await typeKeyboardOnes(page, 55);
+  await waitTwoRafs(page);
+  const beforeCompositionText = `${initialText}${'1'.repeat(55)}`;
+  const beforeComposition = await readFocusedSnapshot(page);
+  assert.equal(beforeComposition.model.text, beforeCompositionText, `${format} continuous IME precondition text`);
+  assert.equal(beforeComposition.model.lineCount, 4, `${format} continuous IME precondition lines`);
+  assert.equal(beforeComposition.pagination.pending, true, `${format} continuous IME precondition pending`);
+
+  await page.evaluate(() => {
+    window.__inputHandler.textarea.dispatchEvent(new CompositionEvent('compositionstart', {
+      bubbles: true,
+      data: '',
+    }));
+  });
+  const compositionStates = [];
+  const compositionCaptures = {};
+  let glyphClip = null;
+  for (const value of ['ㅎ', '하', '한']) {
+    await page.evaluate((text) => {
+      const textarea = window.__inputHandler.textarea;
+      textarea.value = text;
+      textarea.dispatchEvent(new InputEvent('input', {
+        bubbles: true,
+        data: text,
+        inputType: 'insertCompositionText',
+        isComposing: true,
+      }));
+    }, value);
+    await waitTwoRafs(page);
+    const expectedText = `${initialText}${'1'.repeat(55)}${value}`;
+    const state = await collectState(page, `continuous-ime-${value}-2raf`, timelineStart);
+    assert.equal(state.model.lineCount, 5, `${format} continuous IME ${value}: flow line count`);
+    assertExactFocusedState(
+      format,
+      'continuous-ime-digit',
+      state,
+      expectedText,
+      5,
+      945.9,
+      true,
+      false,
+    );
+    compositionStates.push(state);
+
+    if (value === '하') {
+      glyphClip = await resolveCaretGlyphClip(page);
+      compositionCaptures.ha = await captureCompositedCrop(
+        page,
+        path.join(directory, 'ime-ha-2raf.png'),
+        glyphClip,
+      );
+    } else if (value === '한') {
+      assert.ok(glyphClip, `${format} continuous IME: glyph clip`);
+      compositionCaptures.han = await captureCompositedCrop(
+        page,
+        path.join(directory, 'ime-han-2raf.png'),
+        glyphClip,
+      );
+    }
+  }
+  const compositionInkComparison = comparePng(
+    compositionCaptures.han.filePath,
+    compositionCaptures.ha.filePath,
+    path.join(directory, 'ime-ha-vs-han-diff.png'),
+  );
+  assert.equal(compositionInkComparison.comparable, true, `${format} continuous IME: glyph crop comparable`);
+  assert.ok(
+    compositionInkComparison.changedPixelCount > 0,
+    `${format} continuous IME: 한 must replace 하 in the composited canvas within 2-rAF`,
+  );
+  assert.notEqual(
+    compositionCaptures.han.sha256,
+    compositionCaptures.ha.sha256,
+    `${format} continuous IME: glyph crop hash`,
+  );
+  await page.evaluate(() => {
+    window.__inputHandler.textarea.dispatchEvent(new CompositionEvent('compositionend', {
+      bubbles: true,
+      data: '한',
+    }));
+  });
+
+  // Put the following digit token behind an explicit break opportunity. This is the
+  // browser form of #3822: the old composer moved an overlong token after the prior
+  // break, then skipped character-level breaking for that token.
+  await waitForDeferredPaginationBegin(page);
+  await page.keyboard.type(' ');
+  const separatorText = `${initialText}${'1'.repeat(55)}한 `;
+  const separatorState = await readFocusedSnapshot(page);
+  assert.equal(separatorState.model.text, separatorText, `${format} continuous IME separator text`);
+  assert.equal(separatorState.pagination.pending, true, `${format} continuous IME separator pending`);
+
+  // Cross two digit line boundaries while that pagination job is active. No
+  // completion wait is allowed before the second wrap is observed.
+  let digitCount = 0;
+  const digitWraps = [];
+  let tailInputsRemaining = null;
+  const initialImeLineCount = separatorState.model.lineCount;
+  let previousLineCount = initialImeLineCount;
+  const durationsMs = [];
+  while (digitCount < CONTINUOUS_WRAP_MAX_INSERTS) {
+    digitCount += 1;
+    const startedAt = performance.now();
+    await page.keyboard.type('1');
+    durationsMs.push(performance.now() - startedAt);
+    const expectedText = `${separatorText}${'1'.repeat(digitCount)}`;
+    const snapshot = await readFocusedSnapshot(page);
+    const prefix = `${format} continuous IME digit ${digitCount}`;
+    assert.equal(snapshot.model.text, expectedText, `${prefix}: model text`);
+    assert.equal(snapshot.model.length, expectedText.length, `${prefix}: model length`);
+    assert.equal(snapshot.cursor.position.charOffset, expectedText.length, `${prefix}: cursor offset`);
+    assert.equal(snapshot.pagination.pageCount, 115, `${prefix}: page count`);
+    assert.equal(snapshot.pagination.pending, true, `${prefix}: pending`);
+    assert.equal(snapshot.cursor.rect?.cellOverflowed, false, `${prefix}: cursor overflow`);
+
+    if (snapshot.model.lineCount > previousLineCount) {
+      digitWraps.push({ digitCount, from: previousLineCount, to: snapshot.model.lineCount });
+      previousLineCount = snapshot.model.lineCount;
+    }
+    if (snapshot.model.lineCount >= initialImeLineCount + 2 && tailInputsRemaining === null) {
+      assert.equal(snapshot.pagination.pending, true, `${format} continuous IME: second wrap pending`);
+      tailInputsRemaining = CONTINUOUS_WRAP_TAIL_INPUTS;
+    } else if (tailInputsRemaining !== null) {
+      tailInputsRemaining -= 1;
+      if (tailInputsRemaining === 0) break;
+    }
+    await delay(page, CONTINUOUS_INPUT_MIN_GAP_MS);
+  }
+  assert.deepEqual(
+    digitWraps.map((wrap) => wrap.digitCount),
+    [11, 69],
+    `${format} continuous IME: deterministic digit line transitions`,
+  );
+  assert.equal(tailInputsRemaining, 0, `${format} continuous IME: post-wrap tail inputs`);
+
+  await waitTwoRafs(page);
+  const expectedText = `${separatorText}${'1'.repeat(digitCount)}`;
+  const expectedLineCount = initialImeLineCount + 2;
+  const digitTokenStart = TARGET.charOffset + 57;
+  const pendingState = await collectState(page, 'continuous-ime-digit-second-tail-2raf', timelineStart);
+  assertExactFocusedState(
+    format,
+    'continuous-ime-digit',
+    pendingState,
+    expectedText,
+    expectedLineCount,
+    945.9,
+    true,
+  );
+  assertContinuousFlowGeometry(format, 'continuous IME digit pending', pendingState, digitTokenStart);
+  const pendingCapture = await captureCompositedCrop(
+    page,
+    path.join(directory, 'ime-digit-pending.png'),
+    clip,
+  );
+
+  await waitForDeferredPaginationCompletion(page, 15_000);
+  const completedState = await collectState(page, 'continuous-ime-digit-complete', timelineStart);
+  assertExactFocusedState(
+    format,
+    'continuous-ime-digit',
+    completedState,
+    expectedText,
+    expectedLineCount,
+    945.9,
+    false,
+    true,
+    116,
+  );
+  assertContinuousFlowGeometry(format, 'continuous IME digit complete', completedState, digitTokenStart);
+  const completedCapture = await captureCompositedCrop(
+    page,
+    path.join(directory, 'ime-digit-complete.png'),
+    clip,
+  );
+  const comparison = comparePng(
+    completedCapture.filePath,
+    pendingCapture.filePath,
+    path.join(directory, 'ime-digit-pending-vs-complete-diff.png'),
+  );
+  assert.equal(comparison.comparable, true, `${format} continuous IME: comparable crop`);
+  assert.equal(comparison.changedPixelCount, 0, `${format} continuous IME: pending ink must be final ink`);
+  assert.equal(completedCapture.sha256, pendingCapture.sha256, `${format} continuous IME: exact crop hash`);
+
+  const trace = await collectTrace(page);
+  const begins = trace.events.filter((event) => event.type === 'wasm.beginDeferredPagination');
+  const steps = trace.events.filter((event) => event.type === 'wasm.stepDeferredPagination');
+  const latestBegin = begins.at(-1);
+  const finalStep = steps.at(-1);
+  assert.ok(latestBegin, `${format} continuous IME: latest deferred begin`);
+  assert.ok(finalStep, `${format} continuous IME: final deferred step`);
+  assert.equal(finalStep.status, 'complete', `${format} continuous IME: final deferred status`);
+  assert.equal(finalStep.pageCount, 116, `${format} continuous IME: final deferred page count`);
+  assert.equal(
+    finalStep.revision,
+    latestBegin.revision,
+    `${format} continuous IME: latest begin/final step revision`,
+  );
+  assert.ok(
+    latestBegin.sequence < finalStep.sequence,
+    `${format} continuous IME: latest begin must precede final step`,
+  );
+  assert.equal(trace.counts.deferredReplace, 2, `${format} continuous IME: replacement count`);
+  assert.equal(trace.counts.wasmFlush, 0, `${format} continuous IME: WASM flush`);
+  assert.equal(trace.counts.inputFlush, 0, `${format} continuous IME: input flush`);
+  const operationDurationsMs = traceDurations(trace, 'InputHandler.executeOperation');
+  assert.equal(
+    operationDurationsMs.length,
+    57 + digitCount,
+    `${format} continuous IME: operation timing count`,
+  );
+  const timing = {
+    keyboardBeforeFlow: summarizeDurations(stableKeyboardDurationsMs),
+    keyboardPendingFlow: summarizeDurations(durationsMs),
+    operationBeforeFlow: summarizeDurations(operationDurationsMs.slice(0, 55)),
+    operationPendingFlow: summarizeDurations(operationDurationsMs.slice(55)),
+    cursorQuery: summarizeDurations(traceDurations(trace, 'wasm.getCursorRectByPathNear')),
+    filteredRender: summarizeDurations(traceDurations(trace, 'wasm.renderPageToCanvasFiltered')),
+    pageRender: summarizeDurations(traceDurations(trace, 'PageRenderer.renderPage')),
+  };
+  await restoreTrace(page);
+  console.log(
+    `  continuous IME→digit: correctness GREEN, wraps=${digitWraps.map((wrap) => wrap.digitCount).join('/')}, `
+      + `digits=${digitCount}, `
+      + `pendingOpP95=${timing.operationPendingFlow.p95Ms.toFixed(1)}ms`,
+  );
+  return {
+    format,
+    correctness: 'passed',
+    latency: 'measured-not-gated',
+    compositionStates: compositionStates.map((state) => ({
+      label: state.label,
+      lineCount: state.model.lineCount,
+      pending: state.pagination.pending,
+    })),
+    digitWraps,
+    digitCount,
+    durations: summarizeDurations(durationsMs),
+    timing,
+    traceCounts: trace.counts,
+    paginationTrace: {
+      beginCount: begins.length,
+      latestBeginRevision: latestBegin.revision,
+      finalStepRevision: finalStep.revision,
+      finalStepStatus: finalStep.status,
+      finalStepPageCount: finalStep.pageCount,
+    },
+    compositionCaptures,
+    compositionInkComparison,
+    pendingCapture,
+    completedCapture,
+    comparison,
+  };
+}
+
 function assertRawBoundaryTrace(format, kind, trace) {
   const prefix = `${format} ${kind} raw boundary`;
   const inserts = trace.events.filter((event) => event.type === 'wasm.insertTextInCellDeferredPagination');
@@ -1353,7 +1753,10 @@ function assertRawBoundaryTrace(format, kind, trace) {
   const firstCursorQuery = cursorQueries.find((event) => event.sequence > inserts[0].sequence);
   assert.ok(firstCursorQuery, `${prefix}: cursor query after mutation`);
   assert.ok(inserts[0].sequence < begins[0].sequence, `${prefix}: mutation must precede resumable begin`);
-  assert.ok(begins[0].sequence < firstCursorQuery.sequence, `${prefix}: begin must precede cursor query`);
+  assert.ok(
+    firstCursorQuery.sequence < begins[0].sequence,
+    `${prefix}: cursor query and input paint must precede async resumable begin`,
+  );
 }
 
 function assertRawStableTrace(format, kind, trace) {
@@ -1454,18 +1857,25 @@ async function runMultiUpdateImeSmoke(page, format, bytes) {
   assert.equal(snapshot.pagination.pending, true, `${format} IME deferred hold`);
 
   const trace = await collectTrace(page);
-  const deletes = trace.events.filter((event) => event.type === 'wasm.deleteTextInCellDeferredPagination');
-  assert.equal(trace.counts.deferredInsert, 3, `${format} IME deferred insert count`);
-  assert.equal(trace.counts.deferredDelete, 2, `${format} IME replacement delete count`);
+  // [#3412] #3254 이후 조합 갱신은 delete+insert 가 아니라 단일 replace 를 쓴다.
+  // 첫 갱신(삭제 0)만 insert 로 남고, 2·3번째가 replace 두 번이 된다.
+  const replacements = trace.events.filter(
+    (event) => event.type === 'wasm.replaceTextInCellDeferredPagination',
+  );
+  assert.equal(trace.counts.deferredInsert, 1, `${format} IME deferred insert count`);
+  assert.equal(trace.counts.deferredReplace, 2, `${format} IME deferred replacement count`);
+  assert.equal(trace.counts.deferredDelete, 0, `${format} IME standalone delete count`);
   assert.equal(trace.counts.immediateDelete, 0, `${format} IME synchronous flat delete count`);
   assert.equal(trace.counts.pathDelete, 0, `${format} IME path delete count`);
   assert.equal(trace.counts.cursorRectInCell, 0, `${format} IME anchor cursor lookup count`);
   assert.equal(trace.counts.prepareTextMutation, 3, `${format} IME effect consumption count`);
   assert.equal(trace.counts.wasmFlush, 0, `${format} IME synchronous flush count`);
-  assert.deepEqual(deletes.map((event) => event.charOffset), [
+  // 두 치환 모두 조합 anchor 에서 직전 조합 글자 1개를 지우고 새 글자로 바꾼다.
+  assert.deepEqual(replacements.map((event) => event.charOffset), [
     TARGET.charOffset,
     TARGET.charOffset,
   ]);
+  assert.deepEqual(replacements.map((event) => event.deleteCount), [1, 1]);
   for (const [index, durationMs] of durationsMs.entries()) {
     assert.ok(durationMs < 250, `${format} IME update ${index + 1} blocked ${durationMs.toFixed(2)}ms`);
   }
@@ -1805,11 +2215,29 @@ async function runSaveBarrierSmoke(page, format, bytes) {
 async function runPrintBarrierSmoke(page, format, bytes) {
   const before = await preparePendingBoundary(page, format, bytes);
   await page.evaluate(() => {
+    // [#3412] 인쇄 미리보기는 별도 창(print.html surface)을 열고 load 이벤트·origin·rAF 를
+    // 사용한다. 가짜 창이 document/print/close 만 갖고 있으면 createPrintPreviewSurface 가
+    // addEventListener 에서 죽어 페이지가 한 장도 안 그려진다.
     const printDocument = document.implementation.createHTMLDocument('issue-2424-print');
+    try {
+      Object.defineProperty(printDocument, 'readyState', { value: 'complete', configurable: true });
+    } catch {
+      // readyState 를 덮어쓸 수 없으면 load 이벤트 경로로 넘어간다.
+    }
+    const surfaceUrl = new URL('print.html', document.baseURI).href;
     window.__issue2424PrintWindow = {
       document: printDocument,
+      location: { href: surfaceUrl, origin: window.location.origin },
+      closed: false,
+      addEventListener() {},
+      removeEventListener() {},
+      requestAnimationFrame(callback) {
+        return window.requestAnimationFrame(callback);
+      },
       print() {},
-      close() {},
+      close() {
+        this.closed = true;
+      },
     };
     window.open = () => window.__issue2424PrintWindow;
   });
@@ -1823,7 +2251,9 @@ async function runPrintBarrierSmoke(page, format, bytes) {
   );
   const trace = await collectTrace(page);
   const flush = trace.events.find((event) => event.type === 'wasm.flushDeferredPagination');
-  const firstRender = trace.events.find((event) => event.type === 'wasm.renderPageSvg');
+  const firstRender = trace.events.find(
+    (event) => event.type === 'wasm.renderPageSvg' || event.type === 'wasm.renderPageSvgWithProfile',
+  );
   assert.ok(flush, `${format} print flush event`);
   assert.ok(firstRender, `${format} print render event`);
   assert.ok(flush.sequence < firstRender.sequence, `${format} print must flush before first page render`);
@@ -1832,11 +2262,14 @@ async function runPrintBarrierSmoke(page, format, bytes) {
 
   const output = await page.evaluate(() => ({
     pageCount: window.__issue2424PrintWindow.document.querySelectorAll('.page').length,
-    printBarLabel: window.__issue2424PrintWindow.document.querySelector('.print-bar span')?.textContent ?? '',
+    // [#3412] 402d6342c 에서 미리보기 바가 print-preview-bar/print-preview-title 로 바뀌고
+    // 라벨도 `파일명 — N쪽` 형식이 됐다.
+    printBarLabel: window.__issue2424PrintWindow.document
+      .querySelector('.print-preview-bar .print-preview-title')?.textContent ?? '',
     pending: window.__inputHandler.hasDeferredPaginationPending(),
   }));
   assert.equal(output.pageCount, before.pagination.pageCount, `${format} print final page count`);
-  assert.match(output.printBarLabel, /115페이지/, `${format} print bar page count`);
+  assert.match(output.printBarLabel, /115쪽/, `${format} print bar page count`);
   assert.equal(output.pending, false, `${format} print pending state`);
   await restoreTrace(page);
   console.log(`  print barrier: GREEN, flush→render ${output.pageCount} pages`);
@@ -1850,7 +2283,13 @@ async function runFocusedMain() {
     .filter(Boolean);
   const runs = Number(cliValue('runs', '3'));
   const reviewOnly = process.argv.includes('--review-only');
+  const continuousOnly = process.argv.includes('--continuous-only');
   assert.ok(Number.isInteger(runs) && runs > 0, '--runs must be a positive integer');
+  assert.equal(
+    reviewOnly && continuousOnly,
+    false,
+    '--review-only and --continuous-only are mutually exclusive',
+  );
   for (const format of formats) assert.ok(SAMPLES[format], `unsupported format: ${format}`);
 
   mkdirSync(OUTPUT_ROOT, { recursive: true });
@@ -1876,28 +2315,37 @@ async function runFocusedMain() {
   const startedAt = new Date().toISOString();
   const results = [];
   const rawSmokes = [];
+  const continuousSmokes = [];
   const reviewSmokes = [];
   try {
     await loadApp(page);
     for (const format of formats) {
-      if (!reviewOnly) {
+      if (!reviewOnly && !continuousOnly) {
         console.log(`\n[${format.toUpperCase()}] focused GREEN (${runs} runs)`);
         for (let runNumber = 1; runNumber <= runs; runNumber += 1) {
           results.push(await runFocusedFormat(page, format, fixtures[format].bytes, runNumber));
         }
+      }
+      if (!reviewOnly) {
+        console.log(`\n[${format.toUpperCase()}] continuous IME→digit second-wrap`);
+        continuousSmokes.push(await runContinuousImeDigitSmoke(page, format, fixtures[format].bytes));
+      }
+      if (!reviewOnly && !continuousOnly) {
         rawSmokes.push(await runRawStableSmoke(page, format, fixtures[format].bytes, 'ime'));
         rawSmokes.push(await runRawStableSmoke(page, format, fixtures[format].bytes, 'ios'));
         rawSmokes.push(await runRawBoundarySmoke(page, format, fixtures[format].bytes, 'ime'));
         rawSmokes.push(await runRawBoundarySmoke(page, format, fixtures[format].bytes, 'ios'));
       }
-      console.log(`\n[${format.toUpperCase()}] #2424 deletion/IME/output barrier`);
-      reviewSmokes.push(await runDeleteKeySmoke(page, format, fixtures[format].bytes, 'Backspace'));
-      reviewSmokes.push(await runDeleteKeySmoke(page, format, fixtures[format].bytes, 'Delete'));
-      reviewSmokes.push(await runMultiUpdateImeSmoke(page, format, fixtures[format].bytes));
-      reviewSmokes.push(await runImeAcrossPaginationCommitSmoke(page, format, fixtures[format].bytes));
-      reviewSmokes.push(await runSaveBarrierSmoke(page, format, fixtures[format].bytes));
-      if (format === 'hwp') {
-        reviewSmokes.push(await runPrintBarrierSmoke(page, format, fixtures[format].bytes));
+      if (!continuousOnly) {
+        console.log(`\n[${format.toUpperCase()}] #2424 deletion/IME/output barrier`);
+        reviewSmokes.push(await runDeleteKeySmoke(page, format, fixtures[format].bytes, 'Backspace'));
+        reviewSmokes.push(await runDeleteKeySmoke(page, format, fixtures[format].bytes, 'Delete'));
+        reviewSmokes.push(await runMultiUpdateImeSmoke(page, format, fixtures[format].bytes));
+        reviewSmokes.push(await runImeAcrossPaginationCommitSmoke(page, format, fixtures[format].bytes));
+        reviewSmokes.push(await runSaveBarrierSmoke(page, format, fixtures[format].bytes));
+        if (format === 'hwp') {
+          reviewSmokes.push(await runPrintBarrierSmoke(page, format, fixtures[format].bytes));
+        }
       }
     }
   } finally {
@@ -1916,6 +2364,7 @@ async function runFocusedMain() {
       chromePath: process.env.CHROME_PATH ?? process.env.PUPPETEER_EXECUTABLE_PATH ?? null,
       viewport: { width: 1280, height: 900, deviceScaleFactor: 1 },
       runs,
+      continuousOnly,
     },
     fixtures: Object.fromEntries(Object.entries(fixtures).map(([format, value]) => [format, {
       path: value.path,
@@ -1924,6 +2373,7 @@ async function runFocusedMain() {
     }])),
     results,
     rawSmokes,
+    continuousSmokes,
     reviewSmokes,
   };
   writeJson(path.join(OUTPUT_ROOT, 'focused-summary.json'), summary);

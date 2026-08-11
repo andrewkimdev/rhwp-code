@@ -11,7 +11,7 @@ use super::border_rendering::{
 use super::text_measurement::{
     is_cjk_char, is_vertical_rotate_char, resolved_to_text_style, vertical_substitute_char,
 };
-use super::utils::{extract_shape_transform, find_bin_data};
+use super::utils::{extract_shape_transform, find_bin_data_bytes};
 use super::{CellContext, CellPathEntry, LayoutEngine};
 use crate::model::bin_data::BinDataContent;
 use crate::model::control::Control;
@@ -29,7 +29,7 @@ impl LayoutEngine {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn layout_vertical_cell_text(
         &self,
-        tree: &mut PageRenderTree,
+        tree: &mut LayoutFrame,
         cell_node: &mut RenderNode,
         composed_paras: &[ComposedParagraph],
         paragraphs: &[Paragraph],
@@ -274,6 +274,7 @@ impl LayoutEngine {
                             if let Some(last) = new_ctx.path.last_mut() {
                                 last.cell_index = cell_idx;
                                 last.cell_para_index = ci.cell_para_index;
+                                last.text_direction = text_direction;
                             }
                             Some(new_ctx)
                         } else {
@@ -318,7 +319,7 @@ impl LayoutEngine {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn layout_cell_shape(
         &self,
-        tree: &mut PageRenderTree,
+        tree: &mut LayoutFrame,
         cell_node: &mut RenderNode,
         shape: &crate::model::shape::ShapeObject,
         inner_area: &LayoutRect,
@@ -415,7 +416,7 @@ impl LayoutEngine {
     /// enclosing_ctx: (section_index, body_para_index, 상위 경로, 표의 컨트롤 인덱스)
     pub(crate) fn layout_embedded_table(
         &self,
-        tree: &mut PageRenderTree,
+        tree: &mut LayoutFrame,
         parent: &mut RenderNode,
         table: &crate::model::table::Table,
         styles: &ResolvedStyleSet,
@@ -513,6 +514,27 @@ impl LayoutEngine {
         let mut v_edges: Vec<Vec<Option<BorderLine>>> = vec![vec![None; row_count]; col_count + 1];
 
         // 표 노드 생성
+        // [#4334] TAC(text-as-char) 중첩 표는 자기 자신의 (section, para, control) 을
+        // `enclosing_ctx`(호스트 글상자/셀의 경로 + 이 표 컨트롤의 호스트 문단 내
+        // 인덱스)에서 그대로 옮겨 담는다 — 이전에는 전부 None 이라 stableIndex 가
+        // next_id() 카운터 폴백에 전적으로 의존했다(#4334 stage3 실측).
+        let (table_section_index, table_para_index, table_control_index, table_cell_context) =
+            match enclosing_ctx {
+                Some((sec_idx, para_idx, parent_path, table_ci)) => (
+                    Some(sec_idx),
+                    Some(para_idx),
+                    Some(table_ci),
+                    if parent_path.is_empty() {
+                        None
+                    } else {
+                        Some(CellContext {
+                            parent_para_index: para_idx,
+                            path: parent_path.to_vec(),
+                        })
+                    },
+                ),
+                None => (None, None, None, None),
+            };
         let table_id = tree.next_id();
         let mut table_node = RenderNode::new(
             table_id,
@@ -520,9 +542,10 @@ impl LayoutEngine {
                 row_count: table.row_count,
                 col_count: table.col_count,
                 border_fill_id: table.border_fill_id,
-                section_index: None,
-                para_index: None,
-                control_index: None,
+                section_index: table_section_index,
+                para_index: table_para_index,
+                control_index: table_control_index,
+                cell_context: table_cell_context,
             }),
             BoundingBox::new(table_x, table_y, table_width, table_height),
         );
@@ -760,8 +783,7 @@ impl LayoutEngine {
                             };
 
                             let bin_id = pic.image_attr.bin_data_id;
-                            let img_data =
-                                find_bin_data(bin_data_content, bin_id).map(|bd| bd.data.load());
+                            let img_data = find_bin_data_bytes(bin_data_content, bin_id);
                             let img_node_id = tree.next_id();
                             // [Task #1151 v4] 셀 안 inline picture 의 cell context + outer
                             // 정보 보존. rendering.rs:1495 의 Image JSON 직렬화 에 cellIdx/
@@ -842,7 +864,7 @@ impl LayoutEngine {
 
         // 엣지 기반 테두리 렌더링
         table_node.children.extend(render_edge_borders(
-            tree, &h_edges, &v_edges, &row_col_x, &row_y, table_x, table_y,
+            tree, &h_edges, &v_edges, &row_col_x, &row_y, table_x, table_y, None,
         ));
         if self.show_transparent_borders.get() {
             table_node.children.extend(render_transparent_borders(

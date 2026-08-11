@@ -226,6 +226,9 @@ mod tests {
             start_cut: Vec::new(),
             end_cut: Vec::new(),
             is_block_split: false,
+            row_cursor_is_nested: false,
+            end_row_height_override: None,
+            start_row_height_override: None,
         }]);
         assert_eq!(a.assign(&p1), 1);
 
@@ -239,6 +242,9 @@ mod tests {
             start_cut: Vec::new(),
             end_cut: Vec::new(),
             is_block_split: false,
+            row_cursor_is_nested: false,
+            end_row_height_override: None,
+            start_row_height_override: None,
         }]);
         assert_eq!(a.assign(&p2), 2);
     }
@@ -272,6 +278,28 @@ mod tests {
     fn should_not_hide_when_no_new_numbers() {
         let a = PageNumberAssigner::new(&[], 1);
         assert!(!a.should_hide_page_number(), "NewNumber 없으면 항상 표시");
+    }
+
+    /// [#4369] 같은 문단에 NewNumber Page 컨트롤이 2개(12, 11 순)면 문서
+    /// 순서상 **마지막**(11)이 채택되고 이후 단조 증가한다. HWP5/HWPX 재현
+    /// (5쪽, p3 문단에 newNum 12→11 연속)에서 dump-pages 가 1,2,11,12,13 을
+    /// 내는 계약의 단위 고정.
+    #[test]
+    fn same_paragraph_multiple_new_numbers_last_wins() {
+        let nns = vec![(5usize, 12u16), (5usize, 11u16)];
+        let mut a = PageNumberAssigner::new(&nns, 1);
+
+        let p1 = mk_page(vec![PageItem::FullParagraph { para_index: 0 }]);
+        assert_eq!(a.assign(&p1), 1);
+
+        // NewNumber 2개가 같은 문단에서 함께 트리거 — 마지막(11) 채택
+        let p2 = mk_page(vec![PageItem::FullParagraph { para_index: 5 }]);
+        assert_eq!(a.assign(&p2), 11);
+
+        let p3 = mk_page(vec![PageItem::FullParagraph { para_index: 6 }]);
+        assert_eq!(a.assign(&p3), 12);
+        let p4 = mk_page(vec![PageItem::FullParagraph { para_index: 7 }]);
+        assert_eq!(a.assign(&p4), 13);
     }
 
     #[test]

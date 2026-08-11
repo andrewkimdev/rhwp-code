@@ -25,8 +25,8 @@ impl DocumentCore {
         | (1 << 26)
         | (1 << 28);
     pub(crate) fn sync_common_obj_attr_known_bits(c: &mut crate::model::shape::CommonObjAttr) {
-        let packed =
-            crate::document_core::converters::common_obj_attr_writer::pack_common_attr_bits(c);
+        // [#4400] pack_common_attr_bits 는 serializer 소유로 이동했다.
+        let packed = crate::serializer::control::pack_common_attr_bits(c);
         c.attr = (c.attr & !Self::COMMON_OBJ_ATTR_KNOWN_MASK)
             | (packed & Self::COMMON_OBJ_ATTR_KNOWN_MASK);
     }
@@ -47,6 +47,12 @@ impl DocumentCore {
         styles: &crate::renderer::style_resolver::ResolvedStyleSet,
         dpi: f64,
     ) {
+        // [#4149] 컨트롤 삭제는 char_offsets −8 시프트로 compose 입력을 바꾼다 —
+        // 높이만 조정하고 reflow_line_segs 를 타지 않는 분기(남은 컨트롤/빈 문단)도
+        // 포함해 단일줄 과밀 memo 를 무효화한다. 삽입 쌍둥이
+        // `shift_for_inline_control_insert` 와 대칭 (셀 그림/도형/수식/각주 삭제
+        // 가족이 전부 이 함수로 수렴).
+        para.invalidate_single_line_overflow_memo();
         // 남은 컨트롤 중 가장 큰 높이 계산
         let max_remaining_ctrl_height = para
             .controls
@@ -382,6 +388,8 @@ impl crate::document_core::DocumentCore {
             idx
         };
 
+        // [#3214] controls 기준 인덱스를 ctrl_data_records 에 그대로 쓰기 전에 정렬한다.
+        paragraph.align_ctrl_data_records();
         paragraph
             .controls
             .insert(insert_idx, Control::NewNumber(new_number));

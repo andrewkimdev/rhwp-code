@@ -18,6 +18,7 @@ pub mod font_metrics_data;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod font_paths;
 pub(crate) mod form_caption;
+pub(crate) mod hancom_pua;
 pub mod height_cursor;
 pub mod height_measurer;
 pub mod html;
@@ -28,6 +29,8 @@ pub mod layout;
 pub mod page_layout;
 pub mod page_number;
 pub mod pagination;
+#[cfg(any(target_arch = "wasm32", test))]
+pub(crate) mod partial_replay;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod pdf;
 pub mod pua_oldhangul;
@@ -202,7 +205,75 @@ pub struct TextStyle {
     pub shade_color: ColorRef,
 }
 
+/// 위첨자/아래첨자 글리프를 그릴 때 적용하는 본문 대비 글꼴 크기 배율.
+pub const SCRIPT_FONT_SCALE: f64 = 0.7;
+/// 위첨자 baseline 상향 이동량 (본문 글꼴 크기 대비 em).
+pub const SUPERSCRIPT_RISE_EM: f64 = 0.3;
+/// 아래첨자 baseline 하향 이동량 (본문 글꼴 크기 대비 em).
+pub const SUBSCRIPT_DROP_EM: f64 = 0.15;
+
 impl TextStyle {
+    /// 위첨자/아래첨자 run 의 **그리기** 글꼴 크기와 baseline 을 계산한다.
+    ///
+    /// SVG·Canvas·HTML·Skia·paint JSON 이 각자 하드코딩하던 동일 상수를 한곳으로
+    /// 모은 것이다 (#2771). 레이아웃 advance 는 본문 run 기준을 유지하고 실제
+    /// 글리프 크기와 baseline 만 조정한다는 계약은 종전과 같다.
+    ///
+    /// 비첨자 run 은 인자를 그대로 돌려주므로 기존 출력이 비트 단위로 보존된다.
+    pub fn script_draw_metrics(&self, base_font_size: f64, baseline_y: f64) -> (f64, f64) {
+        if self.superscript {
+            (
+                base_font_size * SCRIPT_FONT_SCALE,
+                baseline_y - base_font_size * SUPERSCRIPT_RISE_EM,
+            )
+        } else if self.subscript {
+            (
+                base_font_size * SCRIPT_FONT_SCALE,
+                baseline_y + base_font_size * SUBSCRIPT_DROP_EM,
+            )
+        } else {
+            (base_font_size, baseline_y)
+        }
+    }
+
+    /// 글자폭 맞춤(fit) 대상 advance 에 적용할 배율 (#2771).
+    ///
+    /// SVG `textLength` 와 Canvas `fit_scale` 은 "레이아웃 advance 에 글리프 폭을
+    /// 맞춘다". 그런데 첨자 글리프는 `script_draw_metrics` 로 0.7 배 축소되어
+    /// 그려지므로, 대상 advance 를 같은 배율로 줄이지 않으면 브라우저가 축소된
+    /// 글리프를 본문 폭까지 되늘려 1/0.7 ≈ 1.43 배 가로 확대가 발생한다.
+    ///
+    /// 비첨자는 **정확히 1.0** 을 돌려준다. `advance * 1.0` 은 IEEE-754 상
+    /// 반올림이 없는 항등 연산이라 기존 `textLength` 값이 비트 단위로 불변이다.
+    pub fn script_advance_scale(&self) -> f64 {
+        if self.superscript || self.subscript {
+            SCRIPT_FONT_SCALE
+        } else {
+            1.0
+        }
+    }
+
+    /// 브라우저 렌더러가 실제 glyph 폭을 맞출 때 사용할 advance 를 반환한다.
+    ///
+    /// `extra_char_spacing` 의 양수 값은 배분/나눔 정렬에서 다음 cluster 의 시작
+    /// 위치를 옮기는 간격이다. 이를 SVG `textLength` 또는 Canvas `scaleX`의 목표
+    /// 폭에 포함하면 영문·숫자 glyph 자체가 가로로 늘어난다. 문자 위치 계산은
+    /// 그대로 두고, glyph 맞춤 단계에서만 이 간격을 제외한다.
+    ///
+    /// 음수 값은 셀 오버플로우 보정(#2189)에서 glyph까지 layout advance에
+    /// 맞추는 기존 계약이므로 그대로 유지한다. 최소 advance clamp 때문에
+    /// intrinsic 폭을 안전하게 역산할 수도 없다. 따라서 양수 간격만 제외한다.
+    pub(crate) fn glyph_fit_advance(&self, layout_cluster_advance: f64) -> Option<f64> {
+        if !layout_cluster_advance.is_finite() || !self.extra_char_spacing.is_finite() {
+            return None;
+        }
+        if self.extra_char_spacing > 0.0 {
+            Some((layout_cluster_advance - self.extra_char_spacing).max(0.0))
+        } else {
+            Some(layout_cluster_advance)
+        }
+    }
+
     /// 시각적 bold 여부.
     ///
     /// CharShape.bold=true 외에도 HY헤드라인M 같은 heavy display face 를
@@ -232,6 +303,31 @@ impl TextStyle {
             None
         }
     }
+}
+
+/// Canvas 폰트의 실측 폭을 레이아웃 advance에 맞출 때 적용할 배율을 계산한다.
+///
+/// 양수 문자 간격은 다음 cluster의 시작 위치를 바꾸는 값이므로 glyph 폭 맞춤과
+/// 분리한다. 음수 간격은 #2189 셀 오버플로우 보정의 기존 glyph-fit 계약을
+/// 유지하고, 양수 배분 간격만 `glyph_fit_advance`로 제외한다.
+pub(crate) fn canvas_cluster_fit_scale(
+    style: &TextStyle,
+    layout_cluster_advance: f64,
+    visual_width: f64,
+    pin_ascii_advance: bool,
+) -> Option<f64> {
+    let cluster_advance =
+        style.glyph_fit_advance(layout_cluster_advance)? * style.script_advance_scale();
+    if cluster_advance <= 0.0 || visual_width <= 0.0 || style.letter_spacing < 0.0 {
+        return None;
+    }
+    if pin_ascii_advance {
+        return Some((cluster_advance / visual_width).clamp(0.1, 2.0));
+    }
+    if visual_width > cluster_advance + 0.25 {
+        return Some((cluster_advance / visual_width).clamp(0.1, 1.0));
+    }
+    None
 }
 
 impl Default for TextStyle {
@@ -862,6 +958,40 @@ pub(crate) fn para_has_no_stored_line_segs(p: &crate::model::paragraph::Paragrap
     p.line_segs.is_empty() || p.line_segs.iter().all(|s| s.tag & 0x8000_0000 != 0)
 }
 
+/// 셀 문단의 저장 `LINE_SEG.vertical_pos` 를 절대 앵커로 신뢰할 수 있는지 판정한다.
+///
+/// `vertical_pos == 0` 은 "셀 상단"이라는 유효한 값이면서 동시에 "앵커 없음"의
+/// 센티널이기도 하다. 첫 문단은 0 이 곧 셀 상단이라 그대로 신뢰하고, 두 번째 이후
+/// 문단은 양수 vpos 가 저장돼 있을 때만 앵커로 쓴다.
+#[inline]
+pub(crate) fn first_seg_vpos_is_anchor(
+    para: &crate::model::paragraph::Paragraph,
+    cell_para_index: usize,
+) -> bool {
+    para.line_segs
+        .first()
+        .is_some_and(|seg| cell_para_index == 0 || seg.vertical_pos > 0)
+}
+
+/// 셀의 저장 vpos 흐름이 문단 위치를 구분해 담고 있는지 ("사다리" 온전성).
+///
+/// 셀 안 문단이 전부 `vpos == 0` 으로 저장된 문서(중첩 표 안쪽 셀에서 흔하다)에서는
+/// 저장 흐름이 문단 위치를 구분하지 못한다. 이 경우 다음 세 가지가 모두 성립하지
+/// 않으므로 저장 지오메트리를 신뢰해선 안 된다.
+///
+/// - 문단별 절대 배치 — 전 문단이 셀 상단 한 y 로 리셋된다
+/// - `max(vpos + lh)` 기반 셀 높이 — 1문단분으로 붕괴한다
+/// - `para_top + 중첩표 높이` 의 max 합성 — 텍스트와 중첩 표가 서로를 가린다
+#[inline]
+pub(crate) fn cell_vpos_ladder_is_intact(
+    paragraphs: &[crate::model::paragraph::Paragraph],
+) -> bool {
+    paragraphs
+        .iter()
+        .enumerate()
+        .all(|(idx, para)| first_seg_vpos_is_anchor(para, idx))
+}
+
 /// [#2287] 저장 LINE_SEG 없는 빈 anchor 문단의 TAC(글자처럼) 그림/도형 플로우
 /// 줄 메트릭 합성. 컨트롤 폭을 가용 폭에 greedy wrap 하여 줄별 (최대 높이, 0)
 /// 을 돌려준다.
@@ -971,6 +1101,47 @@ pub(crate) fn text_anchor_square_table_strip(
     (strip_cs > 0 && strip_sw > 0).then_some((strip_cs, strip_sw))
 }
 
+/// 빈 호스트 문단의 우측 Square 표가 남긴 좌측 본문 띠를 복원한다.
+///
+/// 한글은 표를 실제 수평 오프셋에 두면서 호스트 문단에는 전폭 LINE_SEG만 저장할 수
+/// 있다. 이 경우 다음 문단의 `cs=0, sw=horizontal_offset`가 표 왼쪽 띠를 직접
+/// 가리킨다. 호스트에 가시 텍스트가 있으면 기존 `text_anchor_square_table_strip`이
+/// 담당하므로, 이 함수는 빈 호스트와 우측으로 밀린 표에만 한정한다.
+pub(crate) fn empty_host_square_table_left_strip(
+    para: &crate::model::paragraph::Paragraph,
+    column_width_hu: i32,
+) -> Option<(i32, i32)> {
+    let first = para.line_segs.first()?;
+    if first.column_start != 0
+        || (first.segment_width as i32 - column_width_hu).abs() >= 3000
+        || para
+            .text
+            .chars()
+            .any(|ch| ch > '\u{001F}' && ch != '\u{FFFC}' && !ch.is_whitespace())
+    {
+        return None;
+    }
+
+    let left_width = para.controls.iter().find_map(|control| match control {
+        crate::model::control::Control::Table(table)
+            if !table.common.treat_as_char
+                && matches!(
+                    table.common.text_wrap,
+                    crate::model::shape::TextWrap::Square
+                )
+                && matches!(
+                    table.common.horz_align,
+                    crate::model::shape::HorzAlign::Left
+                ) =>
+        {
+            Some(table.common.horizontal_offset as i32)
+        }
+        _ => None,
+    })?;
+
+    (left_width > 0 && left_width < column_width_hu).then_some((0, left_width))
+}
+
 /// [#3314] 요청 face 의 굵기/폭 접미사를 벗긴 base family.
 ///
 /// `"Noto Serif KR Black"` → `Some("Noto Serif KR")`, 접미사가 없으면 `None`.
@@ -1016,13 +1187,41 @@ pub fn base_family_without_weight_suffix(font_family: &str) -> Option<String> {
     (tokens.len() < original_len).then(|| tokens.join(" "))
 }
 
-/// [#3314] 렌더용 폴백 체인 문자열: `요청 face → (base family) → generic 체인`.
+/// 현재 설치된 글꼴로 보완 가능한 legacy face 의 대체명.
+///
+/// HWPX 는 `한양중고딕`이라는 legacy name을 보존하지만 실제 한양 face의 family는
+/// `HY중고딕`(fontconfig full name: `HYGothic-Medium`)이다. 두 이름을 모두
+/// 체인에 넣어 원 font가 설치된 호스트에서는 해당 glyph를 먼저 선택한다.
+/// 원 font가 없는 호스트에서는 `Malgun Gothic`이 종전과 같은 마지막 대체다.
+fn installed_render_font_alias(font_family: &str) -> Option<&'static str> {
+    match font_family {
+        "한양중고딕" => Some("HY중고딕"),
+        "HY중고딕" => Some("Malgun Gothic"),
+        _ => None,
+    }
+}
+
+/// SVG/CSS `font-family`에서 쓸 단일 인용 family 이름.
+///
+/// font name 자체에 작은따옴표나 역슬래시가 들어갈 수 있으므로 단순히 `'{}'`로
+/// 감싸면 `Tom's Handwriting` 같은 이름이 중간에서 끝나 잘못된 CSS가 된다.
+fn css_single_quoted_font_family(font_family: &str) -> String {
+    let escaped = font_family.replace('\\', "\\\\").replace('\'', "\\'");
+    format!("'{escaped}'")
+}
+
+/// [#3314] 렌더용 폴백 체인 문자열: `요청 face → (한컴 대체 face) → (base family) → generic 체인`.
 pub fn render_font_family_chain(font_family: &str) -> String {
     let fb = generic_fallback(font_family);
-    match base_family_without_weight_suffix(font_family) {
-        Some(base) => format!("{},'{}',{}", font_family, base, fb),
-        None => format!("{},{}", font_family, fb),
+    let mut families = vec![css_single_quoted_font_family(font_family)];
+    if let Some(alias) = installed_render_font_alias(font_family) {
+        families.push(css_single_quoted_font_family(alias));
     }
+    if let Some(base) = base_family_without_weight_suffix(font_family) {
+        families.push(css_single_quoted_font_family(&base));
+    }
+    families.push(fb.to_string());
+    families.join(",")
 }
 
 /// Canvas 2D 렌더용 인용 font-family 체인.
@@ -1036,10 +1235,15 @@ pub fn canvas_font_family_chain(font_family: &str) -> String {
     }
 
     let fallback = generic_fallback(font_family);
-    match base_family_without_weight_suffix(font_family) {
-        Some(base) => format!("\"{}\", \"{}\", {}", font_family, base, fallback),
-        None => format!("\"{}\", {}", font_family, fallback),
+    let mut families = vec![format!("\"{}\"", font_family)];
+    if let Some(alias) = installed_render_font_alias(font_family) {
+        families.push(format!("\"{}\"", alias));
     }
+    if let Some(base) = base_family_without_weight_suffix(font_family) {
+        families.push(format!("\"{}\"", base));
+    }
+    families.push(fallback.to_string());
+    families.join(", ")
 }
 
 /// CSS generic fallback 반환 (serif 또는 sans-serif)
@@ -1124,6 +1328,38 @@ pub(crate) fn contains_old_hangul_jamo(text: &str) -> bool {
     })
 }
 
+/// 한컴 Supplementary PUA-A의 사각 안 숫자 값을 반환한다.
+///
+/// IR은 원문 PUA를 보존하고, 렌더러는 이 값을 사용해 backend/font와 무관한 사각형+숫자를
+/// 합성한다.
+pub(crate) fn boxed_pua_number(ch: char) -> Option<u32> {
+    let code_point = ch as u32;
+    (0xF02B1..=0xF02C4)
+        .contains(&code_point)
+        .then(|| code_point - 0xF02B0)
+}
+
+/// 실제 `CharOverlap`에 저장된 한컴 사각 안 숫자의 렌더 의미를 반환한다 (#4158).
+///
+/// 이 PUA 범위는 문자 자체가 사각형 의미를 포함하므로 raw `border_type=0`이어도 사각형을
+/// 그린다. 작성된 명시적 테두리는 보존한다. 다중 문자 겹침은 별도의 자리별 PUA 디코더가
+/// 담당하므로 여기서는 의도적으로 제외한다.
+pub(crate) fn boxed_pua_char_overlap_semantics(
+    chars: &[char],
+    raw_border_type: u8,
+) -> Option<(u32, u8)> {
+    let [ch] = chars else {
+        return None;
+    };
+    let number = boxed_pua_number(*ch)?;
+    let effective_border = if raw_border_type == 0 {
+        3
+    } else {
+        raw_border_type
+    };
+    Some((number, effective_border))
+}
+
 // ============================================================
 // 자동 번호 매기기 (AutoNumber)
 // ============================================================
@@ -1182,6 +1418,9 @@ impl AutoNumberCounter {
                 self.page += 1;
                 self.page
             }
+            // 총 쪽수는 카운터로 증가시키는 값이 아니라 페이지네이션이 끝난 뒤
+            // 알려지는 문서 전체 쪽수를 그대로 표시하는 필드라 여기서 처리하지 않는다.
+            AutoNumberType::TotalPage => 0,
         }
     }
 
@@ -1194,6 +1433,7 @@ impl AutoNumberCounter {
             AutoNumberType::Footnote => self.footnote,
             AutoNumberType::Endnote => self.endnote,
             AutoNumberType::Page => self.page,
+            AutoNumberType::TotalPage => 0,
         }
     }
 
@@ -1446,6 +1686,147 @@ mod tests {
         // 1인치 = 7200 HWPUNIT, 96 DPI → 96px
         let px = hwpunit_to_px(7200, 96.0);
         assert!((px - 96.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_script_draw_metrics_matches_shared_contract() {
+        // [#2771] SVG/Canvas/HTML/Skia/paint JSON 이 공유하는 첨자 계약:
+        // 글꼴 0.7 배 + baseline 위 0.3em / 아래 0.15em.
+        let base = TextStyle {
+            font_size: 20.0,
+            ..Default::default()
+        };
+
+        let sup = TextStyle {
+            superscript: true,
+            ..base.clone()
+        };
+        let (sup_size, sup_y) = sup.script_draw_metrics(20.0, 100.0);
+        assert!(
+            (sup_size - 14.0).abs() < 1e-9,
+            "위첨자 글꼴은 0.7 배여야 함: {sup_size}"
+        );
+        assert!(
+            (sup_y - 94.0).abs() < 1e-9,
+            "위첨자 baseline 은 0.3em 위여야 함: {sup_y}"
+        );
+
+        let sub = TextStyle {
+            subscript: true,
+            ..base.clone()
+        };
+        let (sub_size, sub_y) = sub.script_draw_metrics(20.0, 100.0);
+        assert!(
+            (sub_size - 14.0).abs() < 1e-9,
+            "아래첨자 글꼴은 0.7 배여야 함: {sub_size}"
+        );
+        assert!(
+            (sub_y - 103.0).abs() < 1e-9,
+            "아래첨자 baseline 은 0.15em 아래여야 함: {sub_y}"
+        );
+
+        // 비첨자는 인자를 그대로 돌려준다.
+        assert_eq!(base.script_draw_metrics(20.0, 100.0), (20.0, 100.0));
+    }
+
+    #[test]
+    fn positive_distribution_spacing_is_not_part_of_glyph_fit_advance() {
+        let positive = TextStyle {
+            extra_char_spacing: 12.0,
+            ..Default::default()
+        };
+        assert_eq!(positive.glyph_fit_advance(20.0), Some(8.0));
+
+        let zero = TextStyle::default();
+        assert_eq!(zero.glyph_fit_advance(8.0), Some(8.0));
+
+        let negative = TextStyle {
+            extra_char_spacing: -3.0,
+            ..Default::default()
+        };
+        assert_eq!(negative.glyph_fit_advance(5.0), Some(5.0));
+    }
+
+    #[test]
+    fn issue_2809_negative_letter_spacing_does_not_compress_canvas_glyph() {
+        let style = TextStyle {
+            letter_spacing: -7.5,
+            ..Default::default()
+        };
+        assert_eq!(canvas_cluster_fit_scale(&style, 7.5, 15.0, false), None);
+        assert_eq!(canvas_cluster_fit_scale(&style, 7.5, 15.0, true), None);
+    }
+
+    #[test]
+    fn non_negative_letter_spacing_keeps_existing_canvas_font_fit_policy() {
+        let style = TextStyle::default();
+        assert_eq!(
+            canvas_cluster_fit_scale(&style, 7.5, 15.0, false),
+            Some(0.5)
+        );
+        assert_eq!(canvas_cluster_fit_scale(&style, 7.5, 15.0, true), Some(0.5));
+        assert_eq!(canvas_cluster_fit_scale(&style, 15.0, 14.9, false), None);
+    }
+
+    #[test]
+    fn distribution_spacing_does_not_resize_ascii_canvas_glyph() {
+        let positive = TextStyle {
+            extra_char_spacing: 12.0,
+            ..Default::default()
+        };
+        assert_eq!(
+            canvas_cluster_fit_scale(&positive, 20.0, 8.0, true),
+            Some(1.0)
+        );
+
+        let negative = TextStyle {
+            extra_char_spacing: -3.0,
+            ..Default::default()
+        };
+        assert_eq!(
+            canvas_cluster_fit_scale(&negative, 5.0, 8.0, true),
+            Some(0.625)
+        );
+        assert_eq!(
+            canvas_cluster_fit_scale(&negative, 5.0, 8.0, false),
+            Some(0.625)
+        );
+    }
+
+    #[test]
+    fn test_script_advance_scale_is_exact_identity_for_non_script() {
+        // [#2771] 비첨자 배율이 **정확히 1.0** 이어야 기존 golden SVG 의
+        // textLength 값이 비트 단위로 보존된다 (`x * 1.0` 은 IEEE-754 상
+        // 반올림이 없는 항등 연산).
+        let base = TextStyle {
+            font_size: 20.0,
+            ..Default::default()
+        };
+        assert_eq!(base.script_advance_scale(), 1.0);
+        for advance in [0.0_f64, 6.2133, 1e-300, 1e300, f64::MIN_POSITIVE] {
+            assert_eq!(
+                (advance * base.script_advance_scale()).to_bits(),
+                advance.to_bits(),
+                "비첨자 advance 는 비트 단위로 불변이어야 함: {advance}"
+            );
+        }
+
+        // 첨자 배율은 그리기 글꼴 축소율과 반드시 같은 값이어야 한다.
+        // (다르면 글리프가 textLength 로 되늘어나는 #2771 결함이 재발한다.)
+        let sup = TextStyle {
+            superscript: true,
+            ..base.clone()
+        };
+        let sub = TextStyle {
+            subscript: true,
+            ..base.clone()
+        };
+        for style in [&sup, &sub] {
+            assert_eq!(
+                style.script_draw_metrics(20.0, 0.0).0,
+                20.0 * style.script_advance_scale()
+            );
+        }
     }
 
     // [#2287] 저장 LINE_SEG 없는 빈 anchor 문단의 TAC 그림 줄 메트릭 합성.
@@ -1738,15 +2119,32 @@ mod tests {
         assert_eq!(base_family_without_weight_suffix("Light"), None);
         // 렌더 체인: 요청 face → base → generic
         let chain = render_font_family_chain("Noto Serif KR Black");
-        assert!(chain.starts_with("Noto Serif KR Black,'Noto Serif KR',"));
+        assert!(chain.starts_with("'Noto Serif KR Black','Noto Serif KR',"));
         let plain = render_font_family_chain("맑은 고딕");
-        assert!(plain.starts_with("맑은 고딕,'Malgun Gothic'"));
+        assert!(plain.starts_with("'맑은 고딕','Malgun Gothic'"));
+        assert!(render_font_family_chain("Tom's Handwriting")
+            .starts_with("'Tom\\'s Handwriting','Malgun Gothic'"));
+        assert!(
+            render_font_family_chain(r"Legacy\Face").starts_with(r"'Legacy\\Face','Malgun Gothic'")
+        );
+
+        assert_eq!(
+            render_font_family_chain("한양중고딕"),
+            format!("'한양중고딕','HY중고딕',{}", generic_fallback("한양중고딕"))
+        );
 
         assert_eq!(
             canvas_font_family_chain("Noto Serif KR Black"),
             format!(
                 "\"Noto Serif KR Black\", \"Noto Serif KR\", {}",
                 generic_fallback("Noto Serif KR Black")
+            )
+        );
+        assert_eq!(
+            canvas_font_family_chain("HY중고딕"),
+            format!(
+                "\"HY중고딕\", \"Malgun Gothic\", {}",
+                generic_fallback("HY중고딕")
             )
         );
         assert_eq!(
@@ -1799,6 +2197,37 @@ mod tests {
         assert_eq!(generic_fallback("Noto Sans KR"), sans);
         // 빈 문자열
         assert_eq!(generic_fallback(""), sans);
+    }
+
+    #[test]
+    fn boxed_pua_number_covers_hancom_square_digits() {
+        assert_eq!(boxed_pua_number('\u{F02B1}'), Some(1));
+        assert_eq!(boxed_pua_number('\u{F02BA}'), Some(10));
+        assert_eq!(boxed_pua_number('\u{F02C4}'), Some(20));
+        assert_eq!(boxed_pua_number('\u{F02B0}'), None);
+        assert_eq!(boxed_pua_number('\u{F02C5}'), None);
+        assert_eq!(boxed_pua_number('1'), None);
+    }
+
+    #[test]
+    fn boxed_pua_char_overlap_promotes_only_implicit_square_border() {
+        assert_eq!(
+            boxed_pua_char_overlap_semantics(&['\u{F02B1}'], 0),
+            Some((1, 3))
+        );
+        assert_eq!(
+            boxed_pua_char_overlap_semantics(&['\u{F02C4}'], 0),
+            Some((20, 3))
+        );
+        assert_eq!(
+            boxed_pua_char_overlap_semantics(&['\u{F02B1}'], 1),
+            Some((1, 1))
+        );
+        assert_eq!(
+            boxed_pua_char_overlap_semantics(&['\u{F02B1}', '\u{F02B2}'], 0),
+            None
+        );
+        assert_eq!(boxed_pua_char_overlap_semantics(&['1'], 0), None);
     }
 
     #[test]

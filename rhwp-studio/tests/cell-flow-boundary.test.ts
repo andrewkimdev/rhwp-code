@@ -11,8 +11,16 @@ import { fileURLToPath } from 'node:url';
 // 실제 production 모듈을 임시 CommonJS로 변환해 source 복제 없이 동작을 검증한다.
 const studioRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const runtimeRoot = mkdtempSync(path.join(tmpdir(), 'rhwp-cell-flow-boundary-'));
-const compiler = path.join(studioRoot, 'node_modules', '.bin', 'tsc');
+// npm bin 을 직접 spawn 하지 않는다: Windows 의 `.bin/tsc` 는 확장자 없는 shell 스크립트라
+// 실행되지 않고, `.cmd` 는 Node 가 shell 없는 spawn 을 막는다(CVE-2024-27980 완화). 어느
+// 쪽이든 status=null 로 죽어 테스트가 통째로 중단된다. typescript 의 JS 진입점을 현재
+// node 로 실행하면 셸 없이도 모든 OS 에서 동일하게 동작한다.
+const compiler = process.env.RHWP_STUDIO_TSC ?? process.execPath;
+const compilerArgs = process.env.RHWP_STUDIO_TSC
+  ? []
+  : [path.join(studioRoot, 'node_modules', 'typescript', 'bin', 'tsc')];
 const compilation = spawnSync(compiler, [
+  ...compilerArgs,
   '--ignoreConfig',
   'src/engine/command.ts',
   'src/engine/history.ts',
@@ -209,6 +217,40 @@ test('TextMutationEffectAccumulator는 묶음 effect를 OR 누적하고 한 번�
   assert.deepEqual(accumulator.consume(), NO_TEXT_MUTATION_EFFECTS);
 });
 
+test('#3137 repaint patch accumulator는 같은 페이지 dirty rect를 합치고 불일치면 버린다', () => {
+  const accumulator = new TextMutationEffectAccumulator();
+  const base = {
+    documentPaginationPending: true,
+    flowChanged: false,
+    paginationCompleted: false,
+  };
+  accumulator.add({
+    ...base,
+    focusedPagePatch: { pageIndex: 0, x: 10, y: 20, width: 30, height: 10 },
+  });
+  accumulator.add({
+    ...base,
+    focusedPagePatch: { pageIndex: 0, x: 8, y: 22, width: 40, height: 12 },
+  });
+  assert.deepEqual(accumulator.consume().focusedPagePatch, {
+    pageIndex: 0,
+    x: 8,
+    y: 20,
+    width: 40,
+    height: 14,
+  });
+
+  accumulator.add({
+    ...base,
+    focusedPagePatch: { pageIndex: 0, x: 0, y: 0, width: 10, height: 10 },
+  });
+  accumulator.add({
+    ...base,
+    focusedPagePatch: { pageIndex: 1, x: 0, y: 0, width: 10, height: 10 },
+  });
+  assert.equal(accumulator.consume().focusedPagePatch, undefined);
+});
+
 test('flat 셀 삭제는 deferred effect를 반환하고 undo는 즉시 pagination을 사용한다', () => {
   const wasm = new FakeWasm(mutationResult(true));
   const history = new CommandHistory();
@@ -397,6 +439,50 @@ test('atomic API fallback 결과는 immediate-completed effect다', () => {
       paginationCompleted: true,
     },
   );
+});
+
+test('#3137 stable deferred 결과는 source/target cell path와 revision geometry를 전달한다', () => {
+  const wasm = new FakeWasm({
+    ok: true,
+    charOffset: 8,
+    paginationDeferred: true,
+    cellFlowChanged: false,
+    focusedPageTreePatched: true,
+    focusedPagePatch: {
+      pageIndex: 0,
+      x: 100,
+      y: 200,
+      width: 300,
+      height: 24,
+    },
+    focusedCursorGeometry: {
+      baseRevision: 11,
+      revision: 12,
+      sourceCharOffset: 7,
+      targetCharOffset: 8,
+      deltaX: 6.25,
+    },
+  });
+
+  const effects = insertTextWithMutationEffects(wasm, depth1Position(7), '1');
+  assert.equal(effects.focusedCursorGeometry?.baseRevision, 11);
+  assert.equal(effects.focusedCursorGeometry?.revision, 12);
+  assert.equal(effects.focusedCursorGeometry?.deltaX, 6.25);
+  assert.deepEqual(effects.focusedCursorGeometry?.source, {
+    ...depth1Position(7),
+    cursorRect: undefined,
+  });
+  assert.deepEqual(effects.focusedCursorGeometry?.target, {
+    ...depth1Position(8),
+    cursorRect: undefined,
+  });
+  assert.deepEqual(effects.focusedPagePatch, {
+    pageIndex: 0,
+    x: 100,
+    y: 200,
+    width: 300,
+    height: 24,
+  });
 });
 
 test('본문 insert와 delete command는 stable local replace effect를 반환한다', () => {

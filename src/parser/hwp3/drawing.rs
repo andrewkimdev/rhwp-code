@@ -574,6 +574,14 @@ use std::collections::HashMap;
 
 const HWP3_UNIT_SCALE: i32 = 4;
 
+/// 신뢰할 수 없는 파일에서 읽은 HWP3 raw margin(u32)을 `* HWP3_UNIT_SCALE` 스케일 후
+/// `i16` 필드(`TextBox::margin_*`)에 담는다. 곱셈이 `i32`/`i16` 범위를 넘으면 그대로
+/// 캐스팅하는 대신 클램프해 오버플로 panic(malformed/fuzzed 파일에서의 DoS)을 막는다.
+fn hwp3_margin_to_i16(raw_margin: u32) -> i16 {
+    let scaled = raw_margin as i64 * HWP3_UNIT_SCALE as i64;
+    scaled.clamp(i16::MIN as i64, i16::MAX as i64) as i16
+}
+
 pub fn parse_drawing_object_tree(
     cursor: &mut std::io::Cursor<&[u8]>,
     doc_char_shapes: &mut Vec<crate::model::style::CharShape>,
@@ -603,6 +611,7 @@ pub fn parse_drawing_object_tree(
         doc_border_fills,
         doc_tab_defs,
         pic_name_to_id,
+        0,
     )?;
 
     if root_nodes.is_empty() {
@@ -620,6 +629,14 @@ pub fn parse_drawing_object_tree(
     }
 }
 
+/// [#4285] `has_child`(connection_info bit 1)는 파일에서 그대로 온 값이라,
+/// 재귀 깊이에 상한이 없으면 중첩된 Container 객체 체인 하나로 네이티브
+/// 스택을 고갈시켜 프로세스를 죽일 수 있다(패닉과 달리 catch_unwind로 못
+/// 잡음). 최소 92바이트짜리 Container 객체를 수만 겹 중첩해도
+/// HWP3_MAX_RECORD_SIZE(256MiB) 안에 들어간다. HmlLimits::max_depth와 같은
+/// 취지로 상한을 둔다.
+const MAX_DRAWING_OBJECT_DEPTH: u32 = 256;
+
 fn parse_shape_list(
     cursor: &mut std::io::Cursor<&[u8]>,
     doc_char_shapes: &mut Vec<crate::model::style::CharShape>,
@@ -627,7 +644,16 @@ fn parse_shape_list(
     doc_border_fills: &mut Vec<crate::model::style::BorderFill>,
     doc_tab_defs: &mut Vec<crate::model::style::TabDef>,
     pic_name_to_id: &mut HashMap<String, u16>,
+    depth: u32,
 ) -> Result<Vec<ShapeObject>, Hwp3Error> {
+    if depth > MAX_DRAWING_OBJECT_DEPTH {
+        return Err(Hwp3Error::ParseError {
+            message: format!(
+                "Drawing object nesting exceeds {} levels",
+                MAX_DRAWING_OBJECT_DEPTH
+            ),
+        });
+    }
     let mut list = Vec::new();
     loop {
         let raw_obj =
@@ -653,6 +679,7 @@ fn parse_shape_list(
                 doc_border_fills,
                 doc_tab_defs,
                 pic_name_to_id,
+                depth + 1,
             )?;
             if let ShapeObject::Group(ref mut g) = node {
                 g.children = children;
@@ -668,6 +695,29 @@ fn parse_shape_list(
         }
     }
     Ok(list)
+}
+
+/// HWP3 사각형의 무색·무늬 없음 sentinel을 채우기 없음으로 판정한다.
+///
+/// `fill_color`의 high byte는 표 69의 RGB 영역이 아니다. 실제 HWP3 원본에서
+/// 사각형의 `0x10000000`은 테두리만 남기는 no-fill 표식으로 사용된다. 반면 같은
+/// 표식이 글상자 기본 스타일에도 나타나므로 개체 종류와 무늬/그라데이션 부재까지
+/// 함께 확인한다.
+fn hwp3_rectangle_uses_no_fill_marker(header: &Hwp3DrawingObjectCommonHeader) -> bool {
+    header.object_type == 2
+        && header.basic_attr.fill_color == 0x1000_0000
+        && header.basic_attr.pattern_type == 0
+        && header.gradient_attr.is_none()
+}
+
+/// HWP3 선 색상의 무색 sentinel을 테두리 없음으로 판정한다.
+///
+/// `0x10000000`은 검정 RGB 값이 아니다. HWP3 원본의 글자처럼 취급된 사각형과
+/// 여백 구분선에서 이 값은 "선 없음"을 뜻한다. 기존의 `line_width > 0` 보정이
+/// 이 sentinel도 검정 실선으로 승격해 한컴/HWP5 변환본에는 없는 테두리를 그렸다.
+/// 실제 검정은 `0x00000000`이므로 구분할 수 있다.
+fn hwp3_uses_no_line_marker(header: &Hwp3DrawingObjectCommonHeader) -> bool {
+    header.basic_attr.line_color == 0x1000_0000
 }
 
 fn map_to_shape_object(
@@ -704,6 +754,7 @@ fn map_to_shape_object(
                     0,            // body_left_hu: 드로잉 내부 텍스트, wrap zone 불필요
                     i32::MAX / 2, // column_width_hu
                     0,            // body_height_hu: 도형 내부 텍스트는 본문 페이지 분할 제외
+                    false,        // 복호화 원본의 본문 Square-wrap 계약은 적용하지 않음
                 )?;
                 parsed_paragraphs = paras;
             }
@@ -727,8 +778,8 @@ fn map_to_shape_object(
     let mut final_shape = shape;
 
     let common = CommonObjAttr {
-        width: (header.object_size[0] as u32 * HWP3_UNIT_SCALE as u32),
-        height: (header.object_size[1] as u32 * HWP3_UNIT_SCALE as u32),
+        width: header.object_size[0].saturating_mul(HWP3_UNIT_SCALE as u32),
+        height: header.object_size[1].saturating_mul(HWP3_UNIT_SCALE as u32),
         ..Default::default()
     };
 
@@ -751,19 +802,22 @@ fn map_to_shape_object(
     }
 
     let shape_attr = ShapeComponentAttr {
-        offset_x: header.relative_pos[0] as i32 * HWP3_UNIT_SCALE,
-        offset_y: header.relative_pos[1] as i32 * HWP3_UNIT_SCALE,
-        original_width: (header.object_size[0] as u32 * HWP3_UNIT_SCALE as u32),
-        original_height: (header.object_size[1] as u32 * HWP3_UNIT_SCALE as u32),
-        current_width: (header.object_size[0] as u32 * HWP3_UNIT_SCALE as u32),
-        current_height: (header.object_size[1] as u32 * HWP3_UNIT_SCALE as u32),
+        offset_x: (header.relative_pos[0] as i64 * HWP3_UNIT_SCALE as i64)
+            .clamp(i32::MIN as i64, i32::MAX as i64) as i32,
+        offset_y: (header.relative_pos[1] as i64 * HWP3_UNIT_SCALE as i64)
+            .clamp(i32::MIN as i64, i32::MAX as i64) as i32,
+        original_width: header.object_size[0].saturating_mul(HWP3_UNIT_SCALE as u32),
+        original_height: header.object_size[1].saturating_mul(HWP3_UNIT_SCALE as u32),
+        current_width: header.object_size[0].saturating_mul(HWP3_UNIT_SCALE as u32),
+        current_height: header.object_size[1].saturating_mul(HWP3_UNIT_SCALE as u32),
         rotation_angle,
         ..Default::default()
     };
 
     let border_line = ShapeBorderLine {
         color: header.basic_attr.line_color,
-        width: header.basic_attr.line_width as i32 * HWP3_UNIT_SCALE,
+        width: (header.basic_attr.line_width as i64 * HWP3_UNIT_SCALE as i64)
+            .clamp(i32::MIN as i64, i32::MAX as i64) as i32,
         // [Task #877 Stage 3] HWP3 drawing line_style = 0 (= "선 종류 없음") 인데
         // line_width > 0 인 경우 → 실제 한컴 viewer 는 실선으로 표시. (sample16 RFP
         // 박스 외곽선 회귀: raw line_style=0, line_width=84, line_color=0 검정)
@@ -776,7 +830,10 @@ fn map_to_shape_object(
         // 상 존재하나 한컴 동작은 일관 solid — 작업지시자 한컴 한글 정답지 시각
         // 정답 단언. HWP3 sample 분포 sweep: line_style=2 는 sample16 한정 (다른
         // fixture: 0/1 만), narrow fix 회귀 risk 0. HWP3 한정 (HWP5/HWPX 무영향).
-        attr: {
+        attr: if hwp3_uses_no_line_marker(&header) {
+            // line_width가 남아 있어도 HWP3 무색 sentinel은 선을 그리지 않는다.
+            0
+        } else {
             let raw_attr = header.basic_attr.line_style as u32;
             let line_type = raw_attr & 0x3F;
             if line_type == 0 && header.basic_attr.line_width > 0 {
@@ -791,65 +848,70 @@ fn map_to_shape_object(
         outline_style: 0,
     };
 
-    // [Task #877 Stage 4] HWP3 fill_color 의 high byte (bit 24~31) 가 0 이 아니면
-    // 한컴 HWP3 의 "기본값 없음/투명" flag 로 추정 (sample16 paragraph 5/131/393:
-    // raw 0x10000000 = bit 28 set + RGB 0). rhwp 가 raw 그대로 ColorRef 로 사용
-    // → 거의 검정 fill (alpha=0x10) → 외곽선이 fill 위에 안 보이는 회귀.
-    //
-    // 해결: RGB=0 + high flag set 인 경우 흰색 fill 로 대체. 한컴 viewer 의 실제
-    // 표시 (연한 보라 채우기) 와 100% 정합은 아니나 외곽선 가시화로 본질 표현.
-    let raw_fc = header.basic_attr.fill_color;
-    let fill_flag = (raw_fc >> 24) & 0xFF;
-    let fill_rgb = raw_fc & 0x00FFFFFF;
-    let effective_rgb = if fill_flag != 0 && fill_rgb == 0 {
-        0x00FFFFFF
+    let fill = if hwp3_rectangle_uses_no_fill_marker(&header) {
+        // HWP3 사각형의 `0x10000000`은 RGB가 아니라 "채우기 없음" sentinel이다.
+        // 이 값을 흰색 단색 채움으로 대체하면, 아이콘 위에 놓인 테두리 사각형이
+        // 아이콘을 가려 버린다. 한컴 HWP5 변환본도 같은 사각형을 Fill=None으로
+        // 기록한다. 글상자(type 6)는 같은 high byte를 서로 다른 기본 스타일에
+        // 사용하므로, 사각형·무늬 없음·비그라데이션 조합으로 한정한다.
+        Fill::default()
     } else {
-        fill_rgb
-    };
-    // [Task #1008 격차 A] HWP3 gradient_attr 이 파싱된 경우 IR Fill.gradient 에 매핑.
-    // HWP3 raw stream 의 Hwp3DrawingObjectGradientAttr (drawing.rs:149~170) 은 이미
-    // basic_attr.has_gradient() 시 파싱되어 header.gradient_attr 에 보존되지만, 종전
-    // 코드는 fill_type 을 항상 Solid 로 하드코딩하여 데이터가 무시되었음. HWP5 의
-    // doc_info.rs:404 매핑과 동일 contract 로 IR 주입 (step→blur, 2-stop colors,
-    // positions=vec![] → renderer 가 균등 분포).
-    let (fill_type, gradient) = if let Some(g) = header.gradient_attr.as_ref() {
-        let grad = crate::model::style::GradientFill {
-            gradient_type: g.kind as i16,
-            angle: g.angle as i16,
-            center_x: g.center_x as i16,
-            center_y: g.center_y as i16,
-            blur: g.step as i16,
-            step_center: 0,
-            colors: vec![g.start_color, g.end_color],
-            positions: vec![],
+        let raw_fc = header.basic_attr.fill_color;
+        let fill_flag = (raw_fc >> 24) & 0xFF;
+        let fill_rgb = raw_fc & 0x00FFFFFF;
+        // HWP3 글상자 등은 high-byte marker와 RGB=0을 기본 흰색 면으로 사용한다.
+        // 사각형의 no-fill marker만 위 분기에서 분리하고, 기존 가시성 보정은 유지한다.
+        let effective_rgb = if fill_flag != 0 && fill_rgb == 0 {
+            0x00FFFFFF
+        } else {
+            fill_rgb
         };
-        (crate::model::style::FillType::Gradient, Some(grad))
-    } else {
-        (crate::model::style::FillType::Solid, None)
-    };
-    let fill = Fill {
-        fill_type,
-        solid: Some(crate::model::style::SolidFill {
-            background_color: effective_rgb,
-            pattern_color: header.basic_attr.pattern_color,
-            pattern_type: header.basic_attr.pattern_type as i32,
-        }),
-        gradient,
-        image: None,
-        // [Task #877 Stage 4] 한컴 호환 alpha convention: 0=불투명, 255=완전 투명.
-        // (renderer/layout/utils.rs:199 의 opacity 식: opacity = 1 - alpha/255)
-        // 기존 alpha=255 → opacity=0 → SVG <rect opacity="0.000"> 완전 투명 회귀.
-        // HWP3 raw 에는 alpha 정보 없음, 한컴 viewer 의 default = 불투명 = alpha 0.
-        alpha: 0,
+
+        // [Task #1008 격차 A] HWP3 gradient_attr 이 파싱된 경우 IR Fill.gradient 에 매핑.
+        // HWP3 raw stream 의 Hwp3DrawingObjectGradientAttr (drawing.rs:149~170) 은 이미
+        // basic_attr.has_gradient() 시 파싱되어 header.gradient_attr 에 보존되지만, 종전
+        // 코드는 fill_type 을 항상 Solid 로 하드코딩하여 데이터가 무시되었음. HWP5 의
+        // doc_info.rs:404 매핑과 동일 contract 로 IR 주입 (step→blur, 2-stop colors,
+        // positions=vec![] → renderer 가 균등 분포).
+        let (fill_type, gradient) = if let Some(g) = header.gradient_attr.as_ref() {
+            let grad = crate::model::style::GradientFill {
+                gradient_type: g.kind as i16,
+                angle: g.angle as i16,
+                center_x: g.center_x as i16,
+                center_y: g.center_y as i16,
+                blur: g.step as i16,
+                step_center: 0,
+                colors: vec![g.start_color, g.end_color],
+                positions: vec![],
+            };
+            (crate::model::style::FillType::Gradient, Some(grad))
+        } else {
+            (crate::model::style::FillType::Solid, None)
+        };
+        Fill {
+            fill_type,
+            solid: Some(crate::model::style::SolidFill {
+                background_color: effective_rgb,
+                pattern_color: header.basic_attr.pattern_color,
+                pattern_type: header.basic_attr.pattern_type as i32,
+            }),
+            gradient,
+            image: None,
+            // [Task #877 Stage 4] 한컴 호환 alpha convention: 0=불투명, 255=완전 투명.
+            // (renderer/layout/utils.rs:199 의 opacity 식: opacity = 1 - alpha/255)
+            // 기존 alpha=255 → opacity=0 → SVG <rect opacity="0.000"> 완전 투명 회귀.
+            // HWP3 raw 에는 alpha 정보 없음, 한컴 viewer 의 default = 불투명 = alpha 0.
+            alpha: 0,
+        }
     };
 
     let text_box = if (header.basic_attr.options & (1 << 19)) != 0 || !parsed_paragraphs.is_empty()
     {
         Some(TextBox {
-            margin_left: (header.basic_attr.textbox_margin[0] as i32 * HWP3_UNIT_SCALE) as i16,
-            margin_top: (header.basic_attr.textbox_margin[1] as i32 * HWP3_UNIT_SCALE) as i16,
-            margin_right: (header.basic_attr.textbox_margin[0] as i32 * HWP3_UNIT_SCALE) as i16,
-            margin_bottom: (header.basic_attr.textbox_margin[1] as i32 * HWP3_UNIT_SCALE) as i16,
+            margin_left: hwp3_margin_to_i16(header.basic_attr.textbox_margin[0]),
+            margin_top: hwp3_margin_to_i16(header.basic_attr.textbox_margin[1]),
+            margin_right: hwp3_margin_to_i16(header.basic_attr.textbox_margin[0]),
+            margin_bottom: hwp3_margin_to_i16(header.basic_attr.textbox_margin[1]),
             paragraphs: parsed_paragraphs,
             ..Default::default()
         })
@@ -904,6 +966,100 @@ fn map_to_shape_object(
 mod modified_arc_overread_tests {
     use super::*;
     use std::io::Cursor;
+
+    // [POC] textbox_margin/line_width/object_size 는 파일에서 그대로 읽은 신뢰
+    // 불가 u32 값이다. `* HWP3_UNIT_SCALE(4)` 를 i32/i16 로 계산·캐스팅하는
+    // 과정에서 큰 값(예: u32::MAX)이 들어오면 곱셈이 i32 오버플로를 일으켜
+    // debug 빌드에서 panic한다(fuzzing/악성 파일 경로에서 서비스 거부).
+    #[test]
+    fn map_to_shape_object_does_not_panic_on_huge_margins() {
+        let header = Hwp3DrawingObjectCommonHeader {
+            object_type: 6, // TextBox
+            object_size: [u32::MAX, u32::MAX],
+            relative_pos: [u32::MAX, u32::MAX],
+            basic_attr: Hwp3DrawingObjectBasicAttr {
+                line_width: u32::MAX,
+                textbox_margin: [u32::MAX, u32::MAX],
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let raw = Hwp3DrawingObject::TextBox(
+            header,
+            Hwp3DrawingTextBox {
+                info1_len: 0,
+                info2_len: 0,
+                paragraph_list_data: Vec::new(),
+            },
+        );
+        let mut doc_char_shapes = Vec::new();
+        let mut doc_para_shapes = Vec::new();
+        let mut doc_border_fills = Vec::new();
+        let mut doc_tab_defs = Vec::new();
+        let mut pic_name_to_id = HashMap::new();
+        let result = map_to_shape_object(
+            raw,
+            &mut doc_char_shapes,
+            &mut doc_para_shapes,
+            &mut doc_border_fills,
+            &mut doc_tab_defs,
+            &mut pic_name_to_id,
+        );
+        assert!(
+            result.is_ok(),
+            "거대한 margin/width 값에서도 panic 없이 처리되어야 함"
+        );
+    }
+
+    #[test]
+    fn rectangle_no_fill_marker_does_not_apply_to_text_boxes() {
+        let rectangle = Hwp3DrawingObjectCommonHeader {
+            object_type: 2,
+            basic_attr: Hwp3DrawingObjectBasicAttr {
+                fill_color: 0x1000_0000,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        assert!(hwp3_rectangle_uses_no_fill_marker(&rectangle));
+
+        let text_box = Hwp3DrawingObjectCommonHeader {
+            object_type: 6,
+            basic_attr: Hwp3DrawingObjectBasicAttr {
+                fill_color: 0x1000_0000,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        assert!(
+            !hwp3_rectangle_uses_no_fill_marker(&text_box),
+            "글상자의 동일 marker는 기본 스타일이지 사각형 no-fill이 아님"
+        );
+    }
+
+    #[test]
+    fn no_line_marker_is_distinct_from_black_line() {
+        let no_line = Hwp3DrawingObjectCommonHeader {
+            basic_attr: Hwp3DrawingObjectBasicAttr {
+                line_color: 0x1000_0000,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        assert!(hwp3_uses_no_line_marker(&no_line));
+
+        let black_line = Hwp3DrawingObjectCommonHeader {
+            basic_attr: Hwp3DrawingObjectBasicAttr {
+                line_color: 0x0000_0000,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        assert!(
+            !hwp3_uses_no_line_marker(&black_line),
+            "실제 검정 선은 sentinel이 아니므로 기존 line-style 보정을 유지한다"
+        );
+    }
 
     // [Task #2824] 변형된 호(object_type=9)는 스펙 11.3.4절에 따라 공통 헤더
     // 외에 추가 세부 정보가 전혀 없어야 한다. 수정 전 코드는 존재하지 않는
@@ -973,6 +1129,67 @@ mod hypertext_bookmark_underread_tests {
             cursor.position(),
             hypertext_len,
             "하이퍼텍스트 정보 파싱이 책갈피 필드를 32바이트로 소비하지 않음"
+        );
+    }
+}
+
+#[cfg(test)]
+mod drawing_object_recursion_depth_tests {
+    use super::*;
+    use std::io::Cursor;
+
+    /// object_type=0(Container)에 connection_info=0x0002(has_child, no
+    /// sibling)만 실은 최소 92바이트 공통 헤더를 만든다.
+    fn container_block() -> Vec<u8> {
+        let mut buf = Vec::new();
+        buf.extend_from_slice(&0u32.to_le_bytes()); // header_length
+        buf.extend_from_slice(&0u16.to_le_bytes()); // object_type = 0 (Container)
+        buf.extend_from_slice(&0x0002u16.to_le_bytes()); // connection_info: has_child, !has_sibling
+        buf.extend_from_slice(&[0u8; 8]); // relative_pos
+        buf.extend_from_slice(&[0u8; 8]); // object_size
+        buf.extend_from_slice(&[0u8; 8]); // absolute_pos
+        buf.extend_from_slice(&[0u8; 16]); // bounds
+        buf.extend_from_slice(&[0u8; 32]); // basic_attr: line_style..pattern_color
+        buf.extend_from_slice(&[0u8; 8]); // basic_attr: textbox_margin
+        buf.extend_from_slice(&0u32.to_le_bytes()); // basic_attr: options
+        buf
+    }
+
+    // [#4285] has_child 는 파일에서 그대로 온 값이라 재귀 깊이 상한이 없으면
+    // Container 객체를 깊이 중첩한 파일 하나로 네이티브 스택을 고갈시켜
+    // 프로세스를 죽인다(catch_unwind로 못 잡음). MAX_DRAWING_OBJECT_DEPTH를
+    // 넘는 중첩이 패닉/abort 대신 파싱 오류로 거부되는지 확인한다.
+    #[test]
+    fn deeply_nested_container_chain_is_rejected_not_stack_overflowed() {
+        let mut buf = Vec::new();
+        buf.extend_from_slice(&24u32.to_le_bytes()); // frame header_length (<=24: 하이퍼텍스트 없음)
+        buf.extend_from_slice(&0u32.to_le_bytes()); // z_order
+        buf.extend_from_slice(&1u32.to_le_bytes()); // object_count
+        buf.extend_from_slice(&[0u8; 16]); // bounds
+
+        for _ in 0..(MAX_DRAWING_OBJECT_DEPTH as usize + 4) {
+            buf.extend_from_slice(&container_block());
+        }
+
+        let mut doc_char_shapes = Vec::new();
+        let mut doc_para_shapes = Vec::new();
+        let mut doc_border_fills = Vec::new();
+        let mut doc_tab_defs = Vec::new();
+        let mut pic_name_to_id = HashMap::new();
+
+        let mut cursor = Cursor::new(buf.as_slice());
+        let result = parse_drawing_object_tree(
+            &mut cursor,
+            &mut doc_char_shapes,
+            &mut doc_para_shapes,
+            &mut doc_border_fills,
+            &mut doc_tab_defs,
+            &mut pic_name_to_id,
+        );
+
+        assert!(
+            result.is_err(),
+            "상한을 넘는 중첩은 패닉 대신 오류로 거부되어야 함"
         );
     }
 }

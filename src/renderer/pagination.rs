@@ -164,15 +164,121 @@ pub struct MasterPageRef {
     pub master_page_index: usize,
 }
 
+/// 표 셀 안에 중첩된 머리말/꼬리말 컨트롤로 내려가는 경로 한 단계.
+///
+/// 최상위 문단 → 표 → 셀 → 셀 문단 순으로 내려간다. 여러 단계가 쌓이면
+/// 표 안의 표처럼 다중 중첩도 표현할 수 있다.
+#[derive(Debug, Clone)]
+pub struct HeaderFooterTableStep {
+    /// 바깥 controls 리스트에서 Table 컨트롤의 인덱스
+    pub table_control_index: usize,
+    /// 표 셀 인덱스
+    pub cell_index: usize,
+    /// 셀 내부 문단 인덱스
+    pub cell_para_index: usize,
+}
+
 /// 머리말/꼬리말 참조
 #[derive(Debug, Clone)]
 pub struct HeaderFooterRef {
-    /// Header/Footer 컨트롤이 있는 문단 인덱스
+    /// Header/Footer 컨트롤이 있는 (최상위) 문단 인덱스
     pub para_index: usize,
-    /// 해당 문단 내 컨트롤 인덱스
+    /// Header/Footer 컨트롤이 위치한 (가장 안쪽) controls 리스트 내 인덱스
     pub control_index: usize,
     /// Header/Footer 컨트롤이 속한 구역 인덱스 (구역 간 상속 시 원본 구역 추적용)
     pub source_section_index: usize,
+    /// 표 셀 안에 중첩된 경우의 경로. 비어 있으면 최상위 문단 직속 컨트롤.
+    ///
+    /// HWP 시험지(예: 수능 수학 선택과목 소책자)는 4쪽짜리 소책자의 4쪽 머리말을
+    /// 제목표(1x1 표) 셀 안에 정의하기도 한다. 이 경로가 없으면 그 머리말이
+    /// 수집되지 않아 4쪽 쪽번호가 2쪽 머리말로 대체돼 잘못 표시된다.
+    pub table_path: Vec<HeaderFooterTableStep>,
+}
+
+/// 표 셀 안에 중첩된 Header/Footer 컨트롤을 재귀적으로 수집한다.
+///
+/// `base_path` 는 바깥 문단에서 `table` 까지 내려온 경로(마지막 단계의 셀/문단은
+/// 이 함수 안에서 채운다). 수집된 항목은 최상위 문단 인덱스 `pi` 를 그대로 써서
+/// 페이지 매핑 정합성을 유지한다(PageHide 수집과 동일 규약).
+pub(crate) fn collect_nested_header_footer_controls(
+    table: &crate::model::table::Table,
+    pi: usize,
+    section_index: usize,
+    table_control_index: usize,
+    base_path: &[HeaderFooterTableStep],
+    hf_entries: &mut Vec<(usize, HeaderFooterRef, bool, HeaderFooterApply)>,
+) {
+    for (cell_idx, cell) in table.cells.iter().enumerate() {
+        for (cpi, cp) in cell.paragraphs.iter().enumerate() {
+            let mut path = base_path.to_vec();
+            path.push(HeaderFooterTableStep {
+                table_control_index,
+                cell_index: cell_idx,
+                cell_para_index: cpi,
+            });
+            for (cci, ctrl) in cp.controls.iter().enumerate() {
+                match ctrl {
+                    Control::Header(h) => {
+                        hf_entries.push((
+                            pi,
+                            HeaderFooterRef {
+                                para_index: pi,
+                                control_index: cci,
+                                source_section_index: section_index,
+                                table_path: path.clone(),
+                            },
+                            true,
+                            h.apply_to,
+                        ));
+                    }
+                    Control::Footer(f) => {
+                        hf_entries.push((
+                            pi,
+                            HeaderFooterRef {
+                                para_index: pi,
+                                control_index: cci,
+                                source_section_index: section_index,
+                                table_path: path.clone(),
+                            },
+                            false,
+                            f.apply_to,
+                        ));
+                    }
+                    Control::Table(inner) => {
+                        collect_nested_header_footer_controls(
+                            inner,
+                            pi,
+                            section_index,
+                            cci,
+                            &path,
+                            hf_entries,
+                        );
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+}
+
+/// `HeaderFooterRef` 가 가리키는 Header/Footer 컨트롤을 원본 문단 슬라이스에서 해석한다.
+/// `table_path` 를 따라 표 셀 안까지 내려간다.
+pub(crate) fn resolve_header_footer_control<'a>(
+    paragraphs: &'a [Paragraph],
+    hf_ref: &HeaderFooterRef,
+) -> Option<&'a Control> {
+    let mut para = paragraphs.get(hf_ref.para_index)?;
+    for step in &hf_ref.table_path {
+        let Control::Table(table) = para.controls.get(step.table_control_index)? else {
+            return None;
+        };
+        para = table
+            .cells
+            .get(step.cell_index)?
+            .paragraphs
+            .get(step.cell_para_index)?;
+    }
+    para.controls.get(hf_ref.control_index)
 }
 
 /// 쪽별 활성 머리말/꼬리말 선택기.
@@ -263,6 +369,18 @@ pub enum FootnoteSource {
     },
 }
 
+/// 한 각주를 물리 페이지 경계에서 나눈 line fragment.
+///
+/// `start_line..end_line`은 각주 안의 문단을 순서대로 compose한 뒤의 평탄 line index다.
+/// `end_line`은 exclusive다. 첫 fragment만 separator와 번호를 그린다.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FootnoteFragment {
+    pub start_line: usize,
+    pub end_line: usize,
+    pub draw_separator: bool,
+    pub draw_number: bool,
+}
+
 /// 페이지에 배치되는 각주 참조
 #[derive(Debug, Clone)]
 pub struct FootnoteRef {
@@ -270,6 +388,8 @@ pub struct FootnoteRef {
     pub number: u16,
     /// 출처
     pub source: FootnoteSource,
+    /// `None`이면 각주 전체를 그린다.
+    pub fragment: Option<FootnoteFragment>,
 }
 
 /// 한 단(Column)에 배치될 콘텐츠
@@ -315,6 +435,10 @@ pub struct WrapAroundPara {
     pub table_para_index: usize,
     /// 텍스트가 있는 문단인지 (false면 빈 리턴)
     pub has_text: bool,
+    /// 표 옆 띠에서 렌더할 첫 줄(포함).
+    pub start_line: usize,
+    /// 표 옆 띠에서 렌더할 끝 줄(제외). `usize::MAX`는 전체 줄을 뜻한다.
+    pub end_line: usize,
 }
 
 /// [Task #604 R3] anchor 그림/표 ↔ wrap text 문단 매칭 메타데이터.
@@ -382,6 +506,22 @@ pub enum PageItem {
         /// (`advance_row_block_cut`). false 이면 단일 행 `row_span==1` col 인덱스
         /// (`advance_row_cut`, 기존). page-larger 셀 내부 분할에서만 true.
         is_block_split: bool,
+        /// [Issue #4326] `start_row`/`end_row`/`start_cut`/`end_cut`이 가리키는 좌표계.
+        /// true면 투명 1×1 래퍼를 벗긴 중첩 표(측정기·`row_geometry_table`이 실제로 쓰는
+        /// 표) 기준이고, false면 이 항목이 참조하는 바깥 `para_index`/`control_index`
+        /// 표 자신의 행 도메인 기준이다. 렌더러가 값(`end_row <= table.row_count`)으로
+        /// 되추론하던 것을 페이지네이션 결정 시점에 데이터로 고정한다.
+        row_cursor_is_nested: bool,
+        /// RowBreak 표에서 이전 rowspan이 닿는 마지막 행을 현재 조각의 남은
+        /// 물리 높이에 맞춰 배치해야 할 때의 마지막 행 높이 상한(px).
+        ///
+        /// 내용은 이미 이 조각에 모두 소비됐지만 선언 행 높이만 남은 공간보다
+        /// 큰 경우에만 사용한다. 다음 조각은 끝행의 full cut으로 재진입해 남은
+        /// 빈 밴드만 소비하므로, 이 값은 cursor/cut 계약과 짝을 이룬다.
+        end_row_height_override: Option<f64>,
+        /// 직전 조각에서 내용이 모두 소비된 시작 행의 남은 빈 물리 밴드 높이(px).
+        /// `start_cut`은 해당 셀 내용을 숨기고 이 값은 테두리/셀 기하만 보존한다.
+        start_row_height_override: Option<f64>,
     },
     /// 그리기 개체
     Shape {
@@ -513,6 +653,9 @@ impl PageItem {
                 start_cut,
                 end_cut,
                 is_block_split,
+                row_cursor_is_nested,
+                end_row_height_override,
+                start_row_height_override,
             } => PageItem::PartialTable {
                 para_index: adjust(*para_index),
                 control_index: *control_index,
@@ -522,6 +665,9 @@ impl PageItem {
                 start_cut: start_cut.clone(),
                 end_cut: end_cut.clone(),
                 is_block_split: *is_block_split,
+                row_cursor_is_nested: *row_cursor_is_nested,
+                end_row_height_override: *end_row_height_override,
+                start_row_height_override: *start_row_height_override,
             },
             PageItem::Shape {
                 para_index,
@@ -676,6 +822,8 @@ impl PaginationResult {
                                 table_para_index: (w.table_para_index as i64 + offset as i64).max(0)
                                     as usize,
                                 has_text: w.has_text,
+                                start_line: w.start_line,
+                                end_line: w.end_line,
                             })
                             .collect(),
                         used_height: cc.used_height,
@@ -743,6 +891,7 @@ impl PaginationResult {
                         FootnoteRef {
                             number: f.number,
                             source,
+                            fragment: f.fragment,
                         }
                     })
                     .collect(),
@@ -765,6 +914,8 @@ impl PaginationResult {
                     para_index: shifted_pi,
                     table_para_index: shifted_tpi,
                     has_text: w.has_text,
+                    start_line: w.start_line,
+                    end_line: w.end_line,
                 });
             }
         }

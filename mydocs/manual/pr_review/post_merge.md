@@ -2,7 +2,7 @@
 kind: guide
 status: active
 canonical: mydocs/manual/pr_review_workflow.md
-last_verified: 2026-07-25
+last_verified: 2026-08-09
 ---
 
 # Merge 후속 처리
@@ -120,9 +120,12 @@ done
 
 OPEN이면 작업지시자 승인 뒤 수동 close와 후속 comment를 남긴다.
 
+여러 단락의 후속 기록은 [공통 본문 전송 규칙](../pr_review_workflow.md#34-github-markdown-본문-전송)에 따라
+close와 comment를 분리하고 실제 줄바꿈을 담은 `--body-file`을 쓴다.
+
 ~~~bash
-gh issue close N --repo edwardkim/rhwp \
-  --comment "[PR M](https://github.com/edwardkim/rhwp/pull/M) 머지로 해결 (by @contributor). ..."
+gh issue close N --repo edwardkim/rhwp
+gh issue comment N --repo edwardkim/rhwp --body-file <issue-comment.md>
 ~~~
 
 CLOSED여도 같은 merge commit·같은 검증 증적의 maintainer comment가 아직 없으면 다음을 담은 comment를 남긴다.
@@ -135,6 +138,23 @@ CLOSED여도 같은 merge commit·같은 검증 증적의 maintainer comment가 
 
 GitHub bot auto-close comment만으로 후속 기록이 완료된 것은 아니다. 같은 commit·같은 증적의 maintainer
 comment가 있으면 중복 게시하지 않고 permalink를 상태 보고에 남긴다.
+
+### 7.3.1 sub-issue 연동 부모 issue의 close
+
+추적 성격의 부모 issue(discussion 발견 여러 건을 부모로 묶고 실작업을 sub-issue로 분리한 경우 등)는
+마지막 sub-issue close 시점에 함께 close하는 것을 기본으로 한다. 단 다음을 모두 지킨다.
+
+- 부모 귀속 산출물(가드 테스트 PR 등)이 모두 merge된 뒤에만 close한다. sub-issue close를 단일
+  트리거로 삼지 않는다.
+- sub-issue 연동은 close 시점 규칙일 뿐 절차 단축이 아니다. devel 반영 검증(`git branch --contains`)과
+  작업지시자 승인 게이트는 동일하게 거친다. GitHub는 sub-issue 완료 시 부모를 자동 close하지 않으므로
+  항상 수동 close다.
+- close comment에 판정 경위를 명시한다. "버그 수정으로 닫힘"이 아닌 경우(오등록 판정, 이미 닫힌 축
+  귀속, 가드 보강)는 그 성격과 귀속 커밋을 남겨 사후 검색이 성격을 오독하지 않게 한다.
+
+첫 적용 사례: #3552(부모 — 재현 불가 판정, 가드 테스트 PR 귀속) / #3576(sub-issue — 실작업).
+close 체크리스트: ① sub-issue close ② 가드 테스트 PR merge ③ 판정 경위 close comment
+④ 작업지시자 승인.
 
 ## 7.4 contributor PR comment
 
@@ -218,15 +238,17 @@ contributor fork의 head는 위 `upstream` 조회 대상이 아니다. PR metada
 
 ### 7.7.1 검토 전용 target
 
-CARGO_TARGET_DIR=target/<review-name>처럼 이번 review만을 위해 만든 exact target 하위 directory는
-branch·worktree 정리 뒤에만 정리한다. shared target/debug, target/release, target/release-test,
-target/wasm32-unknown-unknown와 사용자·다른 도구 산출물은 삭제 대상으로 가정하지 않는다.
+PR review Cargo 검증의 고정 경로 `target/pr-review`는 branch·worktree 정리 뒤에도 보존한다. 이 경로는
+다음 review의 일반 컴파일 산출물을 재사용하는 shared review cache이며, 빌드 뒤 이동하면 통합 테스트에
+박힌 절대 실행 경로가 깨질 수 있다. shared target/debug, target/release, target/release-test,
+target/wasm32-unknown-unknown와 사용자·다른 도구 산출물도 삭제 대상으로 가정하지 않는다.
 
 ~~~bash
 find target -mindepth 1 -maxdepth 1 -type d -exec du -sh {} \;
 pgrep -alf '(^|/)(cargo|rustc|wasm-pack)( |$)' || true
 ~~~
 
-실행 중인 Cargo/Rust가 그 directory를 쓰면 유지한다. 현재 review 전용임을 확인한 정확한 하위 경로만
-제거하거나 복구 가능한 환경에서는 휴지통으로 이동한다. 이후 남은 target 하위 경로를 확인하고, 정리한
-정확한 이름과 보존한 shared 경로를 최종 상태에 기록한다.
+실행 중인 Cargo/Rust가 있으면 해당 target을 유지한다. `target/pr-review`는 정리하지 않고, 종료된 과거
+`target/review-*`처럼 고정 cache와 구별되는 exact legacy review directory만 소유·미사용을 확인한 뒤
+제거하거나 복구 가능한 환경에서는 휴지통으로 이동한다. 이후 남은 target 하위 경로와 보존한
+`target/pr-review`를 최종 상태에 기록한다.

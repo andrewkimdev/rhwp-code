@@ -2,7 +2,7 @@
 kind: guide
 status: active
 canonical: mydocs/manual/pr_review_workflow.md
-last_verified: 2026-07-25
+last_verified: 2026-08-07
 ---
 
 # PR 접수와 리뷰 기록
@@ -73,6 +73,8 @@ python tools/object_visual_regression.py --preset ovr5 -o output/poc/ovr --diff-
 
 maintainer 일반 경로는 처리 중 active 경로에 작성하고, 완료 후 archive로 이동한다.
 collaborator self-merge와 collaborator 매개 외부 PR은 해당 기본 경로 문서가 정한 archive 경로를 처음부터 쓴다.
+PR 번호는 PR 생성 시점에 확정하며 생성 전에 예측하지 않는다. collaborator self-merge는 PR을 생성해
+번호를 받은 뒤 reviewer assign을 거쳐 번호 기반 review 문서를 같은 PR의 후속 commit으로 추가한다.
 
 ~~~text
 mydocs/pr/pr_N_review.md
@@ -110,7 +112,17 @@ draft, mergeable, head SHA, CI 상태는 확정 사실처럼 쓰지 않는다. �
 
 과거 CI 통과, 특정 SHA, CLEAN 상태만으로 최종 merge 가능을 단정하지 않는다.
 
-### 3.4 가설 기각·재분류 PR
+### 3.4 완료 검증 기록의 시제
+
+local validation이 끝난 review 문서는 검증 계획서가 아니다. 완료한 Cargo·npm·lint·fixture·
+시각 검증은 명령과 결과를 과거형으로 쓴다. "실행한다", "확인할 예정이다", "통과해야 한다"는
+아직 실행하지 않은 항목에만 사용한다.
+
+GitHub Actions와 mergeability는 작성 뒤에도 변하는 외부 상태이므로, 최신 head 재확인 필요와
+merge 전 조건으로 구분해 기록한다. 이 규칙은 로컬 검증 결과를 미래 약속처럼 약화하거나,
+반대로 대기 중 CI를 완료 사실처럼 쓰는 일을 함께 막는다.
+
+### 3.5 가설 기각·재분류 PR
 
 조사 PR이 초기 가설을 기각하거나 다른 원인 계통으로 재분류하는 목적이면, 기각 자체는 merge 보류 사유가 아니다.
 다만 최종 보고서·stage 문서·README·sample 설명이 같은 결론을 가리키고, 기각 근거와 후속 issue가 명확해야 한다.

@@ -2,6 +2,7 @@ import type { CommandDef, CommandServices } from '../types';
 import { PageSetupDialog } from '@/ui/page-setup-dialog';
 import { AboutDialog } from '@/ui/about-dialog';
 import { showSaveAs } from '@/ui/save-as-dialog';
+import { showHwpSavePasswordDialog } from '@/ui/hwp-password-dialog';
 import { showUnsavedChangesDialog } from '@/ui/unsaved-changes-dialog';
 import { showHmlSaveFormatDialog } from '@/ui/hml-save-format-dialog';
 import {
@@ -12,7 +13,17 @@ import {
   type SaveFormat,
 } from '@/command/save-target';
 import { SAVE_FORMAT_DETAILS } from '@/command/save-format';
-import { exportDocumentForFormat } from '@/command/save-document-format';
+import {
+  exportDocumentWithReportForFormat,
+  exportPasswordProtectedDocumentWithReportForFormat,
+  type SaveExportArtifact,
+} from '@/command/save-document-format';
+import {
+  buildContentLossNotice,
+  persistDownloadWithContentLoss,
+  persistWithContentLoss,
+  type ContentLossReport,
+} from '@/core/export-content-loss';
 import {
   readHmlSaveContext,
   resolveHmlSaveCapability,
@@ -36,14 +47,13 @@ import {
   type PrintSurface,
 } from '@/command/print-surface';
 import {
-  canUseOpenFilePicker,
-  pickOpenFileHandle,
   readFileFromHandle,
   saveDocumentToFileSystem,
   type FileSystemFileHandleLike,
   type SaveDocumentResult,
   type FileSystemWindowLike,
 } from '@/command/file-system-access';
+import { openDocumentViaPicker } from '../file-open-picker';
 import { PdfPrintDialog } from '@/ui/pdf-print-dialog';
 import { userSettings } from '@/core/user-settings';
 import { showToast } from '@/ui/toast';
@@ -55,37 +65,14 @@ import { openRecentEntry } from '@/recent/recent-open';
  * 문서를 로드한다. `file:open` 커맨드와 "최근 문서" 메타-only 항목 재열기가 공유한다.
  */
 async function openFileViaPicker(services: CommandServices): Promise<void> {
-  try {
-    const canReplace = await confirmSaveBeforeReplacingDocument(services);
-    if (!canReplace) return;
-
-    const windowLike = window as FileSystemWindowLike;
-    const nativeOpenPickerAvailable = canUseOpenFilePicker(windowLike);
-    const handle = await pickOpenFileHandle(windowLike);
-    if (!handle) {
-      // File System Access API picker가 있었다면 null은 사용자 취소(예: Esc)다.
-      // 이때 숨김 input fallback을 다시 열면 파일 선택창이 곧바로 재오픈된다.
-      if (nativeOpenPickerAvailable) return;
-      const fileInput = document.getElementById('file-input') as HTMLInputElement | null;
-      if (fileInput) {
-        fileInput.dataset.skipUnsavedGuard = 'true';
-        fileInput.click();
-      }
-      return;
-    }
-
-    const { bytes, name } = await readFileFromHandle(handle);
-    services.eventBus.emit('open-document-bytes', {
-      bytes,
-      fileName: name,
-      fileHandle: handle,
-      skipUnsavedGuard: true,
-    });
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    console.error('[file:open] 열기 실패:', msg);
-    alert(`파일 열기에 실패했습니다:\n${msg}`);
-  }
+  await openDocumentViaPicker({
+    canReplace: () => confirmSaveBeforeReplacingDocument(services),
+    windowLike: window as FileSystemWindowLike,
+    findFileInput: () => document.getElementById('file-input') as HTMLInputElement | null,
+    emitOpenDocument: (payload) => services.eventBus.emit('open-document-bytes', payload),
+    warn: (message, error) => console.warn(message, error),
+    alert: (message) => alert(message),
+  });
 }
 
 /** 최근 문서 핸들의 읽기 권한을 확인/요청한다. 최종 'granted' 여부 반환. */
@@ -141,11 +128,42 @@ async function chooseSaveAsFormat(services: CommandServices): Promise<SaveFormat
   );
 }
 
-function createSaveBlob(services: CommandServices, format: SaveFormat): Blob {
-  const bytes = exportDocumentForFormat(services.wasm, format);
-  return new Blob([bytes as unknown as BlobPart], {
-    type: SAVE_FORMAT_DETAILS[format].mimeType,
-  });
+interface SavePayload {
+  blob: Blob;
+  contentLoss: ContentLossReport | null;
+}
+
+function createSavePayload(
+  services: CommandServices,
+  format: SaveFormat,
+  password?: string,
+): SavePayload {
+  const artifact: SaveExportArtifact = password === undefined
+    ? exportDocumentWithReportForFormat(services.wasm, format)
+    : exportPasswordProtectedDocumentWithReportForFormat(
+      services.wasm,
+      requirePasswordSaveFormat(format),
+      password,
+    );
+  return {
+    blob: new Blob([artifact.bytes as unknown as BlobPart], {
+      type: SAVE_FORMAT_DETAILS[format].mimeType,
+    }),
+    contentLoss: artifact.contentLoss,
+  };
+}
+
+function showExportContentLoss(report: ContentLossReport): void {
+  const message = buildContentLossNotice(report);
+  if (!message) return;
+  showToast({ message, durationMs: 0, confirmLabel: '확인' });
+}
+
+function requirePasswordSaveFormat(format: SaveFormat): Exclude<SaveFormat, 'hml'> {
+  if (format === 'hml') {
+    throw new Error('암호 설정 저장은 HWP 또는 HWPX 형식에서만 지원합니다.');
+  }
+  return format;
 }
 
 function isHmlSaveEnabled(services: CommandServices): boolean {
@@ -192,10 +210,12 @@ function completeHandleSave(
   sourceFormat: string,
   result: SaveDocumentResult,
   reason: 'save' | 'save-as',
+  passwordProtected = false,
 ): void {
   if (sourceFormat === 'hml') markConvertedHmlSaveHandle(result.handle);
   services.wasm.currentFileHandle = result.handle;
   services.wasm.fileName = result.fileName;
+  services.wasm.requiresPasswordForSave = passwordProtected;
   services.documentState.markClean(reason);
 }
 
@@ -204,45 +224,91 @@ function downloadBlob(blob: Blob, fileName: string): void {
   const anchor = document.createElement('a');
   anchor.href = url;
   anchor.download = fileName;
-  anchor.click();
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  try {
+    anchor.click();
+  } finally {
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
 }
 
 async function promptFallbackName(
   suggestedName: string,
   format: SaveFormat,
 ): Promise<string | null> {
-  const result = await showSaveAs(saveBaseNameFor(suggestedName, format), format);
-  return result ? fileNameForFormat(result, format) : null;
+  const result = await showSaveAs(saveBaseNameFor(suggestedName, format), format, {
+    allowPassword: false,
+  });
+  return result?.fileName ?? null;
+}
+
+interface SaveAsOptions {
+  fileName: string;
+  password: string | null;
+}
+
+async function promptSaveAsOptions(
+  services: CommandServices,
+  format: SaveFormat,
+): Promise<SaveAsOptions | null> {
+  const selection = await showSaveAs(
+    saveBaseNameFor(services.wasm.fileName, format),
+    format,
+    { allowPassword: format !== 'hml' },
+  );
+  if (selection === null) return null;
+  if (!selection.configurePassword) {
+    return { fileName: selection.fileName, password: null };
+  }
+
+  const password = await showHwpSavePasswordDialog(selection.fileName);
+  if (password === null) return null;
+  return { fileName: selection.fileName, password };
 }
 
 async function saveAsFormat(services: CommandServices, format: SaveFormat): Promise<void> {
+  let password: string | null = null;
   try {
-    flushDeferredPaginationBeforeExplicitOutput(services, 'save-as');
     const sourceFormat = services.wasm.getSourceFormat();
-    const saveName = fileNameForFormat(services.wasm.fileName, format);
-    const blob = createSaveBlob(services, format);
+    const options = await promptSaveAsOptions(services, format);
+    if (options === null) return;
+    password = options.password;
+
+    flushDeferredPaginationBeforeExplicitOutput(services, 'save-as');
+    const saveName = options.fileName;
+    const payload = createSavePayload(services, format, password ?? undefined);
     const originalHandle = sourceFormat === 'hml' ? services.wasm.currentFileHandle : null;
-    const result = await tryFileSystemSave(
-      services,
-      format,
-      blob,
-      saveName,
-      true,
-      originalHandle,
+    const result = await persistWithContentLoss(
+      payload.contentLoss,
+      () => tryFileSystemSave(
+        services,
+        format,
+        payload.blob,
+        saveName,
+        true,
+        originalHandle,
+      ),
+      (saveResult) => saveResult !== 'cancelled' && saveResult.method !== 'fallback',
+      showExportContentLoss,
     );
     if (result === 'cancelled') return;
     if (result.method !== 'fallback') {
-      completeHandleSave(services, sourceFormat, result, 'save-as');
+      completeHandleSave(services, sourceFormat, result, 'save-as', password !== null);
       return;
     }
     const downloadName = await promptFallbackName(saveName, format);
     if (!downloadName) return;
     services.wasm.fileName = downloadName;
-    downloadBlob(blob, downloadName);
+    services.wasm.requiresPasswordForSave = password !== null;
+    persistDownloadWithContentLoss(
+      payload.contentLoss,
+      () => downloadBlob(payload.blob, downloadName),
+      showExportContentLoss,
+    );
     services.documentState.markClean('save-as');
   } catch (error) {
     reportSaveError('file:save-as', error);
+  } finally {
+    password = '';
   }
 }
 
@@ -255,6 +321,7 @@ function reportSaveError(scope: string, error: unknown): void {
 export type SaveCurrentDocumentResult = 'saved' | 'cancelled' | 'failed' | 'unsupported';
 
 export async function saveCurrentDocument(services: CommandServices): Promise<SaveCurrentDocumentResult> {
+  let password: string | null = null;
   try {
     flushDeferredPaginationBeforeExplicitOutput(services, 'save');
     const sourceFormat = services.wasm.getSourceFormat();
@@ -274,28 +341,45 @@ export async function saveCurrentDocument(services: CommandServices): Promise<Sa
         suggestedName: fileNameForFormat(services.wasm.fileName, format),
       };
     }
-    const blob = createSaveBlob(services, target.format);
-    const result = await tryFileSystemSave(
-      services,
-      target.format,
-      blob,
-      target.suggestedName,
-      target.forceSaveAs,
-      services.wasm.currentFileHandle,
+    if (services.wasm.requiresPasswordForSave) {
+      const passwordFormat = requirePasswordSaveFormat(target.format);
+      password = await showHwpSavePasswordDialog(fileNameForFormat(services.wasm.fileName, passwordFormat));
+      if (password === null) return 'cancelled';
+    }
+    const payload = createSavePayload(services, target.format, password ?? undefined);
+    const result = await persistWithContentLoss(
+      payload.contentLoss,
+      () => tryFileSystemSave(
+        services,
+        target.format,
+        payload.blob,
+        target.suggestedName,
+        target.forceSaveAs,
+        services.wasm.currentFileHandle,
+      ),
+      (saveResult) => saveResult !== 'cancelled' && saveResult.method !== 'fallback',
+      showExportContentLoss,
     );
     if (result === 'cancelled') return 'cancelled';
     if (result.method !== 'fallback') {
-      completeHandleSave(services, sourceFormat, result, 'save');
+      completeHandleSave(services, sourceFormat, result, 'save', password !== null);
       return 'saved';
     }
     const downloadName = await fallbackNameForCurrentSave(services, target);
     if (!downloadName) return 'cancelled';
-    downloadBlob(blob, downloadName);
+    persistDownloadWithContentLoss(
+      payload.contentLoss,
+      () => downloadBlob(payload.blob, downloadName),
+      showExportContentLoss,
+    );
+    services.wasm.requiresPasswordForSave = password !== null;
     services.documentState.markClean('save');
     return 'saved';
   } catch (error) {
     reportSaveError('file:save', error);
     return 'failed';
+  } finally {
+    password = '';
   }
 }
 

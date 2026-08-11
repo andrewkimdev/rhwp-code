@@ -48,7 +48,9 @@ pub struct SourceProvenance {
 pub struct LayoutCompatibilityProfile {
     hwp3_layout: bool,
     hwp3_native_layout: bool,
+    hwp3_password_layout: bool,
     hwpx_stored_layout: bool,
+    hwpx_container: bool,
     hwp5_origin_hwpx: bool,
     native_hwp5_layout: bool,
 }
@@ -58,13 +60,16 @@ impl LayoutCompatibilityProfile {
         hwp3_layout: bool,
         hwp3_native_layout: bool,
         hwpx_stored_layout: bool,
+        hwpx_container: bool,
         hwp5_origin_hwpx: bool,
         native_hwp5_layout: bool,
     ) -> Self {
         Self {
             hwp3_layout,
             hwp3_native_layout,
+            hwp3_password_layout: false,
             hwpx_stored_layout,
+            hwpx_container,
             hwp5_origin_hwpx,
             native_hwp5_layout,
         }
@@ -82,11 +87,38 @@ impl LayoutCompatibilityProfile {
         self.hwp3_native_layout
     }
 
+    /// 원본 HWP3가 비밀번호로 복호화된 문서인지 여부.
+    ///
+    /// 일부 HWP3 암호 문서는 일반 HWP3와 다른 저장 line-segment 계약을 쓴다.
+    /// 그 보정은 원본 암호 상태가 확인된 문서에만 적용해야 일반 HWP3의 흐름을
+    /// 바꾸지 않는다.
+    pub fn hwp3_password_layout(&self) -> bool {
+        self.hwp3_password_layout
+    }
+
+    /// 원본 암호 HWP3 전용 레이아웃 계약을 표시한다.
+    ///
+    /// `Document::layout_profile`만 이 값을 유도한다. 별도 렌더러 단위 테스트는
+    /// 기존 기본값(false)을 유지한다.
+    pub(crate) fn with_hwp3_password_layout(mut self, enabled: bool) -> Self {
+        self.hwp3_password_layout = enabled;
+        self
+    }
+
     /// 저장 lineseg 를 HWPX 시멘틱으로 해석할지 여부(RowBreak 분할 tolerance
     /// 등) — 기존 `is_hwpx_source` 분기 동치: HWPX 컨테이너이면서 rhwp
     /// HWP5→HWPX 산출물이 아니거나, rhwp HWPX→HWP 변환본인 경우.
     pub fn hwpx_stored_layout(&self) -> bool {
         self.hwpx_stored_layout
+    }
+
+    /// 입력 원본이 실제 HWPX(OWPML ZIP) 컨테이너인지 여부.
+    ///
+    /// `hwpx_stored_layout()`과 달리 rhwp HWPX→HWP 변환 계보는 포함하지 않는다.
+    /// 컨테이너에만 존재하는 물리 조각 결함 보정은 이 질의를 사용해야 변환 HWP의
+    /// 정상 HWP5 뷰포트를 바꾸지 않는다.
+    pub fn hwpx_container(&self) -> bool {
+        self.hwpx_container
     }
 
     /// rhwp 가 HWP5 원본에서 내보낸 HWPX 인지 — HWPX 컨테이너라도 HWP5 원본의
@@ -100,12 +132,41 @@ impl LayoutCompatibilityProfile {
     pub fn native_hwp5_layout(&self) -> bool {
         self.native_hwp5_layout
     }
+
+    /// 원 HWP5와 rhwp가 HWP5에서 내보낸 marker HWPX가 공유하는 저장 pagination
+    /// 계약인지 여부.
+    ///
+    /// marker HWPX는 컨테이너는 XML이지만 원 HWP5의 저장 LINE_SEG·RowBreak
+    /// source-owner를 보존한다. 순수 HWPX는 이 계약에 포함하지 않는다.
+    pub fn hwp5_stored_pagination_layout(&self) -> bool {
+        self.native_hwp5_layout || self.hwp5_origin_hwpx
+    }
 }
 
 impl Default for LayoutCompatibilityProfile {
     fn default() -> Self {
         // 렌더러 단위 테스트와 생성기 경로가 역사적으로 all-false 프로필을
         // HWP5 기본값으로 사용했다. 새 출처 신호도 같은 기본 의미를 보존한다.
-        Self::new(false, false, false, false, true)
+        Self::new(false, false, false, false, false, true)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::LayoutCompatibilityProfile;
+
+    #[test]
+    fn hwp5_stored_pagination_excludes_original_hwpx() {
+        let native_hwp5 = LayoutCompatibilityProfile::new(false, false, false, false, false, true);
+        let hwp5_origin_hwpx =
+            LayoutCompatibilityProfile::new(false, false, false, true, true, false);
+        let original_hwpx = LayoutCompatibilityProfile::new(false, false, true, true, false, false);
+
+        assert!(native_hwp5.hwp5_stored_pagination_layout());
+        assert!(hwp5_origin_hwpx.hwp5_stored_pagination_layout());
+        assert!(
+            !original_hwpx.hwp5_stored_pagination_layout(),
+            "원본 HWPX의 별도 저장 line-seg 계약까지 HWP5 pagination으로 넓히면 안 된다"
+        );
     }
 }

@@ -7,14 +7,15 @@
 //! DOCUMENT_PROPERTIES → ID_MAPPINGS → BIN_DATA → FACE_NAME →
 //! BORDER_FILL → CHAR_SHAPE → TAB_DEF → NUMBERING → PARA_SHAPE → STYLE
 
-use super::byte_writer::ByteWriter;
+use super::byte_writer::{char_to_wchar, ByteWriter};
+pub use super::char_shape::serialize_char_shape;
 use super::record_writer::write_record;
 
 use crate::model::bin_data::{BinData, BinDataType};
 use crate::model::document::{DocInfo, DocProperties};
 use crate::model::style::{
-    BorderFill, BorderLineType, Bullet, CenterLine, CharShape, FillType, Font, ImageFillMode,
-    Numbering, ParaShape, Style, TabDef,
+    BorderFill, BorderLineType, Bullet, CenterLine, FillType, Font, ImageFillMode, Numbering,
+    ParaShape, Style, TabDef,
 };
 use crate::parser::tags;
 
@@ -421,127 +422,6 @@ fn serialize_fill(w: &mut ByteWriter, fill: &crate::model::style::Fill) {
     }
 }
 
-pub fn serialize_char_shape(cs: &CharShape) -> Vec<u8> {
-    let mut w = ByteWriter::new();
-
-    // font_ids (7 × u16)
-    for &id in &cs.font_ids {
-        w.write_u16(id).unwrap();
-    }
-    // ratios (7 × u8)
-    for &ratio in &cs.ratios {
-        w.write_u8(ratio).unwrap();
-    }
-    // spacings (7 × i8)
-    for &spacing in &cs.spacings {
-        w.write_i8(spacing).unwrap();
-    }
-    // relative_sizes (7 × u8)
-    for &size in &cs.relative_sizes {
-        w.write_u8(size).unwrap();
-    }
-    // char_offsets (7 × i8)
-    for &offset in &cs.char_offsets {
-        w.write_i8(offset).unwrap();
-    }
-    // base_size
-    w.write_i32(cs.base_size).unwrap();
-    // attr: 원본 비트를 기반으로, 모델링된 필드 반영
-    let mut attr = cs.attr;
-    // bit 0: italic
-    if cs.italic {
-        attr |= 0x01;
-    } else {
-        attr &= !0x01;
-    }
-    // bit 1: bold
-    if cs.bold {
-        attr |= 0x02;
-    } else {
-        attr &= !0x02;
-    }
-    // bits 2-3: underline_type (0=none, 1=bottom, 3=top)
-    attr &= !0x0C;
-    attr |= match cs.underline_type {
-        crate::model::style::UnderlineType::Bottom => 1u32 << 2,
-        crate::model::style::UnderlineType::Top => 3u32 << 2,
-        crate::model::style::UnderlineType::None => 0,
-    };
-    // bits 8-10: outline_type (hwplib 기준)
-    attr &= !(0x07 << 8);
-    attr |= (cs.outline_type as u32 & 0x07) << 8;
-    // bits 11-12: shadow_type (hwplib 기준)
-    attr &= !(0x03 << 11);
-    attr |= (cs.shadow_type as u32 & 0x03) << 11;
-    // bit 13: emboss
-    if cs.emboss {
-        attr |= 1u32 << 13;
-    } else {
-        attr &= !(1u32 << 13);
-    }
-    // bit 14: engrave
-    if cs.engrave {
-        attr |= 1u32 << 14;
-    } else {
-        attr &= !(1u32 << 14);
-    }
-    // HWP 스펙 표 37: bit 15 = 위첨자(superscript), bit 16 = 아래첨자(subscript)
-    if cs.superscript {
-        attr |= 1u32 << 15;
-    } else {
-        attr &= !(1u32 << 15);
-    }
-    if cs.subscript {
-        attr |= 1u32 << 16;
-    } else {
-        attr &= !(1u32 << 16);
-    }
-    // bits 4-7: underline_shape (표 27 선 종류)
-    attr &= !(0x0F << 4);
-    attr |= (cs.underline_shape as u32 & 0x0F) << 4;
-    // bits 18-20: strikethrough (≥2 means active)
-    if cs.strikethrough {
-        if (attr >> 18) & 0x07 < 2 {
-            attr = (attr & !(0x07 << 18)) | (2u32 << 18);
-        }
-    } else {
-        attr &= !(0x07 << 18);
-    }
-    // bits 21-24: emphasis_dot (강조점 종류)
-    attr &= !(0x0F << 21);
-    attr |= (cs.emphasis_dot as u32 & 0x0F) << 21;
-    // bit 25: use font space
-    if cs.use_font_space {
-        attr |= 1u32 << 25;
-    } else {
-        attr &= !(1u32 << 25);
-    }
-    // bits 26-29: strike_shape (취소선 모양, 표 27 선 종류)
-    attr &= !(0x0F << 26);
-    attr |= (cs.strike_shape as u32 & 0x0F) << 26;
-    // bit 30: kerning
-    if cs.kerning {
-        attr |= 1u32 << 30;
-    } else {
-        attr &= !(1u32 << 30);
-    }
-    w.write_u32(attr).unwrap();
-    // shadow offsets (i8 × 2)
-    w.write_i8(cs.shadow_offset_x).unwrap();
-    w.write_i8(cs.shadow_offset_y).unwrap();
-    // colors
-    w.write_color_ref(cs.text_color).unwrap();
-    w.write_color_ref(cs.underline_color).unwrap();
-    w.write_color_ref(cs.shade_color).unwrap();
-    w.write_color_ref(cs.shadow_color).unwrap();
-    // 글자 테두리/배경 ID (5.0.2.1 이상)
-    w.write_u16(cs.border_fill_id).unwrap();
-    // 취소선 색 (5.0.3.0 이상)
-    w.write_color_ref(cs.strike_color).unwrap();
-
-    w.into_bytes()
-}
-
 pub fn serialize_tab_def(td: &TabDef) -> Vec<u8> {
     let mut w = ByteWriter::new();
     // auto tab 비트(bit0=left, bit1=right)를 불리언에서 재인코딩한다. 파서는 이 두
@@ -610,7 +490,7 @@ fn serialize_bullet(bullet: &Bullet) -> Vec<u8> {
     w.write_u32(bullet.char_shape_id).unwrap();
 
     // 글머리표 문자 (WCHAR)
-    w.write_u16(bullet.bullet_char as u16).unwrap();
+    w.write_u16(char_to_wchar(bullet.bullet_char)).unwrap();
 
     // 이미지 글머리표 여부 (INT32)
     w.write_i32(bullet.image_bullet).unwrap();
@@ -621,7 +501,8 @@ fn serialize_bullet(bullet: &Bullet) -> Vec<u8> {
     }
 
     // 체크 글머리표 문자 (WCHAR)
-    w.write_u16(bullet.check_bullet_char as u16).unwrap();
+    w.write_u16(char_to_wchar(bullet.check_bullet_char))
+        .unwrap();
 
     w.into_bytes()
 }

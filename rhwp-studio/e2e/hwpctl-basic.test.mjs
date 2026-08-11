@@ -26,8 +26,29 @@ runTest('hwpctl 호환 레이어 기본 동작', async ({ page }) => {
   const actId = await page.evaluate(() => window.HwpCtrl.CreateAction("TableCreate").ActID);
   assert(actId === 'TableCreate', `ActID = "TableCreate" (실제: "${actId}")`);
 
+  // #3648: boolean Run/Execute만으로는 실패의 종류를 알 수 없으므로, 공개 조회 API와
+  // 정책상 미지원 액션의 호환 반환값을 실제 브라우저 경계에서 함께 확인한다.
+  console.log('  [5] Action 지원 상태 확인...');
+  const support = await page.evaluate(() => {
+    const undo = window.HwpCtrl.CreateAction('Undo');
+    return {
+      missing: window.HwpCtrl.GetActionSupport('__rhwp_missing_action__'),
+      undo: window.HwpCtrl.GetActionSupport('Undo'),
+      tableCreate: window.HwpCtrl.GetActionSupport('TableCreate'),
+      undoRun: undo.Run(),
+      undoExecute: undo.Execute(undo.CreateSet()),
+    };
+  });
+  assert(support.missing === null, '미등록 Action은 null');
+  assert(support.undo?.status === 'unsupported', 'Undo는 정책상 미지원');
+  assert(support.undo?.code === 'notSupportedByDesign', 'Undo 미지원 코드는 기계 판독 가능');
+  assert(support.undo?.reference === 'https://github.com/edwardkim/rhwp/issues/3648', 'Undo 미지원 근거');
+  assert(support.tableCreate?.status === 'supported', 'TableCreate는 지원');
+  assert(support.undoRun === false, '미지원 Undo.Run()은 false');
+  assert(support.undoExecute === false, '미지원 Undo.Execute()는 false');
+
   // ParameterSet
-  console.log('  [5] ParameterSet 동작 확인...');
+  console.log('  [6] ParameterSet 동작 확인...');
   const setResult = await page.evaluate(() => {
     const set = window.HwpCtrl.CreateSet("TableCreation");
     set.SetItem("Rows", 10);
@@ -39,7 +60,7 @@ runTest('hwpctl 호환 레이어 기본 동작', async ({ page }) => {
   assert(setResult.name === 'TableCreation', `Set name = "TableCreation"`);
 
   // InsertText
-  console.log('  [6] InsertText 동작 확인...');
+  console.log('  [7] InsertText 동작 확인...');
   const textResult = await page.evaluate(() => {
     window.HwpCtrl.Clear();
     const ok = window.HwpCtrl.InsertText("테스트 문장");
@@ -50,7 +71,7 @@ runTest('hwpctl 호환 레이어 기본 동작', async ({ page }) => {
   assert(textResult.pos.pos > 0, `커서 이동 (pos=${textResult.pos.pos})`);
 
   // 구현률
-  console.log('  [7] 구현률 확인...');
+  console.log('  [8] 구현률 확인...');
   const implRate = await page.evaluate(() => {
     const total = window.HwpCtrl.constructor.getRegisteredActionCount();
     const impl = window.HwpCtrl.constructor.getImplementedActionCount();

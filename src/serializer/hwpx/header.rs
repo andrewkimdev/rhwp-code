@@ -25,7 +25,7 @@ use crate::model::ColorRef;
 
 use super::canonical_defaults::FONTFACE_LANG_NAMES;
 use super::context::SerializeContext;
-use super::utils::{empty_tag, end_tag, start_tag_attrs, write_xml_decl};
+use super::utils::{empty_tag, end_tag, start_tag_attrs, text, write_xml_decl};
 use super::SerializeError;
 
 /// `header.xml` 바이트 생성. Stage 1 진입점.
@@ -533,8 +533,11 @@ fn border_line_type_str(t: BorderLineType) -> &'static str {
     match t {
         None => "NONE",
         Solid => "SOLID",
-        Dash => "DASH",
-        Dot => "DOT",
+        // HWPX LineType2의 DASH/DOT 표기는 HWP5 BORDER_FILL 코드 2/3과 역순이다.
+        // parser::hwpx::header::parse_border_line_type와 짝을 맞춰 HWPX 왕복에서도
+        // 코드 2(파선), 3(점선)을 보존한다.
+        Dash => "DOT",
+        Dot => "DASH",
         DashDot => "DASH_DOT",
         DashDotDot => "DASH_DOT_DOT",
         LongDash => "LONG_DASH",
@@ -606,11 +609,9 @@ fn write_char_pr<W: Write>(
 ) -> Result<(), SerializeError> {
     // 속성 순서 (CharShapeType.cpp:79-86): id, height, textColor, shadeColor,
     // useFontSpace, useKerning, symMark, borderFillIDRef
-    let shade = if cs.shade_color == 0 {
-        "none".to_string()
-    } else {
-        color_hex(cs.shade_color)
-    };
+    // `0xFFFF_FFFF`만 "음영 없음" sentinel 이다. `0x00000000`은 HWP3 팔레트
+    // 검정색을 100% 적용한 실제 음영이므로 #000000으로 보존해야 한다 (#4155).
+    let shade = color_hex(cs.shade_color);
     start_tag_attrs(
         w,
         "hh:charPr",
@@ -841,18 +842,70 @@ fn write_tab_pr<W: Write>(w: &mut Writer<W>, id: u16, td: &TabDef) -> Result<(),
     } else {
         start_tag_attrs(w, "hh:tabPr", &attrs_ref)?;
         for tab in &td.tabs {
-            empty_tag(
-                w,
-                "hh:tabItem",
-                &[
-                    ("pos", &tab.position.to_string()),
-                    ("type", tab_type_str(tab.tab_type)),
-                    ("leader", tab_leader_str(tab.fill_type)),
-                ],
-            )?;
+            write_tab_item_switch(w, tab)?;
         }
         end_tag(w, "hh:tabPr")?;
     }
+    Ok(())
+}
+
+/// tabItem 을 한컴 원본과 동일하게 `<hp:switch>`(case/default) 구조로 쓴다 (#3551).
+///
+/// `parse_tab_def` 의 정확한 역. 파서는 HwpUnitChar `case` 값을 ×2 하여 IR 에
+/// 적재하므로(`stored = case × 2`, parser/hwpx/header.rs:1789), 역으로:
+///   - `case`(HwpUnitChar) 값 = 저장값 / 2, `unit="HWPUNIT"` 동반
+///   - `default` 값 = 저장값 그대로
+///
+/// 종전엔 switch 없이 `hh:tabItem` 만 방출해 한컴 원본의 구조가 소실됐다
+/// (실측: 서울시 공개 서식 4건에서 tabItem 이 정확히 절반). 같은 파일의
+/// `write_para_margin_switch` 와 동형이다.
+///
+/// 홀수 저장값은 `case` 로 정확히 표현할 수 없으므로(`101/2 = 50`), 파서가
+/// `default != case × 2` 일 때 `default` 원값을 채택해 되살린다 — #3368 이
+/// paraPr 여백에서 지적한 것과 같은 계약이다.
+fn write_tab_item_switch<W: Write>(
+    w: &mut Writer<W>,
+    tab: &crate::model::style::TabItem,
+) -> Result<(), SerializeError> {
+    super::utils::start_tag(w, "hp:switch")?;
+
+    start_tag_attrs(
+        w,
+        "hp:case",
+        &[(
+            "hp:required-namespace",
+            "http://www.hancom.co.kr/hwpml/2016/HwpUnitChar",
+        )],
+    )?;
+    write_tab_item(w, tab, true)?;
+    end_tag(w, "hp:case")?;
+
+    super::utils::start_tag(w, "hp:default")?;
+    write_tab_item(w, tab, false)?;
+    end_tag(w, "hp:default")?;
+
+    end_tag(w, "hp:switch")?;
+    Ok(())
+}
+
+/// `<hh:tabItem>` 한 개. `half=true` 면 HwpUnitChar case 용으로 저장값의 절반과
+/// `unit="HWPUNIT"` 를 쓴다.
+fn write_tab_item<W: Write>(
+    w: &mut Writer<W>,
+    tab: &crate::model::style::TabItem,
+    half: bool,
+) -> Result<(), SerializeError> {
+    let pos = if half { tab.position / 2 } else { tab.position };
+    let pos = pos.to_string();
+    let mut attrs: Vec<(&str, &str)> = vec![
+        ("pos", pos.as_str()),
+        ("type", tab_type_str(tab.tab_type)),
+        ("leader", tab_leader_str(tab.fill_type)),
+    ];
+    if half {
+        attrs.push(("unit", "HWPUNIT"));
+    }
+    empty_tag(w, "hh:tabItem", &attrs)?;
     Ok(())
 }
 
@@ -945,23 +998,30 @@ fn write_numbering<W: Write>(
         let num_format = numbering_format_str(h.number_format);
         let text_offset_s = h.text_distance.to_string();
         let char_pr_id_ref_s = h.char_shape_id.to_string();
-        empty_tag(
-            w,
-            "hh:paraHead",
-            &[
-                ("start", &start_s),
-                ("level", &level_s),
-                ("align", "LEFT"),
-                ("useInstWidth", "1"),
-                ("autoIndent", "1"),
-                ("widthAdjust", &wa),
-                ("textOffsetType", "PERCENT"),
-                ("textOffset", &text_offset_s),
-                ("numFormat", num_format),
-                ("charPrIDRef", &char_pr_id_ref_s),
-                ("checkable", "0"),
-            ],
-        )?;
+        let attrs = [
+            ("start", start_s.as_str()),
+            ("level", level_s.as_str()),
+            ("align", "LEFT"),
+            ("useInstWidth", "1"),
+            ("autoIndent", "1"),
+            ("widthAdjust", wa.as_str()),
+            ("textOffsetType", "PERCENT"),
+            ("textOffset", text_offset_s.as_str()),
+            ("numFormat", num_format),
+            ("charPrIDRef", char_pr_id_ref_s.as_str()),
+            ("checkable", "0"),
+        ];
+        // [#3838] 번호 형식 문자열은 `hh:paraHead` 의 **텍스트 내용**이다("^1." 등).
+        // 자기닫힘으로 내보내면 형식이 사라져 문단 번호가 아예 렌더되지 않는다.
+        // 한컴 원본 실측: paraHead 232개 중 172개가 내용을 갖는다.
+        let format_str = n.level_formats.get(idx).map(String::as_str).unwrap_or("");
+        if format_str.is_empty() {
+            empty_tag(w, "hh:paraHead", &attrs)?;
+        } else {
+            start_tag_attrs(w, "hh:paraHead", &attrs)?;
+            text(w, format_str)?;
+            end_tag(w, "hh:paraHead")?;
+        }
     }
     end_tag(w, "hh:numbering")?;
     Ok(())
@@ -1784,6 +1844,32 @@ mod tests {
     }
 
     #[test]
+    fn write_border_fill_uses_hwpx_dash_dot_contract() {
+        let mut bf = BorderFill::default();
+        bf.borders[0].line_type = BorderLineType::Dash;
+        bf.borders[1].line_type = BorderLineType::Dot;
+
+        let mut writer = Writer::new(Vec::new());
+        write_border_fill(
+            &mut writer,
+            0,
+            &bf,
+            &SerializeContext::collect_from_document(&Default::default()),
+        )
+        .expect("write borderFill");
+        let xml = String::from_utf8(writer.into_inner()).unwrap();
+
+        assert!(
+            xml.contains(r#"<hh:leftBorder type="DOT""#),
+            "HWP5 code 2(Dash)는 HWPX DOT으로 방출돼야 함: {xml}"
+        );
+        assert!(
+            xml.contains(r#"<hh:rightBorder type="DASH""#),
+            "HWP5 code 3(Dot)는 HWPX DASH로 방출돼야 함: {xml}"
+        );
+    }
+
+    #[test]
     fn write_border_fill_preserves_three_d_and_shadow_bits() {
         // [#2965] bf.attr bit0=3D, bit1=그림자. 종전엔 threeD/shadow 가 항상
         // "0" 으로 하드코딩되어 파서가 보존한 값이 왕복에서 소실됐다.
@@ -1947,6 +2033,43 @@ mod tests {
     }
 
     #[test]
+    fn write_tab_pr_emits_tab_item_switch_case_default() {
+        // [#3551] tabItem 은 한컴 원본과 동일하게 <hp:switch>(case=저장값/2 +
+        // unit="HWPUNIT", default=저장값) 로 나가야 한다. 종전엔 switch 없이
+        // hh:tabItem 만 방출해 실물 문서에서 tabItem 이 정확히 절반이 됐다.
+        use crate::model::style::{TabDef, TabItem};
+
+        let mut td = TabDef::default();
+        td.tabs = vec![TabItem {
+            position: 3288,
+            tab_type: 0,
+            fill_type: 0,
+        }];
+
+        let mut writer = Writer::new(Vec::new());
+        write_tab_pr(&mut writer, 2, &td).expect("write tabPr");
+        let xml = String::from_utf8(writer.into_inner()).unwrap();
+
+        assert!(
+            xml.contains(
+                r#"<hp:case hp:required-namespace="http://www.hancom.co.kr/hwpml/2016/HwpUnitChar"><hh:tabItem pos="1644" type="LEFT" leader="NONE" unit="HWPUNIT"/></hp:case>"#
+            ),
+            "case 는 절반값(1644) + unit=HWPUNIT: {xml}"
+        );
+        assert!(
+            xml.contains(
+                r#"<hp:default><hh:tabItem pos="3288" type="LEFT" leader="NONE"/></hp:default>"#
+            ),
+            "default 는 저장값(3288), unit 없음: {xml}"
+        );
+        assert_eq!(
+            xml.matches("<hp:switch>").count(),
+            1,
+            "탭 1개당 switch 1개: {xml}"
+        );
+    }
+
+    #[test]
     fn write_para_pr_emits_margin_switch_case_default() {
         // paraPr margin/lineSpacing 은 <hp:switch>(case=저장값/2, default=저장값)
         // 구조로, margin 자식은 hc: 네임스페이스(value, unit 순)로 출력되어야 한다.
@@ -2067,6 +2190,24 @@ mod tests {
         assert!(
             xml.contains(r#"<hh:shadow type="NONE""#),
             "shadow NONE 항상 출력: {xml}"
+        );
+    }
+
+    #[test]
+    fn write_char_pr_preserves_opaque_black_shade() {
+        let cs = CharShape {
+            shade_color: 0x0000_0000,
+            ..Default::default()
+        };
+        let xml = write_single_char_pr(&cs);
+
+        assert!(
+            xml.contains(r##"shadeColor="#000000""##),
+            "실제 검정 음영은 none 으로 소거하면 안 된다: {xml}"
+        );
+        assert!(
+            !xml.contains(r#"shadeColor="none""#),
+            "0x00000000은 음영 없음 sentinel 이 아니다: {xml}"
         );
     }
 
@@ -2298,6 +2439,36 @@ mod tests {
 
         assert_eq!(xml.matches("<hh:paraHead").count(), 10);
         assert!(xml.starts_with(r#"<hh:numbering id="1" start="0">"#));
+    }
+
+    #[test]
+    fn write_numbering_skeleton_emits_level_format_string_as_text() {
+        // [#3838] 번호 형식 문자열("^1." 등)은 `hh:paraHead` 의 **텍스트 내용**이다.
+        // 폴백이 자기닫힘 태그로 속성만 내보내면 형식이 사라져 문단 번호가 아예
+        // 렌더되지 않는다 — IR diff 는 0 이라 `--verify` 게이트가 못 잡는다.
+        //
+        // 한컴 원본 실측(HWPX 40건): paraHead 232개 중 172개가 내용을 갖는다.
+        let mut n = Numbering::default();
+        n.level_formats[0] = "^1.".to_string();
+        n.level_formats[1] = "(^2)".to_string();
+
+        let mut writer = Writer::new(Vec::new());
+        write_numbering(&mut writer, 0, &n).unwrap();
+        let xml = String::from_utf8(writer.into_inner()).unwrap();
+
+        assert!(
+            xml.contains(">^1.</hh:paraHead>"),
+            "level 1 형식 문자열이 텍스트 내용으로 나가야 한다: {xml}"
+        );
+        assert!(
+            xml.contains(">(^2)</hh:paraHead>"),
+            "level 2 형식 문자열이 텍스트 내용으로 나가야 한다: {xml}"
+        );
+        // 형식이 빈 수준은 종전대로 자기닫힘 — 빈 내용을 만들지 않는다.
+        assert!(
+            xml.contains("checkable=\"0\"/>"),
+            "형식이 없는 수준은 자기닫힘을 유지해야 한다: {xml}"
+        );
     }
 
     #[test]

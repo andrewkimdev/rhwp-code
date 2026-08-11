@@ -9,18 +9,11 @@ use crate::model::path::PathSegment;
 use crate::model::style::BorderLineType;
 
 pub(crate) fn is_treat_as_char_object_control(ctrl: &Control) -> bool {
-    match ctrl {
-        Control::Shape(shape) => shape.common().treat_as_char,
-        Control::Table(table) => table.common.treat_as_char,
-        Control::Picture(picture) => picture.common.treat_as_char,
-        Control::Equation(equation) => equation.common.treat_as_char,
-        _ => false,
-    }
+    ctrl.is_treat_as_char_object()
 }
 
 fn is_logical_inline_control(ctrl: &Control) -> bool {
-    is_treat_as_char_object_control(ctrl)
-        || matches!(ctrl, Control::Footnote(_) | Control::Endnote(_))
+    ctrl.is_logical_inline()
 }
 
 /// 문단의 탐색 가능한 텍스트 길이를 반환한다.
@@ -147,35 +140,11 @@ pub(crate) fn find_control_text_positions(para: &Paragraph) -> Vec<usize> {
 /// `find_control_text_positions()` 는 HWP/HWPX record stream 의 raw text position 을 보존한다.
 /// 반면 커서 이동은 `SectionDef`, `ColumnDef` 같은 구조 컨트롤을 건너뛰고,
 /// Shape/Table/Picture/Equation/Footnote/Endnote 같은 인라인 개체만 한 글자 폭으로 센다.
+///
+/// 알고리즘 본체는 [`Paragraph::logical_control_positions`] 로 이동했으며, 본 함수는
+/// 기존 호출 경로를 유지하기 위한 thin wrapper 다.
 pub(crate) fn find_logical_control_positions(para: &Paragraph) -> Vec<usize> {
-    if para.text.is_empty() && para.char_offsets.is_empty() {
-        let mut inline_seen = 0usize;
-        let mut positions = Vec::with_capacity(para.controls.len());
-
-        for ctrl in &para.controls {
-            positions.push(inline_seen);
-            if is_logical_inline_control(ctrl) {
-                inline_seen += 1;
-            }
-        }
-
-        return positions;
-    }
-
-    let text_positions = find_control_text_positions(para);
-    let text_len = para.text.chars().count();
-    let mut inline_seen = 0usize;
-    let mut positions = Vec::with_capacity(para.controls.len());
-
-    for (ci, ctrl) in para.controls.iter().enumerate() {
-        let text_pos = text_positions.get(ci).copied().unwrap_or(text_len);
-        positions.push(text_pos + inline_seen);
-        if is_logical_inline_control(ctrl) {
-            inline_seen += 1;
-        }
-    }
-
-    positions
+    para.logical_control_positions()
 }
 
 /// ShapeObject에서 TextBox를 추출하는 헬퍼
@@ -206,6 +175,37 @@ pub(crate) fn get_textbox_from_shape_mut(
         _ => return None,
     };
     drawing.text_box.as_mut()
+}
+
+/// ShapeObject에서 캡션을 추출하는 헬퍼 (#4321).
+///
+/// 캡션이 실제로 어느 필드에 남는지는 변형마다 다르다 — `.drawing()`(`DrawingObjAttr.caption`)
+/// 을 보면 되는 것과, 자기 struct의 `caption` 필드를 직접 봐야 하는 것으로 갈린다:
+///
+/// - `Line`/`Rectangle`/`Ellipse`/`Arc`/`Polygon`/`Curve`: `.drawing()` 이 `Some` 이고 파서가
+///   캡션을 거기 그대로 둔다 (`src/parser/control/shape.rs` 일반 도형 분기 — `xxx.drawing =
+///   drawing;` 뒤에 별도 이동이 없다. HWPX(`src/parser/hwpx/section.rs::parse_shape_object`)도
+///   `<hp:caption>` 을 같은 `DrawingObjAttr.caption` 자리에 직접 채운다).
+/// - `Group`/`Picture`: `.drawing()` 이 `None` 이다. 파서가 캡션을 자기 struct의 `caption`
+///   필드로 옮겨(HWP5: `group.caption = drawing.caption;`) 또는 처음부터 거기로(HWPX:
+///   `parse_container`/`parse_picture`) 채운다.
+/// - `Chart`/`Ole`: **`.drawing()` 이 `Some` 이지만 캡션은 거기 없다.** HWP5 파서
+///   (`src/parser/control/shape.rs:213,222`)가 `chart.caption = chart.drawing.caption.take();`
+///   / `ole.caption = ole.drawing.caption.take();` 로 캡션을 파싱 직후 `drawing.caption` 밖으로
+///   `.take()` 해 자기 struct 최상위 필드로 옮긴다 — `.drawing()` 만 보면 항상 `None` 이라
+///   미스캔이었다. (HWPX 의 `parse_hp_chart_element`/`parse_hp_ole_element` 는 `<hp:caption>`
+///   자체를 파싱하지 않아 — 아예 어느 필드에도 값이 없다 — 이건 별개의 파서 결함 #4319 다.)
+pub(crate) fn get_caption_from_shape(
+    shape: &crate::model::shape::ShapeObject,
+) -> Option<&crate::model::shape::Caption> {
+    use crate::model::shape::ShapeObject;
+    match shape {
+        ShapeObject::Group(g) => g.caption.as_ref(),
+        ShapeObject::Picture(p) => p.caption.as_ref(),
+        ShapeObject::Chart(c) => c.caption.as_ref(),
+        ShapeObject::Ole(o) => o.caption.as_ref(),
+        _ => shape.drawing().and_then(|d| d.caption.as_ref()),
+    }
 }
 
 /// 문단 목록에서 DocumentPath를 따라 중첩 표에 대한 가변 참조를 얻는다.
@@ -519,6 +519,8 @@ pub(crate) fn parse_para_shape_mods(json: &str) -> crate::model::style::ParaShap
             "center" => Alignment::Center,
             "justify" => Alignment::Justify,
             "distribute" => Alignment::Distribute,
+            // 나눔 정렬 — 한글 `ParagraphShapeAlignDivision`(AlignType 5).
+            "split" | "division" => Alignment::Split,
             _ => Alignment::Justify,
         });
     }
@@ -846,6 +848,19 @@ pub(crate) fn json_escape(s: &str) -> String {
         }
     }
     out
+}
+
+/// 바이트를 JSON 문자열 리터럴(따옴표 포함)로 버퍼에 바로 base64 인코딩한다.
+///
+/// base64 표준 알파벳은 `A-Za-z0-9+/=` 뿐이라 [`json_escape`] 가 바꿀 문자가 하나도
+/// 없다. 그림 바이트는 수 MB 라서 이스케이프 스캔과 중간 String 할당이 레이어 JSON
+/// 직렬화 비용의 대부분을 차지했다 (Task #3315: 3.7MB 그림 1장 36.4ms 중 29.5ms).
+pub(crate) fn write_json_base64(buf: &mut String, bytes: &[u8]) {
+    use base64::Engine;
+
+    buf.push('"');
+    base64::engine::general_purpose::STANDARD.encode_string(bytes, buf);
+    buf.push('"');
 }
 
 /// JSON 성공 응답 생성: {"ok":true}
@@ -1532,6 +1547,39 @@ mod tests {
     use crate::model::image::Picture;
     use crate::model::page::ColumnDef;
     use crate::model::shape::TextWrap;
+
+    /// `write_json_base64` 는 "이스케이프를 건너뛰어도 같은 출력"이라는 전제로 스캔을
+    /// 없앤 것이므로, 전제 자체를 옛 경로와의 차분으로 고정한다 (Task #3315).
+    #[test]
+    fn json_base64_matches_escaped_encoding_for_every_byte_value() {
+        use base64::Engine;
+
+        let all_bytes: Vec<u8> = (0..=255u8).collect();
+        let cases: Vec<Vec<u8>> = vec![
+            Vec::new(),
+            vec![0x00],
+            vec![b'"', b'\\', b'\n', b'\r', b'\t', 0x08, 0x0C],
+            all_bytes.clone(),
+            // 길이 % 3 을 모두 훑어 패딩(`=`) 유무를 전부 통과시킨다.
+            all_bytes[..255].to_vec(),
+            all_bytes[..254].to_vec(),
+            all_bytes[..253].to_vec(),
+        ];
+
+        for bytes in cases {
+            let mut actual = String::new();
+            write_json_base64(&mut actual, &bytes);
+
+            let encoded = base64::engine::general_purpose::STANDARD.encode(&bytes);
+            let expected = format!("\"{}\"", json_escape(&encoded));
+
+            assert_eq!(actual, expected, "len={}", bytes.len());
+            let decoded = base64::engine::general_purpose::STANDARD
+                .decode(actual.trim_matches('"'))
+                .expect("base64 왕복");
+            assert_eq!(decoded, bytes);
+        }
+    }
 
     #[test]
     fn navigable_text_len_counts_trailing_footnote_marker() {

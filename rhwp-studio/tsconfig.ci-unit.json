@@ -1,0 +1,10 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "paths": {
+      "@/*": ["./src/*"],
+      "@wasm/rhwp.js": ["./types/wasm-ci-unit-stub.d.ts"]
+    }
+  },
+  "include": ["src", "types/wasm-ci-unit-stub.d.ts"]
+}

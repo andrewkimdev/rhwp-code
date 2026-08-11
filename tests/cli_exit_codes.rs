@@ -6,8 +6,11 @@
 //! 본 테스트가 다루지 않는다 — `tests/issue_1638_convert_verify_gate.rs` 참조.
 #![cfg(not(target_arch = "wasm32"))]
 
+#[path = "support/cli_exit_code_support.rs"]
+mod cli_exit_code_support;
+
+use cli_exit_code_support::{assert_code, describe, unique_temp_path};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
 
 /// 파싱까지 성공하는 실제 샘플 (페이지 범위 초과·쓰기 실패 경로 검증용).
 const SAMPLE: &str = "samples/hwp3-sample.hwp";
@@ -25,44 +28,6 @@ const COMMANDS_WITHOUT_ARGS: &[&str] = &[
 
 fn sample_path() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join(SAMPLE)
-}
-
-fn unique_temp_path(label: &str) -> PathBuf {
-    let nonce = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .expect("system clock")
-        .as_nanos();
-    std::env::temp_dir().join(format!(
-        "rhwp-exit-codes-{label}-{}-{nonce}",
-        std::process::id()
-    ))
-}
-
-fn run(args: &[&str]) -> Output {
-    Command::new(rhwp_bin())
-        .args(args)
-        .output()
-        .expect("rhwp 실행 실패")
-}
-
-fn describe(args: &[&str], output: &Output) -> String {
-    format!(
-        "명령: rhwp {}\nstdout:\n{}\nstderr:\n{}",
-        args.join(" "),
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    )
-}
-
-fn assert_code(args: &[&str], expected: i32) -> Output {
-    let output = run(args);
-    assert_eq!(
-        output.status.code(),
-        Some(expected),
-        "종료 코드 {expected} 를 기대했다\n{}",
-        describe(args, &output)
-    );
-    output
 }
 
 // --- 2: 사용법 오류 -------------------------------------------------------
@@ -153,8 +118,12 @@ fn unreadable_input_reports_runtime_failure() {
     let missing = missing.to_str().expect("utf-8 경로").to_string();
     let out_dir = unique_temp_path("runtime-out");
     let out_dir = out_dir.to_str().expect("utf-8 경로").to_string();
-    let out_file = unique_temp_path("runtime-out.hwpx");
-    let out_file = out_file.to_str().expect("utf-8 경로").to_string();
+    let mut hwp_out_file = unique_temp_path("runtime-out");
+    hwp_out_file.set_extension("hwp");
+    let hwp_out_file = hwp_out_file.to_str().expect("utf-8 경로").to_string();
+    let mut hwpx_out_file = unique_temp_path("runtime-out");
+    hwpx_out_file.set_extension("hwpx");
+    let hwpx_out_file = hwpx_out_file.to_str().expect("utf-8 경로").to_string();
 
     for args in [
         vec!["export-svg", &missing, "-o", &out_dir],
@@ -162,8 +131,8 @@ fn unreadable_input_reports_runtime_failure() {
         vec!["export-text", &missing, "-o", &out_dir],
         vec!["export-markdown", &missing, "-o", &out_dir],
         vec!["export-structure", &missing],
-        vec!["convert", &missing, &out_file],
-        vec!["export-hwpx", &missing, &out_file],
+        vec!["convert", &missing, &hwp_out_file],
+        vec!["export-hwpx", &missing, &hwpx_out_file],
     ] {
         assert_code(&args, 1);
     }
@@ -212,20 +181,6 @@ fn successful_export_returns_zero() {
     let _ = std::fs::remove_dir_all(&output_dir);
 }
 
-// --- export-png (feature 게이트) -----------------------------------------
-
-#[cfg(feature = "native-skia")]
-#[test]
-fn export_png_follows_the_same_contract() {
-    let missing = unique_temp_path("missing-png.hwp");
-    let missing = missing.to_str().expect("utf-8 경로").to_string();
-    let out_dir = unique_temp_path("png-out");
-    let out_dir = out_dir.to_str().expect("utf-8 경로").to_string();
-
-    assert_code(&["export-png"], 2);
-    assert_code(&["export-png", &missing, "-o", &out_dir], 1);
-}
-
 #[cfg(not(feature = "native-skia"))]
 #[test]
 fn export_png_without_native_skia_reports_usage_error() {
@@ -238,10 +193,4 @@ fn export_png_without_native_skia_reports_usage_error() {
         "왜 못 쓰는지 알려야 한다\n{}",
         describe(&args, &output)
     );
-}
-
-/// [#3289] 아카이브 실행 시 컴파일타임 경로는 빌드 러너 전용이므로,
-/// nextest가 런타임에 재매핑해 주입하는 CARGO_BIN_EXE_rhwp를 우선한다.
-fn rhwp_bin() -> String {
-    std::env::var("CARGO_BIN_EXE_rhwp").unwrap_or_else(|_| env!("CARGO_BIN_EXE_rhwp").to_string())
 }

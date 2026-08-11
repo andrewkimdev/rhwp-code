@@ -6,10 +6,11 @@
 
 use super::layout::{estimate_text_width, resolved_to_text_style};
 use super::style_resolver::{detect_lang_category, ResolvedStyleSet};
-use super::{px_to_hwpunit, TextStyle};
+use super::{hwpunit_to_px, px_to_hwpunit, TextStyle};
 use crate::model::control::Control;
 use crate::model::document::Section;
-use crate::model::paragraph::{CharShapeRef, LineSeg, Paragraph};
+use crate::model::paragraph::{CharShapeRef, LineSeg, Paragraph, SingleLineOverflowMemo};
+use crate::model::shape::Caption;
 
 /// 글자겹침(CharOverlap) 렌더링 정보
 #[derive(Debug, Clone, serde::Serialize)]
@@ -184,7 +185,7 @@ fn synthesize_marker_paragraph(para: &Paragraph) -> Option<Paragraph> {
     // 쉼표/고정탭/일반 글자가 한 줄에 섞인 문단은 [0,0,2,2,4] 같은 raw
     // position 자체가 편집자가 입력한 순서다. 여기에 \u{FFFC}를 재합성하면
     // TAC가 쉼표/탭 뒤로 밀려 순서가 깨진다.
-    let raw_positions = find_control_text_positions(para);
+    let raw_positions = para.control_text_positions();
     let raw_inline_positions: Vec<usize> = para
         .controls
         .iter()
@@ -336,13 +337,75 @@ pub fn compose_paragraph(para: &Paragraph) -> ComposedParagraph {
     // PUA 테두리 숫자(사각형/원형 안의 숫자) → CharOverlap 런으로 변환
     convert_pua_enclosed_numbers(&mut composed);
 
-    // Hanyang-PUA 옛한글 / 한컴 PUA 표시 문자열 변환 (렌더링·측정용)
+    // Hanyang-PUA 옛한글 / 한컴 PUA와 legacy 제품명 표시 문자열 변환 (렌더링·측정용)
     convert_pua_display_text(&mut composed);
 
     composed
 }
 
-/// Hanyang-PUA 옛한글 코드포인트와 한컴 PUA 표시 문자열을 렌더링용 텍스트로 변환한다.
+/// 컴포즈드 줄 목록에서 첫 "텍스트 포함 줄"(런에 텍스트 성격 문자가 있는 줄)의 인덱스.
+/// 실제 텍스트가 있는 문단은 leading 컨트롤-전용 줄(수식 객체마커 ￼ 등)을 건너뛰고 이
+/// 줄부터 그린다 — `LayoutEngine::layout_column_item`(실제 렌더)과
+/// `TypesetEngine::measure_endnote_para_advance`(측정 전용)가 이 판정을 공유한다.
+/// 종전엔 각자 재구현해 sep20/20(pi=936, 측정 127.7px vs 렌더 101.3px)에서 갈라졌다(#4312).
+pub(crate) fn first_text_line(composed: &ComposedParagraph) -> Option<usize> {
+    composed.lines.iter().position(|line| {
+        line.runs
+            .iter()
+            .any(|r| r.text.chars().any(|c| c > '\u{001F}' && c != '\u{FFFC}'))
+    })
+}
+
+/// 캡션(문단 목록)의 총 높이를 px 로 계산한다.
+///
+/// 렌더(`calculate_caption_height`)와 측정(`measure_caption`)이 각자 재구현하며 갈라졌던
+/// 산식을 통일한 것이다(#4320). 저장된 `line_segs` 는 한컴이 실제로 배치한 레이아웃 값이므로
+/// `compose_paragraph` 재계산 높이의 하한으로 쓴다 — `line_segs`가 있어도 폰트 대체 등으로
+/// 재계산 높이가 더 작게 나오면 실제보다 낮게 예약되어 다음 요소가 겹친다
+/// (`2d973021c`가 `samples/rowbreak-problem-pages.hwpx`에서 고친 오버랩이 이 경우다).
+/// `line_segs`가 비어 있으면(레이아웃 전/미저장 캡션) `compose_paragraph`로만 계산한다.
+pub fn caption_height_px(caption: &Option<Caption>, dpi: f64) -> f64 {
+    let caption = match caption {
+        Some(c) => c,
+        None => return 0.0,
+    };
+
+    if caption.paragraphs.is_empty() {
+        return 0.0;
+    }
+
+    // line_segs가 비어 컴포즈로 대체할 때 쓰는 기본 줄 높이(HWPUNIT).
+    const DEFAULT_LINE_HEIGHT_HWPUNIT: i32 = 400;
+
+    let mut line_seg_height = 0.0f64;
+    let mut composed_height = 0.0f64;
+    for para in &caption.paragraphs {
+        if let (Some(first), Some(last)) = (para.line_segs.first(), para.line_segs.last()) {
+            let para_top = first.vertical_pos.min(0);
+            let para_bottom = last.vertical_pos + last.line_height;
+            line_seg_height = line_seg_height.max(hwpunit_to_px(para_bottom - para_top, dpi));
+        }
+
+        let composed = compose_paragraph(para);
+        if composed.lines.is_empty() {
+            composed_height += hwpunit_to_px(DEFAULT_LINE_HEIGHT_HWPUNIT, dpi); // 기본 줄 높이
+        } else {
+            for (i, line) in composed.lines.iter().enumerate() {
+                let line_h = hwpunit_to_px(line.line_height, dpi);
+                let spacing = if i < composed.lines.len() - 1 {
+                    hwpunit_to_px(line.line_spacing, dpi)
+                } else {
+                    0.0 // 마지막 줄은 line_spacing 제외
+                };
+                composed_height += line_h + spacing;
+            }
+        }
+    }
+
+    line_seg_height.max(composed_height)
+}
+
+/// Hanyang-PUA 옛한글 코드포인트·한컴 PUA와 legacy 제품명을 렌더링용 텍스트로 변환한다.
 ///
 /// 한컴 자체 폰트 (함초롬바탕 LVT 등) 는 PUA 영역에 옛한글 글리프를 직접
 /// 보유하나, OFL 폰트 (Noto Serif KR / Source Han Serif K 등) 는 KS X 1026-1
@@ -354,31 +417,105 @@ pub fn compose_paragraph(para: &Paragraph) -> ComposedParagraph {
 /// `line.char_start`, `line_chars` 등 인덱싱 불변성을 유지하기 위함이다
 /// (PUA 1 char = display N chars).
 ///
+/// 1990년대 한컴 제품 설명서는 `ᄒᆞᆫ글`·`ᄒᆞᆫ메일`처럼 제품명을 옛한글 자모로
+/// 저장했지만, 한컴 PDF는 이를 각각 `한글`·`한메일`로 인쇄한다. 이것은 일반
+/// 옛한글 정규화가 아니다. 아래의 닫힌 제품명 어휘만 display projection으로
+/// 바꾸며, 원문 IR·검색·캐럿 offset은 그대로 보존한다.
+///
 /// 매핑 표: KTUG HanyangPuaTableProject (Public Domain).
 fn convert_pua_display_text(composed: &mut ComposedParagraph) {
     use super::pua_oldhangul::map_pua_old_hangul;
+
+    let product_prefix_starts = legacy_hancom_product_prefix_starts(composed);
+    let mut run_char_start = 0usize;
     for line in composed.lines.iter_mut() {
         for run in line.runs.iter_mut() {
-            if !run
-                .text
-                .chars()
-                .any(|ch| pua_plain_text_display(ch).is_some() || map_pua_old_hangul(ch).is_some())
-            {
+            let chars: Vec<char> = run.text.chars().collect();
+            let run_char_end = run_char_start + chars.len();
+            let has_product_projection = product_prefix_starts
+                .iter()
+                .any(|start| *start < run_char_end && start.saturating_add(3) > run_char_start);
+            let has_pua_display = chars.iter().any(|ch| {
+                pua_plain_text_display(*ch).is_some() || map_pua_old_hangul(*ch).is_some()
+            });
+            if !has_product_projection && !has_pua_display {
+                run_char_start = run_char_end;
                 continue;
             }
             let mut display = String::with_capacity(run.text.len() * 3);
-            for ch in run.text.chars() {
-                if let Some(replacement) = pua_plain_text_display(ch) {
+            let mut changed = false;
+            for (index, ch) in chars.iter().copied().enumerate() {
+                let char_position = run_char_start + index;
+                if product_prefix_starts.contains(&char_position) {
+                    display.push('한');
+                    changed = true;
+                } else if product_prefix_starts
+                    .iter()
+                    .any(|start| (start + 1..start + 3).contains(&char_position))
+                {
+                    // `ᄒᆞᆫ` 세 자모가 style/line 경계를 넘더라도 첫 위치에만
+                    // `한`을 투영한다. 뒤 두 model char는 offset 공간에만 남긴다.
+                    changed = true;
+                } else if let Some(replacement) = pua_plain_text_display(ch) {
                     display.push_str(replacement);
+                    changed = true;
                 } else if let Some(jamos) = map_pua_old_hangul(ch) {
                     display.extend(jamos.iter().copied());
+                    changed = true;
                 } else {
                     display.push(ch);
                 }
             }
-            run.display_text = Some(display);
+            run_char_start = run_char_end;
+            if changed {
+                run.display_text = Some(display);
+            }
         }
     }
+}
+
+const LEGACY_HANCOM_PRODUCT_WORDS: [(&str, &str); 4] = [
+    ("ᄒᆞᆫ글", "한글"),
+    ("ᄒᆞᆫ메일", "한메일"),
+    ("ᄒᆞᆫ팩스", "한팩스"),
+    ("ᄒᆞᆫ소프트", "한소프트"),
+];
+
+/// 한컴 PDF가 현대 글리프로 인쇄하는 레거시 제품명만 화면 문자열로 투영한다.
+///
+/// 이 함수는 모델 문자열을 정규화하지 않는다. 표 셀처럼 composer를 우회해
+/// `TextRunNode`를 직접 만드는 레이아웃 경로에도 같은 제한된 표시 계약을
+/// 적용하기 위해 render-tree 최종화 단계에서 재사용한다.
+pub(crate) fn legacy_hancom_product_display_text(text: &str) -> Option<String> {
+    let mut display = text.to_owned();
+    for (legacy, modern) in LEGACY_HANCOM_PRODUCT_WORDS {
+        display = display.replace(legacy, modern);
+    }
+    (display != text).then_some(display)
+}
+
+/// `ᄒᆞᆫ`이 legacy 한컴 제품명으로 쓰인 model-character 시작 위치를 찾는다.
+///
+/// `ComposedParagraph`의 run은 줄·글자모양 경계에서 나뉠 수 있으므로, 먼저 모든
+/// run을 이어 검사한 뒤 model char 좌표를 돌려준다. 그 뒤 display projection은
+/// run별로 적용해도 줄 경계를 넘어선 제품명을 놓치지 않는다.
+fn legacy_hancom_product_prefix_starts(composed: &ComposedParagraph) -> Vec<usize> {
+    let logical_text: String = composed
+        .lines
+        .iter()
+        .flat_map(|line| line.runs.iter())
+        .map(|run| run.text.as_str())
+        .collect();
+    let mut starts = Vec::new();
+    for (char_index, (byte_index, _)) in logical_text.char_indices().enumerate() {
+        if LEGACY_HANCOM_PRODUCT_WORDS
+            .iter()
+            .any(|(legacy, _)| logical_text[byte_index..].starts_with(legacy))
+        {
+            starts.push(char_index);
+        }
+    }
+    starts
 }
 
 /// 각주 마커를 해당 텍스트 위치의 런에 인라인 삽입
@@ -717,6 +854,30 @@ fn effective_line_seg_count(para: &Paragraph) -> usize {
     }
 }
 
+/// [#4384 조사] 이 문단 텍스트 리터럴을 IR 속성 판정으로 일반화할 수 있는지 조사했으나
+/// 안전하게 일반화할 신호를 찾지 못했다 — 아래는 기각한 가설과 근거다.
+///
+/// 1. **LINE_SEG tag bit 17/18(첫/마지막 세그먼트)**: `hwp3-sample16-hwp5-2022.hwp`
+///    p83 실측 — 두 LINE_SEG 모두 `tag=0x00060000`/`0x00160000`으로 bit17+18
+///    (`LineSeg::TAG_SINGLE_SEGMENT_LINE`)을 함께 켜고 있다. 즉 한컴 인코더 자신도
+///    이 둘을 "한 줄이 세그먼트 2개로 쪼개진 것"이 아니라 "완결된 줄 2개"로
+///    표시했다 — 세그먼트 비트로는 이 문서조차 구분되지 않는다.
+/// 2. **bit 20(indentation 적용) 차이**: 유일하게 다른 비트가 bit20(ls[1]에만 설정)
+///    이다. 그러나 이 문단의 ParaShape는 `indent=-5000`(내어쓰기, 번호/글머리
+///    스타일)이고, bit20은 내어쓰기 문단의 "이어지는 줄"에 일반적으로 켜지는
+///    비트라 — 이 신호로 판정하면 내어쓰기 문단의 정상적인 2번째 줄 전부가
+///    (합쳐지면 안 되는데도) 접혀버린다. 오탐 범위가 이 문서 하나가 아니라
+///    "내어쓰기 문단 + 짧은 마지막 줄" 전체로 넓어진다.
+/// 3. **"마지막 줄이 짧다"는 기하 조건 단독**: 문단이 줄바꿈 후 마지막 줄에 단어
+///    1~2개만 남는 것은 지극히 흔한 정상 조판 결과다(orphan/widow 자체가 아니라
+///    그냥 마지막 줄). 이 조건만으로 접으면 정상적으로 2줄이어야 하는 문단들을
+///    광범위하게 회귀시킨다.
+///
+/// 즉 이 오프셋/피치 조건은 이미 `hwp3-sample16-hwp5-2022.hwp` 문서 안에서도
+/// "정상적인 마지막 짧은 줄"과 "한컴이 인코딩은 2줄로 했지만 실제로는 1줄로
+/// 그리는 이 특정 문단"을 IR 필드만으로 구분하지 못한다 — 텍스트 리터럴이 사실상
+/// 유일하게 안전한 좁힘 조건이다. 회귀 fixture: `tests/issue_1116.rs`
+/// (`sample16_hwp5_2022_page3_bcp_tail_paragraph_folds_orphan_lineseg` 등).
 fn is_sample16_2022_bcp_orphan_tail_lineseg(para: &Paragraph) -> bool {
     if para.line_segs.len() != 2 {
         return false;
@@ -1055,12 +1216,6 @@ fn identify_inline_controls(para: &Paragraph) -> Vec<InlineControl> {
     result
 }
 
-/// char_offsets 갭을 분석하여 각 컨트롤의 텍스트 내 삽입 위치를 결정한다.
-/// → document_core::helpers::find_control_text_positions 으로 위임
-fn find_control_text_positions(para: &Paragraph) -> Vec<usize> {
-    crate::document_core::find_control_text_positions(para)
-}
-
 fn is_render_inline_control(ctrl: &Control) -> bool {
     match ctrl {
         Control::Picture(pic) => pic.common.treat_as_char,
@@ -1085,7 +1240,7 @@ fn find_render_inline_control_positions(para: &Paragraph) -> Vec<usize> {
         return positions;
     }
 
-    find_control_text_positions(para)
+    para.control_text_positions()
 }
 
 /// CharOverlap 컨트롤의 글자를 조합된 텍스트에 올바른 위치로 삽입한다.
@@ -1112,7 +1267,7 @@ fn inject_char_overlap_text(composed: &mut ComposedParagraph, para: &Paragraph) 
     }
 
     // 모든 컨트롤의 텍스트 위치 결정
-    let control_positions = find_control_text_positions(para);
+    let control_positions = para.control_text_positions();
 
     // CharOverlap별 (텍스트위치, 런) 수집
     let mut insertions: Vec<(usize, ComposedTextRun)> = Vec::new();
@@ -1454,11 +1609,28 @@ pub fn recompose_stored_single_line_if_overflowing(
     // `stored_lines_overflow`(#2525)와 동일하게 ×1.8 로 좁혀 정당한 장평/자간·
     // 패딩 발산 범위(≤~1.5×)를 넘는 부실 저장만 재래핑한다. #2291 원 타깃
     // (76자 1-lineseg = ~7.6× 초과, 절단 해소)은 임계 위라 계속 재래핑.
-    let over = composed
-        .lines
-        .first()
-        .map(|l| estimate_composed_line_width(l, styles) > cell_inner_width_px * 1.8)
-        .unwrap_or(false);
+    //
+    // [#4149] 판정 memo — 같은 (문단 text·char_shapes, 셀 내폭)이면 판정이 결정적
+    // 인데, 페이지 트리 재빌드마다 estimate_composed_line_width 재측정이 반복돼
+    // 거대 셀 문서의 캐럿 rect 질의당 ~30% 를 차지했다. 폭 키(f32 bits 패킹)로
+    // 판정만 memo 하고(측정 생략), over=true 의 fresh 재래핑 자체는 매 빌드 그대로
+    // 수행한다 — 재래핑 결과는 composed 에만 반영되고 저장 line_segs 는 안 바뀌므로
+    // 재래핑을 생략하면 절단 렌더 회귀. text/char_shapes 변경 경로는
+    // `invalidate_single_line_overflow_memo` 로 비운다 (셀 크기 조정은 키 불일치로
+    // 자연 재판정).
+    let width_key = SingleLineOverflowMemo::width_key(cell_inner_width_px);
+    let over = match para.single_line_overflow_memo.get(width_key) {
+        Some(memoized) => memoized,
+        None => {
+            let measured = composed
+                .lines
+                .first()
+                .map(|l| estimate_composed_line_width(l, styles) > cell_inner_width_px * 1.8)
+                .unwrap_or(false);
+            para.single_line_overflow_memo.set(width_key, measured);
+            measured
+        }
+    };
     if std::env::var("RHWP_DIAG_CELLREWRAP").is_ok() && over {
         if let Some(l) = composed.lines.first() {
             for run in &l.runs {
@@ -1872,13 +2044,52 @@ pub fn recompose_for_cell_width(
     if let Ok(pat) = std::env::var("RHWP_DIAG_RECOMP") {
         if para.text.contains(&pat) {
             eprintln!(
-                "DIAG_RECOMP width={:.2} first={:.2} cont={:.2} lines={} text={:?}",
+                "DIAG_RECOMP width={:.2} first={:.2} cont={:.2} lines={} align={:?} kbu={} condense={} char_break={} text={:?}",
                 cell_inner_width_px,
                 first_width_px,
                 cont_width_px,
                 composed.lines.len(),
+                styles
+                    .para_styles
+                    .get(para.para_shape_id as usize)
+                    .map(|ps| ps.alignment)
+                    .unwrap_or_default(),
+                styles
+                    .para_styles
+                    .get(para.para_shape_id as usize)
+                    .map(|ps| ps.korean_break_unit)
+                    .unwrap_or(0),
+                styles
+                    .para_styles
+                    .get(para.para_shape_id as usize)
+                    .map(|ps| ps.condense_min_space)
+                    .unwrap_or(0),
+                char_break,
                 para.text.chars().take(20).collect::<String>(),
             );
+            for (line_idx, line) in composed.lines.iter().enumerate() {
+                let text: String = line.runs.iter().map(|run| run.text.as_str()).collect();
+                eprintln!(
+                    "  line[{line_idx}] advance={:.2} text={text:?}",
+                    estimate_composed_line_width(line, styles),
+                );
+            }
+            for (run_idx, run) in composed
+                .lines
+                .iter()
+                .flat_map(|line| line.runs.iter())
+                .enumerate()
+            {
+                let style = resolved_to_text_style(styles, run.char_style_id, run.lang_index);
+                eprintln!(
+                    "  run[{run_idx}] font={:?} fs={:.2} lsp={:.2} ratio={:.3} text={:?}",
+                    style.font_family.split(',').next().unwrap_or(""),
+                    style.font_size,
+                    style.letter_spacing,
+                    style.ratio,
+                    run.text,
+                );
+            }
         }
     }
 }
@@ -2412,6 +2623,37 @@ pub fn char_overlap_advance_units(chars: &[char]) -> usize {
     usize::from(!chars.is_empty())
 }
 
+/// 글자겹침(CharOverlap) 내부 글자의 크기 비율.
+///
+/// `charSz` 는 OWPML 상 **"테두리 내부 글자의 크기 비율. 단위 %"**
+/// (`mydocs/manual/OWPML SCHEMA/ParaList XML schema.xml:571`) 다. 따라서 테두리를
+/// 그리지 않는 겹침에는 적용하지 않는다 — 축소할 "테두리 내부"가 없다.
+///
+/// `effective_border` 는 raw `border_type` 이 아니라 **실제로 테두리를 그리는지** 다.
+/// PUA 다자리 숫자는 `border_type=0` 이어도 원형 테두리로 승격되므로(각 렌더 경로의
+/// combined 분기) 그 경우는 축소가 정당하다.
+///
+/// 한컴 실측 두 건이 이 규칙을 함께 만족한다 (#4085):
+/// - `samples/hwpx/k-water-rfp.hwpx` p13 — 반전 사각형(4), `charSz=-2` → 0.80 (PR #1101)
+/// - 관세청 월간 수출입 현황 p1 — 테두리 없음(0), `charSz=-4` → 축소 없음. 한컴 PDF
+///   content stream 에서 마커와 본문이 같은 `101 Tf`, 같은 baseline 으로 나온다.
+///
+/// 음수 영역의 10% step 해석은 PR #1101 의 실측 가설을 그대로 둔다.
+pub fn char_overlap_size_ratio(effective_border: u8, inner_char_size: i8) -> f64 {
+    if effective_border == 0 {
+        return 1.0;
+    }
+    if inner_char_size > 0 {
+        // 양수 → percent ratio (HWPX 양수 case 보존: 50 = 0.5)
+        inner_char_size as f64 / 100.0
+    } else if inner_char_size < 0 {
+        // 음수 → 10% step 축소 (한컴 정합: charSz=-3 → 1.0 + (-3)×0.10 = 0.70)
+        1.0 + inner_char_size as f64 * 0.10
+    } else {
+        1.0
+    }
+}
+
 fn pua_enclosed_border_type(ch: char) -> Option<u8> {
     let cp = ch as u32;
     // U+F02B1~F02C4 (①~⑳): map_pua_bullet_char 에서 표준 원문자로 매핑 — CharOverlap 제외
@@ -2423,20 +2665,7 @@ fn pua_enclosed_border_type(ch: char) -> Option<u8> {
 }
 
 fn pua_plain_text_display(ch: char) -> Option<&'static str> {
-    match ch as u32 {
-        0xF012B => Some("(인)"),
-        // 2025 행정업무운영 편람 p08 TOC bullet. Hancom PDF renders this
-        // private-use marker as a filled square bullet.
-        0xF031C => Some("■"),
-        // 2025 행정업무운영 편람 p15 callout bullet. Hancom PDF renders this
-        // private-use marker as a filled right-pointing pointer, not tofu.
-        0xF02FC => Some("►"),
-        // [Task #1001] 한컴 변환본 (HWP3→HWP5) 의 글머리표 PUA. 한컴 viewer 는
-        // 빈 체크박스 모양으로 표시. "□" (U+25A1 WHITE SQUARE) 매핑.
-        // 실제 sample16-hwp5 의 PUA codepoint 는 U+F03C5 (글자 분석 결과).
-        0xF03C5 => Some("□"),
-        _ => None,
-    }
+    super::hancom_pua::verified_hancom_pua_display(ch)
 }
 
 /// 한글 방점(U+302E/U+302F)을 렌더용 spacing 가운데 점 글리프로 치환한다. (Task #1735)
@@ -2498,7 +2727,7 @@ pub fn pua_to_display_text(ch: char) -> Option<String> {
     if let Some(replacement) = pua_plain_text_display(ch) {
         return Some(replacement.to_string());
     }
-    // U+F02B1~F02C4 는 map_pua_bullet_char 에서 ①~⑳ 으로 매핑 — 여기 도달 불가
+    // U+F02B1~F02C4 는 렌더러의 boxed_pua_char_overlap_semantics 가 먼저 처리한다 (#4158).
     // 반전 사각형 안의 숫자: U+F02CE(1) ~ U+F02E1(20)
     if (0xF02CE..=0xF02E1).contains(&cp) {
         let num = cp - 0xF02CD;
@@ -2507,6 +2736,61 @@ pub fn pua_to_display_text(ch: char) -> Option<String> {
     None
 }
 
+/// [#3385] **텍스트 추출 전용** PUA 표시 변환.
+///
+/// IR은 U+F02B1~F02C4(사각 안 숫자) 원문을 보존하고, 렌더러는 폰트 글리프 대신 결정적인
+/// 사각형+숫자를 합성한다(#4158). 표준 ①~⑳ 로 직접 렌더하면 1순위 폰트의 *원 안* 글리프가
+/// 잡혀 한컴 정답지의 *사각 안* 의미와 달라지므로 렌더 표시 문자열로는 사용하지 않는다.
+///
+/// 그러나 **텍스트 표면은 사정이 다르다.** 추출 결과는 폰트가 없는 소비자(RAG·LLM·grep)
+/// 에게 가므로 원문 PUA 는 읽을 수 없는 코드포인트일 뿐이다. 그래서 렌더 결정은 그대로
+/// 두고 텍스트 표면에서만 읽을 수 있는 문자로 바꾼다.
+///
+/// 의미를 모르는 PUA 는 **매핑을 지어내지 않고 그대로 둔다.**
+pub fn pua_to_text_surface(text: &str) -> std::borrow::Cow<'_, str> {
+    if !text
+        .chars()
+        .any(|ch| text_surface_replacement(ch).is_some())
+    {
+        return std::borrow::Cow::Borrowed(text);
+    }
+    let mut out = String::with_capacity(text.len());
+    for ch in text.chars() {
+        match text_surface_replacement(ch) {
+            Some(rep) => out.push_str(&rep),
+            None => out.push(ch),
+        }
+    }
+    std::borrow::Cow::Owned(out)
+}
+
+fn text_surface_replacement(ch: char) -> Option<String> {
+    let cp = ch as u32;
+    // 사각 안 숫자 1~20 — IR은 원문을 유지하고 렌더는 사각형+숫자를 합성하지만, 텍스트
+    // 표면에서는 둘러싸인 숫자라는 뜻이 전달되면 충분하다.
+    if (0xF02B1..=0xF02C4).contains(&cp) {
+        let n = cp - 0xF02B1; // 0-based
+        return char::from_u32(0x2460 + n).map(|c| c.to_string());
+    }
+    // 렌더가 이미 표시 문자열을 갖고 있는 대역은 같은 답을 쓴다.
+    if let Some(replacement) = pua_to_display_text(ch) {
+        return Some(replacement);
+    }
+    // 렌더의 글리프 치환 표(`map_pua_bullet_char`)를 텍스트 표면에도 적용한다.
+    //
+    // 새 매핑을 지어내지 않고 **렌더가 이미 쓰는 표를 재사용**한다 — 근거(한컴 정답지
+    // 실측)가 그 표에 붙어 있다. 사각 안 숫자(U+F02B1~F02C4)는 그 표와 별도로 위 분기가
+    // 계속 담당한다.
+    //
+    // 규모: 저장소 샘플 346건 중 50건이 추출 텍스트에 PUA 를 흘렸고, 그중 U+F080F
+    // (굵은 가로선 ━)만 155,709자다. hwp3-sample11.hwp 는 한 쪽 1,398자 중 181자가
+    // 이 문자이고 최장 96자 연속 — 머리말/꼬리말 가로선이 본문 텍스트로 나갔다.
+    let mapped = super::layout::map_pua_bullet_char(ch);
+    if mapped != ch {
+        return Some(mapped.to_string());
+    }
+    None
+}
 /// 조합된 텍스트 런에서 PUA 테두리 숫자 문자를 찾아 CharOverlap 런으로 변환한다.
 ///
 /// PUA 문자는 원본 그대로 유지하되 CharOverlapInfo만 부착한다.
@@ -2594,7 +2878,8 @@ pub mod lineseg_compare;
 
 pub(crate) use line_breaking::{
     is_line_end_forbidden, is_line_start_forbidden, paragraph_flow_end, recalculate_section_vpos,
-    reflow_line_segs, tokenize_paragraph, BreakToken,
+    reflow_line_segs, reflow_line_segs_after_cell_split, reflow_line_segs_after_cell_text_edit,
+    tokenize_paragraph, BreakToken,
 };
 
 #[cfg(test)]

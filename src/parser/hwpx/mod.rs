@@ -12,6 +12,7 @@
 
 pub mod content;
 mod contract_streams;
+mod crypto;
 pub mod header;
 pub mod reader;
 pub mod section;
@@ -19,7 +20,7 @@ pub mod utils;
 
 use std::collections::{HashMap, HashSet};
 
-use crate::model::bin_data::{BinData, BinDataContent, BinDataType};
+use crate::model::bin_data::{BinData, BinDataContent, BinDataType, MAX_BIN_DATA_BYTES};
 use crate::model::document::{Document, FileHeader, HwpVersion, Section};
 
 fn is_internal_bin_data_href(href: &str) -> bool {
@@ -127,6 +128,27 @@ impl crate::model::bin_data::BinDataResolver for HwpxBinResolver {
             }
         }
     }
+
+    /// [#2550] HWPX BinData의 길이·존재 질의는 ZIP 중앙 디렉터리의 비압축 크기로
+    /// 판정한다. 종전 trait 기본 구현은 `resolve()`를 호출해 256MB 초과 엔트리도
+    /// materialize했으므로 DocLang·외부 이미지 확인만으로 deflate bomb가 풀렸다.
+    ///
+    /// 내부 OLE은 size prefix 제거 뒤 실제 길이가 최대 4 byte 작을 수 있다. 빈 값
+    /// 판정과 상한 적용에는 원본 size가 충분하며, `load_limited()`가 실제 바이트를
+    /// 요청할 때 정확한 정규화 길이를 다시 확인한다.
+    fn resolved_len(&self, key: &str) -> usize {
+        let mut reader = match self.reader.lock() {
+            Ok(reader) => reader,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        reader
+            .file_size_limited(key, MAX_BIN_DATA_BYTES)
+            .unwrap_or(0)
+    }
+
+    fn resolved_is_empty(&self, key: &str) -> bool {
+        self.resolved_len(key) == 0
+    }
 }
 
 /// HWPX 파싱 에러
@@ -141,8 +163,14 @@ pub enum HwpxError {
     /// 데이터 변환 오류
     ConversionError(String),
     /// [Issue #1946] 비밀번호 암호화 HWPX(ODF encryption-data, AES-256-CBC).
-    /// 복호화 미지원 — 암호문을 UTF-8 로 오독하는 대신 명확히 분류한다.
+    /// 비밀번호 없이 열었으므로 암호문을 UTF-8 로 오독하지 않고 명확히 분류한다.
     Encrypted(String),
+    /// ODF 암호화 방식이 현재 지원 계약과 다르거나 manifest가 손상됐다.
+    UnsupportedEncryption(String),
+    /// 비밀번호 불일치 또는 암호문/압축 payload 손상.
+    WrongPasswordOrCorruptPayload,
+    /// 복호화 뒤 raw-deflate payload가 HWPX 기존 엔트리 상한을 넘었다.
+    DecryptedEntryLimitExceeded { path: String, max_bytes: usize },
 }
 
 impl HwpxError {
@@ -159,7 +187,21 @@ impl std::fmt::Display for HwpxError {
             HwpxError::XmlError(e) => write!(f, "XML 파싱 오류: {}", e),
             HwpxError::MissingFile(e) => write!(f, "필수 파일 누락: {}", e),
             HwpxError::ConversionError(e) => write!(f, "변환 오류: {}", e),
-            HwpxError::Encrypted(e) => write!(f, "암호화된 문서(복호화 미지원): {}", e),
+            HwpxError::Encrypted(e) => write!(f, "암호화된 문서: {}", e),
+            HwpxError::UnsupportedEncryption(e) => {
+                write!(f, "지원하지 않는 HWPX 암호화 방식: {}", e)
+            }
+            HwpxError::WrongPasswordOrCorruptPayload => {
+                write!(
+                    f,
+                    "비밀번호가 일치하지 않거나 암호화 데이터가 손상되었습니다"
+                )
+            }
+            HwpxError::DecryptedEntryLimitExceeded { path, max_bytes } => write!(
+                f,
+                "HWPX 암호화 엔트리 '{}'의 복호화 결과가 {} byte 제한을 넘었습니다",
+                path, max_bytes
+            ),
         }
     }
 }
@@ -227,13 +269,48 @@ fn resolve_master_page_hrefs<'a, 'b>(
     (hrefs, missing_refs)
 }
 
+/// [#3460] `binaryItemIDRef` 를 매니페스트 위치 기준 정규 이름(`image{N}`)으로 통일한다.
+///
+/// 섹션 파서는 `binaryItemIDRef` 에서 **숫자만 뽑아** `bin_data_id` 로 쓰고(숫자 불변식,
+/// 직렬화 쪽 `context.rs` 도 같은 규약으로 `image{N}` 을 방출한다), BinData 는 매니페스트
+/// 순서대로 `id = 위치+1` 로 적재된다. 그래서 두 가지가 깨진다.
+///
+/// - 숫자가 없는 ID(예: `BINHDR`): 추출 결과가 빈 문자열 → `bin_data_id = 0` → 매칭 실패로
+///   그림이 통째로 사라진다(머리말 SVG 밴드가 빈 공간이 되던 원인).
+/// - 숫자가 위치와 어긋나는 ID(예: 두 번째 항목이 `BIN0007`): 다른 그림을 가리킨다.
+///
+/// 파서 내부 호출 사슬 전체에 매니페스트 맵을 배선하는 대신, 진입 시점에 참조 문자열만
+/// 정규화한다. 실제 바이트 적재(`id = 위치+1`)와 같은 기준을 쓰므로 결과가 일치하고,
+/// 이미 정규형인 문서는 문자열이 바뀌지 않아 무영향이다.
+fn canonicalize_bin_item_refs(xml: &str, bin_data_items: &[content::PackageItem]) -> String {
+    let mut out = xml.to_string();
+    for (i, item) in bin_data_items.iter().enumerate() {
+        let canonical_id = i + 1;
+        let digits: String = item.id.chars().filter(|c| c.is_ascii_digit()).collect();
+        if digits.parse::<usize>() == Ok(canonical_id) {
+            continue; // 이미 숫자 불변식을 만족 — 건드리지 않는다.
+        }
+        let from = format!("binaryItemIDRef=\"{}\"", item.id);
+        if !out.contains(&from) {
+            continue;
+        }
+        let to = format!("binaryItemIDRef=\"image{}\"", canonical_id);
+        out = out.replace(&from, &to);
+    }
+    out
+}
+
 fn attach_hwpx_master_page(
     reader: &mut reader::HwpxReader,
     section: &mut Section,
     master_page_href: &str,
+    bin_data_items: &[content::PackageItem],
 ) -> bool {
     match reader.read_file(master_page_href) {
-        Ok(master_page_xml) => match section::parse_hwpx_master_page(&master_page_xml) {
+        Ok(master_page_xml) => match section::parse_hwpx_master_page(&canonicalize_bin_item_refs(
+            &master_page_xml,
+            bin_data_items,
+        )) {
             Ok(master_page) => {
                 section.section_def.master_pages.push(master_page);
                 true
@@ -336,6 +413,7 @@ pub fn parse_hwpx(data: &[u8]) -> Result<Document, HwpxError> {
     let mut sections = Vec::new();
     for (section_idx, section_href) in package_info.section_files.iter().enumerate() {
         let section_xml = reader.read_file(section_href)?;
+        let section_xml = canonicalize_bin_item_refs(&section_xml, &package_info.bin_data_items);
         let master_page_refs = match section::collect_hwpx_section_master_page_refs(&section_xml) {
             Ok(refs) => refs,
             Err(e) => {
@@ -356,7 +434,12 @@ pub fn parse_hwpx(data: &[u8]) -> Result<Document, HwpxError> {
 
                 let mut attached_master_page_count = 0usize;
                 for master_page_href in master_page_hrefs {
-                    if attach_hwpx_master_page(&mut reader, &mut section, master_page_href) {
+                    if attach_hwpx_master_page(
+                        &mut reader,
+                        &mut section,
+                        master_page_href,
+                        &package_info.bin_data_items,
+                    ) {
                         attached_master_page_count += 1;
                     }
                 }
@@ -372,6 +455,7 @@ pub fn parse_hwpx(data: &[u8]) -> Result<Document, HwpxError> {
                                     &mut reader,
                                     &mut section,
                                     master_page_href,
+                                    &package_info.bin_data_items,
                                 );
                             }
                         }
@@ -495,6 +579,18 @@ pub fn parse_hwpx(data: &[u8]) -> Result<Document, HwpxError> {
     super::populate_link_image_paths(&mut doc);
 
     Ok(doc)
+}
+
+/// 비밀번호와 함께 HWPX를 연다.
+///
+/// ODF `encryption-data`가 있는 패키지는 AES-256-CBC/PKDF2 복호화 뒤 기존
+/// `parse_hwpx` 경로로 들어간다. 비암호 HWPX에 비밀번호를 넘기면 원본 바이트를
+/// 다시 쓰지 않고 종전 파서 결과를 그대로 반환한다.
+pub fn parse_hwpx_with_password(data: &[u8], password: &[u8]) -> Result<Document, HwpxError> {
+    match crypto::decrypt_hwpx_package(data, password)? {
+        Some(decrypted) => parse_hwpx(&decrypted),
+        None => parse_hwpx(data),
+    }
 }
 
 fn resolve_embedded_font_references(

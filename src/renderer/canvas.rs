@@ -251,7 +251,7 @@ impl CanvasRenderer {
                             self.open_shape_transform(&image.transform, &eff_bbox);
                             let data = resolved
                                 .as_deref()
-                                .map(|payload| payload.data.as_slice())
+                                .map(|payload| &payload.data[..])
                                 .or(image.data.as_deref());
                             if let Some(data) = data {
                                 self.draw_image(
@@ -625,6 +625,7 @@ mod tests {
                 section_index: Some(0),
                 para_index: Some(0),
                 control_index: Some(0),
+                cell_context: None,
             }),
             BoundingBox::new(80.0, 100.0, 160.0, 60.0),
         );

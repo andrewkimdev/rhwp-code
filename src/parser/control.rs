@@ -136,6 +136,8 @@ fn parse_field_control(ctrl_id: u32, ctrl_data: &[u8]) -> Control {
         memo_paragraphs: Vec::new(),
         memo_text_direction: None,
         raw_parameters_xml: None,
+        parameters: Default::default(),
+        guide_residue: None,
     })
 }
 
@@ -165,9 +167,18 @@ fn parse_table_control(ctrl_data: &[u8], child_records: &[Record]) -> Control {
     }
 
     // HWPTAG_TABLE 레코드 위치 찾기
+    //
+    // [#3528] **직계 자식 레벨**의 것만 본다. 종전에는 첫 HWPTAG_TABLE 을 그냥 집었는데,
+    // 캡션 문단 안에 표가 들어 있으면 그 표가 자기 HWPTAG_TABLE 을 더 앞에 방출한다
+    // (저장 순서: CTRL_TABLE → 캡션 → HWPTAG_TABLE → 셀). 그러면 캡션 범위가 거기서
+    // 끊겨 캡션 문단이 잘리고, 그 안의 표도 얕게 읽힌다.
+    //
+    // 직계 자식은 모두 CTRL_HEADER 바로 아래 레벨이므로(캡션 LIST_HEADER·HWPTAG_TABLE·
+    // 셀 LIST_HEADER 가 같은 레벨), 자식 레코드의 최소 레벨이 곧 직계 레벨이다.
+    let direct_level = child_records.iter().map(|r| r.level).min();
     let table_record_idx = child_records
         .iter()
-        .position(|r| r.tag_id == tags::HWPTAG_TABLE);
+        .position(|r| r.tag_id == tags::HWPTAG_TABLE && Some(r.level) == direct_level);
 
     // HWPTAG_TABLE 이전에 LIST_HEADER가 있으면 캡션
     if let Some(table_idx) = table_record_idx {
@@ -352,8 +363,11 @@ fn parse_cell(records: &[Record]) -> Cell {
     // 셀 속성 (표 82: 26바이트)
     cell.col = r.read_u16().unwrap_or(0);
     cell.row = r.read_u16().unwrap_or(0);
-    cell.col_span = r.read_u16().unwrap_or(1);
-    cell.row_span = r.read_u16().unwrap_or(1);
+    // 손상된 문서는 colSpan/rowSpan에 0을 기록할 수 있다. HWPX/HWP3 파서는
+    // 이미 .max(1)로 최소 1을 보장하므로 HWP5도 동일하게 정규화한다
+    // (0이면 이후 병합/렌더링 로직의 `row + row_span - 1` 계산이 언더플로한다).
+    cell.col_span = r.read_u16().unwrap_or(1).max(1);
+    cell.row_span = r.read_u16().unwrap_or(1).max(1);
     cell.width = r.read_u32().unwrap_or(0);
     cell.height = r.read_u32().unwrap_or(0);
 
@@ -626,6 +640,10 @@ fn parse_auto_number(ctrl_data: &[u8]) -> Control {
             3 => AutoNumberType::Picture,
             4 => AutoNumberType::Table,
             5 => AutoNumberType::Equation,
+            // 6 = 총 쪽수 ('전체 쪽 번호' 필드). exam_eng.hwp 실측: 꼬리말 쪽번호 상자의
+            // 두 번째 atno가 attr&0x0F=6 으로 인코딩됨. 과거엔 fallback으로 Page 취급되어
+            // 현재 쪽번호가 두 번 표시되는 버그가 있었다.
+            6 => AutoNumberType::TotalPage,
             _ => AutoNumberType::Page,
         };
         an.format = ((attr >> 4) & 0xFF) as u8; // bit 4~11: 번호 모양 (표 134)
@@ -652,6 +670,7 @@ fn parse_new_number(ctrl_data: &[u8]) -> Control {
             3 => AutoNumberType::Picture,
             4 => AutoNumberType::Table,
             5 => AutoNumberType::Equation,
+            6 => AutoNumberType::TotalPage,
             _ => AutoNumberType::Page,
         };
         nn.number = r.read_u16().unwrap_or(0);

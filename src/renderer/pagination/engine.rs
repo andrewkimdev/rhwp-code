@@ -764,6 +764,8 @@ impl Paginator {
                             para_index: para_idx,
                             table_para_index: wrap_around_table_para,
                             has_text: !is_empty_para,
+                            start_line: 0,
+                            end_line: usize::MAX,
                         });
                     continue;
                 } else {
@@ -1058,6 +1060,7 @@ impl Paginator {
                             para_index: pi,
                             control_index: ci,
                             source_section_index: section_index,
+                            table_path: Vec::new(),
                         };
                         hf_entries.push((pi, r, true, h.apply_to));
                     }
@@ -1066,6 +1069,7 @@ impl Paginator {
                             para_index: pi,
                             control_index: ci,
                             source_section_index: section_index,
+                            table_path: Vec::new(),
                         };
                         hf_entries.push((pi, r, false, f.apply_to));
                     }
@@ -1082,6 +1086,14 @@ impl Paginator {
                     }
                     Control::Table(table) => {
                         Self::collect_pagehide_in_table(table, pi, &mut page_hides);
+                        crate::renderer::pagination::collect_nested_header_footer_controls(
+                            table,
+                            pi,
+                            section_index,
+                            ci,
+                            &[],
+                            &mut hf_entries,
+                        );
                     }
                     _ => {}
                 }
@@ -1778,6 +1790,7 @@ impl Paginator {
                                                 tb_para_index: tp_idx,
                                                 tb_control_index: tc_idx,
                                             },
+                                            fragment: None,
                                         });
                                         let fn_height = super::estimate_footnote_note_height(
                                             &fn_ctrl, self.dpi,
@@ -1827,6 +1840,7 @@ impl Paginator {
                                 para_index: para_idx,
                                 control_index: ctrl_idx,
                             },
+                            fragment: None,
                         });
                         let fn_height = super::estimate_footnote_note_height(fn_ctrl, self.dpi);
                         st.add_footnote_height(fn_height);
@@ -2170,6 +2184,7 @@ impl Paginator {
                                     cell_para_index: cp_idx,
                                     cell_control_index: cc_idx,
                                 },
+                                fragment: None,
                             });
                             let fn_height = super::estimate_footnote_note_height(fn_ctrl, self.dpi);
                             st.add_footnote_height(fn_height);
@@ -2360,6 +2375,13 @@ impl Paginator {
         spacing_before_px: f64,
         _is_tac_table: bool,
     ) {
+        // [Issue #4326] `mt`(MeasuredTable)는 `HeightMeasurer::measure_table_impl`이
+        // 투명 1×1 래퍼를 벗긴 표를 기준으로 만들어질 수 있다 — `row_count`/`row_heights`가
+        // `table`(바깥 컨트롤 표) 자신의 행 수와 다를 수 있다는 뜻이다. 이 함수가 아래에서
+        // 방출하는 모든 PartialTable의 start_row/end_row는 그 `mt` 기준이므로, 같은 unwrap
+        // 규칙(`row_geometry_table`)으로 좌표계를 판정해 PageItem에 데이터로 싣는다.
+        let row_cursor_is_nested =
+            !std::ptr::eq(crate::renderer::typeset::row_geometry_table(table), table);
         let row_count = mt.row_heights.len();
         let cs = mt.cell_spacing;
         let header_row_height = if row_count > 0 {
@@ -2722,6 +2744,9 @@ impl Paginator {
                         start_cut: Vec::new(),
                         end_cut: Vec::new(),
                         is_block_split: false,
+                        row_cursor_is_nested,
+                        end_row_height_override: None,
+                        start_row_height_override: None,
                     });
                     // 마지막 부분 표: spacing_after도 포함 (레이아웃과 일치)
                     let mp = measured.get_measured_paragraph(para_idx);
@@ -2741,6 +2766,9 @@ impl Paginator {
                 start_cut: Vec::new(),
                 end_cut: Vec::new(),
                 is_block_split: false,
+                row_cursor_is_nested,
+                end_row_height_override: None,
+                start_row_height_override: None,
             });
             st.advance_column_or_new_page();
 

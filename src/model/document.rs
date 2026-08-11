@@ -15,6 +15,32 @@ use super::*;
 /// 마커가 사라져 native HWPX로 취급된다.
 pub const HWP5_ORIGIN_HWPX_MARKER_PATH: &str = "META-INF/rhwp-hwp5-origin";
 
+/// [Issue #1770] HWPX-origin 마커 스트림 경로.
+///
+/// rhwp 의 HWPX→HWP 변환은 LINE_SEG 를 verbatim 직렬화하므로 산출 HWP5 의 IR 은
+/// HWPX 시멘틱 그대로다. 재파스 시 이 마커로 `Document::is_hwpx_variant` 를 세워
+/// pagination/렌더의 `is_hwpx_source` 분기(RowBreak 분할 tolerance 등)를 HWPX 로
+/// 해석한다 — 같은 IR 이 같은 쪽수(roundtrip 자기정합, 2953495 4→5쪽 divergence 해소).
+/// 한컴은 미지의 루트 스트림을 무시하고(열림 계약 게이트로 검증), 한컴에서 재저장하면
+/// 마커가 사라지며 그 문서는 진짜 native HWP5 가 되므로 시멘틱이 자기일관적이다.
+pub const HWPX_ORIGIN_STREAM_PATH: &str = "/RhwpHwpxOrigin";
+
+/// [#3707] HWP3 출처 마커. `RhwpHwpxOrigin` 과 같은 방식이다.
+///
+/// HWP3 파싱은 `apply_hwp3_origin_fixup` 으로 `margin_bottom` 에서 1600 HU(21.3px)를
+/// 빼 한글97 의 마지막 줄 tolerance 를 모방한다. 그 보정은 IR 에만 있고 저장 파일의
+/// 여백은 원본 그대로다(그래야 한컴이 보는 기하가 원본과 같다). 그런데 재파싱 때
+/// 보정을 다시 걸지 판단하는 조건이 **문단 대비 모양 비율**이라, 저장하며 문단마다
+/// 모양이 생성돼 비율이 임계를 넘으면 보정이 사라진다(실측: ps 0.707 · cs 1.115 vs
+/// 임계 0.05 / 0.15).
+///
+/// 그 21.3px 만큼 미주 단 가용이 줄어 단 전환이 일찍 걸리고, 2단 미주의 왼쪽 단이
+/// 조기에 닫혀 미주가 다음 쪽으로 밀린다(SO-SUEOP 44쪽). 한컴은 원본·왕복본 모두
+/// 두 단을 고르게 채우므로 보정이 유지되는 쪽이 정답지와 맞는다.
+///
+/// 저장 여백을 줄이는 대신 **출처만 기록**해 재파싱이 보정을 결정론적으로 되건다.
+pub const HWP3_ORIGIN_STREAM_PATH: &str = "/RhwpHwp3Origin";
+
 /// 파서가 모델링하지 않는 원시 레코드 (라운드트립 보존용)
 #[derive(Debug, Clone, Default)]
 pub struct RawRecord {
@@ -260,11 +286,16 @@ pub struct SectionDef {
     pub text_direction: u8,
     /// 개요 번호 ID (SectionDef 바이트 14-15, Numbering 테이블 참조, 1-based)
     pub outline_numbering_id: u16,
+    /// [#2779] 메모 모양 ID (HWPX `secPr@memoShapeIDRef`, header.xml `hh:memoPr@id` 참조).
+    /// HWP5 SECTION_DEF 고정 필드에는 대응 슬롯이 없어 HWPX 경로 전용 보존 필드다.
+    pub memo_shape_id: u16,
     /// CTRL_HEADER 데이터의 파싱된 필드 이후 추가 바이트 (라운드트립 보존용)
     pub raw_ctrl_extra: Vec<u8>,
     /// 추가 쪽 테두리/배경 (2번째, 3번째 등)
     pub extra_page_border_fills: Vec<PageBorderFill>,
-    /// 파서가 인식하지 못한 자식 레코드 (바탕쪽 등, 라운드트립 보존용)
+    /// 파서가 인식하지 못한 자식 레코드 (바탕쪽 등, 라운드트립 보존용).
+    /// 첫 중첩 CTRL_HEADER 전의 SectionDef 직접 자식 CTRL_DATA는
+    /// Paragraph.ctrl_data_records가 소유한다.
     pub extra_child_records: Vec<RawRecord>,
     /// 바탕쪽 (extra_child_records에서 파싱, 렌더링 전용)
     pub master_pages: Vec<MasterPage>,
@@ -297,10 +328,14 @@ impl Document {
             self.provenance.format == SourceFormat::Hwp3,
             (self.provenance.format == SourceFormat::Hwpx && !hwp5_origin_hwpx)
                 || self.provenance.hwpx_lineage,
+            self.provenance.format == SourceFormat::Hwpx,
             hwp5_origin_hwpx,
             self.provenance.format == SourceFormat::Hwp5
                 && !self.provenance.hwp3_lineage
                 && !self.provenance.hwpx_lineage,
+        )
+        .with_hwp3_password_layout(
+            self.provenance.format == SourceFormat::Hwp3 && self.header.encrypted,
         )
     }
 
@@ -363,13 +398,14 @@ impl Document {
         let idx = (bin_data_id as usize).saturating_sub(1);
         if idx < self.bin_data_content.len() {
             self.bin_data_content[idx].id = bin_data_id;
-            self.bin_data_content[idx].data = data.into();
+            self.bin_data_content[idx].data =
+                crate::model::bin_data::BinDataBytes::from_shared(data);
             self.bin_data_content[idx].extension = extension;
         } else {
             self.bin_data_content
                 .push(crate::model::bin_data::BinDataContent {
                     id: bin_data_id,
-                    data: data.into(),
+                    data: crate::model::bin_data::BinDataBytes::from_shared(data),
                     extension,
                 });
         }
@@ -625,6 +661,30 @@ mod tests {
             assert_eq!(legacy, refactored, "{format:?}/{lineage}/{major}");
             assert_eq!(refactored, expected, "{format:?}/{lineage}/{major}");
         }
+    }
+
+    #[test]
+    fn hwp3_password_layout_requires_native_hwp3_and_encrypted_origin() {
+        use crate::model::provenance::SourceFormat;
+
+        let mut hwp3 = Document::default();
+        hwp3.provenance.format = SourceFormat::Hwp3;
+        assert!(
+            !hwp3.layout_profile().hwp3_password_layout(),
+            "평문 HWP3에는 암호 원본 전용 레이아웃 계약을 적용하지 않는다"
+        );
+
+        hwp3.header.encrypted = true;
+        assert!(
+            hwp3.layout_profile().hwp3_password_layout(),
+            "복호화 뒤에도 보존한 HWP3 암호 플래그가 레이아웃 계약을 선택한다"
+        );
+
+        hwp3.provenance.format = SourceFormat::Hwpx;
+        assert!(
+            !hwp3.layout_profile().hwp3_password_layout(),
+            "HWPX 암호 문서는 HWP3 전용 계약을 사용하지 않는다"
+        );
     }
 
     #[test]

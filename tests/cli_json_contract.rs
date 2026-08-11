@@ -32,13 +32,28 @@ fn run_with_stdin(args: &[&str], stdin_body: &str) -> Output {
         .stderr(Stdio::piped())
         .spawn()
         .expect("rhwp 실행 실패");
-    child
+    write_stdin_ignoring_early_exit(&mut child, stdin_body);
+    child.wait_with_output().expect("rhwp 종료 대기 실패")
+}
+
+/// stdin 에 본문을 쓰되, 자식이 stdin 을 읽기 전에 종료한 경우의 BrokenPipe 는
+/// 무시한다. 인자 검증 거부 계열 테스트는 프로세스가 입력을 소비하기 전에
+/// 종료하는 것이 정상 경로라, 쓰기 완료 여부는 검증 대상(종료 코드·출력)이
+/// 아니다 (#3763 — batch_axes_contract.rs 와 같은 처리).
+fn write_stdin_ignoring_early_exit(child: &mut std::process::Child, stdin_body: &str) {
+    use std::io::ErrorKind;
+    if let Err(err) = child
         .stdin
         .as_mut()
         .expect("stdin")
         .write_all(stdin_body.as_bytes())
-        .expect("stdin 쓰기 실패");
-    child.wait_with_output().expect("rhwp 종료 대기 실패")
+    {
+        assert_eq!(
+            err.kind(),
+            ErrorKind::BrokenPipe,
+            "stdin 쓰기 실패: {err:?}"
+        );
+    }
 }
 
 fn describe(args: &[&str], output: &Output) -> String {
@@ -294,6 +309,121 @@ fn capabilities_json_contract() {
 }
 
 #[test]
+fn capabilities_search_finds_table_commands() {
+    // [#3828 B1] 처음 오는 에이전트가 정확한 명령 이름을 모를 때 "표" 로 관련 명령을
+    // 훑을 수 있어야 한다. 부분 문자열 매칭이라 export-tables·table-to-csv·
+    // csv-to-table 모두 걸린다.
+    let args = ["capabilities", "--search", "표", "--json"];
+    let output = run(&args);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{}",
+        describe(&args, &output)
+    );
+    let v = parse_stdout_json(&args, &output);
+    assert_eq!(v["schemaVersion"], "1.0", "{v}");
+    assert_eq!(v["search"], "표", "{v}");
+    let commands = v["commands"].as_array().expect("commands 배열");
+    assert!(!commands.is_empty(), "{v}");
+    for name in ["export-tables", "table-to-csv", "csv-to-table"] {
+        assert!(
+            commands.iter().any(|c| c["name"] == name),
+            "{name} 이 '표' 검색 결과에 없음: {v}"
+        );
+    }
+    // 매치하지 않는 명령은 결과에 없어야 한다 (test-shape 요약 "도형 왕복 테스트" 에는
+    // '표'가 없다 — '테스트'와 혼동하기 쉬워 일부러 고른 반례).
+    assert!(
+        !commands.iter().any(|c| c["name"] == "test-shape"),
+        "무관한 명령이 섞임: {v}"
+    );
+}
+
+#[test]
+fn capabilities_search_no_match_is_empty_not_error() {
+    // 매치 0건은 에러가 아니라 빈 commands 배열, exit 0.
+    let args = ["capabilities", "--search", "없는단어999", "--json"];
+    let output = run(&args);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{}",
+        describe(&args, &output)
+    );
+    let v = parse_stdout_json(&args, &output);
+    let commands = v["commands"].as_array().expect("commands 배열");
+    assert!(commands.is_empty(), "{v}");
+}
+
+#[test]
+fn capabilities_search_multi_keyword_is_and() {
+    // 여러 키워드는 AND — "표"만으로는 여러 건이지만 "표 병합" 은 병합을 다루는
+    // 명령(export-tables: 병합 rowSpan/colSpan 보존)으로 더 좁혀져야 한다.
+    let args = ["capabilities", "--search", "표", "--json"];
+    let output = run(&args);
+    let v = parse_stdout_json(&args, &output);
+    let broad = v["commands"].as_array().expect("commands 배열").len();
+
+    let args2 = ["capabilities", "--search", "표 병합", "--json"];
+    let output2 = run(&args2);
+    assert_eq!(
+        output2.status.code(),
+        Some(0),
+        "{}",
+        describe(&args2, &output2)
+    );
+    let v2 = parse_stdout_json(&args2, &output2);
+    let narrow = v2["commands"].as_array().expect("commands 배열");
+    assert!(
+        narrow.len() < broad,
+        "AND 조건이면 키워드 추가로 결과가 줄어들어야 함: 표={broad}건, 표+병합={}건",
+        narrow.len()
+    );
+    assert!(!narrow.is_empty(), "{v2}");
+    assert!(narrow.iter().any(|c| c["name"] == "export-tables"), "{v2}");
+}
+
+#[test]
+fn capabilities_search_human_mode_is_not_json() {
+    // --json 없이도 사람이 읽는 출력을 지원한다(다른 명령과 일관).
+    let args = ["capabilities", "--search", "표"];
+    let output = run(&args);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{}",
+        describe(&args, &output)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        serde_json::from_str::<serde_json::Value>(&stdout).is_err(),
+        "human 모드인데 순수 JSON 이 나옴: {stdout}"
+    );
+    assert!(stdout.contains("export-tables"), "{stdout}");
+}
+
+#[test]
+fn capabilities_base_output_unchanged_by_search_flag_addition() {
+    // 드리프트 가드: 인자 없는 기본 `capabilities` 의 출력은 --search 도입으로도
+    // 절대 바뀌지 않는다.
+    let args = ["capabilities"];
+    let output = run(&args);
+    let v = parse_stdout_json(&args, &output);
+    assert!(v.get("search").is_none(), "{v}");
+    let commands = v["commands"].as_array().expect("commands 배열");
+    let cap_entry = commands
+        .iter()
+        .find(|c| c["name"] == "capabilities")
+        .expect("capabilities 자기 항목");
+    let flags = cap_entry["flags"].as_array().expect("flags");
+    assert!(
+        flags.iter().any(|f| f == "--search"),
+        "commands[capabilities].flags 에 --search 미등재: {cap_entry}"
+    );
+}
+
+#[test]
 fn capabilities_mcp_tool_definitions_contract() {
     // [#3263] `--mcp` 는 MCP 서버가 그대로 등록할 수 있는 도구 정의를 낸다 —
     // 서버 저자가 도구 목록·입력 스키마를 손으로 베껴 쓰지 않게 하는 것이 목적이다.
@@ -342,6 +472,23 @@ fn capabilities_mcp_tool_definitions_contract() {
         info["inputSchema"]["properties"]["path"]["type"] == "string",
         "{info}"
     );
+
+    // [#3480] set-cell의 넘침 경고는 에이전트가 제출 불가 산출물을 선별하는 신호다.
+    // capabilities에는 있으나 MCP 도구 정의에 누락되면 자동 등록 클라이언트가 이를
+    // 알 수 없으므로 두 계약에 함께 있어야 한다. #3383의 실제 산출 형식도 같은 이유다.
+    let set_cell = tools
+        .iter()
+        .find(|t| t["name"] == "hwp_set_cell")
+        .unwrap_or_else(|| panic!("hwp_set_cell 도구 누락: {v}"));
+    let output_fields = set_cell["outputFields"]
+        .as_array()
+        .unwrap_or_else(|| panic!("hwp_set_cell.outputFields 누락: {set_cell}"));
+    for expected in ["overflow", "outputFormat"] {
+        assert!(
+            output_fields.iter().any(|field| field == expected),
+            "hwp_set_cell 출력 계약에 {expected} 누락: {set_cell}"
+        );
+    }
 }
 
 #[test]
@@ -366,6 +513,10 @@ fn capabilities_mcp_covers_every_json_command() {
         .filter_map(|c| c["name"].as_str())
         // capabilities 자신은 도구가 아니라 도구 목록의 원천이라 제외한다.
         .filter(|n| *n != "capabilities")
+        // [#3697] dump-pages 는 CLI 진단 계약만 우선 노출한다 — #3608 1-C 표는 이
+        // 항목에 MCP 도구를 짝짓지 않았다(1-D 의 진단 도구 원칙). 에이전트 수요가
+        // 실증되면 별도 이슈로 승격해 이 제외를 지운다.
+        .filter(|n| *n != "dump-pages")
         .filter(|n| !mcp_commands.contains(n))
         .collect();
     assert!(
@@ -629,8 +780,235 @@ fn batch_unknown_subcommand_is_usage_error() {
     );
 }
 
+/// [#3712] exit code 사전이 실제 계약을 따라가는지 — 자기서술 드리프트 가드.
+///
+/// exit 3 은 처음 `convert/export-hwpx --verify` 하나였다가 `edit 3종 --verify`(#3702)·
+/// `run` 계획 단언(#3703)으로 넓어졌다. 사전이 옛 서술에 머물면 에이전트는 자기서술만
+/// 읽고 "편집에는 3이 안 나온다"고 판단한다 — 선언이 계약을 배신하는 지점이다.
+#[test]
+fn exit_code_dictionary_covers_every_verify_surface() {
+    let args = ["capabilities"];
+    let output = run(&args);
+    let v = parse_stdout_json(&args, &output);
+    for code in ["0", "1", "2", "3", "4"] {
+        let entry = v["exitCodes"][code]
+            .as_str()
+            .unwrap_or_else(|| panic!("exitCodes.{code} 설명 필요: {v}"));
+        assert!(
+            !entry.trim().is_empty(),
+            "exitCodes.{code} 가 빈 문자열: {v}"
+        );
+    }
+    // exit 3 을 낼 수 있는 표면이 늘면 사전도 함께 늘어야 한다.
+    let three = v["exitCodes"]["3"].as_str().unwrap();
+    for surface in ["convert", "edit", "run"] {
+        assert!(
+            three.contains(surface),
+            "exit 3 사전이 '{surface}' 표면을 빠뜨렸다: {three}"
+        );
+    }
+}
+
 /// [#3289] 아카이브 실행 시 컴파일타임 경로는 빌드 러너 전용이므로,
 /// nextest가 런타임에 재매핑해 주입하는 CARGO_BIN_EXE_rhwp를 우선한다.
 fn rhwp_bin() -> String {
     std::env::var("CARGO_BIN_EXE_rhwp").unwrap_or_else(|_| env!("CARGO_BIN_EXE_rhwp").to_string())
+}
+
+/// `--help` 가 광고하는 명령 토큰들.
+///
+/// help 의 명령 줄 패턴은 "정확히 2칸 들여쓰기 + 소문자/하이픈 토큰"이다(옵션·설명 줄은
+/// 그보다 깊게 들여쓴다). 양방향 가드가 **같은 파서**를 봐야 한쪽만 통과하는 착시가 없다.
+fn help_command_tokens() -> Vec<String> {
+    let help = run(&["--help"]);
+    let help_text = String::from_utf8_lossy(&help.stdout);
+    let mut tokens: Vec<String> = Vec::new();
+    for line in help_text.lines() {
+        let Some(rest) = line.strip_prefix("  ") else {
+            continue;
+        };
+        if rest.starts_with(' ') || rest.starts_with('-') {
+            continue; // 옵션·설명 줄
+        }
+        let token = rest.split_whitespace().next().unwrap_or("");
+        if token.is_empty()
+            || !token
+                .chars()
+                .all(|c| c.is_ascii_lowercase() || c == '-' || c.is_ascii_digit())
+        {
+            continue;
+        }
+        if !tokens.iter().any(|t| t == token) {
+            tokens.push(token.to_string());
+        }
+    }
+    tokens
+}
+
+/// `--help` 에 일부러 싣지 않는 명령과 그 사유.
+///
+/// 여기 넣어도 되는 것은 "사용자가 부를 일이 없는 내부 프로브"뿐이다. 사유 없는
+/// 허용목록은 가치가 없으므로 각 항목이 이유 문자열을 동반한다.
+const HELP_HIDDEN: &[(&str, &str)] = &[
+    (
+        "core-pages",
+        "코어 페이지 수만 찍는 회귀 조사용 프로브 — 산출물도 --json 계약도 없다",
+    ),
+    (
+        "dump-extents",
+        "레이아웃 트리 extent 원시 덤프 — 렌더러 디버깅 전용이라 사용자 어휘가 아니다",
+    ),
+    (
+        "measure-width",
+        "파일이 아니라 문자열을 받는 글꼴 폭 계산기 — 문서 처리 명령이 아니다",
+    ),
+];
+
+#[test]
+fn help_covers_every_capabilities_command() {
+    // 드리프트 가드 ③(신규): capabilities 가 광고하는 명령은 사람이 보는 `--help` 에도
+    // 있어야 한다. 종전 가드는 help→capabilities 한 방향뿐이라, 매뉴얼 절까지 갖춘
+    // 사용자용 명령이 help 에서 통째로 빠져도 아무도 못 잡았다(extract-pages 가 실제로
+    // 그랬다 — --json 계약까지 가진 명령이 help 에 없었다).
+    let cap = parse_stdout_json(&["capabilities"], &run(&["capabilities"]));
+    let help = help_command_tokens();
+    assert!(
+        help.len() > 10,
+        "help 파서가 명령을 거의 못 찾았습니다 — 파서가 조용히 0건을 내면 이 가드가 \
+         공허하게 통과합니다: {help:?}"
+    );
+
+    let missing: Vec<&str> = cap["commands"]
+        .as_array()
+        .expect("commands 배열")
+        .iter()
+        .filter_map(|c| c["name"].as_str())
+        .filter(|n| !help.iter().any(|h| h.as_str() == *n))
+        .filter(|n| !HELP_HIDDEN.iter().any(|(hidden, _)| *hidden == *n))
+        .collect();
+    assert!(
+        missing.is_empty(),
+        "capabilities 에는 있는데 --help 에 없는 명령: {missing:?}\n\
+         사용자용이면 print_help 에 추가하고, 내부 프로브면 HELP_HIDDEN 에 사유와 함께 넣으세요."
+    );
+
+    // 허용목록이 낡는 것도 같은 부류의 드리프트다 — help 에 실린 명령이 목록에 남아
+    // 있으면 "감췄다"는 설명 자체가 거짓이 되므로 지우게 만든다.
+    let stale: Vec<&str> = HELP_HIDDEN
+        .iter()
+        .map(|(hidden, _)| *hidden)
+        .filter(|hidden| help.iter().any(|h| h.as_str() == *hidden))
+        .collect();
+    assert!(
+        stale.is_empty(),
+        "이미 --help 에 실린 명령이 HELP_HIDDEN 에 남아 있습니다: {stale:?}"
+    );
+
+    for (hidden, why) in HELP_HIDDEN {
+        assert!(
+            !why.trim().is_empty(),
+            "{hidden} 의 은닉 사유가 비었습니다."
+        );
+    }
+}
+
+#[test]
+fn capabilities_declared_flags_are_real_cli_flags() {
+    // 드리프트 가드 ④(신규): `commands[].flags` 에 선언한 플래그는 실제로 존재해야 한다.
+    // 매니페스트는 에이전트가 도구 정의를 자동 생성하는 원천이라(cli_json_pipeline_guide),
+    // 여기 빠진 플래그는 그 에이전트가 영영 못 쓰는 기능이 된다. 여기서는 축 단위
+    // 선언(batch.flags)과 명령 항목 선언(commands[batch].flags)의 어긋남을 잡는다 —
+    // 같은 문서 안에서 서로 다른 말을 하고 있으면 어느 쪽도 믿을 수 없다.
+    let cap = parse_stdout_json(&["capabilities"], &run(&["capabilities"]));
+    let axis: Vec<&str> = cap["batch"]["flags"]
+        .as_array()
+        .expect("batch.flags")
+        .iter()
+        .filter_map(|f| f.as_str())
+        .collect();
+    let entry: Vec<&str> = cap["commands"]
+        .as_array()
+        .expect("commands")
+        .iter()
+        .find(|c| c["name"] == "batch")
+        .expect("batch 항목")["flags"]
+        .as_array()
+        .expect("commands[batch].flags")
+        .iter()
+        .filter_map(|f| f.as_str())
+        .collect();
+    let missing: Vec<&str> = axis
+        .iter()
+        .copied()
+        .filter(|f| !entry.contains(f))
+        .collect();
+    assert!(
+        missing.is_empty(),
+        "batch.flags 에는 있는데 commands[batch].flags 에 없는 플래그: {missing:?}\n\
+         (같은 매니페스트가 서로 다른 말을 하면 소비자는 어느 쪽도 믿을 수 없다)"
+    );
+
+    // edit 의 --occurrence 는 같은 항목 summary 가 이름을 대고 MCP 도구가 고정 배선한다.
+    let edit_flags: Vec<&str> = cap["commands"]
+        .as_array()
+        .expect("commands")
+        .iter()
+        .find(|c| c["name"] == "edit")
+        .expect("edit 항목")["flags"]
+        .as_array()
+        .expect("commands[edit].flags")
+        .iter()
+        .filter_map(|f| f.as_str())
+        .collect();
+    let mcp = parse_stdout_json(&["capabilities", "--mcp"], &run(&["capabilities", "--mcp"]));
+    let wired = mcp["tools"]
+        .as_array()
+        .expect("tools")
+        .iter()
+        .find(|t| t["name"] == "hwp_set_checkbox")
+        .expect("hwp_set_checkbox")["cli"]["args"]
+        .to_string();
+    if wired.contains("--occurrence") {
+        assert!(
+            edit_flags.contains(&"--occurrence"),
+            "MCP 도구가 고정 배선하는 --occurrence 가 edit flags 에 없습니다: {edit_flags:?}"
+        );
+    }
+}
+
+#[test]
+fn capabilities_formats_write_lists_every_produced_format() {
+    // 드리프트 가드 ⑤(신규): 실제로 만들어 내는 형식은 formats.write 에 있어야 한다.
+    // 매니페스트만 읽는 에이전트가 "HWP5 로는 못 쓴다"고 오판하면 변환 축을 통째로 못 쓴다.
+    // 선언을 믿지 않고 **실제로 만들어 본 뒤** 봉투가 보고한 형식과 대조한다.
+    let cap = parse_stdout_json(&["capabilities"], &run(&["capabilities"]));
+    let write: Vec<&str> = cap["formats"]["write"]
+        .as_array()
+        .expect("formats.write")
+        .iter()
+        .filter_map(|f| f.as_str())
+        .collect();
+
+    let src = Path::new(env!("CARGO_MANIFEST_DIR")).join(SAMPLE);
+    let out = std::env::temp_dir().join(format!("rhwp-capdrift-{}.hwp", std::process::id()));
+    let args = [
+        "convert",
+        src.to_str().unwrap(),
+        out.to_str().unwrap(),
+        "--json",
+    ];
+    let output = run(&args);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{}",
+        describe(&args, &output)
+    );
+    let v = parse_stdout_json(&args, &output);
+    let produced = v["format"].as_str().expect("format");
+    assert!(
+        write.contains(&produced),
+        "convert 가 실제로 낸 형식 {produced} 이 formats.write 에 없습니다: {write:?}"
+    );
+    let _ = std::fs::remove_file(&out);
 }

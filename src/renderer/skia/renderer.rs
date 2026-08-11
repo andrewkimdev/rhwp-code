@@ -624,7 +624,9 @@ impl SkiaLayerRenderer {
                           original_size,
                           crop,
                           crop_reference_size,
-                          effect| {
+                          effect,
+                          brightness,
+                          contrast| {
             draw_image_bytes(
                 canvas,
                 data,
@@ -637,6 +639,8 @@ impl SkiaLayerRenderer {
                 crop,
                 crop_reference_size,
                 effect,
+                brightness,
+                contrast,
                 ImageSampling::linear(),
             )
         };
@@ -818,23 +822,27 @@ impl SkiaLayerRenderer {
                                 canvas.draw_rect(rect, &paint);
                             }
                             if let Some(image) = &background.image {
-                                // [Issue #1156] 워터마크(밝기·대비가 둘 다 0 이 아님)
-                                // 인 배경 이미지만 반투명 합성한다. 밝기·대비가 0/0 인
-                                // 일반 배경 이미지는 불투명 그대로 (effect 그레이스케일
-                                // 등은 draw_image 가 컬러 필터로 처리).
-                                // svg.rs/web_canvas.rs render_page_background_image 정합.
-                                let is_watermark = image.is_watermark();
-                                if is_watermark {
+                                // 일반 RealPic 쪽 배경의 밝기·대비는 색조 조정일 뿐
+                                // 워터마크 표식이 아니다. 검증된 RealPic 프리셋과 기존
+                                // 비-RealPic 워터마크만 반투명 합성한다.
+                                let preserve_color_watermark =
+                                    image.is_real_picture_watermark_tone_preset();
+                                let legacy_non_realpic_watermark = !matches!(
+                                    image.effect,
+                                    crate::model::image::ImageEffect::RealPic
+                                ) && image.is_watermark();
+                                let needs_watermark_opacity =
+                                    preserve_color_watermark || legacy_non_realpic_watermark;
+                                if needs_watermark_opacity {
                                     use crate::renderer::render_tree::{
                                         LEGACY_IMAGE_WATERMARK_OPACITY,
                                         REAL_PICTURE_WATERMARK_PAGE_OPACITY,
                                     };
-                                    let wm_opacity =
-                                        if image.is_real_picture_watermark_tone_preset() {
-                                            REAL_PICTURE_WATERMARK_PAGE_OPACITY
-                                        } else {
-                                            LEGACY_IMAGE_WATERMARK_OPACITY
-                                        };
+                                    let wm_opacity = if preserve_color_watermark {
+                                        REAL_PICTURE_WATERMARK_PAGE_OPACITY
+                                    } else {
+                                        LEGACY_IMAGE_WATERMARK_OPACITY
+                                    };
                                     let alpha = (255.0 * wm_opacity).round() as u32;
                                     canvas.save_layer_alpha(Some(rect), alpha);
                                 }
@@ -846,8 +854,18 @@ impl SkiaLayerRenderer {
                                     None,
                                     None,
                                     image.effect,
+                                    if preserve_color_watermark {
+                                        0
+                                    } else {
+                                        image.display_brightness_contrast().0
+                                    },
+                                    if preserve_color_watermark {
+                                        0
+                                    } else {
+                                        image.display_brightness_contrast().1
+                                    },
                                 );
-                                if is_watermark {
+                                if needs_watermark_opacity {
                                     canvas.restore();
                                 }
                                 if !rendered && strict_resource_failures {
@@ -1107,7 +1125,7 @@ impl SkiaLayerRenderer {
                             }
                             let data = resolved
                                 .as_deref()
-                                .map(|payload| payload.data.as_slice())
+                                .map(|payload| &payload.data[..])
                                 .or(image.data.as_deref());
                             if let Some(data) = data {
                                 let effect = if resolved
@@ -1137,6 +1155,8 @@ impl SkiaLayerRenderer {
                                     image.crop,
                                     image.original_size_hu,
                                     effect,
+                                    0,
+                                    0,
                                 );
                                 if opacity < 1.0 {
                                     canvas.restore();
@@ -1569,6 +1589,19 @@ mod tests {
 
     fn count_ink(image: &image::RgbaImage) -> usize {
         image.pixels().filter(|pixel| pixel[3] > 0).count()
+    }
+
+    /// 잉크 픽셀의 세로 범위 `(min_y, max_y)`. 잉크가 없으면 `None`.
+    fn ink_y_range(image: &image::RgbaImage) -> Option<(u32, u32)> {
+        let mut min_y: Option<u32> = None;
+        let mut max_y = 0_u32;
+        for (_, y, pixel) in image.enumerate_pixels() {
+            if pixel[3] > 0 {
+                min_y = Some(min_y.map_or(y, |m| m.min(y)));
+                max_y = max_y.max(y);
+            }
+        }
+        min_y.map(|min| (min, max_y))
     }
 
     fn portable_font_resources() -> ResourceArena {
@@ -3001,6 +3034,80 @@ mod tests {
     }
 
     #[test]
+    fn issue_2771_script_run_shrinks_glyph_and_shifts_baseline() {
+        // [#2771] skia 경로에는 첨자 분기가 아예 없어 위첨자/아래첨자를 본문과
+        // 같은 크기·같은 baseline 으로 그렸다. SVG/Canvas/HTML 과 동일한
+        // 계약(0.7 배 글꼴 + baseline 이동)을 따라야 한다.
+        let render_script = |superscript: bool, subscript: bool| {
+            let run = TextRunNode {
+                text: "A".to_string(),
+                style: TextStyle {
+                    font_size: 24.0,
+                    color: 0x00000000,
+                    superscript,
+                    subscript,
+                    ..Default::default()
+                },
+                char_shape_id: None,
+                para_shape_id: None,
+                section_index: None,
+                para_index: None,
+                char_start: None,
+                cell_context: None,
+                is_para_end: false,
+                is_line_break_end: false,
+                rotation: 0.0,
+                is_vertical: false,
+                char_overlap: None,
+                border_fill_id: 0,
+                baseline: 32.0,
+                field_marker: Default::default(),
+                display_text: None,
+            };
+            let tree = PageLayerTree::new(
+                64.0,
+                64.0,
+                LayerNode::leaf(
+                    BoundingBox::new(0.0, 0.0, 64.0, 64.0),
+                    None,
+                    vec![PaintOp::text_run(
+                        BoundingBox::new(4.0, 0.0, 56.0, 64.0),
+                        run,
+                    )],
+                ),
+            );
+            let output = SkiaLayerRenderer::new()
+                .render_raster_with_options(&tree, RasterRenderOptions::default())
+                .expect("render script text");
+            ink_y_range(&decode_rgba(&output.bytes)).expect("글리프 잉크가 있어야 함")
+        };
+
+        let (base_top, base_bottom) = render_script(false, false);
+        let (sup_top, sup_bottom) = render_script(true, false);
+        let (sub_top, sub_bottom) = render_script(false, true);
+
+        assert!(
+            sup_bottom < base_bottom,
+            "위첨자는 본문보다 위 baseline 이어야 함: sup={sup_bottom}, base={base_bottom}"
+        );
+        assert!(
+            sub_bottom > base_bottom,
+            "아래첨자는 본문보다 아래 baseline 이어야 함: sub={sub_bottom}, base={base_bottom}"
+        );
+        let base_height = base_bottom - base_top;
+        assert!(
+            sup_bottom - sup_top < base_height,
+            "위첨자 글리프는 0.7 배로 작아야 함: sup={}, base={base_height}",
+            sup_bottom - sup_top
+        );
+        assert!(
+            sub_bottom - sub_top < base_height,
+            "아래첨자 글리프는 0.7 배로 작아야 함: sub={}, base={base_height}",
+            sub_bottom - sub_top
+        );
+    }
+
+    #[test]
     fn renders_equation_layout_as_colored_ink() {
         let font_size = 18.0;
         let layout_box = EqLayout::new(font_size).layout(&EqNode::Fraction {
@@ -3008,6 +3115,7 @@ mod tests {
             denom: Box::new(EqNode::Text("b".to_string())),
         });
         let equation = EquationNode {
+            script: String::new(),
             svg_content: String::new(),
             layout_box,
             color_str: "#ff0000".to_string(),
@@ -3055,6 +3163,7 @@ mod tests {
             bottom: Box::new(EqNode::Text("b".to_string())),
         });
         let equation = EquationNode {
+            script: String::new(),
             svg_content: String::new(),
             layout_box,
             color_str: "#00aa00".to_string(),

@@ -466,6 +466,22 @@ impl ShapeObject {
         }
     }
 
+    /// 개체 요소 속성 가변 참조 반환
+    pub fn shape_attr_mut(&mut self) -> &mut ShapeComponentAttr {
+        match self {
+            ShapeObject::Line(s) => &mut s.drawing.shape_attr,
+            ShapeObject::Rectangle(s) => &mut s.drawing.shape_attr,
+            ShapeObject::Ellipse(s) => &mut s.drawing.shape_attr,
+            ShapeObject::Arc(s) => &mut s.drawing.shape_attr,
+            ShapeObject::Polygon(s) => &mut s.drawing.shape_attr,
+            ShapeObject::Curve(s) => &mut s.drawing.shape_attr,
+            ShapeObject::Group(g) => &mut g.shape_attr,
+            ShapeObject::Picture(p) => &mut p.shape_attr,
+            ShapeObject::Chart(c) => &mut c.drawing.shape_attr,
+            ShapeObject::Ole(o) => &mut o.drawing.shape_attr,
+        }
+    }
+
     /// 개체 타입명 반환
     pub fn shape_name(&self) -> &'static str {
         match self {
@@ -846,6 +862,16 @@ pub struct OleShape {
     pub raw_tag_data: Vec<u8>,
     /// 캡션
     pub caption: Option<Caption>,
+    /// [#3546] HWPX `<hp:chart chartIDRef="...">` 출신 표식 — chartIDRef 원문.
+    /// HWPX 파서가 차트를 OLE 모델(bin_data_id=60000+N)로 변환할 때 채우며,
+    /// Some 이면 HWPX 저장기가 hp:ole 대신 hp:chart 를 원형 구조로 재방출한다.
+    pub chart_id_ref: Option<String>,
+    /// [#3546] 원본 `<hp:switch>` 의 `<hp:default>` fallback OLE.
+    /// 저장 시 switch/case/default 구조 재방출의 재료 — None 이면 bare
+    /// `<hp:chart>` 로 되쓴다. default 없는 case-only `<hp:switch>` 도
+    /// None 으로 접힌다(둘 다 미관측 변형 — 이 경우 switch 래핑은
+    /// 재방출되지 않는다).
+    pub chart_switch_fallback: Option<Box<OleShape>>,
 }
 
 #[cfg(test)]

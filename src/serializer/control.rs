@@ -4,9 +4,8 @@
 //! 각 Control enum variant를 CTRL_HEADER 레코드(+자식 레코드)로 변환한다.
 
 use super::body_text::serialize_paragraph_list;
-use super::byte_writer::ByteWriter;
+use super::byte_writer::{char_to_wchar, ByteWriter};
 
-use crate::document_core::converters::common_obj_attr_writer::pack_common_attr_bits;
 use crate::model::control::*;
 use crate::model::document::SectionDef;
 use crate::model::footnote::FootnoteShape;
@@ -16,8 +15,9 @@ use crate::model::image::{ImageEffect, Picture};
 use crate::model::page::{ColumnDef, ColumnDirection, ColumnType, PageBorderFill, PageDef};
 use crate::model::paragraph::Paragraph;
 use crate::model::shape::{
-    Caption, CaptionDirection, CaptionVertAlign, CommonObjAttr, DrawingObjAttr, HorzRelTo,
-    OleShape, ShapeComponentAttr, ShapeObject, TextFlow, TextWrap, VertRelTo,
+    Caption, CaptionDirection, CaptionVertAlign, CommonObjAttr, DrawingObjAttr, HorzAlign,
+    HorzRelTo, OleShape, ShapeComponentAttr, ShapeObject, SizeCriterion, TextFlow, TextWrap,
+    VertAlign, VertRelTo,
 };
 use crate::model::style::{Fill, FillType, ImageFillMode, ShapeBorderLine};
 use crate::model::table::{Cell, Table, TablePageBreak, VerticalAlign};
@@ -37,7 +37,7 @@ pub fn serialize_control(
     let insert_pos = records.len(); // CTRL_HEADER가 쓰이는 위치 기억
 
     match ctrl {
-        Control::SectionDef(sd) => serialize_section_def(sd, level, records),
+        Control::SectionDef(sd) => serialize_section_def(sd, level, ctrl_data_record, records),
         Control::ColumnDef(cd) => serialize_column_def(cd, level, records),
         Control::Table(table) => serialize_table(table, level, records),
         Control::Header(header) => serialize_header_control(header, level, records),
@@ -170,6 +170,18 @@ pub fn serialize_control(
                     }
                 }
             }
+            // [#4396] `f.parameters`(HWPX `<hp:parameters>` 트리, HWPX 파서가 채움)에
+            // `command`/`memo_index` 외 항목이 있으면 HWP5 로는 옮길 자리가 없다 —
+            // `pdf/hwpspec-2024.pdf` §4.2.8(HWPTAG_CTRL_DATA, 표 61: "필드 이름이나
+            // 하이퍼링크 정보를 저장" — 파라미터 셋을 감싸기만 할 뿐 필드별 item ID
+            // 스키마는 스펙에 없다), §4.2.10.11(책갈피는 "책갈피이름 밖에 없다"),
+            // §4.2.10.15(필드 CTRL_HEADER 는 command/id 뿐)를 확인한 결과다. 스펙에
+            // 없는 값을 임의로 써넣는 대신(#4396 리뷰에서 되돌림 — 실제로
+            // `hwpx_to_hwp.rs`의 0x4000+idx 순차 할당과 충돌 가능성도 있었다) 조용히
+            // 버리지 않고 경고만 낸다.
+            if let Some(warning) = field_parameter_loss_warning(f) {
+                eprintln!("[hwp5] {warning}");
+            }
         }
         // [Task #852 Stage 2.4] 양식 개체 직렬화 — CTRL_HEADER + HWPTAG_FORM_OBJECT
         Control::Form(form) => serialize_form_control(form, level, records),
@@ -210,6 +222,43 @@ pub fn serialize_control(
     }
 }
 
+/// [#4396] `field.parameters`(HWPX `<hp:parameters>` 트리) 중 HWP5 로 옮길 자리가 없는
+/// 항목이 있으면 경고 문자열을 만든다. `command`(CTRL_HEADER 의 command)와
+/// `Number`(memo_index)는 이미 HWP5 쪽 슬롯이 있으므로 손실이 아니다 — 그 둘을 뺀
+/// 나머지가 하나라도 있으면 `Some`.
+///
+/// 순수 판정 함수로 분리해 단위 테스트가 실제 stderr 를 가로채지 않고도 이 조건을
+/// 검증할 수 있게 한다. 호출부(`serialize_control`)가 실제 경고를 `eprintln!` 한다.
+fn field_parameter_loss_warning(field: &Field) -> Option<String> {
+    let lost: Vec<String> = field
+        .parameters
+        .items
+        .iter()
+        .filter(|p| !matches!(parameter_name(p), Some("Command") | Some("Number")))
+        .map(|p| parameter_name(p).unwrap_or("<이름 없음>").to_string())
+        .collect();
+    if lost.is_empty() {
+        return None;
+    }
+    Some(format!(
+        "필드({:?}) 파라미터 {}개 손실 — HWP5 CTRL_DATA에 규정된 슬롯 없음(#4396): {}",
+        field.field_type,
+        lost.len(),
+        lost.join(", ")
+    ))
+}
+
+/// `Parameter` 5종 공통으로 `name` 속성을 꺼낸다(경고 메시지 조립용).
+fn parameter_name(p: &Parameter) -> Option<&str> {
+    match p {
+        Parameter::Boolean { name, .. }
+        | Parameter::Integer { name, .. }
+        | Parameter::Float { name, .. }
+        | Parameter::String { name, .. } => name.as_deref(),
+        Parameter::List(list) => list.name.as_deref(),
+    }
+}
+
 // ============================================================
 // CTRL_HEADER 레코드 생성 헬퍼
 // ============================================================
@@ -231,7 +280,12 @@ fn make_ctrl_record(ctrl_id: u32, level: u16, ctrl_data: &[u8]) -> Record {
 // 구역 정의 ('secd')
 // ============================================================
 
-fn serialize_section_def(sd: &SectionDef, level: u16, records: &mut Vec<Record>) {
+fn serialize_section_def(
+    sd: &SectionDef,
+    level: u16,
+    ctrl_data_record: Option<&[u8]>,
+    records: &mut Vec<Record>,
+) {
     let mut w = ByteWriter::new();
     // HWPX 파서(parse_start_num, pageStartsOn)는 page_num_type 필드만 세팅하고
     // flags bit 20-21은 동기화하지 않는다. HWP5는 page_num_type을 별도 필드로
@@ -309,7 +363,25 @@ fn serialize_section_def(sd: &SectionDef, level: u16, records: &mut Vec<Record>)
     }
 
     // 기타 자식 레코드 복원 (바탕쪽 LIST_HEADER + 문단 등)
+    let mut nested_ctrl_header_seen = false;
     for raw in &sd.extra_child_records {
+        let is_exact_owned_ctrl_data = ctrl_data_record.is_some_and(|data| {
+            !nested_ctrl_header_seen
+                && raw.tag_id == tags::HWPTAG_CTRL_DATA
+                && raw.level == level.saturating_add(1)
+                && raw.data.as_slice() == data
+        });
+        if is_exact_owned_ctrl_data {
+            // 과거 parser 또는 외부 생성 IR이 같은 직접 자식 CTRL_DATA를
+            // Paragraph.ctrl_data_records와 extra_child_records에 동시에 보유해도,
+            // 아래 공용 복원 경로가 CTRL_HEADER 직후에 한 번만 출력하도록 한다.
+            continue;
+        }
+        if raw.tag_id == tags::HWPTAG_CTRL_HEADER {
+            // 이 경계 뒤의 CTRL_DATA는 중첩 raw 구조의 일부일 수 있으므로
+            // payload가 같아도 원래 위치에서 보존한다.
+            nested_ctrl_header_seen = true;
+        }
         records.push(Record {
             tag_id: raw.tag_id,
             level: raw.level,
@@ -387,9 +459,9 @@ fn serialize_page_def(pd: &PageDef) -> Vec<u8> {
 fn serialize_footnote_shape(fs: &FootnoteShape) -> Vec<u8> {
     let mut w = ByteWriter::new();
     w.write_u32(fs.attr).unwrap();
-    w.write_u16(fs.user_char as u16).unwrap();
-    w.write_u16(fs.prefix_char as u16).unwrap();
-    w.write_u16(fs.suffix_char as u16).unwrap();
+    w.write_u16(char_to_wchar(fs.user_char)).unwrap();
+    w.write_u16(char_to_wchar(fs.prefix_char)).unwrap();
+    w.write_u16(char_to_wchar(fs.suffix_char)).unwrap();
     w.write_u16(fs.start_number).unwrap();
     // HWP5 노트 구분선 길이는 i16 슬롯. 한컴 전폭 sentinel(14692344)은 i16을 넘지만
     // HWP5 포맷 한계상 하위 16비트로 기록한다(HWPX 경로는 i32 원본을 보존).
@@ -872,6 +944,7 @@ fn serialize_auto_number(an: &AutoNumber) -> Vec<u8> {
         AutoNumberType::Picture => 3,
         AutoNumberType::Table => 4,
         AutoNumberType::Equation => 5,
+        AutoNumberType::TotalPage => 6,
     };
     let mut attr: u32 = type_val & 0x0F;
     attr |= ((an.format as u32) & 0xFF) << 4; // bit 4~11: 번호 모양
@@ -887,9 +960,9 @@ fn serialize_auto_number(an: &AutoNumber) -> Vec<u8> {
         an.assigned_number
     };
     data.extend_from_slice(&num.to_le_bytes());
-    data.extend_from_slice(&(an.user_symbol as u16).to_le_bytes());
-    data.extend_from_slice(&(an.prefix_char as u16).to_le_bytes());
-    data.extend_from_slice(&(an.suffix_char as u16).to_le_bytes());
+    data.extend_from_slice(&char_to_wchar(an.user_symbol).to_le_bytes());
+    data.extend_from_slice(&char_to_wchar(an.prefix_char).to_le_bytes());
+    data.extend_from_slice(&char_to_wchar(an.suffix_char).to_le_bytes());
     data
 }
 
@@ -901,6 +974,7 @@ fn serialize_new_number(nn: &NewNumber) -> Vec<u8> {
         AutoNumberType::Picture => 3,
         AutoNumberType::Table => 4,
         AutoNumberType::Equation => 5,
+        AutoNumberType::TotalPage => 6,
     };
     let attr: u32 = type_val & 0x0F;
     let mut data = Vec::new();
@@ -913,10 +987,10 @@ fn serialize_page_num_pos(pnp: &PageNumberPos) -> Vec<u8> {
     let attr: u32 = (pnp.format as u32 & 0xFF) | ((pnp.position as u32 & 0x0F) << 8);
     let mut data = Vec::new();
     data.extend_from_slice(&attr.to_le_bytes());
-    data.extend_from_slice(&(pnp.user_symbol as u16).to_le_bytes());
-    data.extend_from_slice(&(pnp.prefix_char as u16).to_le_bytes());
-    data.extend_from_slice(&(pnp.suffix_char as u16).to_le_bytes());
-    data.extend_from_slice(&(pnp.dash_char as u16).to_le_bytes());
+    data.extend_from_slice(&char_to_wchar(pnp.user_symbol).to_le_bytes());
+    data.extend_from_slice(&char_to_wchar(pnp.prefix_char).to_le_bytes());
+    data.extend_from_slice(&char_to_wchar(pnp.suffix_char).to_le_bytes());
+    data.extend_from_slice(&char_to_wchar(pnp.dash_char).to_le_bytes());
     data
 }
 
@@ -1270,7 +1344,14 @@ fn serialize_shape_control(
                     w.write_i32(cp.y).unwrap();
                     w.write_u16(cp.point_type).unwrap();
                 }
-                w.write_bytes(&conn.raw_trailing).unwrap();
+                // [#3570] 한컴은 제어점 뒤에 0 4바이트를 더 쓴다(전수 20건 모두
+                // `00000000`). 종전에는 raw_trailing 이 비면 아무것도 쓰지 않아
+                // 레코드가 4바이트 짧았다. 다각형(위)과 같은 관례로 채운다.
+                if conn.raw_trailing.is_empty() {
+                    w.write_u32(0).unwrap();
+                } else {
+                    w.write_bytes(&conn.raw_trailing).unwrap();
+                }
             } else {
                 w.write_i32(if line.started_right_or_bottom { 1 } else { 0 })
                     .unwrap();
@@ -1497,10 +1578,6 @@ fn serialize_shape_control(
                 level,
                 &serialize_common_obj_attr(&chart.common),
             ));
-            // 캡션 (SHAPE_COMPONENT 앞, level+1)
-            if let Some(ref caption) = chart.caption {
-                serialize_caption(caption, level + 1, records);
-            }
             let sc_ctrl_id = chart.drawing.shape_attr.ctrl_id;
             emit_caption(&chart.caption, records);
             records.push(Record {
@@ -1566,13 +1643,25 @@ fn group_container_component_data(
     w.write_u16(group.children.len() as u16).unwrap();
     for child in &group.children {
         let child_ctrl_id = match child {
-            ShapeObject::Line(_) => tags::SHAPE_LINE_ID,
+            // [#3565] 연결선 자식은 실제 레코드가 '$col' 로 나간다
+            // (serialize_group_child 의 connector 분기). 목록도 같은 판정을
+            // 써야 부모 선언과 자식 실체가 어긋나지 않는다.
+            ShapeObject::Line(line) => {
+                if line.connector.is_some() {
+                    tags::SHAPE_CONNECTOR_ID
+                } else {
+                    tags::SHAPE_LINE_ID
+                }
+            }
             ShapeObject::Rectangle(_) => tags::SHAPE_RECT_ID,
             ShapeObject::Ellipse(_) => tags::SHAPE_ELLIPSE_ID,
             ShapeObject::Arc(_) => tags::SHAPE_ARC_ID,
             ShapeObject::Polygon(_) => tags::SHAPE_POLYGON_ID,
             ShapeObject::Curve(_) => tags::SHAPE_CURVE_ID,
-            ShapeObject::Group(_) => tags::CTRL_GEN_SHAPE,
+            // [#3565] 중첩 그룹 자식의 실제 레코드는 '$con' 이다
+            // (serialize_group_child 의 Group arm). 'gso ' 로 선언하면
+            // 한컴이 자식 트리를 세우지 못해 문서를 열지 못한다.
+            ShapeObject::Group(_) => tags::SHAPE_CONTAINER_ID,
             ShapeObject::Picture(_) => tags::SHAPE_PICTURE_ID,
             ShapeObject::Chart(c) => c.drawing.shape_attr.ctrl_id,
             ShapeObject::Ole(o) => {
@@ -1630,7 +1719,14 @@ fn serialize_group_child(
                     w.write_i32(cp.y).unwrap();
                     w.write_u16(cp.point_type).unwrap();
                 }
-                w.write_bytes(&conn.raw_trailing).unwrap();
+                // [#3570] 한컴은 제어점 뒤에 0 4바이트를 더 쓴다(전수 20건 모두
+                // `00000000`). 종전에는 raw_trailing 이 비면 아무것도 쓰지 않아
+                // 레코드가 4바이트 짧았다. 다각형(위)과 같은 관례로 채운다.
+                if conn.raw_trailing.is_empty() {
+                    w.write_u32(0).unwrap();
+                } else {
+                    w.write_bytes(&conn.raw_trailing).unwrap();
+                }
             } else {
                 w.write_i32(if line.started_right_or_bottom { 1 } else { 0 })
                     .unwrap();
@@ -1984,6 +2080,192 @@ fn serialize_common_obj_attr(common: &CommonObjAttr) -> Vec<u8> {
         w.write_bytes(&common.raw_extra).unwrap();
     }
     w.into_bytes()
+}
+
+/// `CommonObjAttr` 의 enum 필드들로부터 attr u32 비트를 합성한다.
+///
+/// [#4400] `document_core/converters/common_obj_attr_writer.rs` 에서 이 파일로 이동했다
+/// (`sync_anchor_bits`도 같은 이유로 함께 옮겼다 — 아래 참고). CTRL_HEADER attr 비트
+/// 레이아웃을 아는 것은 본질적으로 직렬화 로직이고, 이 파일의 `serialize_common_obj_attr`
+/// (및 `document_core::converters::common_obj_attr_writer::serialize_common_obj_attr`
+/// 어댑터)가 유일한 소비 목적이다 — 직렬화기가 도리어 `document_core` 를 참조하는
+/// 역방향 의존을 없앤다. `document_core` 쪽에서 필요한 호출(패스스루 무효화에 준하는
+/// attr 동기화)은 이 pub(crate) 함수와 `sync_anchor_bits`를 그대로 가져다 쓴다.
+///
+/// 비트 레이아웃 (parser/control/shape.rs 의 역방향):
+/// - bit 0: treat_as_char
+/// - bit 2: affect_line_spacing (줄 간격에 영향 — [#2784], 스펙 표 70)
+/// - bit 3-4: vert_rel_to (Paper=0, Page=1, Para=2)
+/// - bit 5-7: vert_align
+/// - bit 8-9: horz_rel_to
+/// - bit 10-12: horz_align
+/// - bit 13: flow_with_text (HWPX object contract)
+/// - bit 14: allow_overlap (HWPX object contract)
+/// - bit 15-17: width_criterion
+/// - bit 18-19: height_criterion
+/// - bit 21-23: text_wrap
+/// - bit 24-25: text_flow
+/// - bit 20: size protect when VertRelTo is Para
+/// - bit 26: HWPX GenShape storage high bit 후보
+/// - bit 28: HWPX GenShape numbering category high bit 후보
+pub(crate) fn pack_common_attr_bits(common: &CommonObjAttr) -> u32 {
+    let mut a: u32 = 0;
+    if common.treat_as_char {
+        a |= 0x01;
+    }
+    // [#2784] affectLSpacing — 개체 공통 속성 attr bit 2 (스펙 표 70).
+    if common.affect_line_spacing {
+        a |= 1 << 2;
+    }
+    a |= (vert_rel_to_to_bits(common.vert_rel_to) & 0x03) << 3;
+    a |= (vert_align_to_bits(common.vert_align) & 0x07) << 5;
+    a |= (horz_rel_to_to_bits(common.horz_rel_to) & 0x03) << 8;
+    a |= (horz_align_to_bits(common.horz_align) & 0x07) << 10;
+    if common.flow_with_text {
+        a |= 1 << 13;
+    }
+    if common.allow_overlap {
+        a |= 1 << 14;
+    }
+    if common.size_protect {
+        a |= 1 << 20;
+    }
+    a |= (width_criterion_to_bits(common.width_criterion) & 0x07) << 15;
+    a |= (height_criterion_to_bits(common.height_criterion) & 0x03) << 18;
+    a |= (text_wrap_to_bits(common.text_wrap) & 0x07) << 21;
+    a |= (text_flow_to_bits(common.text_flow) & 0x03) << 24;
+    if common.hwp5_gen_shape_attr_bit26 {
+        a |= 1 << 26;
+    }
+    if common.hwp5_gen_shape_attr_bit28 {
+        a |= 1 << 28;
+    }
+    a
+}
+
+/// tac/rel_to 마이그레이션 후 stale packed `attr` 동기화.
+///
+/// [#4400] `document_core/converters/common_obj_attr_writer.rs` 에서 `pack_common_attr_bits`와
+/// 함께 이 파일로 이동했다 — 같은 CTRL_HEADER attr 비트 지식(같은 마스크 상수, 같은
+/// `vert_rel_to_to_bits`/`horz_rel_to_to_bits`)을 다루는 동종 로직을 한쪽만 옮기면
+/// `document_core`에 직렬화 지식이 남고, 그걸 지탱하려고 헬퍼를 `pub(crate)`로 넓혀야
+/// 했다(gestell 자기검증에서 지적된 "총체적 독립성 미달"). 이 함수까지 옮기면 그 넓힘이
+/// 필요 없어진다 — 아래 두 헬퍼를 다시 private으로 좁힌 이유다.
+///
+/// 배경 (Issue #3781 실측): `insert_picture_native` 가 `attr` 비트를 seed 하고
+/// `migrate_picture_floating_to_inline` 은 **enum 필드만** 갱신한다. 직렬화는
+/// `attr != 0` 이면 packed 값을 우선하므로(라운드트립 보존 계약), 마이그레이션된
+/// 그림이 HWP 바이너리 왕복에서 floating(Paper) 앵커로 되살아나
+/// `treatAsChar=1 + vertRelTo=PAPER` 모순 산출물이 된다 (한글 렌더 깨짐).
+/// 앵커 관련 비트(tac bit0 · vert_rel 3-4 · horz_rel 8-9)만 enum 에서 재기입하고,
+/// criterion/wrap/flow 등 나머지 비트는 보존한다 (전체 재패킹은 enum 미동기
+/// 필드의 정보 손실 위험).
+pub(crate) fn sync_anchor_bits(common: &mut CommonObjAttr) {
+    if common.attr == 0 {
+        return; // 직렬화가 pack_common_attr_bits 로 전량 재패킹 — 손댈 것 없음.
+    }
+    let mut a = common.attr;
+    a &= !(0x01 | (0x03 << 3) | (0x03 << 8));
+    if common.treat_as_char {
+        a |= 0x01;
+    }
+    a |= (vert_rel_to_to_bits(common.vert_rel_to) & 0x03) << 3;
+    a |= (horz_rel_to_to_bits(common.horz_rel_to) & 0x03) << 8;
+    common.attr = a;
+}
+
+/// 배치(`text_wrap`)를 packed `attr` 에 되쓴다 — `sync_anchor_bits` 와 같은 이유다.
+///
+/// 배치를 바꾸는 편집(`ShapeObjCtrlSendBehindText` 계열)이 enum 만 갱신하면 저장에서
+/// **묻힌다** — `attr != 0` 이면 직렬화가 packed 값을 우선하기 때문이다. 한글 저장본과
+/// 견줘 보고서야 드러났다(오라클은 `attr` 과 `text_wrap` 이 함께 움직이는데 이쪽은 둘 다
+/// 그대로였다). 건드리는 것은 **비트 21‥23 뿐**이다.
+pub(crate) fn sync_text_wrap_bits(common: &mut CommonObjAttr) {
+    if common.attr == 0 {
+        return; // 직렬화가 전량 재패킹한다.
+    }
+    let mut a = common.attr;
+    a &= !(0x07 << 21);
+    a |= (text_wrap_to_bits(common.text_wrap) & 0x07) << 21;
+    common.attr = a;
+}
+
+fn vert_rel_to_to_bits(v: VertRelTo) -> u32 {
+    match v {
+        VertRelTo::Paper => 0,
+        VertRelTo::Page => 1,
+        VertRelTo::Para => 2,
+    }
+}
+
+fn vert_align_to_bits(v: VertAlign) -> u32 {
+    match v {
+        VertAlign::Top => 0,
+        VertAlign::Center => 1,
+        VertAlign::Bottom => 2,
+        VertAlign::Inside => 3,
+        VertAlign::Outside => 4,
+    }
+}
+
+fn horz_rel_to_to_bits(v: HorzRelTo) -> u32 {
+    match v {
+        HorzRelTo::Paper => 0,
+        HorzRelTo::Page => 1,
+        HorzRelTo::Column => 2,
+        HorzRelTo::Para => 3,
+    }
+}
+
+fn horz_align_to_bits(v: HorzAlign) -> u32 {
+    match v {
+        HorzAlign::Left => 0,
+        HorzAlign::Center => 1,
+        HorzAlign::Right => 2,
+        HorzAlign::Inside => 3,
+        HorzAlign::Outside => 4,
+    }
+}
+
+fn width_criterion_to_bits(v: SizeCriterion) -> u32 {
+    match v {
+        SizeCriterion::Paper => 0,
+        SizeCriterion::Page => 1,
+        SizeCriterion::Column => 2,
+        SizeCriterion::Para => 3,
+        SizeCriterion::Absolute => 4,
+    }
+}
+
+fn height_criterion_to_bits(v: SizeCriterion) -> u32 {
+    match v {
+        SizeCriterion::Paper => 0,
+        SizeCriterion::Page => 1,
+        // height 는 Absolute 만 의미 있음 (parser bit 18-19, 2비트만 사용)
+        _ => 2,
+    }
+}
+
+fn text_wrap_to_bits(v: TextWrap) -> u32 {
+    // hwplib 기준: 0=어울림(Square), 1=자리차지(TopAndBottom), 2=글뒤로(BehindText), 3=글앞으로(InFrontOfText)
+    // Tight/Through 는 HWP 5.0 에 직접 매핑이 없어 Square 로 폴백.
+    match v {
+        TextWrap::Square => 0,
+        TextWrap::Tight => 0,
+        TextWrap::Through => 0,
+        TextWrap::TopAndBottom => 1,
+        TextWrap::BehindText => 2,
+        TextWrap::InFrontOfText => 3,
+    }
+}
+
+fn text_flow_to_bits(v: TextFlow) -> u32 {
+    match v {
+        TextFlow::BothSides => 0,
+        TextFlow::LeftOnly => 1,
+        TextFlow::RightOnly => 2,
+        TextFlow::LargestOnly => 3,
+    }
 }
 
 /// SHAPE_COMPONENT 데이터 직렬화 (ShapeComponentAttr만 — Picture, Group용)

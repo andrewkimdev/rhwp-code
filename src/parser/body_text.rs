@@ -110,7 +110,7 @@ pub fn parse_body_text_section(data: &[u8]) -> Result<Section, BodyTextError> {
                             data: r.data.clone(),
                         })
                         .collect();
-                    let ext_mps = parse_master_pages_from_raw(&tail);
+                    let ext_mps = parse_master_pages_from_raw(&tail, 0);
                     section.section_def.master_pages.extend(ext_mps);
                     break;
                 }
@@ -173,11 +173,21 @@ pub fn parse_paragraph(records: &[Record]) -> Result<Paragraph, BodyTextError> {
 
                 // CTRL_DATA 레코드 추출 (라운드트립 보존용)
                 // 중첩 CTRL_HEADER 이전까지만 검색하여 내부 컨트롤의 CTRL_DATA 혼입 방지
-                let ctrl_data = ctrl_records[1..]
-                    .iter()
-                    .take_while(|r| r.tag_id != tags::HWPTAG_CTRL_HEADER)
-                    .find(|r| r.tag_id == tags::HWPTAG_CTRL_DATA)
-                    .map(|r| r.data.clone());
+                //
+                // SectionDef는 바탕쪽 같은 중첩 raw record를 extra_child_records에도 보존하므로,
+                // 다음 중첩 CTRL_HEADER 전의 직접 자식만 문단 control 슬롯의 canonical owner로
+                // 삼는다. 다른 control은 Picture/Shape처럼 CTRL_DATA가 더 깊은 level에 올 수
+                // 있어 기존 탐색 계약을 유지한다.
+                let ctrl_data_record = if matches!(control, Control::SectionDef(_)) {
+                    section_def_ctrl_data_index(&ctrl_records[1..], ctrl_records[0].level)
+                        .map(|index| &ctrl_records[index + 1])
+                } else {
+                    ctrl_records[1..]
+                        .iter()
+                        .take_while(|r| r.tag_id != tags::HWPTAG_CTRL_HEADER)
+                        .find(|r| r.tag_id == tags::HWPTAG_CTRL_DATA)
+                };
+                let ctrl_data = ctrl_data_record.map(|r| r.data.clone());
 
                 // CTRL_DATA에서 필드 이름 추출 → Field.ctrl_data_name에 설정
                 if let Control::Field(ref mut field) = control {
@@ -532,7 +542,7 @@ fn parse_ctrl_header(records: &[Record]) -> Control {
 
     match ctrl_id {
         tags::CTRL_SECTION_DEF => {
-            let section_def = parse_section_def(ctrl_data, child_records);
+            let section_def = parse_section_def(ctrl_data, child_records, records[0].level);
             Control::SectionDef(Box::new(section_def))
         }
         tags::CTRL_COLUMN_DEF => {
@@ -546,11 +556,29 @@ fn parse_ctrl_header(records: &[Record]) -> Control {
     }
 }
 
+/// SectionDef가 문단 control 슬롯으로 소유할 CTRL_DATA의 자식 배열 인덱스.
+///
+/// 기존 control 파싱 계약처럼 첫 중첩 CTRL_HEADER까지만 검색한다. 그 뒤의
+/// 직접 자식 CTRL_DATA는 바탕쪽 등 raw 자식 레코드의 일부일 수 있으므로
+/// 원래 위치를 유지해야 한다.
+fn section_def_ctrl_data_index(child_records: &[Record], ctrl_level: u16) -> Option<usize> {
+    let direct_child_level = ctrl_level.saturating_add(1);
+    child_records
+        .iter()
+        .enumerate()
+        .take_while(|(_, record)| record.tag_id != tags::HWPTAG_CTRL_HEADER)
+        .find(|(_, record)| {
+            record.tag_id == tags::HWPTAG_CTRL_DATA && record.level == direct_child_level
+        })
+        .map(|(index, _)| index)
+}
+
 /// 구역 정의 파싱 ('secd' 컨트롤)
 ///
 /// ctrl_data: CTRL_HEADER의 ctrl_id 이후 데이터
-/// child_records: 자식 레코드 (PAGE_DEF, FOOTNOTE_SHAPE, PAGE_BORDER_FILL)
-fn parse_section_def(ctrl_data: &[u8], child_records: &[Record]) -> SectionDef {
+/// child_records: 자식 레코드 (CTRL_DATA, PAGE_DEF, FOOTNOTE_SHAPE, PAGE_BORDER_FILL, raw 중첩)
+/// ctrl_level: SectionDef CTRL_HEADER의 record level
+fn parse_section_def(ctrl_data: &[u8], child_records: &[Record], ctrl_level: u16) -> SectionDef {
     let mut sd = SectionDef::default();
     let mut r = ByteReader::new(ctrl_data);
 
@@ -584,7 +612,14 @@ fn parse_section_def(ctrl_data: &[u8], child_records: &[Record]) -> SectionDef {
     // 자식 레코드에서 PAGE_DEF, FOOTNOTE_SHAPE, PAGE_BORDER_FILL 파싱
     let mut footnote_count = 0u32;
     let mut border_fill_count = 0u32;
-    for record in child_records {
+    let owned_ctrl_data_index = section_def_ctrl_data_index(child_records, ctrl_level);
+    for (index, record) in child_records.iter().enumerate() {
+        if Some(index) == owned_ctrl_data_index {
+            // 첫 중첩 CTRL_HEADER 전의 직접 자식 CTRL_DATA는
+            // Paragraph.ctrl_data_records가 canonical owner다.
+            continue;
+        }
+
         match record.tag_id {
             tags::HWPTAG_PAGE_DEF => {
                 sd.page_def = parse_page_def(&record.data);
@@ -620,7 +655,7 @@ fn parse_section_def(ctrl_data: &[u8], child_records: &[Record]) -> SectionDef {
     }
 
     // extra_child_records에서 바탕쪽 (LIST_HEADER) 파싱
-    sd.master_pages = parse_master_pages_from_raw(&sd.extra_child_records);
+    sd.master_pages = parse_master_pages_from_raw(&sd.extra_child_records, sd.flags);
 
     sd
 }
@@ -628,8 +663,11 @@ fn parse_section_def(ctrl_data: &[u8], child_records: &[Record]) -> SectionDef {
 /// extra_child_records에서 바탕쪽 LIST_HEADER를 파싱한다.
 ///
 /// LIST_HEADER(tag 66)가 나타나면 바탕쪽으로 파싱.
-/// 순서: 1번째=양쪽(Both), 2번째=홀수(Odd), 3번째=짝수(Even)
-fn parse_master_pages_from_raw(raw_records: &[RawRecord]) -> Vec<MasterPage> {
+/// 기본 순서: 1번째=양쪽(Both), 2번째=홀수(Odd), 3번째=짝수(Even).
+/// 단, 한컴 2020이 HWPX의 희소 Odd 바탕쪽을 HWP5로 저장할 때는 LIST_HEADER 하나와
+/// SECTION_DEF 상위 플래그 `0x80000000`을 쓴다. 이 조합은 앞 구역의 짝수 쪽을
+/// 상속하고 현재 구역의 홀수 쪽만 바꾸므로 첫 목록을 Both로 해석하면 안 된다.
+fn parse_master_pages_from_raw(raw_records: &[RawRecord], section_flags: u32) -> Vec<MasterPage> {
     let mut master_pages = Vec::new();
 
     // RawRecord를 Record로 변환
@@ -668,9 +706,8 @@ fn parse_master_pages_from_raw(raw_records: &[RawRecord]) -> Vec<MasterPage> {
     ];
 
     for (mp_idx, &start) in list_header_positions.iter().enumerate() {
-        let apply_to = apply_order
-            .get(mp_idx)
-            .copied()
+        let apply_to = master_page_apply_to(section_flags, list_header_positions.len(), mp_idx)
+            .or_else(|| apply_order.get(mp_idx).copied())
             .unwrap_or(HeaderFooterApply::Both);
 
         // LIST_HEADER 데이터 파싱
@@ -737,6 +774,20 @@ fn parse_master_pages_from_raw(raw_records: &[RawRecord]) -> Vec<MasterPage> {
     }
 
     master_pages
+}
+
+fn master_page_apply_to(
+    section_flags: u32,
+    list_header_count: usize,
+    master_page_index: usize,
+) -> Option<HeaderFooterApply> {
+    const MASTER_PAGE_FLAGS_MASK: u32 = 0xe000_0000;
+    const HANCOM_SINGLE_ODD_MASTER_PAGE_FLAGS: u32 = 0x8000_0000;
+
+    (list_header_count == 1
+        && master_page_index == 0
+        && section_flags & MASTER_PAGE_FLAGS_MASK == HANCOM_SINGLE_ODD_MASTER_PAGE_FLAGS)
+        .then_some(HeaderFooterApply::Odd)
 }
 
 /// 단 정의 파싱 ('cold' 컨트롤)

@@ -269,6 +269,66 @@ mod tests {
         }
     }
 
+    /// exam_math.hwp: 선택과목 소책자(확통/미적분/기하)마다 소책자 쪽번호가 1,2,3,4로
+    /// 재시작한다. 큰 이탤릭 모서리 쪽번호는 짝수쪽(왼쪽)에서 2쪽=2, 4쪽=4 로 보여야 한다.
+    /// 4쪽 머리말이 제목표 셀 안에 중첩 정의된 확통(p12)·기하(p20)에서 과거에는
+    /// 4 대신 2가 렌더되던 회귀를 방어한다. (미적분 p16은 최상위 머리말이라 항상 정상)
+    #[test]
+    fn test_exam_math_booklet_corner_page_number_on_fourth_page() {
+        let core = load_document("samples/exam_math.hwp")
+            .expect("samples/exam_math.hwp must load for the page-number regression test");
+
+        // 짝수(왼쪽)쪽의 바깥 모서리(가장 왼쪽)에 있는 큰 폰트(>=38px) 한 자리 숫자 = 소책자 쪽번호
+        fn corner_digit(node: &RenderNode, best: &mut Option<(f64, String)>) {
+            if let RenderNodeType::TextRun(run) = &node.node_type {
+                let t = run.text.trim();
+                if t.len() == 1
+                    && t.chars().all(|c| c.is_ascii_digit())
+                    && run.style.font_size >= 38.0
+                    && node.bbox.y < 300.0
+                {
+                    let x = node.bbox.x;
+                    if best.as_ref().map_or(true, |(bx, _)| x < *bx) {
+                        *best = Some((x, t.to_string()));
+                    }
+                }
+            }
+            for child in &node.children {
+                corner_digit(child, best);
+            }
+        }
+
+        // (0-based page_index, 기대 소책자 쪽번호)
+        // p10=확통2, p12=확통4, p14=미적2, p16=미적4, p18=기하2, p20=기하4
+        let expected = [
+            (9, "2"),
+            (11, "4"),
+            (13, "2"),
+            (15, "4"),
+            (17, "2"),
+            (19, "4"),
+        ];
+        let mut validated_pages = 0usize;
+        for (idx, want) in expected {
+            let tree = core.build_page_render_tree(idx).unwrap_or_else(|error| {
+                panic!("exam_math page index {idx} render failed: {error}")
+            });
+            let mut best = None;
+            corner_digit(&tree.root, &mut best);
+            let got = best.map(|(_, s)| s);
+            assert_eq!(
+                got.as_deref(),
+                Some(want),
+                "exam_math 페이지 인덱스 {} 모서리 소책자 쪽번호가 {:?}가 아님 (기대 {})",
+                idx,
+                got,
+                want
+            );
+            validated_pages += 1;
+        }
+        assert_eq!(validated_pages, expected.len());
+    }
+
     #[test]
     fn test_1098_hwpx_last_page_master_replaces_base_master() {
         let Some(core) = load_document("samples/hwpx/exam-kor-2p.hwpx") else {
@@ -909,6 +969,199 @@ mod tests {
             img_top,
             img_bottom,
             overlap_chars,
+        );
+    }
+
+    /// #3821: page-tail Square 그림의 wrap band는 첫 vpos-reset 문단에서 끊기면 안
+    /// 된다. 실물 HWP p156에서 그림 64(pi=1692, ci=1) 옆의 visible p1697 text는
+    /// 그림 왼쪽 narrow band 안에 끝나며, HWP outer-left margin(510HU)이 만든
+    /// 실제 PDF 공백(약 5.7px @96dpi)을 보존해야 한다.
+    #[test]
+    fn issue_3821_page_tail_square_picture_wrap_reaches_visible_text_after_guides() {
+        let Some(core) = load_document(
+            "samples/정책연구용역사업 중간진도보고서(살아있는 간장 기증자의 의학적 선별기준 연구).hwp",
+        ) else {
+            return;
+        };
+        // `build_page_render_tree`는 0-based page index를 받는다. 기준 PDF human p156.
+        let tree = core
+            .build_page_render_tree(155)
+            .expect("#3821 fixture human p156 render failed");
+
+        fn find_image<'a>(node: &'a RenderNode, result: &mut Option<&'a RenderNode>) {
+            if let RenderNodeType::Image(image) = &node.node_type {
+                if image.para_index == Some(1692) && image.control_index == Some(1) {
+                    *result = Some(node);
+                }
+            }
+            for child in &node.children {
+                find_image(child, result);
+            }
+        }
+
+        fn collect_visible_lines<'a>(node: &'a RenderNode, out: &mut Vec<&'a RenderNode>) {
+            if node.visible {
+                if let RenderNodeType::TextLine(line) = &node.node_type {
+                    let has_visible_text = node.children.iter().any(|child| {
+                        matches!(&child.node_type, RenderNodeType::TextRun(run) if !run.display_or_text().trim().is_empty())
+                    });
+                    if line.para_index == Some(1697) && has_visible_text {
+                        out.push(node);
+                    }
+                }
+            }
+            for child in &node.children {
+                collect_visible_lines(child, out);
+            }
+        }
+
+        let mut image_node = None;
+        find_image(&tree.root, &mut image_node);
+        let image = image_node.expect("#3821: p156 pi=1692 ci=1 image not found");
+        let image_top = image.bbox.y;
+        let image_bottom = image.bbox.y + image.bbox.height;
+        let image_left = image.bbox.x;
+
+        let mut visible_lines = Vec::new();
+        collect_visible_lines(&tree.root, &mut visible_lines);
+        let lines_in_image_band: Vec<_> = visible_lines
+            .into_iter()
+            .filter(|line| {
+                line.bbox.y < image_bottom - 0.5 && line.bbox.y + line.bbox.height > image_top + 0.5
+            })
+            .collect();
+        assert!(
+            !lines_in_image_band.is_empty(),
+            "#3821: p1697 visible lines in picture vertical band not found",
+        );
+
+        let line_right = lines_in_image_band
+            .iter()
+            .map(|line| line.bbox.x + line.bbox.width)
+            .fold(f64::NEG_INFINITY, f64::max);
+        let actual_gap = image_left - line_right;
+        assert!(
+            actual_gap >= 5.0,
+            "#3821: p1697 line band must retain PDF-like outer-left margin; image_left={image_left:.1}, line_right={line_right:.1}, gap={actual_gap:.1}",
+        );
+        assert!(
+            actual_gap <= 8.0,
+            "#3821: p1697 gap must come from the 510HU outer-left margin, not an arbitrary global shift: {actual_gap:.1}px",
+        );
+    }
+
+    /// #3820: stored-vpos rewind를 가진 native HWP5 RowBreak 표는 선언 높이가 아니라
+    /// 실제 paint 행 높이로 first fragment를 판단한다. 이 fixture에서 p94 표 28은 0–2행,
+    /// p95는 마지막 3행이며, p106 표 29는 0–2행 뒤 p107에서 재개해야 한다.
+    #[test]
+    fn issue_3820_rewinding_rowbreak_uses_painted_first_fragment_boundary() {
+        let Some(core) = load_document(
+            "samples/정책연구용역사업 중간진도보고서(살아있는 간장 기증자의 의학적 선별기준 연구).hwp",
+        ) else {
+            return;
+        };
+
+        fn rows_for_table(node: &RenderNode, para_index: usize, out: &mut Vec<u16>) {
+            if matches!(
+                &node.node_type,
+                RenderNodeType::Table(table) if table.para_index == Some(para_index)
+            ) {
+                for child in &node.children {
+                    if let RenderNodeType::TableCell(cell) = &child.node_type {
+                        if !out.contains(&cell.row) {
+                            out.push(cell.row);
+                        }
+                    }
+                }
+            }
+            for child in &node.children {
+                rows_for_table(child, para_index, out);
+            }
+        }
+
+        fn page_rows(
+            core: &crate::document_core::DocumentCore,
+            page: usize,
+            pi: usize,
+        ) -> Vec<u16> {
+            let tree = core
+                .build_page_render_tree(page as u32)
+                .unwrap_or_else(|err| panic!("#3820: p{} render failed: {err}", page + 1));
+            let mut rows = Vec::new();
+            rows_for_table(&tree.root, pi, &mut rows);
+            rows.sort_unstable();
+            rows
+        }
+
+        assert_eq!(page_rows(&core, 93, 1000), vec![0, 1, 2], "#3820 p94 표 28");
+        assert_eq!(page_rows(&core, 94, 1000), vec![3], "#3820 p95 표 28");
+        assert_eq!(
+            page_rows(&core, 105, 1136),
+            vec![0, 1, 2],
+            "#3820 p106 표 29"
+        );
+        assert_eq!(
+            page_rows(&core, 106, 1136),
+            vec![3, 4, 5, 6, 7],
+            "#3820 p107 표 29",
+        );
+    }
+
+    /// native HWP의 빈-host 2행 그림+caption RowBreak 표 뒤에 빈 guide 문단들이
+    /// 저장된 경우에도, 다음 실본문은 caption의 실제 paint 하단 뒤에서 시작해야 한다.
+    ///
+    /// 이 fixture의 p182(pi=1904)는 양수 vertical offset을 갖는다. 종전에는 empty
+    /// float의 예약 높이만 소비해 caption 행보다 약 12px 위에서 pi=1911이 시작했다.
+    #[test]
+    fn issue_3738_picture_caption_float_clears_caption_before_next_body_text() {
+        let Some(core) = load_document(
+            "samples/정책연구용역사업 중간진도보고서(살아있는 간장 기증자의 의학적 선별기준 연구).hwp",
+        ) else {
+            return;
+        };
+        let tree = core
+            .build_page_render_tree(181)
+            .unwrap_or_else(|err| panic!("#3738 p182 render failed: {err}"));
+
+        fn collect_bounds(
+            node: &RenderNode,
+            table_bottom: &mut Option<f64>,
+            next_body_top: &mut Option<f64>,
+        ) {
+            match &node.node_type {
+                RenderNodeType::Table(table) if table.para_index == Some(1904) => {
+                    *table_bottom = Some(node.bbox.y + node.bbox.height);
+                }
+                RenderNodeType::TextLine(line) if line.para_index == Some(1911) => {
+                    let has_visible_text = node.children.iter().any(|child| {
+                        matches!(
+                            &child.node_type,
+                            RenderNodeType::TextRun(run) if !run.display_or_text().trim().is_empty()
+                        )
+                    });
+                    if has_visible_text {
+                        *next_body_top = Some(
+                            next_body_top
+                                .map(|top| top.min(node.bbox.y))
+                                .unwrap_or(node.bbox.y),
+                        );
+                    }
+                }
+                _ => {}
+            }
+            for child in &node.children {
+                collect_bounds(child, table_bottom, next_body_top);
+            }
+        }
+
+        let mut table_bottom = None;
+        let mut next_body_top = None;
+        collect_bounds(&tree.root, &mut table_bottom, &mut next_body_top);
+        let table_bottom = table_bottom.expect("#3738 p182 picture+caption table not found");
+        let next_body_top = next_body_top.expect("#3738 p182 next body text not found");
+        assert!(
+            next_body_top >= table_bottom + 0.5,
+            "#3738 p182 next body text overlaps picture caption: table_bottom={table_bottom:.1}, next_body_top={next_body_top:.1}",
         );
     }
 
@@ -2472,6 +2725,382 @@ mod tests {
             (y - 161.3).abs() < 2.0,
             "next paragraph baseline {} px — expected ~161.3 (file lineSegArray              vertical_pos=4160); ~153.3 means the TAC host line_spacing was dropped",
             y
+        );
+    }
+
+    /// exam_eng.hwp 꼬리말 쪽번호 상자 "현재쪽/총쪽수" 회귀 테스트.
+    ///
+    /// HWP atno 컨트롤(표 144)의 "번호 종류" 값 6은 총 쪽수(TotalPage) 필드다.
+    /// 과거엔 파서가 이 값을 인식하지 못해 Page로 폴백했고, 렌더러도 Page 치환만
+    /// 수행해서 꼬리말 쪽번호 상자가 "현재쪽\n현재쪽" 을 표시했다
+    /// (예: 3페이지에서 "3\n3", 6페이지에서 "6\n6" — "3\n8", "6\n8" 이어야 함).
+    ///
+    /// samples/exam_eng.hwp는 총 8페이지이며 각 페이지 텍스트 말미에
+    /// "제 3 교시\n홀수형\n<현재쪽>\n<총쪽수>" 형태의 꼬리말이 들어간다.
+    #[test]
+    fn test_footer_total_page_field_distinct_from_current_page() {
+        let Some(core) = load_document("samples/exam_eng.hwp") else {
+            return;
+        };
+
+        let page_count = core.page_count();
+        assert_eq!(page_count, 8, "exam_eng.hwp는 8페이지여야 함");
+
+        for page_idx in 0..page_count {
+            let text = core
+                .extract_page_text_native(page_idx)
+                .unwrap_or_else(|e| panic!("페이지 {} 텍스트 추출 실패: {:?}", page_idx, e));
+            let trimmed = text.trim_end();
+            let last_two: Vec<&str> = trimmed
+                .rsplit('\n')
+                .take(2)
+                .collect::<Vec<_>>()
+                .into_iter()
+                .rev()
+                .collect();
+            assert_eq!(
+                last_two.len(),
+                2,
+                "페이지 {} 꼬리말 끝에서 두 줄(현재쪽/총쪽수)을 찾지 못함: {:?}",
+                page_idx,
+                trimmed
+            );
+            let current = last_two[0];
+            let total = last_two[1];
+            assert_eq!(
+                current,
+                (page_idx + 1).to_string(),
+                "페이지 {} 꼬리말 현재쪽번호가 {}이어야 함 (실제: {:?})",
+                page_idx,
+                page_idx + 1,
+                current
+            );
+            assert_eq!(
+                total, "8",
+                "페이지 {} 꼬리말 총쪽수가 8이어야 함 (실제: {:?}) — \
+                 AutoNumberType::TotalPage 미치환 시 current와 동일한 값이 찍힌다",
+                page_idx, total
+            );
+        }
+    }
+
+    // === Issue #4334 분해 1단계: 히트테스트 tie-break 회귀 pin (서수화 전 안전망) ===
+    //
+    // 한컴 권위 샘플 `samples/textbox-under-image.hwp` — 글상자(InFrontOfText,
+    // plane 3) 가 이미지(Square, plane 2) 앞에 있다(task1280_v2 로 이미 검증된
+    // 사실, `task1280_v2_control_layout_exposes_plane_z_order_stable_index` 참고).
+    // 겹침 클릭 시 "위에 보이는 개체(글상자) 선택" 이 한컴 편집기 육안 대조로 확정된
+    // 기대값이다(`mydocs/report/task_m100_1280_v2_report.md`). 이 테스트는
+    // `get_page_control_layout_native` 가 노출하는 `(plane, zOrder, stableIndex)` 를
+    // TS `controlTopKey`(input-handler-picture.ts:104-105) 와 동일하게 사전식
+    // 최댓값으로 비교해 실제로 글상자가 이기는지 Rust 쪽에서 고정한다.
+    //
+    // 이 케이스는 plane 차이(3 > 2)로 이미 결정되어 stableIndex 자체는 tie-break에
+    // 관여하지 않는다 — 여러 실제 fixture(issue1921/59043, task2093/1192000,
+    // aift.hwp, 21_언어_기출_편집가능본.hwp 등, 수십~수백 페이지)를 뒤졌지만 stableIndex
+    // 로만 갈리는 **공간적으로 실제 겹치는** 실제 문서 사례를 찾지 못했다 — layer=None
+    // 폴백을 쓰는 인라인 컨트롤끼리는 흐름(flow) 특성상 서로 겹치지 않고, topAndBottom
+    // 류 float 도 서로 겹치지 않게 배치되는 경향이 있다. 그래서 stableIndex 갈래(양쪽
+    // 공식 각각의 현재 값)는 `layout/tests.rs`의
+    // `issue_4334_paper_node_sort_key_no_longer_depends_on_node_id`(신규)와
+    // `task1197_paper_nodes_sort_by_plane_z_order_and_stable_index`(기존)가 Rust
+    // 내부 정렬 단위에서 고정한다.
+    //
+    // [#4334 갱신] `stableIndex` 는 이제 스칼라가 아니라 문서 경로 배열이다
+    // (`[secIdx, paraIdx, ...cell 경로, controlIdx]`) — 이 fixture 는 셀 중첩이 없어
+    // `[secIdx, paraIdx, controlIdx]` 3원소. 값 자체가 `next_id()` 카운터가 아니라
+    // `secIdx/paraIdx/controlIdx` 를 그대로 반영하므로, 아래 JSON 의 `controlIdx`
+    // 필드와 정확히 일치해야 한다(우연이 아니라 `doc_path_for_node` 의 정의).
+    #[test]
+    fn issue_4334_stage1_textbox_under_image_top_object_pin() {
+        fn parse_controls(json: &str) -> Vec<(String, i64, i64, Vec<i64>)> {
+            fn extract_i64(slice: &str, key: &str) -> i64 {
+                let needle = format!("\"{}\":", key);
+                let start = slice
+                    .find(&needle)
+                    .unwrap_or_else(|| panic!("{key} 필드 없음: {slice}"))
+                    + needle.len();
+                let tail = &slice[start..];
+                let end = tail
+                    .find(|c: char| c == ',' || c == '}')
+                    .unwrap_or(tail.len());
+                tail[..end]
+                    .trim()
+                    .parse()
+                    .unwrap_or_else(|_| panic!("{key} 파싱 실패: {slice}"))
+            }
+            fn extract_i64_array(slice: &str, key: &str) -> Vec<i64> {
+                let needle = format!("\"{}\":[", key);
+                let start = slice
+                    .find(&needle)
+                    .unwrap_or_else(|| panic!("{key} 배열 필드 없음: {slice}"))
+                    + needle.len();
+                let tail = &slice[start..];
+                let end = tail
+                    .find(']')
+                    .unwrap_or_else(|| panic!("{key} 배열 종료 없음: {slice}"));
+                let body = tail[..end].trim();
+                if body.is_empty() {
+                    return Vec::new();
+                }
+                body.split(',')
+                    .map(|s| {
+                        s.trim()
+                            .parse()
+                            .unwrap_or_else(|_| panic!("{key} 원소 파싱 실패: {slice}"))
+                    })
+                    .collect()
+            }
+            let marker = "\"type\":\"";
+            let positions: Vec<usize> = json.match_indices(marker).map(|(i, _)| i).collect();
+            positions
+                .iter()
+                .enumerate()
+                .map(|(n, &start)| {
+                    let end = positions.get(n + 1).copied().unwrap_or(json.len());
+                    let slice = &json[start..end];
+                    let type_start = start + marker.len();
+                    let type_end = json[type_start..].find('"').unwrap() + type_start;
+                    let type_name = json[type_start..type_end].to_string();
+                    (
+                        type_name,
+                        extract_i64(slice, "plane"),
+                        extract_i64(slice, "zOrder"),
+                        extract_i64_array(slice, "stableIndex"),
+                    )
+                })
+                .collect()
+        }
+
+        let data = std::fs::read("samples/textbox-under-image.hwp");
+        let Ok(data) = data else {
+            eprintln!("테스트 파일 없음: samples/textbox-under-image.hwp — 건너뜀");
+            return;
+        };
+        let mut core = crate::document_core::DocumentCore::from_bytes(&data).expect("load");
+        core.paginate();
+        let json = core
+            .get_page_control_layout_native(0)
+            .expect("control layout for page 0");
+
+        let controls = parse_controls(&json);
+        assert_eq!(controls.len(), 2, "글상자+이미지 2개 컨트롤 기대: {json}");
+
+        // TS `controlTopKey`/`isAboveControl` 재현: (plane, zOrder, stableIndex) 사전식
+        // 최댓값이 최상단. `Vec<i64>` 의 `Ord` 는 원소별 비교 후 길이로, TS 쪽 새
+        // `compareLexArrays` 와 동일 의미.
+        let winner = controls
+            .iter()
+            .max_by_key(|(_, plane, z, stable)| (*plane, *z, stable.clone()))
+            .expect("빈 목록 아님");
+
+        assert_eq!(
+            winner.0, "shape",
+            "겹침 클릭 시 글상자(위)가 이미지(아래)를 이겨야 한다(한컴 권위 샘플 실측). \
+             controls={controls:?}"
+        );
+        // 원본 값도 그대로 pin — 바뀌면 이 테스트가 즉시 알려준다.
+        let shape = controls.iter().find(|c| c.0 == "shape").unwrap();
+        let image = controls.iter().find(|c| c.0 == "image").unwrap();
+        assert_eq!(
+            (shape.1, shape.2),
+            (3, 0),
+            "shape plane/zOrder: {controls:?}"
+        );
+        assert_eq!(
+            (image.1, image.2),
+            (2, 1),
+            "image plane/zOrder: {controls:?}"
+        );
+        // [#4334] stableIndex = [secIdx, paraIdx, controlIdx] — 글상자 controlIdx=2,
+        // 이미지 controlIdx=3(둘 다 secIdx=0, paraIdx=0, 셀 중첩 없음). doc_path_for_node
+        // 정의를 그대로 반영하는 값이라 controlIdx 가 바뀌면 이 값도 같이 바뀐다.
+        assert_eq!(shape.3, vec![0, 0, 2], "shape stableIndex: {controls:?}");
+        assert_eq!(image.3, vec![0, 0, 3], "image stableIndex: {controls:?}");
+    }
+
+    // === Issue #4334 "문서 경로 배열" 구현 후 잔여 확인 — collect_controls/
+    // sort_paper_render_nodes 두 집합에서 문서 위치를 못 만드는 노드가 남아있는지 실측 ===
+    //
+    // 1단계 실측(42/1680, 폐기된 pin)에서 원인 셋을 찾아 고쳤다 — 전부 "host 는 있지만
+    // 안 이어져 있던" 플러밍 결손:
+    //   - TAC(text-as-char) 중첩 표 — `table_cell_content.rs`(`layout_embedded_table`)가
+    //     `enclosing_ctx`(호스트 경로) 를 갖고 있으면서도 `TableNode.section_index/
+    //     para_index/control_index/cell_context` 를 전부 `None` 으로 버렸다. 이제
+    //     `enclosing_ctx` 를 그대로 옮겨 담는다.
+    //   - 바탕쪽(master page) `Control::Picture` — `layout.rs`의 `build_master_page` 가
+    //     `Control::Table`/`Shape` 분기는 이미 바탕쪽 로컬 `(pi, ci)` 를 넘기면서
+    //     `Control::Picture` 분기만 `None, None` 을 넘겼다. 이제 `Some(pi), Some(ci)`.
+    //   - 재귀 중첩 표(recursive nested table) 3곳(`table_layout.rs` 2곳,
+    //     `table_partial.rs` 1곳) — `enclosing_cell_ctx`(`nested_ctx`) 는 넘기면서
+    //     `table_meta` 는 `None` 이라 para/control 이 항상 비었다. 이제 `nested_ctx`
+    //     경로의 마지막 두 항목에서 유도한다(기존에 이미 있던
+    //     `layout_partial_table_item` 패턴과 동일).
+    //
+    // 실측: Table/Equation/Image 1,680개 중 **42 → 24개**로 줄었다. 남은 24개는 전부
+    // Image 이고 **하나의 원인**으로 수렴한다 — `render_cell_background`
+    // (`table_layout.rs:3773`, 표 셀 배경 무늬/이미지 채우기) 가 `fill_color`/
+    // `gradient`/`pattern` 배경과 같은 자리에서 만드는 **이미지 채우기 장식**은
+    // `ImageNode::new(..)` 기본값(`section_index`/`para_index`/`control_index`
+    // 전부 `None`)을 그대로 쓴다. 이 함수는 애초에 section/para/control/cell_context
+    // 를 매개변수로 받지 않는다 — 셀 지오메트리(`cell_x/y/w/h`)와 테두리 스타일만
+    // 받는 순수 장식 렌더러. 이 이미지 장식은 **독립된 문서 Control 이 아니다** — 자기가
+    // 채우는 셀의 border-fill 스타일에서 파생된 값이라 "이 이미지의 문서 위치"라는
+    // 질문 자체가 그 셀과 별개로는 의미가 없다(#4334 코디네이터 질문 1번 — host 조차
+    // 없는 카테고리, 스칼라든 배열이든 자기 자신의 문서 위치는 없다). `render_cell_background`
+    // 에 문서 경로 매개변수를 추가로 뚫는 건(호출부 전부 갱신) 이번 1단계 범위 밖이라
+    // 하지 않았다 — `doc_path_for_node` 는 이 경우 빈 경로로 결정적으로 폴백한다
+    // (`paper_node_sort_key` 참고, node.id 는 안 읽는다).
+    //
+    // `sort_paper_render_nodes` 가 정렬하는 집합(`paper_images`, 정렬 후
+    // `tree.root.children` 에 그대로 붙는다) 은 이번 라운드에서 손대지 않은 축이라
+    // 여전히 `layer=None` 비중이 크다(56%, PageBg/Header/Footer/Body/MasterPage/
+    // FootnoteArea 제외) — `layer` 유무와 `doc_path_for_node` 성공 여부는 서로 다른
+    // 축이라(레이어 없어도 para/control 은 있을 수 있음) 이 값 자체는 "문서 위치를
+    // 못 구한다"는 뜻이 아니다. 참고용으로 계속 측정한다.
+    //
+    // 셀 중첩(코디네이터 질문 4번, 유지): Equation/Image 1,680개 중 391개(23%)가
+    // `cell_index`/`cell_context` 를 갖는다 — 드문 예외가 아니다. `doc_path_for_node`
+    // 는 Table/Image 는 전체 `cell_context`(다단계 경로)를, Rectangle/Line/Ellipse/
+    // Path/Equation 은 단일 레벨(`cell_index`/`cell_para_index`/
+    // `outer_table_control_index`, Task #1138/#1151 패턴)을 반영한다.
+    #[test]
+    fn issue_4334_stage3_document_position_coverage_precheck() {
+        let candidates = [
+            "samples/textbox-under-image.hwp",
+            "samples/aift.hwp",
+            "samples/21_언어_기출_편집가능본.hwp",
+            "samples/exam_science.hwp",
+            "samples/exam_kor.hwp",
+            "samples/exam_math.hwp",
+            "samples/hwpspec.hwp",
+            "samples/issue2006/1790387_prep_final_report.hwpx",
+            "samples/issue1921/59043_regulatory_analysis.hwp",
+            "samples/task2093/1192000_hydrogen_policy_research.hwp",
+        ];
+        const MAX_PAGES_PER_DOC: u32 = 40;
+
+        // `sort_paper_render_nodes`가 실제로 정렬하는 집합의 근사 —
+        // `push_layered_paper_children`/`paper_images.append` 로 채워진 뒤 정렬되어
+        // `tree.root.children`에 그대로 남는다(`layout.rs:2730-2738`). 고정 구조
+        // 자식(PageBg/Header/Footer/Body/MasterPage/FootnoteArea)은 제외한다.
+        fn is_paper_candidate(n: &RenderNode) -> bool {
+            !matches!(
+                n.node_type,
+                RenderNodeType::PageBackground(_)
+                    | RenderNodeType::Header
+                    | RenderNodeType::Footer
+                    | RenderNodeType::Body { .. }
+                    | RenderNodeType::MasterPage
+                    | RenderNodeType::FootnoteArea
+            )
+        }
+
+        // `collect_controls`(rendering.rs)가 TS로 내보내는 집합 중, 좌표 유무와 무관하게
+        // 무조건 push되는 세 타입(Table/Equation/Image)만 추적한다 — Rectangle/Line/
+        // Ellipse/Path/Group은 좌표가 없으면 애초에 push되지 않아 이 정합 문제와 무관.
+        fn walk_controls(
+            node: &RenderNode,
+            missing_doc_pos: &mut usize,
+            with_cell: &mut usize,
+            total: &mut usize,
+        ) {
+            match &node.node_type {
+                RenderNodeType::Table(t) => {
+                    *total += 1;
+                    if t.para_index.is_none() || t.control_index.is_none() {
+                        *missing_doc_pos += 1;
+                    }
+                }
+                RenderNodeType::Equation(e) => {
+                    *total += 1;
+                    if e.para_index.is_none() || e.control_index.is_none() {
+                        *missing_doc_pos += 1;
+                    }
+                    if e.cell_index.is_some() {
+                        *with_cell += 1;
+                    }
+                }
+                RenderNodeType::Image(i) => {
+                    *total += 1;
+                    if i.para_index.is_none() || i.control_index.is_none() {
+                        *missing_doc_pos += 1;
+                    }
+                    if i.cell_context.is_some() {
+                        *with_cell += 1;
+                    }
+                }
+                _ => {}
+            }
+            for child in &node.children {
+                walk_controls(child, missing_doc_pos, with_cell, total);
+            }
+        }
+
+        let mut paper_layer_none = 0usize;
+        let mut paper_layer_some = 0usize;
+        let mut controls_missing_doc_pos = 0usize;
+        let mut controls_with_cell_context = 0usize;
+        let mut controls_total = 0usize;
+        let mut total_pages = 0usize;
+
+        for path in candidates {
+            let Some(core) = load_document(path) else {
+                continue;
+            };
+            let page_count = core.page_count().min(MAX_PAGES_PER_DOC);
+            for page_idx in 0..page_count {
+                let Ok(tree) = core.build_page_render_tree(page_idx) else {
+                    continue;
+                };
+                total_pages += 1;
+                for child in &tree.root.children {
+                    if is_paper_candidate(child) {
+                        if child.layer.is_some() {
+                            paper_layer_some += 1;
+                        } else {
+                            paper_layer_none += 1;
+                        }
+                    }
+                }
+                walk_controls(
+                    &tree.root,
+                    &mut controls_missing_doc_pos,
+                    &mut controls_with_cell_context,
+                    &mut controls_total,
+                );
+            }
+        }
+
+        if total_pages == 0 {
+            eprintln!("issue_4334_stage3: 대상 fixture 없음(로컬 서브셋 checkout) — 건너뜀");
+            return;
+        }
+
+        eprintln!(
+            "issue_4334_stage3: pages={total_pages} paper(layer=Some/None)={paper_layer_some}/{paper_layer_none} \
+             controls(total/missing_doc_pos/with_cell)={controls_total}/{controls_missing_doc_pos}/{controls_with_cell_context}"
+        );
+
+        // 관찰된 사실을 그대로 pin. `controls_missing_doc_pos` 는 이제 정확히 24 로
+        // 고정한다 — 원인이 `render_cell_background`(셀 배경/무늬 이미지 채우기) 하나로
+        // 수렴했음을 확인했기 때문이다(위 doc 코멘트). 숫자만 고쳐 통과시키지 말 것:
+        // 늘어나면 새 회귀(#4334 fix 가 깨짐)고, 줄어들면(특히 0) `render_cell_background`
+        // 에 문서 경로를 추가로 뚫었다는 뜻이니 왜 그게 안전한지 새로 근거를 대야 한다.
+        assert_eq!(
+            controls_missing_doc_pos, 24,
+            "문서 위치를 못 매기는 control 개수가 실측(24, render_cell_background 장식 \
+             이미지)과 다르다 — #4334 fix 회귀이거나 새 카테고리 발생. 원인을 문서화할 것"
+        );
+        assert!(
+            paper_layer_none > 0,
+            "sort_paper_render_nodes 대상 중 layer=None 이 사라졌다 — 이번 라운드가 손대지 \
+             않은 축인데 값이 바뀌면 다른 변경의 부작용일 수 있음, 재검토할 것"
+        );
+        assert!(
+            controls_with_cell_context > 0,
+            "셀 중첩 control 이 실측에서 사라졌다 — cell_path 축이 더 이상 필요 없어졌을 \
+             수 있음, 재검토할 것"
         );
     }
 }
