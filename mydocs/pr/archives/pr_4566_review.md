@@ -26,7 +26,8 @@ Body→Column 직계 흐름 표의 y 구간을 모아 2px 초과 겹침을 `LAYO
 
 ## 누적 통합과 검증
 
-- 최신 #4520 `b0f82f0`의 HWP5 중첩표 높이 캡을 먼저 포함한 local integration head에 충돌 없이
+- 최신 #4520 `d6c5ac1`의 HWP5 중첩표 높이 캡과 호스트-마지막 문단 예약 간격 판별을 포함한 로컬
+  통합 head에 충돌 없이
   적용했다.
 - `cargo fmt --check`를 통과했다.
 - `cargo test --profile release-test --target-dir target/pr-review --test
@@ -34,6 +35,8 @@ Body→Column 직계 흐름 표의 y 구간을 모아 2px 초과 겹침을 `LAYO
   47쪽 `sample1-repro.hwp`의 6개 실제 결함 쪽에서 8개 overlap을 기록했고, 진단 결과는
   render tree JSON에서 독립 재계산한 표 쌍과 페이지·문단 쌍 단위로 일치했다.
 - 원 PR head의 GitHub CI(Full Rust, Canvas visual diff, Native Skia, CodeQL 포함)는 모두 통과했다.
+- 최신 누적 head에서도 `cargo nextest run --cargo-profile release-test --target-dir target/pr-review
+  --tests --test-threads 12 --no-fail-fast`가 **5,707 passed, 정책 skip 35**로 완료됐다.
 
 ## 판정
 
@@ -41,4 +44,4 @@ Body→Column 직계 흐름 표의 y 구간을 모아 2px 초과 겹침을 `LAYO
 실제 render tree와 자기일관적으로 일치한다. 이 PR은 **진단 추가**이며, 별도 HWP 2020 PDF raster
 fidelity를 개선하거나 보증하는 변경이 아니다.
 
-**최종 권고: 최신 통합 head의 CI와 작업지시자 승인 후 수용.**
+**최종 권고: 최신 통합 head의 로컬 CI는 통과했다. 작업지시자 승인 후 수용한다.**
