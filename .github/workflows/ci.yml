@@ -833,6 +833,9 @@ jobs:
           python3 -m unittest scripts/tests/test_setup_action.py
           python3 -m unittest scripts/tests/test_workflow_contract_wiring.py
 
+      - name: Validate gym scorer contracts
+        run: python3 -m unittest scripts/tests/test_gym_score.py
+
       - name: Clippy
         run: cargo clippy -- -D warnings
 

@@ -143,9 +143,15 @@ def eval_check(check, task, sub_dir, answer, bin_path):
             return detail
         args = resolve_args(check["cmd"], task, sub_dir)
         code, env, head = run_cli(bin_path, args)
-        expect_exit = check.get("expect_exit", 0)
-        if code != expect_exit:
-            detail["error"] = f"exit {code} (기대 {expect_exit}): {head}"
+        expect_exits = check.get("expect_exits")
+        if expect_exits is None:
+            expect_exits = [check.get("expect_exit", 0)]
+        if (not isinstance(expect_exits, list) or not expect_exits
+                or any(type(value) is not int for value in expect_exits)):
+            detail["error"] = f"잘못된 expect_exits: {expect_exits!r}"
+            return detail
+        if code not in expect_exits:
+            detail["error"] = f"exit {code} (허용 {expect_exits}): {head}"
             return detail
         if env is None:
             detail["error"] = f"봉투 파싱 실패: {head}"

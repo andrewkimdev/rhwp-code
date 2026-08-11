@@ -15,8 +15,12 @@
 | T09 원자 계획 실행 | 3 | 통과 | O 1단계 반영 · O 2단계 반영 |
 | T10 결정론 실증 | 3 | 통과 | O 바이트 동일 |
 | T11 보안 스윕 | 2 | 통과 | O 신호 수 일치 |
-| T12 변환 자기검증 | 2 | 통과 | O 변환물 IR 대조 |
+| T12 변환 자기검증 | 2 | 통과 | O HWPX 형식 확인 · O 변환물 IR 대조 |
 | T13 하네스 루프 | 3 | 통과 | O 체인·서명·재현 통합 판정 · O 체인 길이 2 |
 | T14 관문 통과 | 3 | 통과 | O 관문 verdict:allow (재현·계보·서명·앵커 전축) |
 
 채점기: score.py (라이브 오라클) · 바이너리: rhwp.exe
+
+T12는 #4586에서 실제 HWPX로 focused 재실행했다. 전체 1호 선수의 gitignore 산출물을 다시 만들었다고
+가장하지 않고, T12의 입력·산출 해시와 rhwp version/commit/capabilities digest는
+[`T12/verification.json`](T12/verification.json)에 별도로 고정했다.

@@ -35,7 +35,8 @@ for stream in (sys.stdout, sys.stderr):
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 OUT_DIR = os.path.join(ROOT, "mydocs", "manual", "agent_codex")
-TMP = os.path.join(ROOT, "target", "codex-tmp")
+TMP_REL = "target/codex-tmp"
+TMP = os.path.join(ROOT, TMP_REL.replace("/", os.sep))
 
 
 def find_bin():
@@ -63,7 +64,8 @@ ODD = "samples/143E433F503322BD33.hwp"
 PLAN_A = {
     "planVersion": "1.0",
     "input": DOC,
-    "output": "{tmp}/plan_out.hwp",
+    # replay의 plan hash가 checkout 절대경로에 의존하지 않게 저장소 상대경로를 쓴다.
+    "output": f"{TMP_REL}/plan_out.hwp",
     "steps": [{"action": "replace_text", "find": "규제", "replace": "코덱스검증"}],
 }
 
@@ -88,7 +90,7 @@ LIVE = {
     "edit redact": (["edit", "redact", FORM, "--dry-run", "--json"], "개인정보 탐지 (dry-run = 읽기 전용 탐지)"),
     "run": (["run", "{plan_a}", "--json"], "계획서 원자 실행 — 선검증 후 단 한 번 저장"),
     "replay": (["replay", "--plan-json", "{plan_a_inline}", "--json"], "작업 영수증 발급(attest) — 3해시"),
-    "convert": (["convert", FORM, "{tmp}/conv.hwpx", "--verify", "--json"], "형식 변환 + 재파싱 자기검증"),
+    "convert": (["convert", FORM, "{tmp}/conv.hwp", "--verify", "--json"], "HWP5 변환 + 재파싱 자기검증"),
     "export-svg": (["export-svg", FORM, "-o", "{tmp}/svg"], "쪽별 SVG 렌더 (매니페스트 봉투)"),
     "export-provenance-map": (["export-provenance-map", "--json"], "어느 필드가 문서에서 오는가의 지도"),
     "export-plan-schema": (["export-plan-schema", "--json"], "run 계획서 JSON Schema"),
@@ -155,7 +157,7 @@ def redact(text):
     ROOT 하위라 **긴 접두사(TMP)를 먼저** 지운다 — 순서가 뒤집히면
     TMP 경로가 <repo>/… 로 바뀌어 <tmp> 표지를 영영 못 얻는다.
     """
-    for base, mark in ((TMP, "<tmp>"), (ROOT, "<repo>")):
+    for base, mark in ((TMP, "<tmp>"), (TMP_REL, "<tmp>"), (ROOT, "<repo>")):
         text = text.replace(base.replace("\\", "/"), mark).replace(base, mark)
     return text
 
