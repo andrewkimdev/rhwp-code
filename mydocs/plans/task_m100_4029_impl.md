@@ -10,10 +10,11 @@
 ### `.github/workflows/ci.yml`
 
 1. `workflow_dispatch.inputs.release_grade` boolean을 기본값 `false`로 추가한다.
-2. `preflight`에 `test_archive_profile`, `test_archive_timeout_minutes` output을 추가한다.
-3. `Select test archive policy` step이 event/ref/input 진리표를 한 번만 계산한다.
-4. 세 archive builder 호출은 preflight output을 동일하게 전달한다.
-5. 새 workflow 계약 테스트를 Lint job의 기존 계약 테스트 묶음에 배선한다.
+2. `preflight`에 `test_profile`, `test_archive_timeout_minutes` output을 추가한다.
+3. `Select test profile policy` step이 event/ref/input 진리표를 한 번만 계산한다.
+4. 세 archive builder와 Native Skia test는 같은 `test_profile`을 소비한다.
+5. archive timeout은 세 builder에만 전달하고 Native Skia의 기존 30분 상한은 유지한다.
+6. 새 workflow 계약 테스트를 Lint job의 기존 계약 테스트 묶음에 배선한다.
 
 ### `.github/workflows/build-nextest-archives.yml`
 
@@ -31,6 +32,7 @@
 - 수동 입력의 type/default
 - event/ref/input별 profile/timeout 진리표
 - 세 builder가 동일한 preflight output을 전달하는 배선
+- Native Skia test가 같은 profile output을 소비하는 배선
 - reusable workflow 입력과 동적 timeout
 - 허용 조합 검증 및 중복 selector 부재
 - cache exact-hit·운영 summary
@@ -67,9 +69,9 @@ canary는 focused 결과를 공유한 뒤 원격 단계에서 수행한다.
 
 | 실행 | 기대 profile/timeout | 판정 |
 | --- | --- | --- |
-| PR | `release-test/30` | 기존 CI와 check identity 유지 |
-| 같은 SHA 일반 dispatch | `release-test/30` | cold여도 세 archive와 네 worker 완주 |
-| 같은 SHA `release_grade=true` | `release/60` | cold release builder 완주 시간·여유 측정 |
+| PR | `release-test/30` | archive·Native Skia profile과 기존 check identity 유지 |
+| 같은 SHA 일반 dispatch | `release-test/30` | cold여도 세 archive·네 worker·Native Skia 완주 |
+| 같은 SHA `release_grade=true` | `release/60` | cold release builder와 Native Skia 완주 시간·여유 측정 |
 
 세 실행에서 `Build & Test` 결과, builder별 duration, cache exact-hit, archive upload, worker 실행 수를
 기록한다. 60분 안에도 완주하지 못하면 단순 상향을 반복하지 않고 target scope·LTO 분리를 다시 설계한다.

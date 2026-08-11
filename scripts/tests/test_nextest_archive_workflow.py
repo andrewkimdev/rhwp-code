@@ -31,7 +31,9 @@ def step_body(workflow: str, step_name: str) -> str:
     if marker not in workflow:
         raise AssertionError(f"workflow에 {step_name} step이 없다")
     body = workflow.split(marker, maxsplit=1)[1]
-    boundary = re.search(r"(?m)^(?:      - name:|  [A-Za-z0-9_-]+:)\s*", body)
+    boundary = re.search(
+        r"(?m)^(?:      - (?:name:|uses:)|  [A-Za-z0-9_-]+:)\s*", body
+    )
     return body[: boundary.start()] if boundary else body
 
 
@@ -62,7 +64,7 @@ class NextestArchiveWorkflowTests(unittest.TestCase):
         self.assertIn("        default: false", trigger)
 
     def test_policy_router_covers_fast_release_and_fail_closed_paths(self) -> None:
-        step = step_body(self.ci, "Select test archive policy")
+        step = step_body(self.ci, "Select test profile policy")
         script = step.split("        run: |\n", maxsplit=1)[1]
         script = "\n".join(line.removeprefix("          ") for line in script.splitlines())
 
@@ -105,13 +107,13 @@ class NextestArchiveWorkflowTests(unittest.TestCase):
     def test_preflight_exposes_fail_closed_archive_policy_outputs(self) -> None:
         preflight = job_body(self.ci, "preflight")
         self.assertIn(
-            "test_archive_profile: ${{ steps.archive-policy.outputs.cargo_profile "
+            "test_profile: ${{ steps.test-policy.outputs.cargo_profile "
             "|| 'release' }}",
             preflight,
         )
         self.assertIn(
             "test_archive_timeout_minutes: ${{ "
-            "steps.archive-policy.outputs.timeout_minutes || '60' }}",
+            "steps.test-policy.outputs.timeout_minutes || '60' }}",
             preflight,
         )
 
@@ -124,7 +126,7 @@ class NextestArchiveWorkflowTests(unittest.TestCase):
             with self.subTest(job=name):
                 job = job_body(self.ci, name)
                 self.assertIn(
-                    "cargo_profile: ${{ needs.preflight.outputs.test_archive_profile "
+                    "cargo_profile: ${{ needs.preflight.outputs.test_profile "
                     "|| 'release' }}",
                     job,
                 )
@@ -133,6 +135,19 @@ class NextestArchiveWorkflowTests(unittest.TestCase):
                     "needs.preflight.outputs.test_archive_timeout_minutes || '60') }}",
                     job,
                 )
+
+    def test_native_skia_uses_the_same_test_profile_policy(self) -> None:
+        native = job_body(self.ci, "native-skia-tests")
+        self.assertIn(
+            "TEST_PROFILE: ${{ needs.preflight.outputs.test_profile || 'release' }}",
+            native,
+        )
+        step = step_body(self.ci, "Native Skia tests")
+        self.assertIn('case "${TEST_PROFILE}" in', step)
+        self.assertIn("release-test)", step)
+        self.assertIn("release)", step)
+        self.assertIn("Unknown test profile", step)
+        self.assertNotIn('"${GITHUB_EVENT_NAME}" == "pull_request"', step)
 
     def test_reusable_builder_accepts_explicit_policy_and_uses_dynamic_timeout(self) -> None:
         self.assertIn("      cargo_profile:\n", self.builder)
