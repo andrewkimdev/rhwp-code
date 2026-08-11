@@ -39,6 +39,11 @@ pub enum PatchError {
     LabelNotEditable { series: usize },
     /// 같은 점을 두 번 지목했다.
     DuplicateTarget { series: usize, point: usize },
+    /// 빈 요소 `<c:v/>` — 결측치라 텍스트 구간이 없다.
+    ///
+    /// 읽기는 되고 이 점의 쓰기만 막힌다. 값을 넣으려면 요소 자체를 다시 써야 하는데
+    /// 그건 최소 diff 가 아니라 구조 변경이라 B2 다.
+    ValueNotPatchable { series: usize, point: usize },
     /// XML 을 깨뜨리는 문자(`<`, `>`, `&`, 제어문자)가 들어 있다.
     ///
     /// 이스케이프해서 넣지 않고 거부한다. 최소 diff 의 전제는 "쓴 텍스트가 곧
@@ -65,6 +70,10 @@ impl std::fmt::Display for PatchError {
             Self::DuplicateTarget { series, point } => {
                 write!(f, "계열 {series} 점 {point} 을 두 번 지목했다")
             }
+            Self::ValueNotPatchable { series, point } => write!(
+                f,
+                "계열 {series} 점 {point} 은 빈 값(<c:v/>)이라 제자리 치환 대상이 아니다"
+            ),
             Self::UnsafeText { series, point } => {
                 write!(f, "계열 {series} 점 {point} 의 값에 XML 특수문자가 있다")
             }
@@ -148,7 +157,15 @@ pub fn apply_value_edits(
         }
         seen.push(key);
 
-        if point.span.start > point.span.end || point.span.end > xml.len() {
+        let span = point
+            .span
+            .clone()
+            .ok_or(PatchError::ValueNotPatchable {
+                series: edit.series,
+                point: edit.point,
+            })?;
+
+        if span.start > span.end || span.end > xml.len() {
             return Err(PatchError::SpanOutOfRange {
                 series: edit.series,
                 point: edit.point,
@@ -156,7 +173,7 @@ pub fn apply_value_edits(
         }
 
         planned.push(Planned {
-            span: point.span.clone(),
+            span,
             text: &edit.text,
             series: edit.series,
             point: edit.point,
@@ -297,6 +314,27 @@ mod tests {
                 point: 0
             })
         );
+    }
+
+    /// 결측치는 읽히지만 그 점의 편집만 거부된다 — 문서 전체가 막히지 않는다.
+    #[test]
+    fn blank_value_cannot_be_patched_but_its_neighbours_can() {
+        let xml = concat!(
+            r#"<c:chartSpace><c:chart><c:plotArea><c:barChart><c:ser>"#,
+            r#"<c:val><c:numLit><c:ptCount val="2"/>"#,
+            r#"<c:pt idx="0"><c:v/></c:pt><c:pt idx="1"><c:v>2</c:v></c:pt>"#,
+            r#"</c:numLit></c:val></c:ser></c:barChart></c:plotArea></c:chart></c:chartSpace>"#,
+        );
+        let data = scan_chart_values(xml.as_bytes()).expect("스캔");
+        assert_eq!(
+            apply_value_edits(xml.as_bytes(), &data, &[edit(0, 0, "5")]),
+            Err(PatchError::ValueNotPatchable {
+                series: 0,
+                point: 0
+            })
+        );
+        let out = apply_value_edits(xml.as_bytes(), &data, &[edit(0, 1, "5")]).expect("이웃은 된다");
+        assert!(String::from_utf8_lossy(&out).contains("<c:v>5</c:v>"));
     }
 
     #[test]

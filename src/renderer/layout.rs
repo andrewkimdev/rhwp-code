@@ -2235,7 +2235,8 @@ pub(crate) use border_rendering::{
 pub use paragraph_layout::map_pua_bullet_char;
 pub(crate) use utils::{
     default_outline_numbering, drawing_to_line_style, drawing_to_shape_style,
-    expand_numbering_format, find_bin_data, find_bin_data_bytes, format_page_number,
+    expand_numbering_format, find_bin_data, find_bin_data_bytes, find_bin_data_index,
+    format_page_number,
     layout_rect_to_bbox, picture_display_size_hu, picture_flow_frame_size_hu, resolve_numbering_id,
 };
 

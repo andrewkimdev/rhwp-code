@@ -1,8 +1,8 @@
 //! [#4100] B1 엔진축 — 차트 숫자 데이터 편집.
 //!
-//! **Stage 1~2 게이트.** OOXML 차트 XML 위의 구조 스캐너·최소 diff 패처(Stage 1)와
-//! 중첩 CFB 스트림 교체(Stage 2)를 검증한다. 주소 해석(①`Chart/chartN.xml` ↔ ②중첩
-//! CFB)·CSV 왕복·CLI 는 Stage 3 이후다.
+//! **Stage 1~3 게이트.** 구조 스캐너·최소 diff 패처(Stage 1), 중첩 CFB 스트림
+//! 교체(Stage 2), 주소→①② 슬롯 해석과 `get_chart_data_native`(Stage 3)를 검증한다.
+//! ①② 동시 기록(Stage 4)·CSV 왕복·CLI(Stage 5)는 뒤에 붙는다.
 //!
 //! 스캐너를 따로 만드는 이유는 `src/ooxml_chart/parser.rs` 가 **손실 파서**이기
 //! 때문이다 — `c:pt idx`·`c:f`·`c:externalData`·`extLst` 를 읽지 않아 파싱→재방출로
@@ -162,13 +162,15 @@ fn every_span_slices_back_to_its_own_text() {
         let scan = scan_chart_values(&ooxml).expect("스캔");
         for series in &scan.series {
             for point in series.values.iter().chain(series.labels.iter()) {
-                let slice = &ooxml[point.span.clone()];
+                let span = point
+                    .span
+                    .clone()
+                    .unwrap_or_else(|| panic!("{}: 코퍼스엔 빈 값이 없다", path.display()));
                 assert_eq!(
-                    slice,
+                    &ooxml[span.clone()],
                     point.text.as_bytes(),
-                    "{}: 구간 {:?} 이 텍스트와 다르다",
+                    "{}: 구간 {span:?} 이 텍스트와 다르다",
                     path.display(),
-                    point.span
                 );
                 points += 1;
             }
@@ -490,4 +492,184 @@ fn repack_refuses_to_invent_a_missing_stream() {
         replace_ole_stream(&nested, "OOXMLChartContent", b"x"),
         Err(OleRepackError::StreamNotFound("OOXMLChartContent".to_string()))
     );
+}
+
+// ---------------------------------------------------------------------------
+// Stage 3 — 주소 → ①② 슬롯 해석 + get_chart_data_native
+// ---------------------------------------------------------------------------
+
+use rhwp::document_core::queries::chart_extract::{chart_xml, collect_charts};
+use rhwp::document_core::DocumentCore;
+
+fn core_of(path: &std::path::Path) -> DocumentCore {
+    let bytes = std::fs::read(path).expect("샘플 읽기");
+    DocumentCore::from_bytes(&bytes).unwrap_or_else(|e| panic!("{}: 코어 {e:?}", path.display()))
+}
+
+/// 코퍼스 전건에서 차트가 **정확히 하나** 열거되고, 두 표현이 포맷대로 해소된다.
+///
+/// HWPX 는 ①②가 다 있고, HWP5 는 `Chart/*.xml` 파트가 없어 ②만 있다.
+#[test]
+fn every_corpus_document_resolves_its_chart_slots() {
+    let mut hwpx_seen = 0usize;
+    let mut hwp_seen = 0usize;
+    for hwpx in corpus() {
+        for path in [hwpx.with_extension("hwpx"), hwpx.with_extension("hwp")] {
+            let core = core_of(&path);
+            let charts = collect_charts(core.document());
+            assert_eq!(charts.len(), 1, "{}: 차트 수", path.display());
+            let chart = &charts[0];
+            assert!(chart.is_top_level(), "{}: 본문 직속이어야 한다", path.display());
+            assert!(chart.nested_copy.is_some(), "{}: ② 미해소", path.display());
+
+            if path.extension().is_some_and(|e| e == "hwpx") {
+                assert!(chart.zip_part.is_some(), "{}: ① 미해소", path.display());
+                hwpx_seen += 1;
+            } else {
+                assert!(
+                    chart.zip_part.is_none(),
+                    "{}: HWP5 에 ① 이 있을 수 없다",
+                    path.display()
+                );
+                hwp_seen += 1;
+            }
+
+            let (xml, _) = chart_xml(core.document(), chart).expect("차트 XML");
+            assert!(scan_chart_values(&xml).is_ok(), "{}: 스캔", path.display());
+        }
+    }
+    assert_eq!((hwpx_seen, hwp_seen), (28, 28));
+}
+
+/// **①==②** — 어느 표현에서 읽어도 같은 XML 이다(#4055 의 SHA-256 전건 일치를 코드로 고정).
+#[test]
+fn both_representations_carry_the_same_xml() {
+    let mut checked = 0usize;
+    for hwpx in corpus() {
+        let core = core_of(&hwpx);
+        let charts = collect_charts(core.document());
+        let chart = &charts[0];
+        let zip = core.document().bin_data_content[chart.zip_part.expect("①")]
+            .data
+            .load();
+        let nested_cfb = core.document().bin_data_content[chart.nested_copy.expect("②")]
+            .data
+            .load();
+        let nested = stream_of(&nested_cfb, OOXML_STREAM).expect("②의 OOXML");
+        assert_eq!(zip, nested, "{}: ① 과 ② 가 다르다", hwpx.display());
+        checked += 1;
+    }
+    assert_eq!(checked, 28);
+}
+
+/// `get_chart_data_native` 가 모델 파서와 같은 값을 돌려준다.
+#[test]
+fn get_chart_data_native_matches_the_model_parser() {
+    let mut checked = 0usize;
+    for hwpx in corpus() {
+        for path in [hwpx.with_extension("hwpx"), hwpx.with_extension("hwp")] {
+            let core = core_of(&path);
+            let chart = &collect_charts(core.document())[0];
+            let json: serde_json::Value = serde_json::from_str(
+                &core
+                    .get_chart_data_native(chart.section, chart.paragraph, chart.control)
+                    .unwrap_or_else(|e| panic!("{}: {e:?}", path.display())),
+            )
+            .expect("JSON");
+
+            assert_eq!(json["ok"], true, "{}", path.display());
+            assert_eq!(json["chart"], 1, "{}", path.display());
+            assert_eq!(json["labelsShared"], true, "{}", path.display());
+
+            let (xml, _) = chart_xml(core.document(), chart).expect("XML");
+            let model = OoxmlChart::parse(&xml).expect("모델");
+            let series = json["series"].as_array().expect("series");
+            assert_eq!(series.len(), model.series.len(), "{}", path.display());
+            for (s, m) in series.iter().zip(&model.series) {
+                let values: Vec<f64> = s["values"]
+                    .as_array()
+                    .expect("values")
+                    .iter()
+                    .map(|v| v.as_str().expect("문자열").parse().expect("수치"))
+                    .collect();
+                assert_eq!(values, m.values, "{}", path.display());
+            }
+
+            let is_hwpx = path.extension().is_some_and(|e| e == "hwpx");
+            assert_eq!(json["representations"]["zipPart"], is_hwpx, "{}", path.display());
+            assert_eq!(json["representations"]["nestedCopy"], true, "{}", path.display());
+            assert_eq!(
+                json["source"],
+                if is_hwpx { "zipPart" } else { "nestedCopy" },
+                "{}",
+                path.display()
+            );
+            checked += 1;
+        }
+    }
+    assert_eq!(checked, CORPUS_FILES);
+}
+
+/// 값은 **원본 텍스트 그대로** 실린다 — 실수로 파싱했다가 되쓰면 표기가 달라져
+/// 무편집 왕복의 바이트 동일이 깨진다.
+#[test]
+fn values_keep_their_original_spelling() {
+    let path = manifest("samples/chart/세로막대형/묶은세로막대형.hwpx");
+    let core = core_of(&path);
+    let chart = &collect_charts(core.document())[0];
+    let (xml, _) = chart_xml(core.document(), chart).expect("XML");
+    let scan = scan_chart_values(&xml).expect("스캔");
+
+    let json: serde_json::Value =
+        serde_json::from_str(&core.get_chart_data_native(chart.section, chart.paragraph, chart.control).expect("읽기"))
+            .expect("JSON");
+
+    for (si, series) in scan.series.iter().enumerate() {
+        for (pi, point) in series.values.iter().enumerate() {
+            assert_eq!(
+                json["series"][si]["values"][pi].as_str(),
+                Some(point.text.as_str())
+            );
+        }
+    }
+}
+
+/// 주소 오류만 `Err` 다 — 데이터 문제는 `Ok` + 부정 봉투다.
+#[test]
+fn only_address_errors_are_err() {
+    let path = manifest("samples/chart/세로막대형/묶은세로막대형.hwpx");
+    let core = core_of(&path);
+    let chart = &collect_charts(core.document())[0];
+
+    assert!(core.get_chart_data_native(99, 0, 0).is_err(), "없는 구역");
+    assert!(core.get_chart_data_native(0, 9999, 0).is_err(), "없는 문단");
+    assert!(
+        core.get_chart_data_native(chart.section, chart.paragraph, 9999)
+            .is_err(),
+        "없는 컨트롤"
+    );
+
+    // 차트가 아닌 컨트롤을 지목하면 Err — 같은 문단의 다른 컨트롤을 찾아 시험한다.
+    let para = &core.document().sections[chart.section].paragraphs[chart.paragraph];
+    if let Some(other) = (0..para.controls.len()).find(|&i| i != chart.control) {
+        assert!(
+            core.get_chart_data_native(chart.section, chart.paragraph, other)
+                .is_err(),
+            "차트가 아닌 컨트롤"
+        );
+    }
+}
+
+/// 순번 경로는 컨테이너 안의 차트에도 닿는다 — 3인자 주소가 표현하지 못하는 자리다.
+#[test]
+fn index_addressing_covers_the_same_chart() {
+    let path = manifest("samples/chart/원형/쪼개진원형.hwpx");
+    let core = core_of(&path);
+    let chart = &collect_charts(core.document())[0];
+    let by_addr = core
+        .get_chart_data_native(chart.section, chart.paragraph, chart.control)
+        .expect("주소");
+    let by_index = core.get_chart_data_by_index_native(0).expect("순번");
+    assert_eq!(by_addr, by_index);
+    assert!(core.get_chart_data_by_index_native(9).is_err(), "없는 순번");
 }

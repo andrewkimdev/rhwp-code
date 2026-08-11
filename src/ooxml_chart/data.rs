@@ -32,7 +32,11 @@ pub struct ChartPoint {
     /// `c:pt idx` 속성값. 코퍼스는 전건 `0..n-1` 순차지만 해석하지 않고 그대로 싣는다.
     pub idx: u32,
     /// 원본 바이트 안 텍스트 구간 `[start, end)`.
-    pub span: Range<usize>,
+    ///
+    /// 빈 요소 `<c:v/>` 는 텍스트 구간이 없어 `None` 이다 — **읽을 수는 있고 고칠 수만
+    /// 없다.** 결측치는 실데이터에서 흔하므로 문서 전체 읽기를 막지 않고, 그 점을 지목한
+    /// 편집만 거부한다(`patch::PatchError::ValueNotPatchable`).
+    pub span: Option<Range<usize>>,
     /// 구간의 바이트 그대로. **이스케이프를 해제하지 않는다** — 이 문자열을 되쓰면
     /// 바이트가 원본과 같아야 한다는 것이 최소 diff 의 기준이다.
     pub text: String,
@@ -79,11 +83,6 @@ pub enum ChartScanError {
     Xml(String),
     /// `c:ser` 가 하나도 없다 — 편집할 데이터가 없다.
     NoSeries,
-    /// 빈 요소 `<c:v/>` 를 만났다.
-    ///
-    /// 텍스트 구간이 없어 제자리 치환으로 값을 넣을 수 없다. 코퍼스 0건이며, 반쪽만
-    /// 새 값인 파일을 내보내느니 스캔 단계에서 드러낸다.
-    EmptyValueElement { series: usize },
 }
 
 impl std::fmt::Display for ChartScanError {
@@ -92,11 +91,23 @@ impl std::fmt::Display for ChartScanError {
             Self::NotUtf8 => write!(f, "차트 XML 이 UTF-8 이 아니다"),
             Self::Xml(msg) => write!(f, "차트 XML 파싱 실패: {msg}"),
             Self::NoSeries => write!(f, "차트에 c:ser 가 없다"),
-            Self::EmptyValueElement { series } => {
-                write!(f, "계열 {series} 에 빈 <c:v/> 가 있어 제자리 치환이 불가능하다")
-            }
         }
     }
+}
+
+/// 스캔에서 **통째로 건너뛰는** 서브트리.
+///
+/// 확장·데이터라벨·추세선 안에는 값처럼 생긴 것이 들어 있다. 특히 `c:extLst` 는 표준
+/// 확장 지점이라 `c15:filteredCategoryTitle` 처럼 **`c:cat`/`c:pt`/`c:v` 를 통째로 품는**
+/// 확장이 들어올 수 있다. 이 스캐너는 접두어를 고정하지 않으므로(그래야 `chart:` 든
+/// `c:` 든 돈다) 네임스페이스로 걸러내지 못한다 — 서브트리째 건너뛰는 쪽이 확실하다.
+///
+/// 같은 이유로 `c:dLbls`/`c:dLbl` 도 뺀다. 데이터 라벨의 `c:tx` 가 계열명으로 새어
+/// 들어올 수 있는데, B1 은 라벨을 읽지도 쓰지도 않는다.
+const SKIPPED_SUBTREES: &[&[u8]] = &[b"extLst", b"dLbls", b"dLbl", b"trendline", b"errBars"];
+
+fn is_skipped(local: &[u8]) -> bool {
+    SKIPPED_SUBTREES.contains(&local)
 }
 
 /// `c:ser` 안에서 지금 어느 자식 블록에 있는가.
@@ -220,10 +231,22 @@ pub fn scan_chart_values(xml: &[u8]) -> Result<ChartData, ChartScanError> {
     let mut reader = Reader::from_str(text);
     let mut state = ScanState::new();
     let mut buf = Vec::new();
+    // 건너뛰는 서브트리 안의 요소 깊이. 0 이면 정상 스캔 중이다.
+    let mut skip_depth = 0usize;
 
     loop {
         let pos_before = reader.buffer_position() as usize;
         match reader.read_event_into(&mut buf) {
+            Ok(Event::Start(ref e)) if skip_depth > 0 => {
+                let _ = e;
+                skip_depth += 1;
+            }
+            Ok(Event::End(ref e)) if skip_depth > 0 => {
+                let _ = e;
+                skip_depth -= 1;
+            }
+            Ok(Event::Empty(_)) if skip_depth > 0 => {}
+            Ok(Event::Start(ref e)) if is_skipped(e.local_name().as_ref()) => skip_depth = 1,
             Ok(Event::Start(ref e)) => {
                 match e.local_name().as_ref() {
                     b"ser" => {
@@ -249,10 +272,18 @@ pub fn scan_chart_values(xml: &[u8]) -> Result<ChartData, ChartScanError> {
                 }
             }
             Ok(Event::Empty(ref e)) => {
+                // 빈 요소 `<c:v/>` — 결측치다. 텍스트 구간이 없으니 구간 없이 싣는다.
+                // 읽기는 되고 그 점의 편집만 거부된다.
                 if e.local_name().as_ref() == b"v" && state.capturing() {
-                    return Err(ChartScanError::EmptyValueElement {
-                        series: state.series.len(),
-                    });
+                    let idx = state.cur_idx.unwrap_or(0);
+                    push_point(
+                        &mut state,
+                        ChartPoint {
+                            idx,
+                            span: None,
+                            text: String::new(),
+                        },
+                    );
                 }
             }
             Ok(Event::End(ref e)) => match e.local_name().as_ref() {
@@ -261,11 +292,18 @@ pub fn scan_chart_values(xml: &[u8]) -> Result<ChartData, ChartScanError> {
                         // 닫는 태그 직전 = 텍스트 끝. 닫는 태그 길이를 계산하지 않는다.
                         let span = start..pos_before;
                         let idx = state.cur_idx.unwrap_or(0);
-                        let text = text
+                        let body = text
                             .get(span.clone())
                             .map(str::to_string)
                             .unwrap_or_default();
-                        push_point(&mut state, ChartPoint { idx, span, text });
+                        push_point(
+                            &mut state,
+                            ChartPoint {
+                                idx,
+                                span: Some(span),
+                                text: body,
+                            },
+                        );
                     }
                 }
                 b"pt" => state.cur_idx = None,
@@ -339,7 +377,8 @@ mod tests {
         let xml = CATEGORY_CHART.as_bytes();
         let data = scan_chart_values(xml).expect("스캔");
         for p in data.series[0].values.iter().chain(&data.series[0].labels) {
-            assert_eq!(&xml[p.span.clone()], p.text.as_bytes());
+            let span = p.span.clone().expect("코퍼스 모양엔 빈 값이 없다");
+            assert_eq!(&xml[span], p.text.as_bytes());
         }
     }
 
@@ -406,17 +445,75 @@ mod tests {
         assert_eq!(data.series[0].values.len(), 2);
     }
 
+    /// 결측치 `<c:v/>` 는 **읽히고**, 구간이 없어 편집만 막힌다.
+    ///
+    /// 처음에는 스캔 자체를 거부했는데 범위가 틀렸다 — 값 하나가 비었다고 문서 전체
+    /// 읽기를 막으면 결측이 흔한 실데이터에서 `chart-to-csv` 가 통째로 실패한다.
     #[test]
-    fn empty_value_element_is_refused() {
+    fn empty_value_element_is_readable_with_no_span() {
         let xml = concat!(
             r#"<c:chartSpace><c:chart><c:plotArea><c:barChart><c:ser>"#,
-            r#"<c:val><c:numLit><c:ptCount val="1"/><c:pt idx="0"><c:v/></c:pt>"#,
+            r#"<c:val><c:numLit><c:ptCount val="2"/>"#,
+            r#"<c:pt idx="0"><c:v/></c:pt><c:pt idx="1"><c:v>2</c:v></c:pt>"#,
             r#"</c:numLit></c:val></c:ser></c:barChart></c:plotArea></c:chart></c:chartSpace>"#,
         );
-        assert_eq!(
-            scan_chart_values(xml.as_bytes()),
-            Err(ChartScanError::EmptyValueElement { series: 0 })
+        let data = scan_chart_values(xml.as_bytes()).expect("읽을 수 있어야 한다");
+        let values = &data.series[0].values;
+        assert_eq!(values.len(), 2);
+        assert_eq!(values[0].text, "");
+        assert_eq!(values[0].span, None, "빈 요소는 구간이 없다");
+        assert_eq!(values[1].text, "2");
+        assert!(values[1].span.is_some());
+    }
+
+    /// **확장 서브트리는 값으로 읽지 않는다.**
+    ///
+    /// `c:extLst` 는 표준 확장 지점이라 `c15:filteredCategoryTitle` 처럼 `c:cat`·`c:pt`·
+    /// `c:v` 를 통째로 품는 확장이 들어올 수 있다. 접두어를 고정하지 않는 스캐너는
+    /// 네임스페이스로 걸러낼 수 없어 서브트리째 건너뛴다.
+    ///
+    /// 코퍼스는 `c:ser` 안 `extLst` 가 0건이라 이 경로를 한 번도 밟지 않는다 — 그래서
+    /// 합성으로만 덮인다. 모델 파서(`ooxml_chart::parser`)도 `local_name` 만 보므로
+    /// **오라클로 세워도 같이 틀린다**는 것이 이 테스트를 따로 두는 이유다.
+    #[test]
+    fn extension_subtrees_are_not_scanned_as_values() {
+        let xml = concat!(
+            r#"<c:chartSpace><c:chart><c:plotArea><c:barChart><c:ser>"#,
+            r#"<c:val><c:numRef><c:numCache><c:ptCount val="1"/>"#,
+            r#"<c:pt idx="0"><c:v>4.3</c:v></c:pt></c:numCache></c:numRef></c:val>"#,
+            r#"<c:extLst><c:ext uri="{02D57815}"><c15:filteredCategoryTitle>"#,
+            r#"<c:cat><c:strLit><c:pt idx="0"><c:v>숨은 항목</c:v></c:pt></c:strLit></c:cat>"#,
+            r#"<c:val><c:numLit><c:pt idx="0"><c:v>99999</c:v></c:pt></c:numLit></c:val>"#,
+            r#"</c15:filteredCategoryTitle></c:ext></c:extLst>"#,
+            r#"</c:ser></c:barChart></c:plotArea></c:chart></c:chartSpace>"#,
         );
+        let data = scan_chart_values(xml.as_bytes()).expect("스캔");
+        assert_eq!(data.series.len(), 1);
+        let texts: Vec<&str> = data.series[0]
+            .values
+            .iter()
+            .chain(&data.series[0].labels)
+            .map(|p| p.text.as_str())
+            .collect();
+        assert_eq!(texts, ["4.3"], "확장 안의 값이 새어 들어왔다: {texts:?}");
+    }
+
+    /// 데이터 라벨의 `c:tx` 가 계열명으로 새지 않는다.
+    ///
+    /// `c:tx` 는 참조 없이 쓰이는 산출기가 있어 문맥 가드가 느슨한데, `c:dLbl` 안에도
+    /// `c:tx` 가 온다. 계열명이 없는 차트에서만 드러나는 오염이라 합성으로 고정한다.
+    #[test]
+    fn data_label_text_does_not_become_the_series_name() {
+        let xml = concat!(
+            r#"<c:chartSpace><c:chart><c:plotArea><c:barChart><c:ser>"#,
+            r#"<c:dLbls><c:dLbl><c:idx val="0"/><c:tx><c:v>라벨 텍스트</c:v></c:tx></c:dLbl></c:dLbls>"#,
+            r#"<c:val><c:numLit><c:pt idx="0"><c:v>1</c:v></c:pt></c:numLit></c:val>"#,
+            r#"</c:ser></c:barChart></c:plotArea></c:chart></c:chartSpace>"#,
+        );
+        let data = scan_chart_values(xml.as_bytes()).expect("스캔");
+        assert_eq!(data.series[0].name, None, "라벨이 계열명이 됐다");
+        assert_eq!(data.series[0].values.len(), 1);
+        assert_eq!(data.series[0].values[0].text, "1");
     }
 
     #[test]
