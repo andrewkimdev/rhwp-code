@@ -2857,6 +2857,7 @@ fn collect_top_level_table_spans_domain() {
                 section_index: Some(0),
                 para_index: Some(pi),
                 control_index: Some(0),
+                cell_context: None,
             }),
             BoundingBox::new(75.6, y, 642.5, h),
         )
