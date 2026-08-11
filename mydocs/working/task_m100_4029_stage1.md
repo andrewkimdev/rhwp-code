@@ -4,7 +4,7 @@
 - **브랜치**: `issue-4029-cold-release-ci`
 - **기준**: `upstream/devel` `b66e3d79a93c048478c4737443084f9e7149bbb2`
 - **결정 기록**: [issue comment 5251618440](https://github.com/edwardkim/rhwp/issues/4029#issuecomment-5251618440)
-- **상태**: 로컬 구현과 focused 검증 완료, 원격 canary 미실행
+- **상태**: 로컬 구현·focused 검증과 동일 SHA 원격 canary 완료, 최신 `devel` 재검증 중
 
 ## 1. 구현 결과
 
@@ -85,3 +85,22 @@ boolean dispatch input, reusable workflow typed input과 caller `with` 전달 �
 
 60분에도 cold release가 완주하지 못하면 timeout 추가 상향으로 덮지 않고 test target scope 또는 LTO
 검증 구조를 다시 설계한다.
+
+## 7. 동일 SHA 원격 canary 결과
+
+PR head `9dbc0d91f7f663421af36ed6acfee7a39499a33c`에서 다음 두 수동 full run을 순서대로 실행했다.
+
+| 실행 | 정책·cache | 결과 |
+| --- | --- | --- |
+| [일반 dispatch 31483270200](https://github.com/edwardkim/rhwp/actions/runs/31483270200) | `release-test/30`, 세 builder exact hit `false` | `Build & Test` 성공, wall clock 17분 44초 |
+| [release-grade dispatch 31483281790](https://github.com/edwardkim/rhwp/actions/runs/31483281790) | `release/60`, 세 builder `No cache found`·exact hit `false` | `Build & Test` 성공, 실행 구간 약 60분 34초 |
+
+release-grade archive job은 A 52분 01초, slow builder 48분 03초, B 49분 27초에 완주했다. 가장 느린
+A의 Cargo release build는 50분 07초였고 job 상한까지 약 7분 59초가 남았다. Native Skia는 같은
+`release` profile과 기존 30분 상한에서 23분 15초에 성공했다. 네 worker는 slow 1, archive 1 3,938,
+archive 2 866, archive 3 952로 총 5,757개를 실행했고 aggregate의 기대 수와 일치했다.
+
+따라서 30분 상한이 cold release archive를 반복 취소하던 #4029의 직접 실패 조건은 해소됐다. 다만
+수동 dispatch는 cache 저장 대상이 아니므로 실제 main push의 cache 재생성과 약 8분인 cold builder
+여유 폭은 메인테이너 운영 단계에서 후속 관찰한다. canary 뒤 `upstream/devel` 전진으로 PR이 충돌 상태가
+되어 최신 기준선을 merge하고 새 head의 CI를 다시 확인한 뒤 리뷰를 요청한다.

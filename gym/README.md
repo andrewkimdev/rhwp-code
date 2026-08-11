@@ -55,6 +55,11 @@ python gym/score.py --agent <너의이름>   # 4) 자가 채점 — 스코어카
 채점 세부는 스코어카드(`scorecard.json`·`report.md`)에 있는 그대로 남는다 —
 실패도 데이터다.
 
+검사의 `expect_exit`은 단일 정상 종료 코드를 뜻한다. `ir-diff`처럼 동일(exit 0)과 차이 검출(exit 3)이
+모두 유효한 판정인 명령은 `expect_exits:[0,3]`으로 선언한다. 채점기는 허용된 종료 코드의 JSON 봉투를
+계속 읽어 `identical` 같은 판정 값을 답안과 비교한다. 허용 목록에 없는 IO·사용법 오류는 판정 전에
+실패한다.
+
 ## 제출 형식
 
 - `submit.kind: "answer"` → `answer.json` 하나 (과제가 요구한 키만).

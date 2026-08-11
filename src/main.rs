@@ -12300,6 +12300,19 @@ fn convert_hwp(args: &[String]) -> i32 {
     let input_path = &positionals[0];
     let output_path = &positionals[1];
 
+    // [#4586] `convert`는 편집 가능한 HWP5를 만드는 명령이다. 출력 이름만
+    // `.hwpx`로 주면 HWP5 바이트가 HWPX처럼 보이고, 후속 도구가 확장자만 믿을 때
+    // 거짓 양성이 된다. 입력 IO보다 먼저 출력 계약을 판정해 잘못된 산출물을 쓰지 않는다.
+    let output_is_hwp = std::path::Path::new(output_path)
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("hwp"));
+    if !output_is_hwp {
+        eprintln!("오류: convert 출력 경로는 .hwp 확장자여야 합니다: {output_path}");
+        eprintln!("HWPX로 변환하려면 `rhwp export-hwpx <입력> <출력.hwpx>`를 사용하세요.");
+        return EXIT_USAGE;
+    }
+
     // 입력 파일 읽기
     let data = match fs::read(input_path) {
         Ok(d) => d,

@@ -759,6 +759,20 @@ impl CellContext {
         self.innermost().text_direction
     }
 
+    /// [#4334] 이 경로가 가리키는 **중첩 표 자신의** `(para_index, control_index)` —
+    /// `layout_table`/`layout_partial_table_item` 의 `table_meta` 인자 형태 그대로다.
+    /// 경로 마지막 항목이 그 중첩 표 컨트롤이고, 한 단계 바깥 항목의 `cell_para_index`
+    /// 가 그 표를 담은 셀 문단이다. depth 1(최외곽 표)은 바깥 레벨이 없어 `None`.
+    ///
+    /// 재귀 중첩 표를 배치하는 세 곳(`table_layout.rs` 2곳, `table_partial.rs` 1곳)이
+    /// `table_meta: None` 을 넘겨 `TableNode.para_index`/`control_index` 가 항상 비어
+    /// 있었다 — #4334 stage3 가 실측한 "문서 위치 없는 노드" 의 주된 원인이다.
+    pub fn nested_table_meta(&self) -> Option<(usize, usize)> {
+        let table_entry = self.path.last()?;
+        let parent_entry = self.path.get(self.path.len().checked_sub(2)?)?;
+        Some((parent_entry.cell_para_index, table_entry.control_index))
+    }
+
     /// (cell_index, cell_para_index, outer_table_control_index) — 최내곽 entry 의 3 필드.
     /// ImageNode / RectangleNode 등의 cell context 3 필드 매핑 boilerplate 통합용.
     /// path 가 비어있으면 (None, None, None).
@@ -2480,16 +2494,28 @@ impl LayoutEngine {
         }
     }
 
-    /// 종이 기준 렌더 노드의 정렬키 `(plane, z_order, stable_index)`.
+    /// 종이 기준 렌더 노드의 정렬키 `(plane, z_order, doc_path)`.
     /// 레이아웃 쿼리(`get_page_control_layout_native`)가 컨트롤별 plane/zOrder/stableIndex 를
     /// 프런트 히트테스트에 노출할 때 재사용한다(렌더 정렬과 단일 진실 원천 유지). [Task #1280 v2]
-    pub(crate) fn paper_node_sort_key(node: &RenderNode) -> (u8, i32, u32) {
+    ///
+    /// [#4334] 세 번째 원소는 더 이상 `RenderLayerInfo.stable_index`(패킹된 u32,
+    /// layer 없으면 `node.id` 폴백) 가 아니라 [`crate::renderer::render_tree::doc_path_for_node`]
+    /// 가 노드 자신의 필드(para/control/cell 경로)에서 직접 유도하는 [`DocPath`]다 —
+    /// `next_id()` 카운터를 전혀 참조하지 않는다. layer 있는 노드와 없는 노드가 예전엔
+    /// 서로 다른 수 공간(패킹된 u32 vs 카운터)을 썼지만 이제 하나의 좌표계를 공유한다.
+    /// 문서 위치를 유도할 수 없는 노드는 빈 경로로 폴백한다 — 빈 배열은 사전식
+    /// 비교에서 항상 최솟값이라 결정적이지만, 그런 노드끼리의 상대 순서는 여전히
+    /// `paper_images`/`mp_node.children` 삽입 순서(Rust 안정 정렬)를 따른다. #4334
+    /// stage3 실측(`issue_4334_stage3_document_position_coverage_precheck`)으로 이
+    /// 잔여는 표/바탕쪽 picture 는 아니고(플러밍 결손 3곳을 고쳤다) 표 셀 배경/무늬
+    /// 이미지 채우기(`render_cell_background`, 문서 Control 이 아니라 셀 스타일에서
+    /// 파생된 순수 장식이라 애초에 독립된 문서 위치가 없음) 로 수렴한다.
+    pub(crate) fn paper_node_sort_key(node: &RenderNode) -> (u8, i32, DocPath) {
         let layer = node.layer;
-        let (z_order, stable_index) = layer
-            .map(|layer| (layer.z_order, layer.stable_index))
-            .unwrap_or((0, node.id));
+        let z_order = layer.map(|layer| layer.z_order).unwrap_or(0);
+        let doc_path = crate::renderer::render_tree::doc_path_for_node(node).unwrap_or_default();
 
-        (Self::render_layer_plane(layer), z_order, stable_index)
+        (Self::render_layer_plane(layer), z_order, doc_path)
     }
 
     fn sort_paper_render_nodes(paper_images: &mut [RenderNode]) {
@@ -3990,9 +4016,13 @@ impl LayoutEngine {
                                         bin_data_content,
                                         Alignment::Left,
                                         Some(section_index),
-                                        None,
-                                        None,
-                                        None, // [Task #1151 v4] cell_ctx: 바탕쪽
+                                        // [#4334] 바탕쪽 문단/컨트롤 로컬 인덱스(pi/ci) — 이전에는
+                                        // None 이라 stableIndex 가 next_id() 폴백에 의존했다.
+                                        // Control::Table/Shape 분기(위)가 이미 이 pi/ci 를
+                                        // object_stable_index 계산에 쓰던 것과 같은 값.
+                                        Some(pi),
+                                        Some(ci),
+                                        None, // [Task #1151 v4] cell_ctx: 바탕쪽 picture 는 셀 중첩 없음
                                     );
                                 }
                                 Control::Table(t) => {
