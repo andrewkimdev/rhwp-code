@@ -50,6 +50,9 @@ last_verified: 2026-08-11
 - remote push 뒤에는 해당 최신 head의 required checks와 mergeability를 다시 확인한다.
 - PDF 페이지 수와 자동 번호, 머리말, 들여쓰기 fidelity의 기존 차이는 #4366 결함과 분리하며
   [#3820](https://github.com/edwardkim/rhwp/issues/3820)에서 추적한다.
+- HWP5의 과거 기본값 `0`과 의도된 순검정 음영을 renderer IR에서 구분하지 못하는 한계도
+  저장 보정과 분리한다. HWPX/HWP 저장은 `0`을 보존하지만 renderer는 현재 보수적으로
+  음영 없음으로 처리하며, 실제 표본과 함께 #3820에서 모델 표현 확장 여부를 판단한다.
 
 ## rollback
 
