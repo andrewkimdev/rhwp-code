@@ -2,7 +2,7 @@
 kind: guide
 status: active
 canonical: mydocs/README.md
-last_verified: 2026-08-08
+last_verified: 2026-08-10
 ---
 
 # rhwp 문서 지도와 canonical manifest
@@ -50,6 +50,7 @@ front matter는 `mydocs/manual`, `mydocs/tech`, `mydocs/troubleshootings`의 모
 
 | 경로 | kind | status | canonical | last_verified |
 | --- | --- | --- | --- | --- |
+| [프로젝트 로드맵](../ROADMAP.md) | canonical | active | `ROADMAP.md` | 2026-08-10 |
 | [문서·Git 워크플로](manual/codex/docs_and_git_workflow.md) | canonical | active | `manual/codex/docs_and_git_workflow.md` | 2026-08-07 |
 | [Codex 문서 지도](manual/codex/README.md) | guide | active | `manual/codex/README.md` | 2026-07-17 |
 | [Codex 프로젝트 메모리 덤프](manual/codex/MEMORY.md) | memory | active | `manual/codex/MEMORY.md` | 2026-08-07 |
