@@ -65,9 +65,10 @@ HWPX 축도 가려져 있었다. 라이터에 `if cs.shade_color == 0 { "none" }
 | 은닉 판정 | 상위 바이트 ≠ 0 → 색 없음 (진짜 COLORREF 규약) |
 
 즉 HWPX 라이터의 `== 0` 가드는 canonical 규칙이 아니라 **HWP3 전용 반창고**였다. IR sentinel 을
-통일하니 **라이터 3종이 무수정으로 정합**한다 — `color_hex` 는 이미 `0xFFFFFFFF → "none"` 이고
-HWP5 는 통과 저장이면 맞다. 덤으로 IR `0` 은 "진짜 검정 음영"으로 남아 의미가 깨끗해졌고,
-HWPX charPr id 갭 채움·HML `ShadeColor` 부재 같은 다른 생성 경로도 함께 해소됐다.
+통일하면 HWP5·HML 라이터는 그대로 정합하고, HWPX는 `color_hex`의 `0xFFFFFFFF → "none"` 매핑만
+사용해야 한다. `0x00000000`은 "진짜 검정 음영"이므로 `#000000`으로 보존해야 하며, 2026-08-11
+메인터너 검토에서 남아 있던 `== 0 → "none"` 분기를 제거하고 단위 계약을 추가했다. 이로써 HWPX
+charPr id 갭 채움·HML `ShadeColor` 부재 같은 다른 생성 경로와도 같은 sentinel 규칙으로 수렴한다.
 
 #4141 이 `relative_sizes` 를 `CharShape::default()` 한 줄로 고친 것과 같은 모양이다.
 
@@ -100,6 +101,7 @@ HWP3 에서 뒤집혀 시각 검증 레인이 어차피 필요했다. 같은 레
 | `src/parser/hwp3/mod.rs` | `hwp3_char_shade_color` 신설 + 배선 + 단위 테스트 3종 | 1 |
 | `src/parser/hml/reader.rs` | `ShadeColor` 부재 → sentinel | 1 |
 | `src/document_core/builders/exam_paper.rs` | 명시 `shade_color: 0` 제거 | 1 |
+| `src/serializer/hwpx/header.rs` | 실제 검정 음영 `0x00000000`을 `#000000`으로 보존, `none`은 sentinel만 사용 | 메인터너 보정 |
 | `tests/issue_4155_hwp3_char_shade_contract.rs` (신설) | 저장 계약 7종 (한컴 오라클 포함) | 2·4 |
 | renderer 5종 · paint 2종 · `hidden_text.rs` · `parser/doc_info.rs` | 술어 위임 | 3 |
 
