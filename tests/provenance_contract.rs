@@ -35,6 +35,12 @@ const DOCLANG_SAMPLE: &str = "samples/para-001.hwp";
 const HML_SAMPLE: &str = "samples/hml/formatting_table.hml";
 /// PrvImage 썸네일이 내장된 문서.
 const THUMBNAIL_SAMPLE: &str = "samples/2022년 국립국어원 업무계획.hwp";
+/// [#4100] 차트가 **있으면서 본문 텍스트도 있는** 문서.
+///
+/// `samples/chart/` 코퍼스는 차트만 있고 본문이 비어 있어 문서 문자열 오라클이 만들어지지
+/// 않는다 — 오라클이 비면 그 레시피는 아무것도 검사하지 못한다. 이 보고서 문서는 차트 2개와
+/// 본문을 함께 갖고 있고, 계열 6개 중 한 계열에 `c:cat` 이 없는 실사용 변종이기도 하다.
+const CHART_SAMPLE: &str = "samples/issue2006/1790387_prep_final_report.hwpx";
 
 // ── 실행 도우미 ────────────────────────────────────────────────────────────
 
@@ -382,6 +388,7 @@ fn recipes() -> Vec<Recipe> {
     let doclang = sample(DOCLANG_SAMPLE);
     let hml = sample(HML_SAMPLE);
     let thumb = sample(THUMBNAIL_SAMPLE);
+    let chart = sample(CHART_SAMPLE);
 
     let p = |x: &Path| x.to_str().expect("경로").to_string();
     let out = |name: &str| p(&dir.join(name));
@@ -559,6 +566,32 @@ fn recipes() -> Vec<Recipe> {
         .to_string();
     std::fs::write(&table_csv_path, table_csv).expect("CSV 기준선 쓰기");
 
+    // [#4100] csv-to-chart 도 호출자 CSV와 문서 차트를 함께 받는다. 문서에서 뽑은 같은
+    // CSV를 되먹이면 changedCount 0 이지만, JSON 표지가 붙는지와 지도 경로가 이 명령을
+    // 덮는지는 실제 호출로만 확인된다.
+    let chart_csv_path = PathBuf::from(out("provenance-chart.csv"));
+    let chart_seed_args = vec![
+        s("chart-to-csv"),
+        p(&chart),
+        s("--chart"),
+        s("1"),
+        s("--json"),
+    ];
+    let chart_seed = run(&chart_seed_args);
+    assert_eq!(
+        chart_seed.status.code(),
+        Some(0),
+        "차트 CSV 기준선을 만들지 못했습니다:\n{}",
+        describe(&chart_seed_args, &chart_seed)
+    );
+    let chart_seed_json: Value =
+        serde_json::from_slice(&chart_seed.stdout).expect("chart-to-csv 기준선 stdout JSON");
+    let chart_csv = chart_seed_json["charts"][0]["csv"]
+        .as_str()
+        .expect("chart-to-csv 기준선 CSV")
+        .to_string();
+    std::fs::write(&chart_csv_path, chart_csv).expect("차트 CSV 기준선 쓰기");
+
     // [#3885] redact 스윕용 가짜 개인정보 문서 — 저장소에 PII 샘플을 두지 않는다
     // (tests/redact_sanitize_contract.rs 와 같은 fill-fields 주입 방식). 값은 전부
     // 가공이다: 검증 숫자(mod 11)를 통과하는 실재 인물 무관 주민번호, 하이픈 형태
@@ -665,6 +698,37 @@ fn recipes() -> Vec<Recipe> {
                 p(&table_csv_path),
                 s("--table"),
                 s("0"),
+                s("--dry-run"),
+                s("--json"),
+            ],
+            stdin: None,
+            exit: 0,
+            ndjson: false,
+        },
+        Recipe {
+            command: "chart-to-csv",
+            doc: Some(chart.clone()),
+            args: vec![
+                s("chart-to-csv"),
+                p(&chart),
+                s("--chart"),
+                s("1"),
+                s("--json"),
+            ],
+            stdin: None,
+            exit: 0,
+            ndjson: false,
+        },
+        Recipe {
+            command: "csv-to-chart",
+            doc: Some(chart.clone()),
+            args: vec![
+                s("csv-to-chart"),
+                p(&chart),
+                s("--csv"),
+                p(&chart_csv_path),
+                s("--chart"),
+                s("1"),
                 s("--dry-run"),
                 s("--json"),
             ],
@@ -836,6 +900,43 @@ fn recipes() -> Vec<Recipe> {
                 s("0"),
                 s("-o"),
                 out("prov-t2c.csv"),
+                s("--json"),
+            ],
+            stdin: None,
+            exit: 0,
+            ndjson: false,
+        },
+        Recipe {
+            // chart-to-csv -o: output·outputFormat 은 파일 산출에서만 나온다.
+            command: "chart-to-csv",
+            doc: Some(chart.clone()),
+            args: vec![
+                s("chart-to-csv"),
+                p(&chart),
+                s("--chart"),
+                s("1"),
+                s("-o"),
+                out("prov-c2c.csv"),
+                s("--json"),
+            ],
+            stdin: None,
+            exit: 0,
+            ndjson: false,
+        },
+        Recipe {
+            // csv-to-chart 실적용 + --verify: output·outputFormat·verify.
+            command: "csv-to-chart",
+            doc: Some(chart.clone()),
+            args: vec![
+                s("csv-to-chart"),
+                p(&chart),
+                s("--csv"),
+                p(&chart_csv_path),
+                s("--chart"),
+                s("1"),
+                s("-o"),
+                out("prov-csv2chart.hwpx"),
+                s("--verify"),
                 s("--json"),
             ],
             stdin: None,

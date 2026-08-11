@@ -28,18 +28,35 @@ fn refused(reason: &str, message: String) -> String {
     serde_json::json!({ "ok": false, "invalid": [invalid(reason, message)] }).to_string()
 }
 
-/// 계열의 라벨(카테고리 또는 분산형 X)이 전 계열에서 같은가.
+/// 라벨을 **가진** 첫 계열의 라벨.
 ///
-/// OOXML 은 계열마다 다른 라벨/ X 를 허용하지만 CSV 는 한 열로 표현한다. 코퍼스는 전건
-/// 일치하지만 **포맷의 보장이 아니라서** 표지를 실어 CSV 층이 거부할 수 있게 한다.
-fn labels_shared(data: &ChartData) -> bool {
-    let Some(first) = data.series.first() else {
-        return true;
-    };
-    let head: Vec<&str> = first.labels.iter().map(|p| p.text.as_str()).collect();
+/// `series[0]` 을 무조건 보면 안 된다 — `c:cat` 이 일부 계열에만 있는 실사용 문서가 있다
+/// (`samples/issue2006/1790387_prep_final_report.hwpx`: 6계열 중 5계열만 `c:cat` 보유).
+/// 첫 계열을 맹신하면 라벨이 통째로 비어 CSV 가 값을 잃는다.
+fn label_texts(data: &ChartData) -> Vec<&str> {
     data.series
         .iter()
-        .all(|s| s.labels.iter().map(|p| p.text.as_str()).eq(head.iter().copied()))
+        .find(|s| !s.labels.is_empty())
+        .map(|s| s.labels.iter().map(|p| p.text.as_str()).collect())
+        .unwrap_or_default()
+}
+
+/// 라벨(카테고리 또는 분산형 X)이 **가진 계열들 사이에서** 같은가.
+///
+/// OOXML 은 계열마다 다른 라벨/X 를 허용하지만 CSV 는 한 열로 표현한다. 코퍼스는 전건
+/// 일치하지만 **포맷의 보장이 아니라서** 표지를 실어 CSV 층이 거부할 수 있게 한다.
+/// 라벨이 아예 없는 계열은 판정에서 뺀다 — 없는 것과 다른 것은 다르다.
+fn labels_shared(data: &ChartData) -> bool {
+    let head = label_texts(data);
+    data.series
+        .iter()
+        .filter(|s| !s.labels.is_empty())
+        .all(|s| {
+            s.labels
+                .iter()
+                .map(|p| p.text.as_str())
+                .eq(head.iter().copied())
+        })
 }
 
 fn chart_data_json(chart: &ChartRef, data: &ChartData, source: ChartSource) -> serde_json::Value {
@@ -47,11 +64,7 @@ fn chart_data_json(chart: &ChartRef, data: &ChartData, source: ChartSource) -> s
         Some(SeriesAxis::Scatter) => "scatter",
         _ => "category",
     };
-    let labels: Vec<&str> = data
-        .series
-        .first()
-        .map(|s| s.labels.iter().map(|p| p.text.as_str()).collect())
-        .unwrap_or_default();
+    let labels = label_texts(data);
 
     serde_json::json!({
         "ok": true,
@@ -192,26 +205,16 @@ fn validate_labels(
 ) {
     // 분산형은 X 를 한 열로 표현하므로 계열 간 X 가 같아야 한다. 코퍼스는 전건
     // 일치하지만 **포맷의 보장이 아니다** — 다르면 한 열이 한 계열만 조용히 바꾼다.
-    if scatter {
-        let head: Vec<&str> = data
-            .series
-            .first()
-            .map(|s| s.labels.iter().map(|p| p.text.as_str()).collect())
-            .unwrap_or_default();
-        if !data
-            .series
-            .iter()
-            .all(|s| s.labels.iter().map(|p| p.text.as_str()).eq(head.iter().copied()))
-        {
-            out.push(serde_json::json!({
-                "reason": "sharedXRequired",
-                "message": "계열마다 X 값이 달라 CSV 의 X 한 열로 표현할 수 없습니다.",
-            }));
-            return;
-        }
+    if scatter && !labels_shared(data) {
+        out.push(serde_json::json!({
+            "reason": "sharedXRequired",
+            "message": "계열마다 X 값이 달라 CSV 의 X 한 열로 표현할 수 없습니다.",
+        }));
+        return;
     }
 
-    for (i, series) in data.series.iter().enumerate() {
+    // 라벨이 없는 계열은 대조에서 뺀다 — 없는 것과 다른 것은 다르다.
+    for (i, series) in data.series.iter().enumerate().filter(|(_, s)| !s.labels.is_empty()) {
         if labels.len() != series.labels.len() {
             out.push(serde_json::json!({
                 "reason": if scatter { "valueCountMismatch" } else { "categoryMismatch" },

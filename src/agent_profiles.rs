@@ -124,12 +124,14 @@ pub const PROFILES: &[AgentProfile] = &[
     },
     AgentProfile {
         name: "데이터분석",
-        summary: "표 데이터 수확 — HWP 표를 구조화 데이터로, 아카이브 일괄 추출",
+        summary: "표·차트 데이터 수확 — HWP 수치를 구조화 데이터로, 아카이브 일괄 추출",
         tools: &[
             "hwp_info",
             "hwp_export_tables",
             "hwp_table_to_csv",
             "hwp_csv_to_table",
+            "hwp_chart_to_csv",
+            "hwp_csv_to_chart",
             "hwp_extract_data",
             "hwp_search",
             "hwp_batch",
@@ -144,6 +146,8 @@ pub const PROFILES: &[AgentProfile] = &[
             "아카이브 전체의 날짜·금액·수량은 hwp_batch_extract_data (limit 은 문서마다 적용)",
             "값 위치 추적은 hwp_search 의 셀 주소",
             "값 갱신을 되돌려 쓸 때는 hwp_table_to_csv 산출물을 고쳐 hwp_csv_to_table 로 반영",
+            "차트 수치는 hwp_chart_to_csv (행=카테고리·분산형 X, 열=계열), 되돌리기는 hwp_csv_to_chart",
+            "차트 편집은 값만 바꾼다 — 계열·값 개수와 이름·라벨이 다르면 한 칸도 쓰지 않고 invalid",
         ],
     },
     AgentProfile {

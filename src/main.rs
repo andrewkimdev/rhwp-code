@@ -277,6 +277,8 @@ fn main() {
         Some("export-tables") => exit_with(export_tables(&args[2..])),
         Some("table-to-csv") => exit_with(table_to_csv(&args[2..])),
         Some("csv-to-table") => exit_with(csv_to_table(&args[2..])),
+        Some("chart-to-csv") => exit_with(chart_to_csv(&args[2..])),
+        Some("csv-to-chart") => exit_with(csv_to_chart(&args[2..])),
         Some("export-hwpx") => exit_with(export_hwpx(&args[2..])),
         Some("export-hml") => export_hml(&args[2..]),
         Some("export-doclang") => exit_with(export_doclang(&args[2..])),
@@ -937,6 +939,68 @@ fn mcp_tool_definitions() -> Vec<serde_json::Value> {
                 "changedCount",
                 "changed",
                 "invalid",
+                "dryRun",
+                "changedPages",
+                "output",
+                "outputFormat",
+                "verify",
+            ],
+        ),
+        // [#4100 B1] 차트 → CSV. 값이 OOXML 두 표현에 중복 저장돼 있어 되돌릴 때
+        // 한쪽만 쓰면 포맷 변환에서 편집이 사라진다 — 그 짝이 hwp_csv_to_chart 다.
+        tool_with_optional_args(
+            "hwp_chart_to_csv",
+            "문서 안 차트의 숫자 데이터를 RFC 4180 CSV 로 내보낸다 — 행=카테고리(분산형은 X 값), 열=계열. 원본 데이터 시트와 같은 모양이라 스프레드시트에서 바로 고칠 수 있고, hwp_csv_to_chart 로 같은 자리에 되돌려 넣는다. chart 를 생략하면 문서의 차트 전부를 낸다. 차트 번호는 문서 순서 1부터이며 글상자·표 셀 안의 차트도 포함한다.",
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "HWP/HWPX 문서 경로" },
+                    "chart": { "type": "integer", "minimum": 1, "description": "차트 번호(문서 순서, 1부터). 생략하면 전부" },
+                    "output": { "type": "string", "description": "CSV 출력 경로. chart 를 지정하면 파일, 생략하면 차트별 파일(chart<N>.csv)을 담을 디렉터리" },
+                    "bom": { "type": "boolean", "description": "파일 출력에 UTF-8 BOM 을 붙인다 (엑셀 한글 깨짐 방지). 봉투의 csv 문자열에는 붙지 않는다" }
+                },
+                "required": ["path"],
+            }),
+            "chart-to-csv",
+            serde_json::json!(["chart-to-csv", "{path}", "--json"]),
+            serde_json::json!([
+                { "when": "chart", "args": ["--chart", "{chart}"] },
+                { "when": "output", "args": ["-o", "{output}"] },
+                { "when": "bom", "args": ["--bom"] }
+            ]),
+            &["schemaVersion", "source", "chartCount", "charts", "bom", "output", "outputFormat"],
+        ),
+        tool_with_optional_args(
+            "hwp_csv_to_chart",
+            "CSV 파일의 내용으로 기존 차트 N 의 숫자 값을 덮어써 새 문서를 만든다. 계열 수·값 개수·계열명·카테고리 라벨은 바꾸지 않으며(전부 구조 변경이다), CSV 가 차트와 다르면 한 칸도 쓰지 않고 invalid 로 보고한다(exit 2). 값 하나가 OOXML 두 표현(zip 파트·중첩 CFB)에 중복 저장돼 있어 **둘 다에 쓴다** — 한쪽만 쓰면 HWP 변환에서 편집이 조용히 사라진다. 어디에 썼는지는 wrote 로 돌려준다. CSV 는 hwp_chart_to_csv 산출물을 고쳐 쓰는 것이 안전하다.",
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "입력 HWP/HWPX 문서 경로" },
+                    "csv": { "type": "string", "description": "읽을 CSV 파일 경로 (UTF-8, 선두 BOM 허용)" },
+                    "chart": { "type": "integer", "minimum": 1, "description": "덮어쓸 차트 번호(문서 순서, 1부터)" },
+                    "output": { "type": "string", "description": "출력 파일 경로. 생략하면 <입력명>_chart.hwp (HWPX 입력이면 _chart.hwpx)" },
+                    "dryRun": { "type": "boolean", "description": "true 면 파일을 쓰지 않고 바뀔 칸만 보고" },
+                    "verify": { "type": "boolean", "description": "저장 직후 재파싱 IR 자기검증 — 차이가 있으면 exit 3" }
+                },
+                "required": ["path", "csv", "chart"],
+            }),
+            "csv-to-chart",
+            serde_json::json!(["csv-to-chart", "{path}", "--csv", "{csv}", "--chart", "{chart}", "--json"]),
+            serde_json::json!([
+                { "when": "output", "args": ["-o", "{output}"] },
+                { "when": "dryRun", "args": ["--dry-run"] },
+                { "when": "verify", "args": ["--verify"] }
+            ]),
+            &[
+                "schemaVersion",
+                "source",
+                "csv",
+                "chart",
+                "changedCount",
+                "changed",
+                "invalid",
+                "wrote",
                 "dryRun",
                 "changedPages",
                 "output",
@@ -2809,6 +2873,46 @@ fn capabilities_command_entries() -> Vec<serde_json::Value> {
                 "verify",
             ],
         ),
+        // [#4100 B1] 차트 숫자 데이터의 입출구 — 표 CSV 와 같은 왕복 규약.
+        cmd_json(
+            "chart-to-csv",
+            "export",
+            "차트 숫자 데이터를 RFC 4180 CSV 로 내보내기 (행=카테고리·분산형 X, 열=계열)",
+            false,
+            &["--chart", "-o", "--bom", "--json"],
+            &[
+                "schemaVersion",
+                "source",
+                "chartCount",
+                "charts",
+                "bom",
+                "output",
+                "outputFormat",
+            ],
+        ),
+        cmd_json(
+            "csv-to-chart",
+            "edit",
+            "CSV 로 기존 차트 N 의 값 덮어쓰기 — 계열·값 개수 불변, 불일치는 invalid+exit 2. \
+             편집은 OOXML 두 표현(zip 파트·중첩 CFB)에 함께 쓴다",
+            false,
+            &["--csv", "--chart", "-o", "--dry-run", "--verify", "--json"],
+            &[
+                "schemaVersion",
+                "source",
+                "csv",
+                "chart",
+                "changedCount",
+                "changed",
+                "invalid",
+                "wrote",
+                "dryRun",
+                "changedPages",
+                "output",
+                "outputFormat",
+                "verify",
+            ],
+        ),
         cmd_json(
             "extract-pages",
             "export",
@@ -3751,6 +3855,29 @@ fn print_help() {
     println!("      --json                  계약 봉투 JSON을 stdout에 출력");
     println!("      행·열 수가 표와 다르거나 병합으로 덮인 칸에 값이 있으면 한 칸도 쓰지 않고");
     println!("      invalid[] 로 보고하며 사용법 오류(2)로 끝낸다 — 조용히 잘라내지 않는다");
+    println!();
+    println!("  chart-to-csv <파일.hwp|파일.hwpx> [--chart <번호>] [-o <경로>] [--bom] [--json]");
+    println!("      차트 숫자 데이터를 RFC 4180 CSV로 내보내기 (행=카테고리, 열=계열)");
+    println!();
+    println!("      --chart <번호>          한 차트만 (문서 순서, 1부터). 생략하면 전부");
+    println!("      -o, --output <경로>     --chart 지정 시 CSV 파일, 생략 시 차트별 파일");
+    println!("                              (chart<N>.csv)을 담을 폴더");
+    println!("      --bom                   파일 출력에 UTF-8 BOM 추가 (엑셀 한글 깨짐 방지)");
+    println!("      --json                  계약 봉투 JSON을 stdout에 출력");
+    println!("      분산형은 첫 열이 X 값이고 머리 행 첫 칸이 X 로 표시된다");
+    println!();
+    println!("  csv-to-chart <파일.hwp|파일.hwpx> --csv <경로.csv> --chart <번호> [옵션]");
+    println!("      CSV 내용으로 기존 차트 N의 값을 덮어쓰기 (계열·값 개수는 바꾸지 않음)");
+    println!();
+    println!("      --csv <경로>            읽을 CSV 파일 (UTF-8, 선두 BOM 허용)");
+    println!("      --chart <번호>          덮어쓸 차트 (문서 순서, 1부터)");
+    println!("      -o, --output <파일>     출력 경로 (기본: <입력 stem>_chart.hwp/.hwpx)");
+    println!("      --dry-run               파일을 쓰지 않고 바뀔 칸만 보고");
+    println!("      --verify                저장 직후 재파싱 IR 자기검증 (차이 시 exit 3)");
+    println!("      --json                  계약 봉투 JSON을 stdout에 출력");
+    println!("      값은 OOXML 두 표현(zip 파트·중첩 CFB)에 함께 쓴다 — 한쪽만 쓰면 HWP");
+    println!("      변환에서 편집이 사라진다. 어디에 썼는지는 봉투의 wrote[] 로 드러난다");
+    println!("      계열·값 개수나 계열명·라벨이 다르면 한 칸도 쓰지 않고 invalid[] + exit 2");
     println!();
     println!("  export-pdf <파일.hwp|파일.hwpx|파일.hml> [옵션]");
     println!("      HWP/HWPX/HML 문서를 PDF로 내보내기 (기본: SVG 호환 backend)");
@@ -6118,6 +6245,231 @@ fn table_to_csv(args: &[String]) -> i32 {
     EXIT_OK
 }
 
+/// 차트 읽기 봉투에서 `(라벨, 계열명, 계열값, 분산형 여부)` 를 꺼낸다.
+///
+/// 값은 **문자열 그대로** 옮긴다 — 실수로 바꿨다 되쓰면 표기가 달라져 무편집 왕복의
+/// 바이트 동일이 깨진다(코어가 문자열만 받는 이유와 같다).
+fn chart_matrix_from_envelope(
+    read: &serde_json::Value,
+) -> (Vec<String>, Vec<String>, Vec<Vec<String>>, bool) {
+    let strings = |v: &serde_json::Value| -> Vec<String> {
+        v.as_array()
+            .map(|a| {
+                a.iter()
+                    .map(|x| x.as_str().unwrap_or_default().to_string())
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    let labels = strings(&read["labels"]);
+    let series = read["series"].as_array().cloned().unwrap_or_default();
+    let names: Vec<String> = series
+        .iter()
+        .map(|s| s["name"].as_str().unwrap_or_default().to_string())
+        .collect();
+    let values: Vec<Vec<String>> = series.iter().map(|s| strings(&s["values"])).collect();
+    let scatter = read["axis"].as_str() == Some("scatter");
+    (labels, names, values, scatter)
+}
+
+/// `chart-to-csv` — 차트 숫자 데이터를 RFC 4180 CSV 로 내보낸다 (#4100).
+///
+/// 행 = 카테고리(분산형은 X), 열 = 계열. `table-to-csv` 의 `-o`·`--bom`·`--json` 규약을
+/// 그대로 따른다 — 같은 도구로 왕복시킬 수 있어야 한다.
+fn chart_to_csv(args: &[String]) -> i32 {
+    use rhwp::document_core::queries::chart_csv::to_csv;
+    use rhwp::document_core::queries::chart_extract::collect_charts;
+
+    let mut file_path: Option<&str> = None;
+    let mut chart_arg: Option<usize> = None;
+    let mut out_path: Option<String> = None;
+    let mut bom = false;
+    let mut json_mode = false;
+
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--json" => json_mode = true,
+            "--bom" => bom = true,
+            "--chart" => {
+                i += 1;
+                match args.get(i).map(|v| v.parse::<usize>()) {
+                    Some(Ok(value)) if value >= 1 => chart_arg = Some(value),
+                    _ => {
+                        eprintln!("오류: --chart 뒤에 1 이상의 정수가 필요합니다.");
+                        return EXIT_USAGE;
+                    }
+                }
+            }
+            "-o" | "--out" | "--output" => {
+                i += 1;
+                match args.get(i) {
+                    Some(p) => out_path = Some(p.clone()),
+                    None => {
+                        eprintln!("오류: -o 뒤에 출력 경로가 필요합니다.");
+                        return EXIT_USAGE;
+                    }
+                }
+            }
+            other if other.starts_with('-') => {
+                eprintln!("알 수 없는 옵션: {other}");
+                return EXIT_USAGE;
+            }
+            other => {
+                if file_path.replace(other).is_some() {
+                    eprintln!("오류: 입력 파일은 하나만 지정할 수 있습니다: {other}");
+                    return EXIT_USAGE;
+                }
+            }
+        }
+        i += 1;
+    }
+
+    let Some(file_path) = file_path else {
+        eprintln!(
+            "사용법: rhwp chart-to-csv <파일.hwp|파일.hwpx> [--chart <번호>] [-o <경로>] [--bom] [--json]"
+        );
+        return EXIT_USAGE;
+    };
+
+    let data = match fs::read(file_path) {
+        Ok(d) => d,
+        Err(e) => {
+            eprintln!("오류: 파일을 읽을 수 없습니다 - {}: {}", file_path, e);
+            return EXIT_RUNTIME;
+        }
+    };
+    let doc = match rhwp::wasm_api::HwpDocument::from_bytes(&data) {
+        Ok(d) => d,
+        Err(e) => {
+            eprintln!("오류: HWP 파싱 실패 - {}", e);
+            return EXIT_RUNTIME;
+        }
+    };
+
+    let chart_count = collect_charts(doc.document()).len();
+    let selected: Vec<usize> = match chart_arg {
+        Some(n) if n <= chart_count => vec![n - 1],
+        Some(n) => {
+            eprintln!("오류: 차트 {} 번이 없습니다 (차트 {}개).", n, chart_count);
+            return EXIT_RUNTIME;
+        }
+        None => (0..chart_count).collect(),
+    };
+
+    let mut bodies: Vec<(usize, usize, usize, String)> = Vec::new();
+    for index in selected {
+        let read: serde_json::Value =
+            match doc.get_chart_data_by_index_native(index).map(|s| {
+                serde_json::from_str::<serde_json::Value>(&s).unwrap_or(serde_json::Value::Null)
+            }) {
+                Ok(v) => v,
+                Err(e) => {
+                    eprintln!("오류: 차트 {} 읽기 실패 - {:?}", index + 1, e);
+                    return EXIT_RUNTIME;
+                }
+            };
+        if read["ok"] != true {
+            eprintln!(
+                "오류: 차트 {} 를 읽을 수 없습니다 - {}",
+                index + 1,
+                read["invalid"][0]["message"].as_str().unwrap_or("사유 미상")
+            );
+            return EXIT_RUNTIME;
+        }
+        let (labels, names, values, scatter) = chart_matrix_from_envelope(&read);
+        // 행 수는 값이 정한다 — 라벨이 없거나 짧은 차트가 실재한다(chart_csv::to_csv 주석).
+        let rows = values
+            .iter()
+            .map(|s| s.len())
+            .chain(std::iter::once(labels.len()))
+            .max()
+            .unwrap_or(0);
+        bodies.push((
+            index + 1,
+            rows,
+            names.len(),
+            to_csv(&labels, &names, &values, scatter),
+        ));
+    }
+
+    // -o 의 뜻은 --chart 유무로 갈린다 — `table-to-csv` 와 같은 규약(산출물이 여러 개다).
+    let mut written: Vec<Option<String>> = vec![None; bodies.len()];
+    if let Some(dest) = out_path.as_deref() {
+        if chart_arg.is_some() {
+            if let Err(e) = write_csv_file(dest, &bodies[0].3, bom) {
+                eprintln!("오류: 출력 쓰기 실패 - {}: {}", dest, e);
+                return EXIT_RUNTIME;
+            }
+            written[0] = Some(dest.to_string());
+        } else {
+            if let Err(e) = fs::create_dir_all(dest) {
+                eprintln!("오류: 출력 폴더 생성 실패 - {}: {}", dest, e);
+                return EXIT_RUNTIME;
+            }
+            for (slot, (number, _, _, body)) in written.iter_mut().zip(bodies.iter()) {
+                let path = Path::new(dest).join(format!("chart{number}.csv"));
+                let shown = path.to_string_lossy().to_string();
+                if let Err(e) = write_csv_file(&shown, body, bom) {
+                    eprintln!("오류: 출력 쓰기 실패 - {}: {}", shown, e);
+                    return EXIT_RUNTIME;
+                }
+                *slot = Some(shown);
+            }
+        }
+    }
+
+    if json_mode {
+        let charts: Vec<serde_json::Value> = bodies
+            .iter()
+            .zip(written.iter())
+            .map(|((number, rows, cols, body), out)| {
+                let mut entry = serde_json::json!({
+                    "chart": number,
+                    "rowCount": rows,
+                    "colCount": cols,
+                    "csv": body,
+                });
+                if let Some(p) = out {
+                    entry["output"] = serde_json::Value::String(p.clone());
+                }
+                entry
+            })
+            .collect();
+        let mut envelope = serde_json::json!({
+            "schemaVersion": ENVELOPE_SCHEMA_VERSION,
+            "source": file_path,
+            "chartCount": charts.len(),
+            "charts": charts,
+            // BOM 은 파일 인코딩 표식이라 봉투의 csv 문자열에는 붙이지 않는다
+            // (`table-to-csv` 와 같은 이유).
+            "bom": bom,
+        });
+        if let Some(p) = out_path {
+            envelope["output"] = serde_json::Value::String(p);
+            envelope["outputFormat"] = serde_json::Value::String("csv".to_string());
+        }
+        println!("{}", provenance::marked(envelope, "chart-to-csv"));
+        return EXIT_OK;
+    }
+
+    if out_path.is_some() {
+        println!("차트 CSV 내보내기 완료: {} (차트 {}개)", file_path, bodies.len());
+        for out in written.iter().flatten() {
+            println!("  {out}");
+        }
+        return EXIT_OK;
+    }
+
+    for (number, rows, cols, body) in &bodies {
+        if bodies.len() > 1 {
+            println!("# chart{number} ({rows}x{cols})");
+        }
+        print!("{body}");
+    }
+    EXIT_OK
+}
+
 /// CSV 본문 하나를 파일로 쓴다 (선택적 UTF-8 BOM — 엑셀 한글 깨짐 방지).
 fn write_csv_file(path: &str, body: &str, bom: bool) -> std::io::Result<()> {
     use rhwp::document_core::queries::table_csv::UTF8_BOM;
@@ -6521,6 +6873,279 @@ fn csv_to_table(args: &[String]) -> i32 {
             rows,
             cols,
             changed.len()
+        );
+    }
+    if verify_failed {
+        eprintln!("검증 실패(--verify): 저장본 재파싱 IR 차이 — 상세는 --json 또는 ir-diff");
+        process::exit(3);
+    }
+    EXIT_OK
+}
+
+/// `csv-to-chart` — CSV 내용으로 기존 차트 N 의 숫자 값을 덮어쓴다 (#4100).
+///
+/// **크기는 바꾸지 않는다.** 계열 수·값 개수·계열명·카테고리 라벨이 다르면 한 칸도 쓰지
+/// 않고 `invalid[]` 로 보고하며 exit 2 다 — `csv-to-table` 과 같은 규약이다.
+///
+/// 검증은 전부 코어(`set_chart_data_by_index_native`)가 한다. 여기서 하는 것은 CSV 를
+/// 행렬로 읽어 넘기고 봉투를 실어 나르는 일뿐이다 — 검증기가 코어와 CLI 로 갈리면
+/// 둘이 서로 다른 것을 허용하기 시작한다.
+fn csv_to_chart(args: &[String]) -> i32 {
+    use rhwp::document_core::queries::chart_csv::from_csv;
+    use rhwp::document_core::queries::chart_extract::collect_charts;
+
+    let mut file_path: Option<&str> = None;
+    let mut csv_path: Option<String> = None;
+    let mut chart_arg: Option<usize> = None;
+    let mut out_path: Option<String> = None;
+    let mut dry_run = false;
+    let mut verify_mode = false;
+    let mut json_mode = false;
+
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--json" => json_mode = true,
+            "--dry-run" => dry_run = true,
+            "--verify" => verify_mode = true,
+            "--csv" => {
+                i += 1;
+                match args.get(i) {
+                    Some(p) => csv_path = Some(p.clone()),
+                    None => {
+                        eprintln!("오류: --csv 뒤에 CSV 파일 경로가 필요합니다.");
+                        return EXIT_USAGE;
+                    }
+                }
+            }
+            "--chart" => {
+                i += 1;
+                match args.get(i).map(|v| v.parse::<usize>()) {
+                    Some(Ok(value)) if value >= 1 => chart_arg = Some(value),
+                    _ => {
+                        eprintln!("오류: --chart 뒤에 1 이상의 정수가 필요합니다.");
+                        return EXIT_USAGE;
+                    }
+                }
+            }
+            "-o" | "--output" => {
+                i += 1;
+                match args.get(i) {
+                    Some(p) => out_path = Some(p.clone()),
+                    None => {
+                        eprintln!("오류: -o 뒤에 출력 파일 경로가 필요합니다.");
+                        return EXIT_USAGE;
+                    }
+                }
+            }
+            other if other.starts_with('-') => {
+                eprintln!("알 수 없는 옵션: {other}");
+                return EXIT_USAGE;
+            }
+            other => {
+                if file_path.replace(other).is_some() {
+                    eprintln!("오류: 입력 파일은 하나만 지정할 수 있습니다: {other}");
+                    return EXIT_USAGE;
+                }
+            }
+        }
+        i += 1;
+    }
+
+    let (Some(file_path), Some(csv_path), Some(chart_no)) = (file_path, csv_path, chart_arg) else {
+        eprintln!(
+            "사용법: rhwp csv-to-chart <파일.hwp|파일.hwpx> --csv <경로.csv> --chart <번호> [-o <출력>] [--dry-run] [--verify] [--json]"
+        );
+        return EXIT_USAGE;
+    };
+
+    let csv_bytes = match fs::read(&csv_path) {
+        Ok(d) => d,
+        Err(e) => {
+            eprintln!("오류: CSV 파일을 읽을 수 없습니다 - {}: {}", csv_path, e);
+            return EXIT_RUNTIME;
+        }
+    };
+    let csv_text = match String::from_utf8(csv_bytes) {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln!("오류: CSV 가 UTF-8 이 아닙니다 - {}: {}", csv_path, e);
+            return EXIT_RUNTIME;
+        }
+    };
+
+    let bytes = match fs::read(file_path) {
+        Ok(d) => d,
+        Err(e) => {
+            eprintln!("오류: 파일을 읽을 수 없습니다 - {}: {}", file_path, e);
+            return EXIT_RUNTIME;
+        }
+    };
+    let mut doc = match rhwp::wasm_api::HwpDocument::from_bytes(&bytes) {
+        Ok(d) => d,
+        Err(e) => {
+            eprintln!("오류: HWP 파싱 실패 - {}", e);
+            return EXIT_RUNTIME;
+        }
+    };
+
+    let chart_count = collect_charts(doc.document()).len();
+    if chart_no > chart_count {
+        eprintln!("오류: 차트 {} 번이 없습니다 (차트 {}개).", chart_no, chart_count);
+        return EXIT_RUNTIME;
+    }
+    let index = chart_no - 1;
+
+    // ── 1) CSV 구조 — 차트와의 대조는 코어가 한다 ──
+    let parsed = match from_csv(&csv_text) {
+        Ok(v) => v,
+        Err(e) => {
+            let invalid = vec![serde_json::json!({
+                "reason": "csvParse", "message": e.to_string(),
+            })];
+            if json_mode {
+                let envelope = serde_json::json!({
+                    "schemaVersion": ENVELOPE_SCHEMA_VERSION,
+                    "source": file_path, "csv": csv_path, "chart": chart_no,
+                    "changedCount": 0, "changed": [], "invalid": invalid,
+                    "wrote": [], "dryRun": dry_run,
+                    "changedPages": serde_json::Value::Null,
+                });
+                println!("{}", provenance::marked(envelope, "csv-to-chart"));
+            } else {
+                eprintln!("오류: {e}");
+            }
+            return EXIT_USAGE;
+        }
+    };
+
+    // ── 2) 코어에 행렬을 그대로 넘긴다 ──
+    let edits = serde_json::json!({
+        "labels": parsed.labels,
+        "series": parsed
+            .names
+            .iter()
+            .zip(parsed.values.iter())
+            .map(|(name, values)| serde_json::json!({"name": name, "values": values}))
+            .collect::<Vec<_>>(),
+        "dryRun": dry_run,
+    });
+    let result: serde_json::Value = match doc
+        .set_chart_data_by_index_native(index, &edits.to_string())
+        .map(|s| serde_json::from_str(&s).unwrap_or(serde_json::Value::Null))
+    {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("오류: 차트 {} 편집 실패 - {:?}", chart_no, e);
+            return EXIT_RUNTIME;
+        }
+    };
+
+    if result["ok"] != true {
+        let invalid = result["invalid"].clone();
+        if json_mode {
+            let envelope = serde_json::json!({
+                "schemaVersion": ENVELOPE_SCHEMA_VERSION,
+                "source": file_path, "csv": csv_path, "chart": chart_no,
+                "changedCount": 0, "changed": [], "invalid": invalid,
+                "wrote": [], "dryRun": dry_run,
+                "changedPages": serde_json::Value::Null,
+            });
+            println!("{}", provenance::marked(envelope, "csv-to-chart"));
+        } else {
+            for item in invalid.as_array().unwrap_or(&Vec::new()) {
+                eprintln!(
+                    "오류: {}",
+                    item["message"].as_str().unwrap_or("CSV 가 차트와 맞지 않습니다.")
+                );
+            }
+        }
+        return EXIT_USAGE;
+    }
+
+    let changed = result["changed"].clone();
+    let changed_count = result["changedCount"].as_u64().unwrap_or(0);
+    let wrote = result["wrote"].clone();
+
+    // ── 3) 저장 ──
+    let out_format = edit_output_format(&bytes, out_path.as_deref());
+    let output_path = out_path.unwrap_or_else(|| {
+        let stem = Path::new(file_path)
+            .file_stem()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_else(|| "output".to_string());
+        format!("{}_chart.{}", stem, out_format.ext())
+    });
+
+    let mut verify_report = serde_json::Value::Null;
+    let mut verify_failed = false;
+    if !dry_run {
+        let out_bytes = match edit_serialize(&mut doc, out_format) {
+            Ok(b) => b,
+            Err(e) => {
+                eprintln!(
+                    "오류: {} 직렬화 실패 - {}",
+                    out_format.label().to_uppercase(),
+                    e
+                );
+                return EXIT_RUNTIME;
+            }
+        };
+        if let Err(e) = fs::write(&output_path, &out_bytes) {
+            eprintln!("오류: 출력 쓰기 실패 - {}: {}", output_path, e);
+            return EXIT_RUNTIME;
+        }
+        if verify_mode {
+            let cross = out_format == EditOutputFormat::Hwp
+                && rhwp::parser::detect_format(&bytes) == rhwp::parser::FileFormat::Hwpx;
+            let (report, failed) = edit_verify_report(&doc, &out_bytes, cross);
+            verify_report = report;
+            verify_failed = failed;
+        }
+    }
+
+    if json_mode {
+        let mut envelope = serde_json::json!({
+            "schemaVersion": ENVELOPE_SCHEMA_VERSION,
+            "source": file_path,
+            "csv": csv_path,
+            "chart": chart_no,
+            "changedCount": changed_count,
+            "changed": changed,
+            "invalid": [],
+            "wrote": wrote,
+            "dryRun": dry_run,
+            "changedPages": serde_json::Value::Null,
+        });
+        if !dry_run {
+            envelope["output"] = serde_json::Value::String(output_path.clone());
+            envelope["outputFormat"] = serde_json::Value::String(out_format.label().to_string());
+            envelope["verify"] = verify_report.clone();
+        }
+        println!("{}", provenance::marked(envelope, "csv-to-chart"));
+        if verify_failed {
+            process::exit(3);
+        }
+        return EXIT_OK;
+    }
+
+    if dry_run {
+        println!("변경 예정: {} 차트{} — {}칸", file_path, chart_no, changed_count);
+    } else {
+        println!(
+            "차트 기록 완료: {} → {} — 차트{} {}칸 ({})",
+            file_path,
+            output_path,
+            chart_no,
+            changed_count,
+            wrote
+                .as_array()
+                .map(|a| a
+                    .iter()
+                    .filter_map(|v| v.as_str())
+                    .collect::<Vec<_>>()
+                    .join("+"))
+                .unwrap_or_default()
         );
     }
     if verify_failed {

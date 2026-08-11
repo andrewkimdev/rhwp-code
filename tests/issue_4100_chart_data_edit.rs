@@ -1058,6 +1058,104 @@ fn dry_run_reports_the_diff_without_writing() {
     assert_eq!(slot_bytes(&core), before, "dry-run 이 바이트를 바꿨다");
 }
 
+// ---------------------------------------------------------------------------
+// Stage 5 — 실사용 문서 회귀 (코퍼스가 못 보여 준 변종)
+// ---------------------------------------------------------------------------
+
+/// 실사용 보고서 — 차트 2개, 계열 6개, **한 계열에 `c:cat` 이 없다**.
+const REPORT_SAMPLE: &str = "samples/issue2006/1790387_prep_final_report.hwpx";
+
+/// **라벨이 없는 계열이 있어도 값이 사라지지 않는다.**
+///
+/// `samples/chart/` 코퍼스는 전건이 계열마다 `c:cat` 을 갖고 있어 이 변종을 못 보여 준다.
+/// 실사용 문서에서 첫 계열에 `c:cat` 이 없었고, 그 탓에
+///
+/// - 코어가 `series[0]` 의 라벨(빈 목록)을 문서 전체 라벨로 보고했고
+/// - CSV 내보내기가 행 수를 라벨 수로 잡아 **6계열 × 6값 = 36칸이 통째로 사라진** CSV 를 냈다
+///
+/// 오류도 경고도 없었다. 죽지 않고 틀린 산출이라 눈으로 알아채기 어렵다.
+#[test]
+fn charts_with_partial_category_labels_keep_every_value() {
+    use rhwp::document_core::queries::chart_csv::{from_csv, to_csv};
+
+    let path = manifest(REPORT_SAMPLE);
+    let core = core_of(&path);
+    let charts = collect_charts(core.document());
+    assert_eq!(charts.len(), 2, "이 문서는 차트 2개다");
+
+    let read: serde_json::Value =
+        serde_json::from_str(&core.get_chart_data_by_index_native(0).expect("읽기")).expect("JSON");
+    assert_eq!(read["ok"], true);
+
+    let labels: Vec<String> = read["labels"]
+        .as_array()
+        .expect("labels")
+        .iter()
+        .map(|v| v.as_str().expect("문자열").to_string())
+        .collect();
+    let series = read["series"].as_array().expect("series");
+    assert_eq!(series.len(), 6, "계열 6개");
+    assert!(
+        !labels.is_empty(),
+        "라벨을 가진 계열이 있는데 빈 목록이 나왔다 — series[0] 만 보고 있다"
+    );
+
+    let names: Vec<String> = series
+        .iter()
+        .map(|s| s["name"].as_str().unwrap_or_default().to_string())
+        .collect();
+    let values: Vec<Vec<String>> = series
+        .iter()
+        .map(|s| {
+            s["values"]
+                .as_array()
+                .expect("values")
+                .iter()
+                .map(|v| v.as_str().expect("문자열").to_string())
+                .collect()
+        })
+        .collect();
+    assert!(values.iter().all(|v| v.len() == 6), "계열마다 값 6개");
+
+    let csv = to_csv(&labels, &names, &values, false);
+    let back = from_csv(&csv).expect("되읽기");
+    assert_eq!(back.values, values, "CSV 왕복에서 값이 사라졌다");
+    assert_eq!(back.names, names);
+}
+
+/// 그 문서의 무편집 CSV 왕복도 한 칸도 바꾸지 않는다.
+#[test]
+fn the_real_report_round_trips_without_changes() {
+    let mut core = core_of(&manifest(REPORT_SAMPLE));
+    let before = slot_bytes(&core);
+    let edits = edits_from(&core, 0);
+    let out = set_chart(&mut core, &edits);
+    assert_eq!(out["ok"], true, "{out}");
+    assert_eq!(out["changedCount"], 0, "{out}");
+    assert_eq!(slot_bytes(&core), before, "무편집인데 바이트가 바뀌었다");
+}
+
+/// 그 문서에서도 편집은 ①② 에 함께 실린다.
+#[test]
+fn the_real_report_accepts_an_edit_in_both_representations() {
+    let mut core = core_of(&manifest(REPORT_SAMPLE));
+    let chart = collect_charts(core.document())[0].clone();
+    let mut edits = edits_from(&core, 0);
+    edits["series"][0]["values"][0] = serde_json::json!("0.999");
+
+    let out = set_chart(&mut core, &edits);
+    assert_eq!(out["ok"], true, "{out}");
+    assert_eq!(out["changedCount"], 1, "{out}");
+    assert_eq!(out["wrote"][0], "zipPart");
+    assert_eq!(out["wrote"][1], "nestedCopy");
+
+    let nested = core.document().bin_data_content[chart.nested_copy.expect("②")]
+        .data
+        .load();
+    let ooxml = stream_of(&nested, OOXML_STREAM).expect("②");
+    assert!(String::from_utf8_lossy(&ooxml).contains("<c:v>0.999</c:v>"));
+}
+
 /// 분산형은 X 도 편집 대상이다 — 계열이 X 를 공유하므로 두 칸이 함께 바뀐다.
 #[test]
 fn scatter_x_values_are_editable() {
