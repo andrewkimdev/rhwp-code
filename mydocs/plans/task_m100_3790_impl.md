@@ -9,8 +9,9 @@
 - **절차 상태**: Stage 3·4 merge·canary 완료. Stage 5A는 원격 SARIF·시간 비교, 최종 CI·GHAS와 리뷰
   보정을 통과해 PR #4341 merge commit `8ea92cdad120`으로 완료했다. Stage 5A 전용 worktree와 브랜치는
   정리했고 Stage 2.6 controller 유일본은 보존했다. 2026-08-11 `devel` required context가 `Build & Test`
-  하나임을 직접 확인한 뒤 최신 devel에서 Stage 5B의 trusted-base 언어 선택과 고정 check identity를
-  구현·focused 검증한다.
+  하나임을 직접 확인한 뒤 Stage 5B의 trusted-base 언어 선택과 고정 check identity를 구현·focused
+  검증했다. Draft PR #4519에는 최신 devel `32ecfd113690`을 반영하고 reviewer `edwardkim` 지정과
+  archive 검토 기록을 완료했으며, 최종 head의 수동 full CI·CodeQL 확인을 남겼다.
 
 ## Stage 1 — shadow classifier
 

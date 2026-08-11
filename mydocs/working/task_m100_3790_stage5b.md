@@ -3,8 +3,9 @@
 - **이슈**: [#3790](https://github.com/edwardkim/rhwp/issues/3790)
 - **브랜치**: `issue-3790-stage5b-codeql-languages`
 - **worktree**: `tmp/issue-3790-stage5b-codeql`
-- **기준**: `upstream/devel` `8ea92cdad120` (#4341 merge)
-- **상태**: Draft PR #4519 1차 CI 통과, 리뷰 F1·F2·F4 보정·focused 검증 완료
+- **최초 기준**: `upstream/devel` `8ea92cdad120` (#4341 merge)
+- **최신 동기화 기준**: `upstream/devel` `32ecfd113690` (#4512 merge)
+- **상태**: Draft PR #4519 최신 devel 반영, reviewer·검토 기록 완료, 최종 full CI·CodeQL 확인 대기
 
 ## 선행 정리
 
@@ -77,9 +78,19 @@ PR 생성은 별도 승인 뒤 진행한다.
   고정한다.
 - F4를 수용해 fast-pass Summary의 언어·authority·status를 `n/a (fast-pass)`로 표시하고 fast-pass 사유를
   별도로 남긴다.
-- F3 review 문서는 reviewer 지정 승인 뒤 추가해야 하므로 이번 code 보정 commit에서는 다루지 않는다.
+- F3에 따라 reviewer `edwardkim`을 지정하고
+  [`pr_4519_review.md`](../pr/archives/pr_4519_review.md)를 추가했다.
 - TDD RED에서 consumer fallback 부재와 fast-pass Summary 오표시 2건을 확인했다. 보정 뒤 CodeQL 계약
   12/12, classifier 28/28, `actionlint`, `git diff --check`가 통과했다.
 - `python3 -m unittest discover -s scripts/tests -p 'test_*.py'`는 Homebrew Python 3.14에 Pillow가 없어
   `test_visual_sweep` import에서 중단됐다. 코드 실패가 아니므로 Pillow 12.2.0을 포함한 Codex 번들
   Python으로 같은 discover 범위를 재실행했고 188/188이 통과했다.
+
+## 최신 devel 반영과 최종 검증 준비
+
+- `upstream/devel` `32ecfd1136905c7b1bb26b16c47579a16143d305`를 merge commit
+  `64175764120e97eb9af0f0a55be4da86c072cdc6`으로 충돌 없이 반영했다.
+- current-base merge 뒤 CodeQL workflow 계약 12/12, 전체 Python 188/188, classifier 28/28,
+  `actionlint`, `git diff --check`가 통과했다.
+- 최종 문서 trailing commit을 push한 뒤 같은 head에서 수동 `workflow_dispatch` CI와 CodeQL full lane을
+  시작한다. 완료 확인과 Draft 해제·merge는 작업지시자가 별도로 수행한다.
