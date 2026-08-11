@@ -35,8 +35,12 @@ LINE_RE = re.compile(
     r"^(\s*)TextLine\s+y=\s*([0-9.]+)\.\.\s*[0-9.]+\s+h=\s*([0-9.]+)\s.*?pi=(\d+)\s+line=(\d+)\s+vpos=(-?\d+)"
 )
 PAGE_RE = re.compile(r"^Page\s")
-NODE_RE = re.compile(r"^(\s*)(\S+)\s")
+# dump-extents 는 미분류 노드를 전부 "기타"로 인쇄한다 — `[A-Za-z]` 앵커는 이 라벨을
+# 스택에 못 올려 글상자·도형류 FOREIGN 가드가 사문화됐다(#4533 ④-c: 통계청 156667809
+# ·근무성적 113424·누리과정 위양성의 실체). 모든 노드 행은 ` y=` 를 가지므로 그걸 앵커로 쓴다.
+NODE_RE = re.compile(r"^(\s*)(\S+)\s+y=")
 # 이 컨테이너 아래 줄은 본문 흐름 좌표계가 아니다 — 셀·글상자·도형·머리/꼬리말·각주.
+# "기타" = dump-extents 의 미분류 컨테이너(글상자·도형·이미지 등 전부).
 FOREIGN = {
     "Table", "TableCell", "Header", "Footer", "FootnoteArea", "TextBox",
     "Shape", "Group", "Rect", "Ellipse", "Path", "Equation", "MasterPage", "Image",
