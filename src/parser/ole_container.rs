@@ -185,6 +185,38 @@ pub fn ole_root_clsid(cfb_bytes: &[u8]) -> Option<[u8; 16]> {
     crate::parser::cfb_reader::root_clsid(cfb_bytes)
 }
 
+/// 중첩 OLE CFB 의 **모든** 스트림을 `(경로, 바이트)` 로 열거한다. (#4100)
+///
+/// [`parse_ole_container`] 는 아는 이름 4종만 뽑으므로 **재포장에 쓸 수 없다** — 나머지가
+/// 소실된다. 차트 편집은 `OOXMLChartContents` 하나만 갈고 나머지(레거시 `Contents`,
+/// `\x02OlePres000` EMF)는 바이트 그대로 되실어야 하므로 전수 열거가 필요하다.
+///
+/// 경로는 플랫폼 무관 표기로 정규화한다 — Windows 의 `cfb` 는 `/BinData\BIN0001.OLE`
+/// 처럼 구분자를 섞어 돌려주는데, 반환값을 **이름으로 비교**하는 소비자가 있다.
+///
+/// #4055 스파이크가 코퍼스 28종에서 "아는 4종 밖 스트림 0건"을 실측했다. 그래도 이름을
+/// 고정하지 않고 전수로 도는 이유는, 그 관찰이 코퍼스의 성질이지 포맷의 보장이 아니라서다.
+pub fn all_ole_streams(cfb_bytes: &[u8]) -> Option<Vec<(String, Vec<u8>)>> {
+    if cfb_bytes.len() < 8 {
+        return None;
+    }
+    let mut comp = CompoundFile::open(Cursor::new(cfb_bytes)).ok()?;
+    let paths: Vec<std::path::PathBuf> = comp
+        .walk()
+        .filter(|e| e.is_stream())
+        .map(|e| e.path().to_path_buf())
+        .collect();
+
+    let mut out = Vec::with_capacity(paths.len());
+    for path in paths {
+        let mut buf = Vec::new();
+        let mut stream = comp.open_stream(&path).ok()?;
+        stream.read_to_end(&mut buf).ok()?;
+        out.push((path.to_string_lossy().replace('\\', "/"), buf));
+    }
+    Some(out)
+}
+
 fn contains_bytes(haystack: &[u8], needle: &[u8]) -> bool {
     !needle.is_empty() && haystack.windows(needle.len()).any(|w| w == needle)
 }

@@ -1,7 +1,8 @@
 //! [#4100] B1 엔진축 — 차트 숫자 데이터 편집.
 //!
-//! **Stage 1 게이트.** OOXML 차트 XML 위의 구조 스캐너와 최소 diff 패처만 검증한다.
-//! 슬롯 해석(①`Chart/chartN.xml` ②중첩 CFB)·CSV 왕복·CLI 는 Stage 2 이후다.
+//! **Stage 1~2 게이트.** OOXML 차트 XML 위의 구조 스캐너·최소 diff 패처(Stage 1)와
+//! 중첩 CFB 스트림 교체(Stage 2)를 검증한다. 주소 해석(①`Chart/chartN.xml` ↔ ②중첩
+//! CFB)·CSV 왕복·CLI 는 Stage 3 이후다.
 //!
 //! 스캐너를 따로 만드는 이유는 `src/ooxml_chart/parser.rs` 가 **손실 파서**이기
 //! 때문이다 — `c:pt idx`·`c:f`·`c:externalData`·`extLst` 를 읽지 않아 파싱→재방출로
@@ -11,11 +12,16 @@
 #[path = "support/issue_4055_chart_probe.rs"]
 mod chart_probe_support;
 
-use chart_probe_support::{chart_streams, corpus, manifest};
+use chart_probe_support::{chart_streams, corpus, manifest, root_clsid};
 
 use rhwp::ooxml_chart::data::{scan_chart_values, SeriesAxis};
 use rhwp::ooxml_chart::patch::{apply_value_edits, EditTarget, PatchError, ValueEdit};
 use rhwp::ooxml_chart::OoxmlChart;
+use rhwp::parser::ole_container::{all_ole_streams, ole_root_clsid};
+use rhwp::serializer::ole_container::{replace_ole_stream, OleRepackError};
+
+/// 중첩 CFB 안 OOXML 차트 스트림의 이름.
+const OOXML_STREAM: &str = "OOXMLChartContents";
 
 /// 코퍼스 28종 × 2포맷. `samples/chart/` 에 파일을 커밋하면 이 수가 깨진다 —
 /// `issue_4055_b1_chart_edit_probe.rs` 의 `checked == 56` 과 같은 고정이다.
@@ -36,6 +42,38 @@ fn corpus_charts() -> Vec<(std::path::PathBuf, Vec<u8>)> {
     }
     assert_eq!(out.len(), CORPUS_FILES, "코퍼스 28종 × 2포맷");
     out
+}
+
+/// `(경로, 중첩 CFB 바이트)` 전건.
+///
+/// IR 의 `bin_data_content` 에는 **접두어 없는 맨 중첩 CFB** 가 들어 있다 — 4바이트 LE
+/// 크기 접두어는 직렬화기가 붙이고 파서가 뗀다(`serializer/cfb_writer.rs`).
+fn corpus_nested_cfbs() -> Vec<(std::path::PathBuf, Vec<u8>)> {
+    let mut out = Vec::new();
+    for hwpx in corpus() {
+        for path in [hwpx.with_extension("hwpx"), hwpx.with_extension("hwp")] {
+            let bytes = std::fs::read(&path).expect("샘플 읽기");
+            let doc = rhwp::parse_document(&bytes)
+                .unwrap_or_else(|e| panic!("{}: 파싱 {e:?}", path.display()));
+            let nested = doc
+                .bin_data_content
+                .iter()
+                .map(|c| c.data.load())
+                .find(|b| b.starts_with(&[0xD0, 0xCF, 0x11, 0xE0]))
+                .unwrap_or_else(|| panic!("{}: 중첩 CFB 를 못 찾았다", path.display()));
+            out.push((path, nested));
+        }
+    }
+    assert_eq!(out.len(), CORPUS_FILES, "코퍼스 28종 × 2포맷");
+    out
+}
+
+/// 중첩 CFB 에서 스트림 하나를 꺼낸다.
+fn stream_of(cfb: &[u8], name: &str) -> Option<Vec<u8>> {
+    all_ole_streams(cfb)?
+        .into_iter()
+        .find(|(p, _)| p.trim_start_matches('/') == name)
+        .map(|(_, d)| d)
 }
 
 /// 모든 값 점을 **자기 텍스트 그대로** 쓰는 편집 목록. 무편집 왕복의 재료다.
@@ -317,4 +355,139 @@ fn patcher_rejects_bad_addresses_duplicates_and_unsafe_text() {
     let err = apply_value_edits(&ooxml, &scan, &[value(0, 0, "1"), value(0, 0, "2")])
         .expect_err("같은 점을 두 번 지목하면 거부");
     assert!(matches!(err, PatchError::DuplicateTarget { .. }), "{err:?}");
+}
+
+// ---------------------------------------------------------------------------
+// Stage 2 — 중첩 CFB 스트림 교체 (②축의 재료)
+// ---------------------------------------------------------------------------
+
+/// **재포장이 아는 4종 밖 스트림까지 살린다.**
+///
+/// `parse_ole_container` 로 재포장하면 나머지가 소실되므로 `all_ole_streams` 전수
+/// 열거 위에 선다. 코퍼스는 `Contents`·`\x02OlePres000`·`OOXMLChartContents` 셋인데,
+/// 이름을 고정하지 않고 **집합이 보존되는지**로 판정한다.
+#[test]
+fn repack_preserves_every_stream_and_leaves_the_others_byte_identical() {
+    let mut checked = 0usize;
+    for (path, nested) in corpus_nested_cfbs() {
+        let before = all_ole_streams(&nested)
+            .unwrap_or_else(|| panic!("{}: 중첩 CFB 열거 실패", path.display()));
+        assert!(
+            before.iter().any(|(p, _)| p.trim_start_matches('/') == OOXML_STREAM),
+            "{}: OOXMLChartContents 가 없다",
+            path.display()
+        );
+
+        let ooxml = stream_of(&nested, OOXML_STREAM).expect("OOXML");
+        let scan = scan_chart_values(&ooxml).expect("스캔");
+        let patched = apply_value_edits(
+            &ooxml,
+            &scan,
+            &[ValueEdit {
+                series: 0,
+                point: 0,
+                target: EditTarget::Value,
+                text: "91.7".to_string(),
+            }],
+        )
+        .expect("패치");
+
+        let repacked = replace_ole_stream(&nested, OOXML_STREAM, &patched)
+            .unwrap_or_else(|e| panic!("{}: 재포장 {e}", path.display()));
+        let after = all_ole_streams(&repacked).expect("재포장본 열거");
+
+        let names_before: Vec<&str> = before.iter().map(|(p, _)| p.as_str()).collect();
+        let names_after: Vec<&str> = after.iter().map(|(p, _)| p.as_str()).collect();
+        assert_eq!(names_after, names_before, "{}: 스트림 집합", path.display());
+
+        for (name, bytes) in &before {
+            if name.trim_start_matches('/') == OOXML_STREAM {
+                continue;
+            }
+            let now = stream_of(&repacked, name.trim_start_matches('/')).expect("스트림");
+            assert_eq!(&now, bytes, "{}: `{name}` 이 바뀌었다", path.display());
+        }
+
+        assert_eq!(
+            stream_of(&repacked, OOXML_STREAM).as_deref(),
+            Some(patched.as_slice()),
+            "{}: 새 OOXML 이 실리지 않았다",
+            path.display()
+        );
+        checked += 1;
+    }
+    assert_eq!(checked, CORPUS_FILES);
+}
+
+/// **루트 CLSID 가 살아남는다** — 떨구면 한컴이 개체를 알아보지 못해 내용을 비운다(#4097).
+///
+/// 판정은 `cfb` 크레이트 오라클(`root_clsid`)로 한다. rhwp 의 `ole_root_clsid` 로만
+/// 재면 읽기·쓰기가 같은 오프셋 오해를 공유해도 통과해 버린다.
+#[test]
+fn repack_preserves_the_root_class_id() {
+    let mut checked = 0usize;
+    for (path, nested) in corpus_nested_cfbs() {
+        let original = root_clsid(&nested);
+        assert_ne!(
+            original,
+            [0u8; 16],
+            "{}: 원본 CLSID 가 0 이면 판정이 공허하다",
+            path.display()
+        );
+
+        let ooxml = stream_of(&nested, OOXML_STREAM).expect("OOXML");
+        let scan = scan_chart_values(&ooxml).expect("스캔");
+        let patched = apply_value_edits(
+            &ooxml,
+            &scan,
+            &[ValueEdit {
+                series: 0,
+                point: 0,
+                target: EditTarget::Value,
+                text: "91.7".to_string(),
+            }],
+        )
+        .expect("패치");
+        let repacked = replace_ole_stream(&nested, OOXML_STREAM, &patched).expect("재포장");
+
+        assert_eq!(root_clsid(&repacked), original, "{}", path.display());
+        assert_eq!(ole_root_clsid(&repacked), Some(original), "{}", path.display());
+        checked += 1;
+    }
+    assert_eq!(checked, CORPUS_FILES);
+}
+
+/// **바뀐 게 없으면 중첩 CFB 를 다시 쓰지 않는다.**
+///
+/// 재포장은 섹터 배치가 원본 작성기와 달라 바이트 동일을 보장하지 않는다. 짧은 회로가
+/// 없으면 "무편집 왕복 바이트 동일"(수용 기준 2)이 재포장만으로 깨진다.
+#[test]
+fn unchanged_stream_content_skips_the_repack_entirely() {
+    let mut checked = 0usize;
+    for (path, nested) in corpus_nested_cfbs() {
+        let ooxml = stream_of(&nested, OOXML_STREAM).expect("OOXML");
+        let out = replace_ole_stream(&nested, OOXML_STREAM, &ooxml).expect("재포장");
+        assert_eq!(out, nested, "{}: 무편집인데 바이트가 바뀌었다", path.display());
+        checked += 1;
+    }
+    assert_eq!(checked, CORPUS_FILES);
+}
+
+/// 없는 스트림은 새로 만들지 않고 거부한다 — 이름 오타가 조용히 파일을 망치지 않게.
+#[test]
+fn repack_refuses_to_invent_a_missing_stream() {
+    let path = manifest("samples/chart/세로막대형/묶은세로막대형.hwpx");
+    let bytes = std::fs::read(&path).expect("샘플 읽기");
+    let doc = rhwp::parse_document(&bytes).expect("파싱");
+    let nested = doc
+        .bin_data_content
+        .iter()
+        .map(|c| c.data.load())
+        .find(|b| b.starts_with(&[0xD0, 0xCF, 0x11, 0xE0]))
+        .expect("중첩 CFB");
+
+    assert_eq!(
+        replace_ole_stream(&nested, "OOXMLChartContent", b"x"),
+        Err(OleRepackError::StreamNotFound("OOXMLChartContent".to_string()))
+    );
 }
