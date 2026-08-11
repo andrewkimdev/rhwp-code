@@ -45,7 +45,6 @@ AXIS = [
                          "src/provenance.rs", "src/schema_registry.rs",
                          "src/capsule_sign.rs"]),
     ("계약 가드(tests)", ["tests/*contract*.rs"]),
-    ("바인딩(node)", ["bindings/node"]),
     ("하네스 도구", ["tools/roadmap_progress.py", "tools/agent_preflight.py",
                   "tools/gen_agent_codex.py", "tools/agent_dominance_metrics.py"]),
 ]

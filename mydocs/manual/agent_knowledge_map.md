@@ -144,7 +144,7 @@ IR·provenance·plan 네 축을 한 번에 조립하고, 빠진 축은 `missingA
 | 두 문서 IR 차이 | `ir-diff --json` (`hwp_ir_diff`) | `identical`·`diffCount`·`categories` | [ir-diff 매뉴얼](ir_diff_command.md) |
 | 라운드트립 시각 회귀 | `render-diff --json` (`hwp_render_diff`) | `status`·`maxDisp`·`regression` | [CLI 매뉴얼](cli_commands.md) §render-diff |
 | 조판 결과 덤프 | `dump-pages --json` | `pages[].columns[].items[]` | [dump 매뉴얼](dump_command.md) |
-| IR 모양 코드 생성 | `export-ir-schema --json` | `schema`·`definitionCount` | [바인딩 기초](../tech/bindings_foundation.md) |
+| IR 모양 코드 생성 | `export-ir-schema --json` | `schema`·`definitionCount` | [CLI 매뉴얼](cli_commands.md) |
 | 명령 표면 코드 생성 | `export-capabilities-schema --json` | `schema`·`mcpSchema` | 같은 문서 |
 
 #### (아) 대량 — 아카이브를 훑는다
@@ -223,22 +223,13 @@ IR·provenance·plan 네 축을 한 번에 조립하고, 빠진 축은 `missingA
 | [9 — 폴더 문서 대량 추출·변환](recipes/09_bulk_extract_convert.md) | 폴더 단위 메타·본문·표 데이터 추출과 일괄 변환 | `batch info`·`batch export-text`·`batch extract-data`·`batch convert` |
 | [10 — 배포 전 보안 점검 스윕](recipes/10_security_sweep_before_share.md) | 송신 전 은닉·주입·유니코드 기만·개인정보 재검사 | `inspect hidden-text`·`inspect injection`·`inspect unicode`·`edit redact`·`edit sanitize` |
 
-### 1-4. 다른 언어에서 쓰려는가 — 바인딩 가이드
+### 1-4. 다른 언어에서 쓰려는가 — 기계 스키마 사용
 
-바인딩은 **새 표면이 아니라 기존 계약의 재포장**이다. 판정·좌표·파싱은 전부 rhwp
-본체가 하고, 바인딩은 인자 조립·봉투 파싱·종료 코드 매핑 셋만 한다. 그래서 §1-1 의
-명령 표와 §2 의 봉투 필드 사전이 언어를 바꿔도 그대로 권위다.
-
-| 언어 | 패키지 | 가이드 | 상태 |
-|---|---|---|---|
-| Node/TypeScript | `@rhwp/node` | [node_binding_guide.md](node_binding_guide.md) | M19 [#3776](https://github.com/edwardkim/rhwp/issues/3776) — 통합 검토 중 |
-| Python | `rhwp` | [python_binding_guide.md](python_binding_guide.md) | M18 [#3762](https://github.com/edwardkim/rhwp/issues/3762) — 통합 검토 중 |
-
-노출 기준은 손으로 고른 목록이 아니라 `capabilities` 의 `json` 선언이다 — 진단
-계열처럼 `--json` 이 없는 명령은 바인딩에 함수로 없고, 필요하면 저수준 실행기로
-직접 부른다. IR 모양은 `rhwp export-ir-schema`, 명령 표면은
-`rhwp export-capabilities-schema`를 코드 생성의 단일 출처로 쓴다. 두 가이드가 서로
-어긋나면 계약이 언어마다 갈린 것이므로 어긋난 쪽을 고친다.
+공식 Python·Node 바인딩과 해당 패키지 배포는 v0.8.4에서 철회됐다
+([#4655](https://github.com/edwardkim/rhwp/issues/4655)). 다른 언어의 다운스트림 래퍼는
+§1-1 명령 표와 §2 봉투 필드 사전을 그대로 권위로 삼는다. IR 모양은
+`rhwp export-ir-schema`, 명령 표면은 `rhwp export-capabilities-schema`를 코드 생성의
+단일 출처로 쓴다. 별도 래퍼가 이 계약과 어긋나면 다운스트림에서 보정한다.
 
 실측 규모(2026-08-11): `export-ir-schema` → `definitionCount:41`,
 `irSchemaVersion:"1.0"`. `export-capabilities-schema` → `definitionCount:21`,
@@ -1292,7 +1283,6 @@ tracked `tests/**/*_contract.rs` **85개**가 있다. 표면을 고칠 때 **어
 | 봉투 출처 표지 | [tech/envelope_provenance.md](../tech/envelope_provenance.md) | `untrusted*` 의 설계 |
 | 에이전트 경계 계약 | [tech/agent_boundary_contract.md](../tech/agent_boundary_contract.md) | 도구가 넘지 않는 선 |
 | 초소형 모델 매크로 | [tech/tiny_model_macro_tools.md](../tech/tiny_model_macro_tools.md) | `digest`·프로필의 설계 근거 |
-| 바인딩 기초 | [tech/bindings_foundation.md](../tech/bindings_foundation.md) | 다른 언어에서 부를 때 |
 
 ## 유지 규약
 

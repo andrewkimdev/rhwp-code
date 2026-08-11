@@ -1534,7 +1534,7 @@ dependencies = [
 
 [[package]]
 name = "rhwp"
-version = "0.8.3"
+version = "0.8.4"
 dependencies = [
  "aes",
  "base64 0.23.1",

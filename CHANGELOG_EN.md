@@ -6,6 +6,21 @@ This document records the major changes of the rhwp project.
 
 ## [Unreleased]
 
+## [0.8.4] — Unreleased
+
+### Distribution surface rollback
+
+- Restored the official distribution surface to the v0.8.2 set: GitHub Pages,
+  native CLI archives on GitHub Releases, npm `@rhwp/core` and `@rhwp/editor`,
+  VS Code Marketplace/Open VSX, and the Chrome, Edge, and Firefox extensions
+  remain supported (#4655).
+- Removed the PyPI, `@rhwp/node`, GHCR CLI image, deb/rpm/MSI, install scripts,
+  package-manager manifests, and setup GitHub Action paths that had been added
+  without explicit maintainer adoption and complete safety validation (#4655).
+- Removed the dedicated Python and Node binding source, tests, and current-use
+  documentation together with those withdrawn channels. A new official channel
+  now requires agreed build, install, update, rollback, and ownership evidence.
+
 ## [0.8.3] — 2026-08-11
 
 > Cumulative PATCH release integrating 190 PRs since v0.8.2. It expands

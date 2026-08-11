@@ -2039,8 +2039,7 @@ fn sweep_exempt_envelopes_still_carry_provenance_marks() {
 /// 자기서술이 필드를 광고하는데 **아무 가드도 실물과 대조하지 않았다.** 스윕이
 /// 이미 전 `--json` 명령을 유효 인자로 실행하므로, 명령별 봉투 최상위 키 합집합과
 /// 선언을 대조한다. 중첩 경로(`steps[].confusable` 류)는 최상위 대조 대상이
-/// 아니다 — 바인딩 파리티 테스트(bindings/python/tests/test_envelope_parity.py)와
-/// 같은 기준이며, 그쪽은 대표 4개 명령만 본다(이쪽이 전수다).
+/// 아니다 — 이 테스트는 최상위 `recordFields`의 전수 계약만 다룬다.
 ///
 /// 조건부 필드는 **사유와 함께** CONDITIONAL_RECORD_FIELDS 에 적는다 — 사유 없는
 /// 허용목록은 가드를 무력화한다. 가능하면 허용 대신 레시피가 그 필드를 실제로

@@ -4,6 +4,20 @@
 
 ## [Unreleased]
 
+## [0.8.4] — 미출시
+
+### 배포 채널 복원
+
+- 공식 배포 범위를 v0.8.2와 동일하게 복원했다. GitHub Pages, GitHub Release
+  네이티브 CLI, npm `@rhwp/core`·`@rhwp/editor`, VS Code Marketplace/Open VSX와
+  Chrome·Edge·Firefox 확장 배포는 유지한다 (#4655).
+- 명시적인 메인테이너 채택과 안전 검증 없이 추가됐던 PyPI, `@rhwp/node`, GHCR
+  CLI 이미지, deb/rpm/MSI, 설치 스크립트·패키지 관리자 매니페스트·설치용 GitHub
+  Action의 코드와 게시 workflow를 제거했다 (#4655).
+- 공식 배포에서 철회한 Python·Node 바인딩의 전용 개발 코드, 테스트와 현재형 안내도
+  함께 제거했다. 신규 배포 채널은 빌드·설치·업데이트·롤백 검증과 유지 책임을 합의한
+  뒤 별도로 채택한다.
+
 ## [0.8.3] — 2026-08-11
 
 > 누적 PATCH 릴리즈 — v0.8.2 이후 190개 PR을 통합했다. 암호 문서 열기·저장,
