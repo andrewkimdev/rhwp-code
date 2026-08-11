@@ -125,7 +125,7 @@ npx vite --host 0.0.0.0 --port 7700
 해당 포트가 이미 사용 중이면 기존 서버를 확인하거나 다른 포트를 지정한다. 브라우저 검증 절차는
 [시각 검증 문서 지도](verification/README.md)와 각 E2E 가이드를 따른다.
 
-## Subsecond 핫패치 (개발 전용, unix 호스트 전용)
+## Subsecond 핫패치 (개발 전용, Linux·macOS·WSL 전용)
 
 Rust 를 고쳐도 WASM 재빌드 없이 실행 중인 브라우저에 반영하는 개발 전용 경로다. 기본 빌드에는
 들어가지 않는다 — 루트 `Cargo.toml` 의 `subsecond-dev` feature 뒤에 있고, 그 feature 로 빌드해야
@@ -133,7 +133,7 @@ Rust 를 고쳐도 WASM 재빌드 없이 실행 중인 브라우저에 반영하
 
 ### 사전 조건과 최초 설치
 
-- Unix 또는 WSL에서만 사용한다. Windows 네이티브에서는 `build.rs`가 필요한 심링크를 만들지 않아
+- Linux, macOS 또는 WSL에서만 사용한다. Windows 네이티브에서는 `build.rs`가 필요한 심링크를 만들지 않아
   hot-patch를 지원하지 않는다.
 - Rust/Cargo, Node.js/npm이 PATH에 있어야 한다. 프로젝트가 고정한 Dioxus CLI는 전역 설치하지 않고
   `target/dioxus-cli`에 설치한다.
@@ -216,16 +216,16 @@ curl -fsS -o /dev/null -w 'vite-wasm=%{http_code}\n' http://127.0.0.1:7700/wasm/
 다음 세션에서 같은 `npm run subsecond:serve`와 `npm run dev:subsecond -- --host 0.0.0.0 --port 7700`을
 다시 실행한다.
 
-### 지원 플랫폼 — unix 호스트에서만 동작한다
+### 지원 플랫폼 — Linux·macOS·WSL에서만 동작한다
 
 `tools/rhwp-subsecond/build.rs` 는 `dx` 가 찾는 `deps/librhwp-dioxus.rlib` 별칭을 **심링크**로
 만든다. 이 별칭의 대상(`librhwp.rlib`)은 이 빌드 스크립트가 끝난 뒤에야 생기므로 복사로 대체할 수
-없고, 심링크 생성은 `#[cfg(unix)]` 뒤에 있다. 따라서 **Windows 호스트에서는 핫패치가 동작하지
-않는다.** WSL 안에서 빌드하면 unix 경로이므로 동작한다.
+없고, 심링크 생성은 `#[cfg(unix)]` 뒤에 있다. 이 구현 조건은 Linux·macOS를 뜻하며, WSL도 Linux
+환경으로 동작한다. 따라서 **Windows 네이티브 호스트에서는 핫패치가 동작하지 않는다.**
 
 이때 겉으로 드러나는 증상은 "아무 일도 일어나지 않음"이다 — `subsecond:install` 성공,
 `dx serve` 정상 출력, Vite 기동, `/_dioxus` 소켓 연결, 데브서버의 `HotReload` 수신까지 모두 정상이고
-화면만 바뀌지 않는다. 그래서 unix 가 아닌 호스트에서 wasm32 대상으로 빌드하면 빌드 스크립트가
+화면만 바뀌지 않는다. 그래서 Windows 네이티브 호스트에서 wasm32 대상으로 빌드하면 빌드 스크립트가
 `cargo:warning` 한 줄을 남긴다.
 
 ### 실패를 어디서 읽는가
