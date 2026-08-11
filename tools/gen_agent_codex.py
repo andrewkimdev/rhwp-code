@@ -109,6 +109,7 @@ CONTRACT_ONLY_REASON = {
     "gate": "정책·키링·로그 픽스처 조합이 필요하다 — 전 경로 실측은 tests/gate_contract.rs 가, 운영 규약은 mydocs/tech/policy_gate_guide.md 가 정본.",
     "bundle": "연합 픽스처(체인+서명+증명+도메인)가 필요하다 — 전 경로 실측은 tests/bundle_contract.rs 가 정본.",
     "disclose": "서명 캡슐 픽스처가 필요하고 salt 가 난수라 출력이 비결정 — 전 경로 실측은 tests/disclose_contract.rs 가 정본.",
+    "settle": "명세서·캡슐·게이트 봉투·키·원장 픽스처 일습이 필요하다 — 전 경로 실측은 tests/settle_contract.rs 가 정본.",
 }
 COMMON_REASON = "입력 합성 비용 또는 산출 부피 때문에 표본 실행을 싣지 않는다 — 계약(플래그·봉투 필드·출처)은 아래가 전부이며 자기서술에서 생성됐다."
 
@@ -125,7 +126,7 @@ FAMILIES = [
     ("50_검증_사다리", "검증 사다리 — 판정은 데이터다",
      ["verify", "ir-diff", "replay", "audit", "lineage", "hwpx-roundtrip",
       "keygen", "verify-signature", "harness",
-      "harness init", "harness wrap", "harness-status", "anchor", "gate", "bundle", "disclose"]),
+      "harness init", "harness wrap", "harness-status", "anchor", "gate", "bundle", "disclose", "settle"]),
     ("60_보안", "보안 — 받은 문서를 의심한다",
      ["inspect", "inspect injection", "inspect hidden-text", "inspect unicode"]),
     ("70_자기서술", "자기서술 — 도구가 도구를 설명한다",

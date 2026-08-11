@@ -62,6 +62,7 @@ const SUBCOMMAND_WRAPPERS: Readonly<Record<string, readonly string[]>> = {
   anchor: ['anchorAdd', 'anchorCheckpoint', 'anchorVerify'],
   bundle: ['bundleExport', 'bundleVerify'],
   disclose: ['discloseRedact', 'discloseVerify', 'discloseRestore'],
+  settle: ['settlePropose', 'settleVerify', 'settleRecord'],
 };
 
 /**
