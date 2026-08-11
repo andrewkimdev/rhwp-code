@@ -1,8 +1,9 @@
 //! [#4100] B1 엔진축 — 차트 숫자 데이터 편집.
 //!
-//! **Stage 1~3 게이트.** 구조 스캐너·최소 diff 패처(Stage 1), 중첩 CFB 스트림
-//! 교체(Stage 2), 주소→①② 슬롯 해석과 `get_chart_data_native`(Stage 3)를 검증한다.
-//! ①② 동시 기록(Stage 4)·CSV 왕복·CLI(Stage 5)는 뒤에 붙는다.
+//! 구조 스캐너·최소 diff 패처(Stage 1), 중첩 CFB 스트림 교체(Stage 2), 주소→①② 슬롯
+//! 해석과 `get_chart_data_native`(Stage 3), `set_chart_data_native` 의 ①② 동시
+//! 기록(Stage 4), 그리고 실사용 문서 회귀(Stage 5)를 검증한다. CLI 계약은
+//! `tests/chart_csv_contract.rs` 에 있다.
 //!
 //! 스캐너를 따로 만드는 이유는 `src/ooxml_chart/parser.rs` 가 **손실 파서**이기
 //! 때문이다 — `c:pt idx`·`c:f`·`c:externalData`·`extLst` 를 읽지 않아 파싱→재방출로
@@ -877,17 +878,15 @@ fn the_edit_survives_hwp5_save_despite_stream_passthrough() {
 /// B1 이 존재하는 이유 그 자체다. 대조군(①만 고친 문서)이 변환 후 **옛 값**이라는 것이
 /// ②를 함께 써야 하는 이유의 살아 있는 근거다.
 ///
-/// `#[ignore]` 인 이유: `devel` 기준으로는 잴 대상이 없다. #4099 가 고치기 전의 변환은
-/// 차트를 통째로 잃으므로(`bin_data_id=60001` 이 그대로 나가 참조가 끊긴다) 새 값이든 옛
-/// 값이든 읽을 차트가 없다. PR #4499 머지 후 리베이스에서 `#[ignore]` 를 뗀다.
+/// #4099 착지 전에는 잴 대상이 없었다 — 그때의 변환은 차트를 통째로 잃어
+/// (`bin_data_id=60001` 이 그대로 나가 참조가 끊긴다) 새 값이든 옛 값이든 읽을 차트가
+/// 없었다. 그래서 `#[ignore]` 로 잠들어 있었고, 짝으로 둔 회수 게이트가 "변환이 차트를
+/// 보존하는가"를 관측해 착지 순간 실패로 깨웠다.
 ///
-/// 머지 전 측정은 임시 워크트리에 `origin/task4099` 를 머지해 돌린다(계획서 R6):
-///
-/// ```text
-/// cargo test --profile release-test --test issue_4100_chart_data_edit -- --ignored
-/// ```
+/// #4099 는 PR #4499 가 **머지된 게 아니라 CLOSED 되고** 메인테이너가 다른 SHA 로
+/// 재착지시켰다(devel `e6a01730d` 기준). 잠들기 전 측정은 `origin/task4099 = e34e6d8b1`
+/// 에 대한 것이었으므로 여기 값은 **착지본 기준 재측정**이다.
 #[test]
-#[ignore = "#4099(PR #4499) 미머지 — devel 의 변환은 차트를 통째로 잃어 잴 대상이 없다"]
 fn the_edit_survives_conversion_to_hwp5() {
     for name in [
         "세로막대형/묶은세로막대형",
@@ -958,39 +957,6 @@ fn the_edit_survives_conversion_to_hwp5() {
             "{name}: 대조군이 새 값이면 ①만 써도 된다는 뜻이라 설계 전제가 무너진다"
         );
     }
-}
-
-/// **T4 의 `#[ignore]` 를 스스로 회수한다.**
-///
-/// 위 T4 는 지금 잴 수 없어 잠들어 있는데, 잠든 게이트는 **조용히 잊힌다.** 그래서 조건이
-/// 사라지는 순간 시끄럽게 깨우는 짝을 둔다 — `stale_exemptions_are_reclaimed`(#2724 가드)와
-/// 같은 관용구다.
-///
-/// 편집 없이 변환만 해서 차트가 살아남으면 #4099 가 들어왔다는 뜻이고, 그러면 이 테스트가
-/// **실패하면서** T4 를 다시 재라고 알린다. #4099 가 머지·스쿼시·체리픽 중 무엇으로
-/// 들어오든, 메인테이너가 통합 중에 fold 설계를 고쳐도 마찬가지다 — 신호는 "#4099 가
-/// 들어왔는가"가 아니라 **"변환이 차트를 보존하는가"** 라는 관측이기 때문이다.
-///
-/// (이 저장소는 결함을 테스트로 못박는 관행이 있다 — #4097 이전의
-/// `mini_cfb_repack_drops_the_ole_class_id` 가 같은 모양이었고, 고쳐지면서 뒤집혔다.)
-#[test]
-fn the_conversion_gate_wakes_itself_when_4099_lands() {
-    let path = manifest("samples/chart/세로막대형/묶은세로막대형.hwpx");
-    let core = core_of(&path);
-    let hwp = core
-        .export_hwp_with_adapter_snapshot()
-        .expect("HWP5 변환 저장");
-    let converted = DocumentCore::from_bytes(&hwp).expect("변환본 재파스");
-
-    assert_eq!(
-        collect_charts(converted.document()).len(),
-        0,
-        "HWPX→HWP5 변환이 차트를 보존한다 — #4099 가 들어왔다는 뜻이다.\n\
-         `the_edit_survives_conversion_to_hwp5` 의 #[ignore] 를 떼고 수용 기준 4 를 \
-         **들어온 코드 기준으로 다시 재라.**\n\
-         (직전 측정은 `origin/task4099 = e34e6d8b1` 에 대한 것이고, 이 저장소는 기여자 PR 을 \
-         닫고 메인테이너가 보정해 재착지시키는 관행이 있다 — #4144 → #4171 선례)"
-    );
 }
 
 /// 검증에 걸리면 **한 칸도 쓰지 않는다** — `invalid[]` + `wrote: []`.
