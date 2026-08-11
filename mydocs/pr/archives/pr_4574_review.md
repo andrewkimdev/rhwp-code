@@ -49,6 +49,9 @@ modifiers: intake_and_review.md, local_validation.md,
   5,757 passed, 36 skipped, 7 slow, 448.545초.
 - rebase 기준선의 추가분은 CI workflow, Python workflow 검사와 문서뿐이며 `src/` 및 `bindings/node/src/` tree가
   검증 완료 head와 동일함을 확인했다. 작업지시자 지시에 따라 전체 회귀를 다시 실행하지 않았다.
+- 최신 head 이전 CI의 `생성 타입 최신 검사`가 capabilities 52개와 `envelopes.ts` 47개의 불일치를 차단했다.
+  `envelopes.ts`를 재생성해 누락된 audit-report, conformance, disclose, recall-scope, settle 봉투 타입을 추가했고
+  `RHWP_BIN=target/pr-review/debug/rhwp npm run gen:check`를 통과했다. 이 보정 후 최신 head CI를 다시 확인한다.
 
 ## 시각 검증과 merge 조건
 

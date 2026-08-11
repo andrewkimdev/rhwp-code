@@ -16,8 +16,8 @@ last_verified: 2026-08-11
 
 ## 범위와 메인터너 보정
 
-`.lineage-bundle` export/verify와 오프라인 다단 판정을 추가한다. Node envelope 생성 타입은 최신 source와
-동일하게 47개 봉투 헤더임을 대조했다. 생성 코덱스에는 `bundle`만 최상위로 기록하고 export/verify는 실제
+`.lineage-bundle` export/verify와 오프라인 다단 판정을 추가한다. 후속 검증 사다리 명령까지 포함해 Node
+envelope 생성 타입은 52개 봉투 헤더로 재생성했다. 생성 코덱스에는 `bundle`만 최상위로 기록하고 export/verify는 실제
 도움말 경로로 보존해 synthetic command를 만들지 않도록 보정했다.
 
 **권고: 최신 head와 required check를 merge 직전에 재확인하고 통합 수용.**
