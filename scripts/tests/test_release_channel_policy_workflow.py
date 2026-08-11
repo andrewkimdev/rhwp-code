@@ -7,6 +7,8 @@
 
 from __future__ import annotations
 
+import json
+import tomllib
 import unittest
 from pathlib import Path
 
@@ -57,6 +59,40 @@ FORBIDDEN_WORKFLOW_MARKERS = [
 
 
 class ReleaseChannelPolicyWorkflowTests(unittest.TestCase):
+    def test_user_visible_versions_match_release_version(self):
+        cargo = tomllib.loads((REPO_ROOT / "Cargo.toml").read_text(encoding="utf-8"))
+        release_version = cargo["package"]["version"]
+
+        def package_version(path: str) -> str:
+            return json.loads((REPO_ROOT / path).read_text(encoding="utf-8"))["version"]
+
+        visible_versions = {
+            "rhwp-studio About": package_version("rhwp-studio/package.json"),
+            "Chrome and Edge extension": package_version("rhwp-chrome/manifest.json"),
+            "Firefox extension": package_version("rhwp-firefox/manifest.json"),
+        }
+        self.assertEqual(release_version, "0.8.4")
+        self.assertEqual(
+            set(visible_versions.values()),
+            {release_version},
+            f"사용자 표시 버전이 릴리스 버전과 다르다: {visible_versions}",
+        )
+
+        display_wiring = {
+            "rhwp-studio/src/ui/about-dialog.ts": "Version ${__APP_VERSION__}",
+            "rhwp-studio/vite.config.ts": "__APP_VERSION__: JSON.stringify(pkg.version)",
+            "rhwp-chrome/vite.config.ts": "__APP_VERSION__: JSON.stringify(studioPkg.version)",
+            "rhwp-chrome/options.js": "chromeApi.runtime.getManifest().version",
+            "rhwp-firefox/vite.config.ts": "__APP_VERSION__: JSON.stringify(studioPkg.version)",
+            "rhwp-firefox/options.js": "browser.runtime.getManifest().version",
+        }
+        missing = [
+            path
+            for path, marker in display_wiring.items()
+            if marker not in (REPO_ROOT / path).read_text(encoding="utf-8")
+        ]
+        self.assertEqual(missing, [], f"사용자 표시 버전의 단일 출처 배선이 끊겼다: {missing}")
+
     def test_v082_distribution_channels_remain(self):
         missing = [path for path in PRESERVED if not (REPO_ROOT / path).exists()]
         self.assertEqual(missing, [], f"v0.8.2 공식 배포 자산이 사라졌다: {missing}")
