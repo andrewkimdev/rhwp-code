@@ -66,9 +66,9 @@ jobs:
       fast_pass: ${{ steps.finalize.outputs.fast_pass || 'false' }}
       reason: ${{ steps.finalize.outputs.reason || 'preflight-unavailable' }}
       candidate_sha: ${{ steps.finalize.outputs.candidate_sha || '' }}
-      # [#3790 Stage 4] frontend_mode·render_required에 더해 rust_required와
-      # native_skia_required를 실제 worker 조건에 사용한다. CodeQL은 Stage 5까지 유지한다.
-      # 모든 기본값은 full lane이다.
+      # [#3790 Stage 4·5B] frontend_mode·render_required·rust_required·
+      # native_skia_required는 이 workflow의 worker 조건에 사용한다. codeql_languages는
+      # codeql.yml이 같은 trusted-base 판정으로 소비한다. 모든 기본값은 full lane이다.
       rust_required: ${{ steps.impact.outputs.rust_required || 'true' }}
       frontend_mode: ${{ steps.impact.outputs.frontend_mode || 'package' }}
       render_required: ${{ steps.impact.outputs.render_required || 'true' }}
@@ -599,7 +599,7 @@ jobs:
           {
             echo '### CI impact classification'
             echo
-            echo '> Stage 4 activates frontend_mode, render_required, rust_required, and native_skia_required. CodeQL remains unchanged.'
+            echo '> Stage 4 activates frontend_mode, render_required, rust_required, and native_skia_required. Stage 5B consumes codeql_languages in codeql.yml.'
             echo '> Pull requests classify with the base SHA classifier; workflow_dispatch and all failures select the full lane.'
             echo
             echo '| Axis | Value |'
