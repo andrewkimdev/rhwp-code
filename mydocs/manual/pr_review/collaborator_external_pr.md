@@ -2,7 +2,7 @@
 kind: guide
 status: active
 canonical: mydocs/manual/pr_review_workflow.md
-last_verified: 2026-07-25
+last_verified: 2026-08-11
 ---
 
 # Collaborator 매개 외부 PR 처리
@@ -20,6 +20,42 @@ last_verified: 2026-07-25
 
 maintainer_can_modify가 false이면 이 경로를 쓰지 않는다. maintainer 일반 경로 또는 작업지시자가 승인한
 별도 PR 경로로 전환한다.
+
+### 9.1.1 기본 작업공간: `devel` 기반 체리픽 통합 검토
+
+사용자가 VS Code·터미널에서 commit 그래프와 작업 상태를 볼 수 있어야 하는 외부 PR 검토의 기본 경로는,
+사용자가 열어 둔 **주 작업공간**에서 최신 `upstream/devel` 위에 review branch를 만들고 contributor의
+기능 commit을 순서대로 cherry-pick하는 통합 경로다. 기본 작업공간이 clean하면 검토만을 위해 별도
+`git worktree add`를 만들지 않는다. 별도 worktree는 주 작업공간이 dirty여서 격리가 꼭 필요하거나
+작업지시자가 명시적으로 요구한 경우에만 쓴다.
+
+~~~bash
+git status --short --branch
+git fetch upstream devel pull/N/head:refs/remotes/upstream/prN-head
+git switch devel
+git merge --ff-only upstream/devel
+git switch -c review/<contributor>-<yyyymmdd> upstream/devel
+git log --reverse --no-merges --format='%H %s' \
+  upstream/devel..upstream/prN-head
+# 위 목록을 오래된 commit부터 하나씩 적용하고, 각 충돌을 이 branch에서 해결한다.
+git cherry-pick <contributor-commit-sha>
+git diff --check upstream/devel...HEAD
+~~+
+
+- 적용한 원 PR 번호·SHA·cherry-pick 순서와 conflict 보정은 review 문서에 남긴다. 현재 branch는
+  `devel` 위의 contributor 변경과 메인터너 보정을 한 그래프로 보여야 한다.
+- 통합 branch의 code·test 보정은 contributor source를 rewrite하지 않는다. 완료하면 원본 저장소의 임시
+  head branch로 push해 `devel` 대상 통합 PR을 만들고, 그 PR이 merge된 뒤 원 PR은 merge된 통합 PR을
+  링크한 comment와 함께 close한다.
+- PR head가 최신 `devel`과 이미 같은 history를 공유하더라도, integration branch의 기준은 항상
+  `upstream/devel`이다. merge commit은 cherry-pick하지 않고 기능·test·문서 commit만 적용한다.
+- 주 작업공간이 dirty이면 checkout·cherry-pick을 시작하지 않는다. 사용자 변경의 소유와 상태를 먼저
+  확인하고, 작업지시자가 격리를 승인한 경우에만 정확한 worktree 경로를 사용한다.
+
+원 contributor PR head를 그대로 유지하면서 그 source branch에 collaborator commit을 직접 push해야 하는
+경우는 아래 9.3.1의 예외 경로다. 이 경우에도 사용자 가시성이 필요하면 별도 worktree 대신 같은 주
+작업공간에서 source head를 checkout한 `review/<contributor>-<yyyymmdd>` branch를 사용한다. direct source
+경로와 위 체리픽 통합 경로를 한 PR에 섞거나, contributor history를 rebase·amend·force-push하지 않는다.
 
 ## 9.2 문서 경로
 
