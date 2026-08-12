@@ -3162,10 +3162,17 @@ mod tests {
     /// 비밀번호 문서도 복호화 helper에 전달하기 전에 암호문 raw 입력 크기를 차단해야 한다.
     #[test]
     fn hwp5_open_encrypted_doc_info_rejects_raw_input_before_decrypt() {
-        const PASSWORD: &[u8] = b"raw-input-budget";
-
         let source = std::fs::read("samples/2010-01-06.hwp").expect("sample 존재");
-        let encrypted = encrypt_hwp_streams_for_test(&source, PASSWORD);
+        let password = hwp5_raw_doc_info(&source)
+            .into_iter()
+            .take(16)
+            .collect::<Vec<_>>();
+        assert!(
+            !password.is_empty(),
+            "DocInfo fixture must provide test bytes"
+        );
+
+        let encrypted = encrypt_hwp_streams_for_test(&source, &password);
         let ciphertext_len = hwp5_raw_doc_info(&encrypted).len();
         assert!(
             ciphertext_len > 1,
@@ -3175,7 +3182,7 @@ mod tests {
 
         let result = with_document_open_decompression_policy_for_test(
             hwp5_document_open_policy_with_input_for_test(raw_limit, 1024 * 1024, 2 * 1024 * 1024),
-            || parse_document_with_password(&encrypted, PASSWORD),
+            || parse_document_with_password(&encrypted, &password),
         );
 
         assert!(
@@ -3184,7 +3191,7 @@ mod tests {
                 Err(ParseError::CfbError(cfb_reader::CfbError::LimitExceeded(limit)))
                     if *limit == raw_limit
             ),
-            "expected raw input limit {raw_limit}, got {result:?}"
+            "expected raw input limit {raw_limit}"
         );
     }
 
