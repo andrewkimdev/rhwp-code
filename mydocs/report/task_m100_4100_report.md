@@ -213,11 +213,15 @@ CSV** 가 나왔다. 오류도 경고도 없었다.
 ## 8. 검증
 
 ```text
-전체 회귀   537 바이너리 / 5836 passed / 0 failed / 37 ignored
-cargo fmt --check                          Diff in 0건
+전체 회귀   539 바이너리 / 5855 passed / 0 failed / 39 ignored   (PR #4603 리뷰 보정 head)
+cargo fmt --all -- --check                 diff 0 — 전 파일 LF 상태에서 전수 검사
 cargo clippy --all-targets -- -D warnings  exit 0
 git diff --check                           통과
 ```
+
+fmt 는 리뷰에서 지적받은 항목이다 — 작업 트리가 CRLF 로 체크아웃돼 Windows rustfmt 가
+검사를 건너뛰었고, 이전의 "Diff in 0건" 은 통과가 아니라 미검사였다. 보정에서 대상
+파일을 LF 정규화한 뒤 재적용했다(`review(fmt)` 커밋).
 
 변경 범위 = Rust parser/model/core/CLI. 렌더러·studio 무변경, 신규 fixture 커밋 0 →
 `local_validation.md` §4.3 기준 Native Skia 3종·`wasm-pack`·IR sweep baseline 대상 밖이다.
