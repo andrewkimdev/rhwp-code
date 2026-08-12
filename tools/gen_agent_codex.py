@@ -60,6 +60,8 @@ FORM = "samples/field-01.hwp"
 GOV = "samples/2022년 국립국어원 업무계획.hwp"
 TRADE = "samples/156636617_240617 2024년 5월 월간 수출입 현황(확정치).hwp"
 ODD = "samples/143E433F503322BD33.hwp"
+# [#4100] 차트가 있는 실사용 보고서 — 차트 명령의 봉투를 비지 않게 한다.
+CHART = "samples/issue2006/1790387_prep_final_report.hwpx"
 
 PLAN_A = {
     "planVersion": "1.0",
@@ -79,6 +81,8 @@ LIVE = {
     "fields": (["fields", FORM, "--json"], "누름틀 필드 대장"),
     "export-tables": (["export-tables", DOC, "--json"], "표 전량 — 좌표·병합 보존"),
     "table-to-csv": (["table-to-csv", DOC, "--table", "1", "-o", "{tmp}/t1.csv", "--json"], "표 → CSV 추출"),
+    # [#4100] 차트 → CSV. 차트가 있는 문서라야 봉투가 비지 않는다.
+    "chart-to-csv": (["chart-to-csv", CHART, "--chart", "1", "--json"], "차트 숫자 → CSV 추출 (행=카테고리, 열=계열)"),
     "extract-data": (["extract-data", TRADE, "--json"], "날짜·금액·수량 인식 추출"),
     "ir-diff": (["ir-diff", FORM, FORM, "--json"], "IR 구조 비교 — 자기 대조는 identical"),
     "inspect injection": (["inspect", "injection", ODD, "--json"], "프롬프트 주입 신호 스윕"),
@@ -123,7 +127,9 @@ FAMILIES = [
     ("10_조회", "조회 — 문서를 읽고 파악한다",
      ["info", "explain", "digest", "search", "export-text", "export-structure", "fields", "dump-pages", "extract-pages"]),
     ("20_표와_데이터", "표·데이터 — 구조화 수확과 왕복",
-     ["export-tables", "table-to-csv", "csv-to-table", "extract-data", "scan"]),
+     ["export-tables", "table-to-csv", "csv-to-table", "extract-data", "scan",
+      # [#4100] 차트 숫자 데이터도 같은 CSV 왕복 규약을 쓴다 — 표와 한 가족이다.
+      "chart-to-csv", "csv-to-chart"]),
     ("30_편집과_계획", "편집·계획 — 원본 무훼손 변경",
      ["edit", "edit replace-text", "edit set-cell", "edit fill-fields", "edit insert-image", "edit redact", "edit sanitize", "run"]),
     ("40_변환과_렌더", "변환·렌더 — 형식을 넘나든다",

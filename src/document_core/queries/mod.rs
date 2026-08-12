@@ -27,5 +27,9 @@ pub mod pii_scan;
 pub(crate) mod search_query;
 pub mod structure;
 // [#3719 §6-7] 표 ↔ CSV 변환 — `table_extract` 격자를 재사용하는 순수 변환 코어.
+/// [#4100] 차트 데이터 ↔ CSV 행렬 (행=카테고리, 열=계열).
+pub mod chart_csv;
+/// [#4100] 문서 안 차트 열거와 ①② 슬롯 해석.
+pub mod chart_extract;
 pub mod table_csv;
 pub mod table_extract;

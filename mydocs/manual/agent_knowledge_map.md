@@ -295,10 +295,10 @@ IR·provenance·plan 네 축을 한 번에 조립하고, 빠진 축은 `missingA
 를 싣고 `--dry-run` 에서는 싣지 않는다. `edit set-cell` 은 `oldText` 때문에
 `untrustedContent:true`, `edit fill-fields`·`replace-text` 는 `false` 다(실측).
 
-### 2-2. 전수 사전 — 264개 필드
+### 2-2. 전수 사전 — 268개 필드
 
-`capabilities` 의 `recordFields` 고유 **261개**와 그 밖의 실측-only 필드
-`assertions`·`docId`·`preview` **3개**를 합친 264개다. `등장 명령` 은 자기서술
+`capabilities` 의 `recordFields` 고유 **265개**와 그 밖의 실측-only 필드
+`assertions`·`docId`·`preview` **3개**를 합친 268개다. `등장 명령` 은 자기서술
 기준이며, 실제 봉투에는 조건부로 더 실리는 필드가 있다(§2-5).
 
 #### 신원·스키마
@@ -384,6 +384,18 @@ IR·provenance·plan 네 축을 한 번에 조립하고, 빠진 축은 `missingA
 | `row` / `col` | number | 격자 좌표(0 기준). batch fill 에서는 `row` 가 **데이터 행 번호** | `edit set-cell`·`batch fill` |
 | `oldText` / `newText` | string | 칸의 이전/새 값. `oldText` 는 **문서 파생** | `edit set-cell` |
 | `keepStyle` | bool | 칸 안내문 스타일을 상속했나 | `edit set-cell` |
+
+#### 차트 (#4100)
+
+| 필드 | 타입 | 의미 · `null` 의 뜻 | 등장 명령 |
+|---|---|---|---|
+| `chartCount` | number | 문서의 차트 개수(글상자·표 셀 안 포함) | `chart-to-csv` |
+| `charts` | array | 차트 목록 `{chart,rowCount,colCount,csv,output?}` — `csv` 는 **문서 파생** | `chart-to-csv` |
+| `chart` | number | 대상 차트 번호. **문서 순서 1부터**(표의 `table` 은 0부터 — 다른 규약이다) | `chart-to-csv`·`csv-to-chart` |
+| `wrote` | array | **어느 표현에 실제로 썼나** — `["zipPart","nestedCopy"]`(HWPX) / `["nestedCopy"]`(HWP5) / `[]`(거부·dry-run·무변경). 값이 OOXML 두 곳에 중복 저장돼 있어 한쪽만 쓰면 HWP 변환에서 편집이 사라진다 | `csv-to-chart` |
+
+`rowCount`/`colCount`/`changed`/`changedCount`/`invalid` 는 표 소절과 같은 뜻이되 좌표가
+다르다 — 차트의 `changed[]` 는 `{series,point|x,from,to}` 다.
 
 #### 누름틀
 

@@ -218,6 +218,22 @@ pub const MAP: &[CommandProvenance] = &[
         note: "csv·newText는 호출자가 준 입력이고, 변경 전 셀 값(oldText)만 문서에서 왔다.",
     },
     CommandProvenance {
+        command: "chart-to-csv",
+        untrusted: &[f(
+            "charts[].csv",
+            "queries::chart_csv::to_csv — 차트의 계열명·카테고리 라벨·값을 RFC 4180 CSV로 직렬화",
+        )],
+        note: "차트 번호·행열 개수·BOM·산출 경로는 엔진 또는 호출자 값이고, CSV 본문만 문서 파생이다.",
+    },
+    CommandProvenance {
+        command: "csv-to-chart",
+        untrusted: &[f(
+            "changed[].from",
+            "ooxml_chart::data — CSV를 적용하기 전 차트 c:v 에 있던 문서 값",
+        )],
+        note: "csv·to·wrote 는 호출자 입력 또는 엔진값이고, 변경 전 값(from)만 문서에서 왔다.",
+    },
+    CommandProvenance {
         command: "dump-pages",
         untrusted: &[f(
             "pages[].columns[].items[].textPreview",

@@ -23,15 +23,28 @@ pub(crate) fn find_bin_data<'a>(
     bin_data_content: &'a [BinDataContent],
     bin_data_id: u16,
 ) -> Option<&'a BinDataContent> {
+    find_bin_data_index(bin_data_content, bin_data_id).map(|i| &bin_data_content[i])
+}
+
+/// [#4100] `find_bin_data` 와 **같은 규칙**으로 `bin_data_content` 안 인덱스를 돌려준다.
+///
+/// 차트 편집은 슬롯 바이트를 제자리에서 바꾸므로 참조가 아니라 인덱스가 필요하다.
+/// 인덱스↔id 이중성 지식을 복제하지 않도록 `find_bin_data` 가 이 함수에 위임한다 —
+/// 규칙이 갈리면 읽을 때와 쓸 때가 서로 다른 슬롯을 가리키게 된다.
+pub(crate) fn find_bin_data_index(
+    bin_data_content: &[BinDataContent],
+    bin_data_id: u16,
+) -> Option<usize> {
     if bin_data_id == 0 {
         return None;
     }
     // 1-indexed 순번으로 BinDataContent 배열 접근
-    if let Some(c) = bin_data_content.get((bin_data_id - 1) as usize) {
-        return Some(c);
+    let idx = (bin_data_id - 1) as usize;
+    if idx < bin_data_content.len() {
+        return Some(idx);
     }
     // 인덱스 범위 밖 (HWPX 차트 sparse id 60000+N 등) — id 직접 검색
-    bin_data_content.iter().find(|c| c.id == bin_data_id)
+    bin_data_content.iter().position(|c| c.id == bin_data_id)
 }
 
 /// [#2550] `find_bin_data` + 압축 해제 상한 로드.

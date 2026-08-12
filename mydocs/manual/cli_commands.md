@@ -377,6 +377,75 @@ rhwp table-to-csv samples/hwpx/basic-table-01.hwpx --table 0 -o /tmp/표0.csv
 rhwp csv-to-table samples/hwpx/basic-table-01.hwpx --csv /tmp/표0.csv --table 0 -o 작성본.hwpx --json
 ```
 
+### `chart-to-csv <파일.hwp|파일.hwpx> [--chart <번호>] [-o <경로>] [--bom] [--json]` (#4100)
+차트의 숫자 데이터를 RFC 4180 CSV 로 내보낸다. **행 = 카테고리, 열 = 계열** — 원본 데이터
+시트와 같은 모양이라 스프레드시트에서 바로 고쳐 `csv-to-chart` 로 되돌릴 수 있다.
+- `--chart <번호>` — 차트 번호(**문서 순서, 1부터**). 생략하면 전부.
+  표 CSV 의 `--table` 과 달리 0 부터가 아니다 — 차트에는 `export-tables` 같은 발견 명령이
+  없어 번호가 문서 순서 그 자체다. 글상자·표 셀 안의 차트도 이 순서에 포함된다.
+- `-o, --output <경로>` — `--chart` 지정 시 CSV 파일, 생략 시 차트별 파일(`chart<N>.csv`)을
+  담을 폴더
+- `--bom` — 파일 출력에만 UTF-8 BOM 을 붙인다(엑셀 한글 깨짐 방지). 봉투의 `csv` 문자열에는
+  붙이지 않는다 — 붙이면 JSON 소비자가 첫 셀 앞의 U+FEFF 를 값으로 읽는다.
+- `-o` 도 `--json` 도 없으면 CSV 본문을 stdout 으로 흘린다(파이프용).
+- **분산형**은 첫 열이 X 값이고 머리 행 첫 칸이 `X` 다. 카테고리형은 그 칸이 비어 있다.
+- 행 수는 **값이 정한다**(라벨 수가 아니다). `c:cat` 이 일부 계열에만 있는 문서가 실재하며,
+  라벨로 행 수를 잡으면 값이 통째로 빠진 CSV 가 나온다.
+- 비순차 `c:pt idx`(희소·역순·중복) 문서는 `nonSequentialPointIndex` 로 **거부한다** —
+  행 번호가 벡터 출현 순서라, 자리 기반으로 정렬하면 틀린 CSV 를 조용히 내게 된다.
+  오정렬 산출보다 실패가 낫다. 논리 행 모델은 후속 작업이다.
+- 모든 계열의 카테고리 라벨(분산형은 X 값)이 같아야 한다. 계열마다 다르면 CSV 첫 열 하나로
+  안전하게 표현할 수 없어 출력하지 않는다. HWPX의 ① `Chart/chartN.xml`과 ② 중첩 CFB
+  `OOXMLChartContents`도 계열·라벨·값이 논리적으로 같아야 하며, 다르면 어느 쪽도 정본으로
+  가정하지 않고 `representationMismatch`로 거부한다.
+- `--json` 봉투: `{"schemaVersion":"1.0","source","chartCount","charts":[{"chart","rowCount","colCount","csv","output"?}],"bom","output"?,"outputFormat"?}`
+
+```bash
+rhwp chart-to-csv samples/chart/세로막대형/묶은세로막대형.hwpx --chart 1
+# ,계열 1,계열 2,계열 3
+# 항목 1,4.3,2.4,2
+rhwp chart-to-csv 보고서.hwpx --json | jq '.charts[] | {chart, rowCount, colCount}'
+```
+
+### `csv-to-chart <파일.hwp|파일.hwpx> --csv <경로.csv> --chart <번호> [-o <출력>] [--dry-run] [--verify] [--json]` (#4100)
+CSV 내용으로 기존 차트 N 의 숫자 값을 덮어쓴다. `chart-to-csv` 의 짝이다.
+**크기·이름은 바꾸지 않는다** — 계열 수, 값 개수, 계열명, 카테고리 라벨은 전부 구조 변경이라
+범위 밖이고, 다르면 **한 칸도 쓰지 않고** `invalid[]` + exit 2 다.
+- `--csv <경로.csv>` (필수) — UTF-8 CSV(선두 BOM 허용). `chart-to-csv` 산출을 고쳐 쓰는 것이 안전하다.
+- `--chart <번호>` (필수) — 문서 순서 1부터.
+- **값 하나가 OOXML 두 표현에 중복 저장돼 있어 각 원본에 독립적으로 쓴다** — HWPX zip 파트
+  `Chart/chartN.xml`(①)과 중첩 CFB 의 `OOXMLChartContents`(②). ①만 쓰면 HWP 변환에서 편집이
+  조용히 사라진다(#4055 한컴 실측). 두 표현의 계열·라벨·값이 다르면
+  `representationMismatch`로 둘 다 쓰지 않는다. 바이트 차이만 있는 경우에도 각 사본의
+  원래 XML에 해당 값만 패치해 확장 속성·미래 요소를 보존한다. 어디에 썼는지는 봉투의
+  `wrote[]` 로 항상 드러난다 — HWPX 는 `["zipPart","nestedCopy"]`, HWP5 는 `["nestedCopy"]`.
+- ②를 특정하지 못하면(`<hp:switch>` 의 fallback OLE 부재) `nestedCopyNotFound` 로 거부하고
+  ①에도 쓰지 않는다. 반쪽만 새 값인 파일을 내보내지 않는다.
+- 값이 실제로 달라지는 칸만 다시 쓴다. 바뀐 칸이 0 이면 **슬롯을 건드리지 않는다** —
+  중첩 CFB 를 되쓰기만 해도 섹터 배치가 달라져 바이트가 바뀐다.
+- 거부 사유: `csvParse`(CSV 구조) · `seriesCountMismatch` · `valueCountMismatch` ·
+  `seriesNameMismatch` · `categoryMismatch` · `notANumber` · `valueNotPatchable`(빈 `<c:v/>`) ·
+  `sharedXRequired`(분산형에서 계열별 X 가 달라 한 열로 표현 불가) ·
+  `sharedCategoryRequired`(카테고리형에서 계열별 라벨이 달라 한 열로 표현 불가) ·
+  `representationMismatch`(①·②의 논리 차트 데이터 불일치) ·
+  `nonSequentialPointIndex`(희소·역순·중복 `c:pt idx` — 자리 대응이 성립하지 않아
+  읽기·쓰기 모두 거부, 후속 작업 전까지 미지원)
+- `-o, --output <파일>` — 출력 파일(기본 `<입력명>_chart.<입력과 같은 확장자>`, §edit 산출 형식)
+- `--dry-run` — 파일을 쓰지 않고 `changed[]`(from→to)만 보고
+- `--verify` — 저장 직후 IR 자기검증(차이 시 exit 3)
+- `--json` 봉투: `{"schemaVersion":"1.0","source","csv","chart","changedCount","changed":[{"series","point"|"x","from","to"}],"invalid":[],"wrote":["zipPart","nestedCopy"],"dryRun","changedPages":null,"output"?,"outputFormat"?,"verify"?}`
+
+```bash
+rhwp chart-to-csv 보고서.hwpx --chart 1 -o /tmp/차트1.csv
+# /tmp/차트1.csv 를 편집한 뒤
+rhwp csv-to-chart 보고서.hwpx --csv /tmp/차트1.csv --chart 1 -o 수정본.hwpx --json
+```
+
+> **알려진 한계** — 편집된 차트의 레거시 `Contents` 표현은 옛 값으로 남는다. 한컴은 그것을
+> 읽지 않으므로 화면·인쇄에는 무해하지만 rhwp 의 레거시 소비 경로는 옛 값을 보고한다(#4098).
+> `c:formatCode` 도 동기화하지 않는다 — 서식이 `General` 이 아닌 계열은 한컴이 새 값을 그
+> 서식대로 표시하므로 CSV 값과 화면 표시가 다를 수 있다.
+
 ### `export-render-tree <파일> [옵션]`
 페이지별 render tree bbox JSON(레이아웃 시각 분석용). 출력 `render_tree_{NNN}.json`.
 - `-o`, `-p`, `--show-para-marks`, `--show-control-codes`, `--respect-vpos-reset`

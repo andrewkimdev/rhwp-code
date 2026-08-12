@@ -277,6 +277,25 @@ const EXEMPT: &[(&str, &str, Exempt, &str)] = &[
          `raw_stream: None`(`parser/hwp3/mod.rs:3241`)이라 무효화할 패스스루가 없고, \
          적재 대상 `bin_data_content` 는 DocInfo 레코드가 아니라 BinData 저장소다.",
     ),
+    (
+        "commands/object_ops/chart.rs",
+        "set_chart_data_native",
+        Exempt::NoPassthrough,
+        "[#4100] 차트 값 편집. 바꾸는 것은 `bin_data_content` 슬롯 바이트뿐이고 그것은 \
+         BodyText·DocInfo 스트림이 아니라 **BinData 저장소**라 패스스루 대상이 아니다 \
+         (`serializer/cfb_writer.rs`가 IR 에서 매번 재방출, HWPX 는 \
+         `serializer/hwpx/mod.rs`가 `Chart/chartN.xml` 로 무가공 방출). 문단·컨트롤·\
+         DocInfo 레코드는 건드리지 않는다. 근거는 말이 아니라 판정으로 둔다 — \
+         `tests/issue_4100_chart_data_edit.rs::the_edit_survives_hwp5_save_despite_stream_passthrough` \
+         가 HWP5 저장→재파스에서 편집 생존을 확인한다.",
+    ),
+    (
+        "commands/object_ops/chart.rs",
+        "set_chart_data_by_index_native",
+        Exempt::NoPassthrough,
+        "[#4100] 위와 같다 — 문서 순번으로 지목하는 정본 주소 경로이고 기록 대상은 동일한 \
+         `bin_data_content` 슬롯이다.",
+    ),
     // ── 호출자 책임 ────────────────────────────────────────────────────────
     (
         "commands/document.rs",

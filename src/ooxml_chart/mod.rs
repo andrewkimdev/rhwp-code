@@ -25,7 +25,11 @@
 //! ## 범위 외
 //! - 영역형, 추세선, 애니메이션, 세밀 스타일
 
+/// [#4100] 값의 바이트 구간 스캐너 — 편집용. `parser` 는 손실 파서라 재방출에 쓸 수 없다.
+pub mod data;
 pub mod parser;
+/// [#4100] 값 구간의 최소 diff 치환.
+pub mod patch;
 pub mod renderer;
 
 /// OOXML 차트 데이터 모델
