@@ -162,6 +162,51 @@ cargo build --profile release-test --target-dir target/pr-review
 대체하지 않으므로**, 코드 변경 뒤에는 위의 전체 `cargo nextest run ... --tests --no-fail-fast`를 반드시
 완료하세요. 상세 절차는 [로컬 사전 검증](mydocs/manual/pr_review/local_validation.md)을 따릅니다.
 
+### 프런트엔드 변경 검증
+
+`rhwp-studio/`, `npm/editor/`, WASM과 Studio의 연결 코드 또는 브라우저 UI를 바꾸는 PR은 Rust 검증과 별도로
+아래 범위에서 검증합니다. 메인터너용 PR review 문서를 읽거나 저장소에 검토 기록을 추가할 필요는 없습니다.
+PR 본문에 실제로 실행한 명령, 통과 결과, 수동 확인한 동작과 사용한 공개 sample만 적어주세요.
+
+먼저 의존성을 설치한 뒤 Studio의 타입·단위·번들을 확인합니다.
+
+```bash
+npm --prefix rhwp-studio ci
+(cd rhwp-studio && npx tsc --noEmit)
+npm --prefix rhwp-studio test
+npm --prefix rhwp-studio run build
+```
+
+사용자 상호작용, Canvas, 선택·입력·저장, bridge, plugin 등 브라우저 동작을 바꿨다면
+[`rhwp-studio/e2e/MANIFEST.md`](rhwp-studio/e2e/MANIFEST.md)에서 변경 기능에 대응하는 E2E를 골라 함께
+실행합니다. 예를 들어 `e2e/`에 새 회귀를 추가했다면 manifest와 package script도 함께 갱신하고,
+해당 script를 PR 본문에 기록합니다.
+
+```bash
+# 예: 수정한 기능에 맞는 한 가지 이상의 E2E를 선택한다.
+npm --prefix rhwp-studio run e2e:undo
+
+# 실제 브라우저 수동 확인이 필요한 UI 변경은 개발 서버를 외부 인터페이스에도 열어 실행한다.
+npm --prefix rhwp-studio run dev -- --host 0.0.0.0 --port 7700
+# 브라우저에서 http://localhost:7700 을 열어 수정한 흐름을 확인한 뒤 서버를 종료한다.
+```
+
+`npm/editor`의 public API, transport, 선언 파일 또는 package manifest를 바꿨다면 Studio test만으로 끝내지
+말고 package 계약도 확인합니다. iframe RPC·기본 옵션·WASM 초기화가 바뀌면 fresh WASM build 뒤 관련 embed
+E2E까지 실행합니다.
+
+```bash
+npm --prefix npm/editor test
+node --test scripts/frontend-wasm-bindings.test.mjs scripts/frontend-editor-embed.test.mjs
+(cd rhwp-studio && npx tsc --ignoreConfig --noEmit --skipLibCheck ../npm/editor/index.d.ts)
+(cd npm/editor && npm pack --dry-run --json)
+wasm-pack build --target web --out-dir pkg
+VITE_URL=http://127.0.0.1:7700 npm --prefix rhwp-studio run e2e:embed
+```
+
+브라우저 화면·영상·개인정보가 포함된 sample은 저장소에 커밋하지 않고 PR 본문에 공개 가능한 범위로 첨부합니다.
+렌더링 또는 페이지네이션을 바꿨다면 이 절차에 더해 아래의 시각 검증 안내를 따릅니다.
+
 ### 성능 검증 책임
 
 PR을 제출하기 위해 컨트리뷰터가 특정 로컬 환경의 **절대 성능 수치**, 비공개 코퍼스 또는
