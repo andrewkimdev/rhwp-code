@@ -41,6 +41,14 @@ use super::pagination::{
     PaginationResult,
 };
 
+/// [#4654] 전면 크기 그림 낱장 배치는 문단의 비인라인 그림 중 엄격한 과반일 때만 쓴다.
+///
+/// 정확히 절반인 문단까지 낱장 정책을 적용하면 기존 pile 문서의 다수 그림 흐름을
+/// 불필요하게 페이지 단위로 분리한다. 두 장 이상이라는 #1995의 하한은 유지한다.
+fn has_majority_fullpage_images(fullpage_count: usize, noninline_picture_count: usize) -> bool {
+    fullpage_count >= 2 && fullpage_count.saturating_mul(2) > noninline_picture_count
+}
+
 /// [#2085] 표 행-스캔 분할점 캐리 (값 왕복). split_end_cut 은 move.
 struct BlockTableRowScan {
     consumed: f64,
@@ -5636,15 +5644,18 @@ impl TypesetEngine {
                                 && seg.segment_width as i32 == st.wrap_around_sw
                         })
                         .count();
-                    let suffix_is_full_width = para
-                        .line_segs
-                        .get(wrap_prefix_len)
-                        .map(|seg| {
+                    // [#4650 · #4599 ⑩] 종전에는 전폭 꼬리 '정확히 한 줄'만 분리했으나, 반폭
+                    // Square 표 옆 문단이 여러 전폭 꼬리 줄을 갖는 형상(156714641 p1
+                    // pi13: 표 옆 prefix 4줄 + 전폭 꼬리 5줄)이 일반 배치로 떨어져
+                    // prefix 가 표 하단 아래(952.9)로 밀렸다 — 한글 2022 캐시 PDF 는
+                    // 표 옆 747.9. 꼬리 전 줄이 전폭이고 저장 seg 와 조판 줄이 1:1 인
+                    // 경우로 확장한다(#4090 의 안정 형상 판별은 유지).
+                    let suffix_is_full_width =
+                        para.line_segs[wrap_prefix_len..].iter().all(|seg| {
                             seg.column_start == 0
                                 && (seg.segment_width as i32 - st.layout.column_width_hu()).abs()
                                     <= 3_000
-                        })
-                        .unwrap_or(false);
+                        }) && wrap_prefix_len < para.line_segs.len();
                     let col_width = st
                         .layout
                         .column_areas
@@ -5654,7 +5665,7 @@ impl TypesetEngine {
                     let formatted = self.format_paragraph(para, composed, styles, Some(col_width));
                     let can_split_prefix = !is_empty_para
                         && wrap_prefix_len > 0
-                        && wrap_prefix_len + 1 == para.line_segs.len()
+                        && wrap_prefix_len < para.line_segs.len()
                         && suffix_is_full_width
                         && formatted.line_count() == para.line_segs.len();
                     if can_split_prefix {
@@ -7010,7 +7021,19 @@ impl TypesetEngine {
             } else {
                 Vec::new()
             };
-            let is_multi_fullpage_img_para = fullpage_img_ctrls.len() >= 2;
+            // [#4654] 낱장 배치는 **전면 크기가 과반**인 문단에만 — 디자인
+            // 보드형 pile(체육대회 4510000-202300010: 한 문단 그림 210장 중
+            // 전면 ~15장, 한글은 쪽당 60여 장 통 적재에 전면 그림도 포함)에서
+            // 소수 전면 그림이 낱장으로 탈출해 +12쪽이 됐다. #1995 원 취지
+            // (임베드 매뉴얼: 전량 전면 96장, 오라클 268 vs 174 과소)는 과반
+            // 조건으로 그대로 보존된다.
+            let noninline_pic_count = para
+                .controls
+                .iter()
+                .filter(|c| matches!(c, Control::Picture(pic) if !pic.common.treat_as_char))
+                .count();
+            let is_multi_fullpage_img_para =
+                has_majority_fullpage_images(fullpage_img_ctrls.len(), noninline_pic_count);
 
             // [#2097] 이 문단의 TopAndBottom 자리차지 float pushdown 가로 컬럼
             // (h_left, h_right, 스택_높이) px — 가로 겹침으로 스택/나란히 판별.
@@ -22930,6 +22953,15 @@ mod issue_3780_line_advance_oob {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn fullpage_image_single_page_policy_requires_strict_majority() {
+        assert!(!super::has_majority_fullpage_images(0, 0));
+        assert!(!super::has_majority_fullpage_images(1, 1));
+        assert!(!super::has_majority_fullpage_images(2, 4));
+        assert!(super::has_majority_fullpage_images(2, 3));
+        assert!(super::has_majority_fullpage_images(3, 5));
+    }
+
     use super::*;
     use crate::model::page::{ColumnDef, PageDef};
     use crate::model::paragraph::{LineSeg, Paragraph};
