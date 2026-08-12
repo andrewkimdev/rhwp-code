@@ -51,7 +51,7 @@ paint 구현 전에는 한컴과 같은 자연 분할 또는 46쪽 정합을 주
 ## 완료한 검증
 
 - `cargo nextest run --cargo-profile release-test --target-dir target/pr-review --tests --test-threads 12 --no-fail-fast`:
-  현재 통합 HEAD에서 5,776 passed, 36 skipped, 7 slow, 447.357초.
+  리베이스 전 통합 후보에서 5,776 passed, 36 skipped, 7 slow, 447.357초.
 - `cargo nextest run ... --test issue_4514_overlay_table_flow`: 1 passed.
 - `cargo nextest run ... --test issue_4515_table_overlap_diag`: 1 passed.
 - `cargo test --profile release-test --features native-skia skia --lib`: 58 passed.

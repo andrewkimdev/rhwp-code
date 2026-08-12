@@ -22,7 +22,7 @@ last_verified: 2026-08-12
 rewind를 허용했다. 실제 호출 경로의 의도와 달리 비-inline 표까지 이동할 수 있으므로 메인터너 보정에서
 `composed`와 첫 `tac_controls`를 모두 요구하게 좁혔다.
 
-보정은 8개 단위 테스트로 inline TAC 정상 이동과 missing/block TAC 거부를 함께 고정한다. current HEAD에서
-해당 8건, release-test 전체 5,776건, Clippy, Native Skia 3종, WASM build가 통과했다. 원 PR의
+보정은 8개 단위 테스트로 inline TAC 정상 이동과 missing/block TAC 거부를 함께 고정한다. 리베이스 전
+누적 통합 후보에서 해당 8건, release-test 전체 5,776건, Clippy, Native Skia 3종, WASM build가 통과했다. 원 PR의
 `closes #4610` 의미는 통합 PR에서 유지하되, 릴리스 hold 중에는 issue close를 포함한 merge 후속 처리를
 수행하지 않는다.
