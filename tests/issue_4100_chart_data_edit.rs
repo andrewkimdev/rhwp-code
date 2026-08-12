@@ -756,6 +756,38 @@ fn set_chart(core: &mut DocumentCore, edits: &serde_json::Value) -> serde_json::
     .expect("JSON")
 }
 
+/// 실문서의 차트 슬롯에 합성 XML을 주입한다. HWPX는 ①과 ②가 각각 다른 바이트를
+/// 가질 수 있으므로 테스트도 두 표현을 독립적으로 바꾼다.
+fn replace_chart_representations(core: &mut DocumentCore, zip_xml: &[u8], nested_xml: &[u8]) {
+    let chart = collect_charts(core.document())[0].clone();
+    let zip_idx = chart.zip_part.expect("합성 경계는 HWPX ①을 쓴다");
+    let nested_idx = chart.nested_copy.expect("합성 경계는 HWPX ②을 쓴다");
+    let nested_original = core.document().bin_data_content[nested_idx].data.load();
+    let nested_new =
+        replace_ole_stream(&nested_original, OOXML_STREAM, nested_xml).expect("② 교체");
+
+    core.document_mut().bin_data_content[zip_idx].data = zip_xml.to_vec().into();
+    core.document_mut().bin_data_content[nested_idx].data = nested_new.into();
+}
+
+const BLANK_VALUE_CHART: &str = concat!(
+    r#"<c:chartSpace><c:chart><c:plotArea><c:barChart><c:ser>"#,
+    r#"<c:cat><c:strLit><c:pt idx="0"><c:v>A</c:v></c:pt><c:pt idx="1"><c:v>B</c:v></c:pt></c:strLit></c:cat>"#,
+    r#"<c:val><c:numLit><c:pt idx="0"><c:v>4.3</c:v></c:pt><c:pt idx="1"><c:v/></c:pt></c:numLit></c:val>"#,
+    r#"</c:ser></c:barChart></c:plotArea></c:chart></c:chartSpace>"#,
+);
+
+const UNSHARED_CATEGORY_CHART: &str = concat!(
+    r#"<c:chartSpace><c:chart><c:plotArea><c:barChart>"#,
+    r#"<c:ser><c:tx><c:v>첫째</c:v></c:tx><c:cat><c:strLit>"#,
+    r#"<c:pt idx="0"><c:v>A</c:v></c:pt><c:pt idx="1"><c:v>B</c:v></c:pt>"#,
+    r#"</c:strLit></c:cat><c:val><c:numLit><c:pt idx="0"><c:v>1</c:v></c:pt><c:pt idx="1"><c:v>2</c:v></c:pt></c:numLit></c:val></c:ser>"#,
+    r#"<c:ser><c:tx><c:v>둘째</c:v></c:tx><c:cat><c:strLit>"#,
+    r#"<c:pt idx="0"><c:v>B</c:v></c:pt><c:pt idx="1"><c:v>A</c:v></c:pt>"#,
+    r#"</c:strLit></c:cat><c:val><c:numLit><c:pt idx="0"><c:v>3</c:v></c:pt><c:pt idx="1"><c:v>4</c:v></c:pt></c:numLit></c:val></c:ser>"#,
+    r#"</c:barChart></c:plotArea></c:chart></c:chartSpace>"#,
+);
+
 /// **편집이 ①②에 함께 실린다** (수용 기준 1 의 코어 층).
 ///
 /// HWPX 는 두 표현 모두, HWP5 는 ②가 새 값이다. ③(레거시)·④(EMF)는 바이트 그대로 —
@@ -854,6 +886,158 @@ fn writing_the_current_values_back_changes_nothing() {
         }
     }
     assert_eq!(checked, CORPUS_FILES);
+}
+
+/// ①과 ②는 편집 대상 밖 XML이 달라도 각자 자기 바이트 구간만 고친다.
+///
+/// 이전 구현은 ①로 만든 전체 XML을 ②에도 넣어 확장 속성·미래 요소를 조용히 잃었다.
+#[test]
+fn matching_representations_are_patched_independently() {
+    let path = manifest("samples/chart/세로막대형/묶은세로막대형.hwpx");
+    let mut core = core_of(&path);
+    let chart = collect_charts(core.document())[0].clone();
+    let original = String::from_utf8(
+        core.document().bin_data_content[chart.zip_part.expect("①")]
+            .data
+            .load(),
+    )
+    .expect("UTF-8 XML");
+    let zip = original.replacen("<c:chartSpace", "<c:chartSpace review=\"zip\"", 1);
+    let nested = original.replacen("<c:chartSpace", "<c:chartSpace review=\"nested\"", 1);
+    replace_chart_representations(&mut core, zip.as_bytes(), nested.as_bytes());
+
+    let mut edits = edits_from(&core, 0);
+    edits["series"][0]["values"][0] = serde_json::json!("91.7");
+    let out = set_chart(&mut core, &edits);
+    assert_eq!(out["ok"], true, "{out}");
+    assert_eq!(out["wrote"], serde_json::json!(["zipPart", "nestedCopy"]));
+
+    let zip_after = String::from_utf8(
+        core.document().bin_data_content[chart.zip_part.expect("①")]
+            .data
+            .load(),
+    )
+    .expect("UTF-8 XML");
+    let nested_after = String::from_utf8(
+        stream_of(
+            &core.document().bin_data_content[chart.nested_copy.expect("②")]
+                .data
+                .load(),
+            OOXML_STREAM,
+        )
+        .expect("② XML"),
+    )
+    .expect("UTF-8 XML");
+    assert!(zip_after.contains("review=\"zip\""), "{zip_after}");
+    assert!(!zip_after.contains("review=\"nested\""), "{zip_after}");
+    assert!(nested_after.contains("review=\"nested\""), "{nested_after}");
+    assert!(!nested_after.contains("review=\"zip\""), "{nested_after}");
+    assert!(zip_after.contains("<c:v>91.7</c:v>"), "{zip_after}");
+    assert!(nested_after.contains("<c:v>91.7</c:v>"), "{nested_after}");
+}
+
+/// ①과 ②의 데이터가 이미 다르면 어느 표현을 정본으로 삼아도 다른 쪽을 훼손한다.
+/// 읽기와 쓰기 모두 fail-closed하며 슬롯 바이트는 그대로여야 한다.
+#[test]
+fn mismatched_representations_are_refused_without_writing() {
+    let path = manifest("samples/chart/세로막대형/묶은세로막대형.hwpx");
+    let mut core = core_of(&path);
+    let edits = edits_from(&core, 0);
+    let chart = collect_charts(core.document())[0].clone();
+    let zip = core.document().bin_data_content[chart.zip_part.expect("①")]
+        .data
+        .load();
+    let nested = String::from_utf8(zip.clone()).expect("UTF-8 XML").replacen(
+        "<c:v>4.3</c:v>",
+        "<c:v>7.7</c:v>",
+        1,
+    );
+    replace_chart_representations(&mut core, &zip, nested.as_bytes());
+    let before = slot_bytes(&core);
+
+    let read: serde_json::Value =
+        serde_json::from_str(&core.get_chart_data_by_index_native(0).expect("주소는 유효"))
+            .expect("JSON");
+    assert_eq!(read["ok"], false, "{read}");
+    assert_eq!(read["invalid"][0]["reason"], "representationMismatch");
+
+    let mut changed = edits;
+    changed["series"][0]["values"][0] = serde_json::json!("91.7");
+    let out = set_chart(&mut core, &changed);
+    assert_eq!(out["ok"], false, "{out}");
+    assert_eq!(out["invalid"][0]["reason"], "representationMismatch");
+    assert_eq!(slot_bytes(&core), before, "거부했는데 차트 슬롯이 바뀌었다");
+}
+
+/// `<c:v/>`는 그 점만 구조 변경 없이는 쓸 수 없다. 다른 점을 바꿀 때는 빈 값을
+/// 원형으로 전달해도 전체 행렬을 `notANumber`로 거부해서는 안 된다.
+#[test]
+fn blank_value_blocks_only_its_own_edit() {
+    let path = manifest("samples/chart/세로막대형/묶은세로막대형.hwpx");
+    let mut core = core_of(&path);
+    replace_chart_representations(
+        &mut core,
+        BLANK_VALUE_CHART.as_bytes(),
+        BLANK_VALUE_CHART.as_bytes(),
+    );
+
+    let edits = serde_json::json!({
+        "labels": ["A", "B"],
+        "series": [{"values": ["91.7", ""]}],
+    });
+    let out = set_chart(&mut core, &edits);
+    assert_eq!(out["ok"], true, "{out}");
+    assert_eq!(out["changedCount"], 1, "{out}");
+
+    let before = slot_bytes(&core);
+    let bad = serde_json::json!({
+        "labels": ["A", "B"],
+        "series": [{"values": ["91.7", "5"]}],
+    });
+    let out = set_chart(&mut core, &bad);
+    assert_eq!(out["ok"], false, "{out}");
+    assert_eq!(out["invalid"][0]["reason"], "valueNotPatchable");
+    assert_eq!(
+        slot_bytes(&core),
+        before,
+        "빈 값 편집 거부 뒤 바이트가 바뀌었다"
+    );
+}
+
+/// CSV가 넘기는 한 라벨 열은 모든 계열에서 같은 의미여야 한다. 계열별 범주가 다르면
+/// native 호출도 labels를 수락하지 않아 CSV의 행-점 오정렬을 막는다.
+#[test]
+fn nonshared_category_labels_are_refused_before_writing() {
+    let path = manifest("samples/chart/세로막대형/묶은세로막대형.hwpx");
+    let mut core = core_of(&path);
+    replace_chart_representations(
+        &mut core,
+        UNSHARED_CATEGORY_CHART.as_bytes(),
+        UNSHARED_CATEGORY_CHART.as_bytes(),
+    );
+    let before = slot_bytes(&core);
+
+    let read: serde_json::Value =
+        serde_json::from_str(&core.get_chart_data_by_index_native(0).expect("주소는 유효"))
+            .expect("JSON");
+    assert_eq!(read["ok"], true, "{read}");
+    assert_eq!(read["labelsShared"], false, "{read}");
+
+    let edits = serde_json::json!({
+        "labels": ["A", "B"],
+        "series": [
+            {"name": "첫째", "values": ["10", "2"]},
+            {"name": "둘째", "values": ["3", "4"]},
+        ],
+    });
+    let out = set_chart(&mut core, &edits);
+    assert_eq!(out["ok"], false, "{out}");
+    assert_eq!(out["invalid"][0]["reason"], "sharedCategoryRequired");
+    assert_eq!(
+        slot_bytes(&core),
+        before,
+        "비공유 라벨 거부 뒤 바이트가 바뀌었다"
+    );
 }
 
 /// 편집이 저장·재파스를 넘어 살아남는다 — ②까지 함께.

@@ -6378,6 +6378,19 @@ fn chart_to_csv(args: &[String]) -> i32 {
             );
             return EXIT_RUNTIME;
         }
+        if read["labelsShared"] != true {
+            let axis = if read["axis"].as_str() == Some("scatter") {
+                "X 값"
+            } else {
+                "카테고리 라벨"
+            };
+            eprintln!(
+                "오류: 차트 {}는 계열마다 {}이 달라 CSV 한 열로 안전하게 표현할 수 없습니다.",
+                index + 1,
+                axis
+            );
+            return EXIT_RUNTIME;
+        }
         let (labels, names, values, scatter) = chart_matrix_from_envelope(&read);
         // 행 수는 값이 정한다 — 라벨이 없거나 짧은 차트가 실재한다(chart_csv::to_csv 주석).
         let rows = values

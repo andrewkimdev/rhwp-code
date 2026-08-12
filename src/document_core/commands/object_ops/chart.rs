@@ -8,7 +8,7 @@
 use serde::Deserialize;
 
 use crate::document_core::queries::chart_extract::{
-    chart_xml, collect_charts, ChartRef, ChartSource,
+    collect_charts, nested_chart_xml, zip_chart_xml, ChartRef, ChartSource,
 };
 use crate::document_core::DocumentCore;
 use crate::error::HwpError;
@@ -39,6 +39,128 @@ fn scan_refusal(e: &ChartScanError) -> String {
         _ => "chartScan",
     };
     refused(reason, e.to_string())
+}
+
+/// 두 표현을 같은 논리 차트로 볼 수 있는가.
+///
+/// 바이트 동일성은 요구하지 않는다. OOXML은 확장 속성·요소 순서 같은 편집 밖 바이트가
+/// 다를 수 있으므로, B1이 주소로 삼는 계열/축/점의 `idx`와 텍스트만 비교한다. 이 계약이
+/// 깨진 문서는 어느 사본을 기준으로 고쳐도 다른 사본의 의미를 덮어쓸 수 있으므로 쓴다.
+fn same_chart_data(left: &ChartData, right: &ChartData) -> bool {
+    left.series.len() == right.series.len()
+        && left.series.iter().zip(&right.series).all(|(left, right)| {
+            left.name == right.name
+                && left.axis == right.axis
+                && left.labels_multi_level == right.labels_multi_level
+                && left.labels.len() == right.labels.len()
+                && left.values.len() == right.values.len()
+                && left
+                    .labels
+                    .iter()
+                    .zip(&right.labels)
+                    .all(|(left, right)| left.idx == right.idx && left.text == right.text)
+                && left
+                    .values
+                    .iter()
+                    .zip(&right.values)
+                    .all(|(left, right)| left.idx == right.idx && left.text == right.text)
+        })
+}
+
+fn representation_mismatch() -> String {
+    refused(
+        "representationMismatch",
+        "Chart/chartN.xml(①)과 OOXMLChartContents(②)의 계열·축·라벨·값이 다릅니다. \
+         어느 한쪽을 기준으로 다른 사본을 덮어쓰지 않도록 아무것도 기록하지 않습니다."
+            .to_string(),
+    )
+}
+
+/// ①과 ②를 각각 스캔한 결과.
+///
+/// HWP5는 ②만 가진다. HWPX는 두 표현이 모두 있을 때만 ①을 기록할 수 있으며, 패치는
+/// 각 표현의 원본 XML과 그 원본에서 얻은 byte span을 짝으로 유지한다.
+struct ChartRepresentations {
+    zip: Option<(Vec<u8>, ChartData)>,
+    nested: Option<(Vec<u8>, ChartData)>,
+}
+
+impl ChartRepresentations {
+    fn primary(&self) -> Option<(&ChartData, ChartSource)> {
+        self.zip
+            .as_ref()
+            .map(|(_, data)| (data, ChartSource::ZipPart))
+            .or_else(|| {
+                self.nested
+                    .as_ref()
+                    .map(|(_, data)| (data, ChartSource::NestedCopy))
+            })
+    }
+
+    fn nested_for_write(&self) -> Result<(&[u8], &ChartData), String> {
+        self.nested
+            .as_ref()
+            .map(|(xml, data)| (xml.as_slice(), data))
+            .ok_or_else(|| {
+                refused(
+                    "nestedCopyNotFound",
+                    "중첩 CFB 사본을 특정하지 못했습니다 — <hp:switch> 의 fallback OLE 가 없습니다. \
+                     ①만 기록하면 HWP 변환에서 편집이 사라지므로 아무것도 쓰지 않습니다."
+                        .to_string(),
+                )
+            })
+    }
+}
+
+/// 두 차트 표현을 독립적으로 읽고, 모두 존재하면 논리 데이터의 동일성을 확인한다.
+fn scan_chart_representations(
+    document: &crate::model::document::Document,
+    chart: &ChartRef,
+) -> Result<ChartRepresentations, String> {
+    let zip = if chart.zip_part.is_some() {
+        let xml = zip_chart_xml(document, chart).ok_or_else(|| {
+            refused(
+                "zipPartMissing",
+                "Chart/chartN.xml(①) 슬롯이 비어 있거나 읽을 수 없습니다. ②를 ①에 복제하지 않고 \
+                 아무것도 기록합니다."
+                    .to_string(),
+            )
+        })?;
+        let data = scan_chart_values(&xml).map_err(|e| scan_refusal(&e))?;
+        Some((xml, data))
+    } else {
+        None
+    };
+
+    let nested = if chart.nested_copy.is_some() {
+        let xml = nested_chart_xml(document, chart).ok_or_else(|| {
+            refused(
+                "nestedCopyNotFound",
+                "중첩 CFB의 OOXMLChartContents(②)를 읽을 수 없습니다. ①만 기록하면 HWP 변환에서 \
+                 편집이 사라지므로 아무것도 기록하지 않습니다."
+                    .to_string(),
+            )
+        })?;
+        let data = scan_chart_values(&xml).map_err(|e| scan_refusal(&e))?;
+        Some((xml, data))
+    } else {
+        None
+    };
+
+    if let (Some((_, zip_data)), Some((_, nested_data))) = (&zip, &nested) {
+        if !same_chart_data(zip_data, nested_data) {
+            return Err(representation_mismatch());
+        }
+    }
+
+    if zip.is_none() && nested.is_none() {
+        return Err(refused(
+            "chartStreamMissing",
+            "차트 XML 을 읽을 수 없습니다 — 두 표현 모두 비어 있습니다.".to_string(),
+        ));
+    }
+
+    Ok(ChartRepresentations { zip, nested })
 }
 
 /// 라벨을 **가진** 첫 계열의 라벨.
@@ -177,7 +299,9 @@ fn validate(data: &ChartData, edits: &ChartEdits) -> Vec<serde_json::Value> {
             continue;
         }
         if let Some(name) = &want.name {
-            if have.name.as_deref() != Some(name.as_str()) {
+            // CSV는 `c:tx` 부재(None)와 빈 계열명(Some(""))을 구분해 표현할 수 없다.
+            // B1은 계열명을 쓰지 않으므로 이 비교에서만 둘을 같은 무편집 값으로 본다.
+            if have.name.as_deref().unwrap_or_default() != name {
                 out.push(serde_json::json!({
                     "reason": "seriesNameMismatch",
                     "series": i,
@@ -188,7 +312,7 @@ fn validate(data: &ChartData, edits: &ChartEdits) -> Vec<serde_json::Value> {
             }
         }
         for (p, (text, point)) in want.values.iter().zip(&have.values).enumerate() {
-            if !is_number(text) {
+            if text != &point.text && !is_number(text) {
                 out.push(serde_json::json!({
                     "reason": "notANumber", "series": i, "point": p, "value": text,
                     "message": format!("계열 {} 점 {} 의 값 `{}` 이 수치가 아닙니다.", i, p, text),
@@ -216,12 +340,17 @@ fn validate_labels(
     scatter: bool,
     out: &mut Vec<serde_json::Value>,
 ) {
-    // 분산형은 X 를 한 열로 표현하므로 계열 간 X 가 같아야 한다. 코퍼스는 전건
-    // 일치하지만 **포맷의 보장이 아니다** — 다르면 한 열이 한 계열만 조용히 바꾼다.
-    if scatter && !labels_shared(data) {
+    // CSV 첫 열은 카테고리와 분산형 X 모두 하나뿐이다. 계열마다 다르면 같은 행 번호가
+    // 다른 뜻을 가리켜 조용한 오편집이 된다. 값만 주소로 편집하는 native 호출은 labels를
+    // 생략할 수 있지만, CSV가 넘긴 labels는 반드시 공유됨을 증명해야 한다.
+    if !labels_shared(data) {
         out.push(serde_json::json!({
-            "reason": "sharedXRequired",
-            "message": "계열마다 X 값이 달라 CSV 의 X 한 열로 표현할 수 없습니다.",
+            "reason": if scatter { "sharedXRequired" } else { "sharedCategoryRequired" },
+            "message": if scatter {
+                "계열마다 X 값이 달라 CSV 의 X 한 열로 표현할 수 없습니다."
+            } else {
+                "계열마다 카테고리 라벨이 달라 CSV 의 한 라벨 열로 표현할 수 없습니다."
+            },
         }));
         return;
     }
@@ -247,7 +376,7 @@ fn validate_labels(
         }
         for (p, (text, point)) in labels.iter().zip(&series.labels).enumerate() {
             if scatter {
-                if !is_number(text) {
+                if text != &point.text && !is_number(text) {
                     out.push(serde_json::json!({
                         "reason": "notANumber", "series": i, "point": p, "value": text,
                         "message": format!("분산형 X `{}` 이 수치가 아닙니다.", text),
@@ -427,27 +556,15 @@ impl DocumentCore {
             Ok(v) => v,
             Err(e) => return refused("editsParse", format!("편집 JSON 을 읽을 수 없습니다: {e}")),
         };
-        let Some((xml, _)) = chart_xml(&self.document, chart) else {
-            return refused(
-                "chartStreamMissing",
-                "차트 XML 을 읽을 수 없습니다 — 두 표현 모두 비어 있습니다.".to_string(),
-            );
+        let representations = match scan_chart_representations(&self.document, chart) {
+            Ok(v) => v,
+            Err(response) => return response,
         };
-        let data = match scan_chart_values(&xml) {
-            Ok(d) => d,
-            Err(e) => return scan_refusal(&e),
+        let (data, _) = representations.primary().expect("표현 하나 이상 확인함");
+        let (nested_xml, nested_data) = match representations.nested_for_write() {
+            Ok(v) => v,
+            Err(response) => return response,
         };
-
-        // ② 를 특정하지 못하면 쓰기 전에 멈춘다. HWPX 에서 ①만 고치면 HWP 변환에서
-        // 사라지므로 "①만이라도 쓴다"는 선택지가 없다.
-        if chart.nested_copy.is_none() {
-            return refused(
-                "nestedCopyNotFound",
-                "중첩 CFB 사본을 특정하지 못했습니다 — <hp:switch> 의 fallback OLE 가 없습니다. \
-                 ①만 기록하면 HWP 변환에서 편집이 사라지므로 아무것도 쓰지 않습니다."
-                    .to_string(),
-            );
-        }
 
         let invalid = validate(&data, &edits);
         if !invalid.is_empty() {
@@ -470,7 +587,14 @@ impl DocumentCore {
             .to_string();
         }
 
-        let patched = match apply_value_edits(&xml, &data, &plan) {
+        let zip_patched = match &representations.zip {
+            Some((xml, data)) => match apply_value_edits(xml, data, &plan) {
+                Ok(v) => Some(v),
+                Err(e) => return refused("chartPatch", e.to_string()),
+            },
+            None => None,
+        };
+        let nested_patched = match apply_value_edits(nested_xml, nested_data, &plan) {
             Ok(v) => v,
             Err(e) => return refused("chartPatch", e.to_string()),
         };
@@ -487,14 +611,14 @@ impl DocumentCore {
         // ② 재포장을 **먼저** 시도한다. 실패하면 ①도 쓰지 않아 문서가 원형으로 남는다.
         let nested_idx = chart.nested_copy.expect("위에서 확인함");
         let nested_original = self.document.bin_data_content[nested_idx].data.load();
-        let nested_new = match replace_ole_stream(&nested_original, OOXML_STREAM, &patched) {
+        let nested_new = match replace_ole_stream(&nested_original, OOXML_STREAM, &nested_patched) {
             Ok(v) => v,
             Err(e) => return refused("nestedRepack", e.to_string()),
         };
 
         let mut wrote = Vec::new();
-        if let Some(zip_idx) = chart.zip_part {
-            self.document.bin_data_content[zip_idx].data = patched.clone().into();
+        if let (Some(zip_idx), Some(zip_patched)) = (chart.zip_part, zip_patched) {
+            self.document.bin_data_content[zip_idx].data = zip_patched.into();
             wrote.push("zipPart");
         }
         self.document.bin_data_content[nested_idx].data = nested_new.into();
@@ -520,15 +644,12 @@ impl DocumentCore {
     }
 
     fn chart_data_at(&self, chart: &ChartRef) -> String {
-        let Some((xml, source)) = chart_xml(&self.document, chart) else {
-            return refused(
-                "chartStreamMissing",
-                "차트 XML 을 읽을 수 없습니다 — 두 표현 모두 비어 있습니다.".to_string(),
-            );
-        };
-        match scan_chart_values(&xml) {
-            Ok(data) => chart_data_json(chart, &data, source).to_string(),
-            Err(e) => scan_refusal(&e),
+        match scan_chart_representations(&self.document, chart) {
+            Ok(representations) => {
+                let (data, source) = representations.primary().expect("표현 하나 이상 확인함");
+                chart_data_json(chart, data, source).to_string()
+            }
+            Err(response) => response,
         }
     }
 }

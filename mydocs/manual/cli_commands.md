@@ -394,6 +394,10 @@ rhwp csv-to-table samples/hwpx/basic-table-01.hwpx --csv /tmp/표0.csv --table 0
 - 비순차 `c:pt idx`(희소·역순·중복) 문서는 `nonSequentialPointIndex` 로 **거부한다** —
   행 번호가 벡터 출현 순서라, 자리 기반으로 정렬하면 틀린 CSV 를 조용히 내게 된다.
   오정렬 산출보다 실패가 낫다. 논리 행 모델은 후속 작업이다.
+- 모든 계열의 카테고리 라벨(분산형은 X 값)이 같아야 한다. 계열마다 다르면 CSV 첫 열 하나로
+  안전하게 표현할 수 없어 출력하지 않는다. HWPX의 ① `Chart/chartN.xml`과 ② 중첩 CFB
+  `OOXMLChartContents`도 계열·라벨·값이 논리적으로 같아야 하며, 다르면 어느 쪽도 정본으로
+  가정하지 않고 `representationMismatch`로 거부한다.
 - `--json` 봉투: `{"schemaVersion":"1.0","source","chartCount","charts":[{"chart","rowCount","colCount","csv","output"?}],"bom","output"?,"outputFormat"?}`
 
 ```bash
@@ -409,10 +413,12 @@ CSV 내용으로 기존 차트 N 의 숫자 값을 덮어쓴다. `chart-to-csv` 
 범위 밖이고, 다르면 **한 칸도 쓰지 않고** `invalid[]` + exit 2 다.
 - `--csv <경로.csv>` (필수) — UTF-8 CSV(선두 BOM 허용). `chart-to-csv` 산출을 고쳐 쓰는 것이 안전하다.
 - `--chart <번호>` (필수) — 문서 순서 1부터.
-- **값 하나가 OOXML 두 표현에 중복 저장돼 있어 둘 다에 쓴다** — HWPX zip 파트
+- **값 하나가 OOXML 두 표현에 중복 저장돼 있어 각 원본에 독립적으로 쓴다** — HWPX zip 파트
   `Chart/chartN.xml`(①)과 중첩 CFB 의 `OOXMLChartContents`(②). ①만 쓰면 HWP 변환에서 편집이
-  조용히 사라진다(#4055 한컴 실측). 어디에 썼는지는 봉투의 `wrote[]` 로 항상 드러난다 —
-  HWPX 는 `["zipPart","nestedCopy"]`, HWP5 는 `["nestedCopy"]`.
+  조용히 사라진다(#4055 한컴 실측). 두 표현의 계열·라벨·값이 다르면
+  `representationMismatch`로 둘 다 쓰지 않는다. 바이트 차이만 있는 경우에도 각 사본의
+  원래 XML에 해당 값만 패치해 확장 속성·미래 요소를 보존한다. 어디에 썼는지는 봉투의
+  `wrote[]` 로 항상 드러난다 — HWPX 는 `["zipPart","nestedCopy"]`, HWP5 는 `["nestedCopy"]`.
 - ②를 특정하지 못하면(`<hp:switch>` 의 fallback OLE 부재) `nestedCopyNotFound` 로 거부하고
   ①에도 쓰지 않는다. 반쪽만 새 값인 파일을 내보내지 않는다.
 - 값이 실제로 달라지는 칸만 다시 쓴다. 바뀐 칸이 0 이면 **슬롯을 건드리지 않는다** —
@@ -420,6 +426,8 @@ CSV 내용으로 기존 차트 N 의 숫자 값을 덮어쓴다. `chart-to-csv` 
 - 거부 사유: `csvParse`(CSV 구조) · `seriesCountMismatch` · `valueCountMismatch` ·
   `seriesNameMismatch` · `categoryMismatch` · `notANumber` · `valueNotPatchable`(빈 `<c:v/>`) ·
   `sharedXRequired`(분산형에서 계열별 X 가 달라 한 열로 표현 불가) ·
+  `sharedCategoryRequired`(카테고리형에서 계열별 라벨이 달라 한 열로 표현 불가) ·
+  `representationMismatch`(①·②의 논리 차트 데이터 불일치) ·
   `nonSequentialPointIndex`(희소·역순·중복 `c:pt idx` — 자리 대응이 성립하지 않아
   읽기·쓰기 모두 거부, 후속 작업 전까지 미지원)
 - `-o, --output <파일>` — 출력 파일(기본 `<입력명>_chart.<입력과 같은 확장자>`, §edit 산출 형식)

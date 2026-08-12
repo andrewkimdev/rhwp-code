@@ -16,12 +16,38 @@
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
+use rhwp::document_core::queries::chart_extract::collect_charts;
+use rhwp::document_core::DocumentCore;
+use rhwp::serializer::ole_container::replace_ole_stream;
+
 /// 차트 7종 중 가장 평범한 축 — 3계열 × 4값, 카테고리 라벨 보유.
 const SAMPLE: &str = "samples/chart/세로막대형/묶은세로막대형.hwpx";
 /// 실사용 보고서 — 차트 2개, 계열 6개, **한 계열에 `c:cat` 이 없다**.
 const REPORT: &str = "samples/issue2006/1790387_prep_final_report.hwpx";
 /// 분산형 — 첫 열이 X 값이다.
 const SCATTER: &str = "samples/chart/분산형/직선이있는분산형.hwpx";
+const OOXML_STREAM: &str = "OOXMLChartContents";
+
+const BLANK_VALUE_CHART: &str = concat!(
+    r#"<c:chartSpace><c:chart><c:plotArea><c:barChart><c:ser>"#,
+    r#"<c:tx><c:v>계열</c:v></c:tx><c:cat><c:strLit><c:pt idx="0"><c:v>A</c:v></c:pt><c:pt idx="1"><c:v>B</c:v></c:pt></c:strLit></c:cat>"#,
+    r#"<c:val><c:numLit><c:pt idx="0"><c:v>4.3</c:v></c:pt><c:pt idx="1"><c:v/></c:pt></c:numLit></c:val>"#,
+    r#"</c:ser></c:barChart></c:plotArea></c:chart></c:chartSpace>"#,
+);
+
+const UNTITLED_CHART: &str = concat!(
+    r#"<c:chartSpace><c:chart><c:plotArea><c:barChart><c:ser>"#,
+    r#"<c:cat><c:strLit><c:pt idx="0"><c:v>A</c:v></c:pt></c:strLit></c:cat>"#,
+    r#"<c:val><c:numLit><c:pt idx="0"><c:v>4.3</c:v></c:pt></c:numLit></c:val>"#,
+    r#"</c:ser></c:barChart></c:plotArea></c:chart></c:chartSpace>"#,
+);
+
+const UNSHARED_CATEGORY_CHART: &str = concat!(
+    r#"<c:chartSpace><c:chart><c:plotArea><c:barChart>"#,
+    r#"<c:ser><c:tx><c:v>첫째</c:v></c:tx><c:cat><c:strLit><c:pt idx="0"><c:v>A</c:v></c:pt><c:pt idx="1"><c:v>B</c:v></c:pt></c:strLit></c:cat><c:val><c:numLit><c:pt idx="0"><c:v>1</c:v></c:pt><c:pt idx="1"><c:v>2</c:v></c:pt></c:numLit></c:val></c:ser>"#,
+    r#"<c:ser><c:tx><c:v>둘째</c:v></c:tx><c:cat><c:strLit><c:pt idx="0"><c:v>B</c:v></c:pt><c:pt idx="1"><c:v>A</c:v></c:pt></c:strLit></c:cat><c:val><c:numLit><c:pt idx="0"><c:v>3</c:v></c:pt><c:pt idx="1"><c:v>4</c:v></c:pt></c:numLit></c:val></c:ser>"#,
+    r#"</c:barChart></c:plotArea></c:chart></c:chartSpace>"#,
+);
 
 fn sample(rel: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join(rel)
@@ -43,6 +69,27 @@ fn tmp_dir() -> PathBuf {
     let dir = std::env::temp_dir().join(format!("rhwp-chart-csv-{}", std::process::id()));
     let _ = std::fs::create_dir_all(&dir);
     dir
+}
+
+/// 기존 HWPX의 차트 주소·CFB 골격을 재사용하되 ①/② XML을 함께 주입해 CLI 경계를
+/// 실제 파일 입출력으로 검증한다.
+fn synthetic_chart_input(name: &str, zip_xml: &[u8], nested_xml: &[u8]) -> PathBuf {
+    let source = sample(SAMPLE);
+    let bytes = std::fs::read(&source).expect("기준 HWPX 읽기");
+    let mut core = DocumentCore::from_bytes(&bytes).expect("기준 HWPX 파싱");
+    let chart = collect_charts(core.document())[0].clone();
+    let zip_idx = chart.zip_part.expect("①");
+    let nested_idx = chart.nested_copy.expect("②");
+    let nested_original = core.document().bin_data_content[nested_idx].data.load();
+    let nested_new =
+        replace_ole_stream(&nested_original, OOXML_STREAM, nested_xml).expect("② 교체");
+    core.document_mut().bin_data_content[zip_idx].data = zip_xml.to_vec().into();
+    core.document_mut().bin_data_content[nested_idx].data = nested_new.into();
+
+    let out = tmp_dir().join(name);
+    std::fs::write(&out, core.export_hwpx_native().expect("합성 HWPX 저장"))
+        .expect("합성 HWPX 쓰기");
+    out
 }
 
 fn json_of(out: &Output) -> serde_json::Value {
@@ -248,6 +295,125 @@ fn an_edit_reports_both_representations_in_wrote() {
         .as_str()
         .expect("csv")
         .contains("91.7"));
+}
+
+/// 빈 `<c:v/>`는 CSV에서 빈 칸으로 유지된다. 다른 값만 바꿀 때 그 빈 칸 때문에 전체
+/// 행렬이 거부되면 `chart-to-csv`/`csv-to-chart` 왕복 계약이 깨진다.
+#[test]
+fn csv_edit_keeps_an_unchanged_blank_value() {
+    let input = synthetic_chart_input(
+        "blank-value.hwpx",
+        BLANK_VALUE_CHART.as_bytes(),
+        BLANK_VALUE_CHART.as_bytes(),
+    );
+    let input_s = path_str(&input);
+    let csv = tmp_dir().join("blank-value.csv");
+    let csv_s = path_str(&csv);
+    let export = run(&["chart-to-csv", &input_s, "--chart", "1", "-o", &csv_s]);
+    assert_eq!(export.status.code(), Some(0), "{export:?}");
+
+    let body = std::fs::read_to_string(&csv).expect("CSV 읽기");
+    std::fs::write(&csv, body.replacen("4.3", "91.7", 1)).expect("CSV 편집");
+    let output = tmp_dir().join("blank-value-edited.hwpx");
+    let output_s = path_str(&output);
+    let imported = run(&[
+        "csv-to-chart",
+        &input_s,
+        "--csv",
+        &csv_s,
+        "--chart",
+        "1",
+        "-o",
+        &output_s,
+        "--json",
+    ]);
+    assert_eq!(imported.status.code(), Some(0), "{imported:?}");
+    assert_eq!(json_of(&imported)["changedCount"], 1);
+    assert!(output.exists(), "변환본이 없다");
+}
+
+/// `<c:tx>`가 없는 계열도 CSV의 빈 머리 칸을 다시 읽어 무편집 왕복할 수 있어야 한다.
+#[test]
+fn untitled_series_round_trips_through_csv() {
+    let input = synthetic_chart_input(
+        "untitled.hwpx",
+        UNTITLED_CHART.as_bytes(),
+        UNTITLED_CHART.as_bytes(),
+    );
+    let input_s = path_str(&input);
+    let csv = tmp_dir().join("untitled.csv");
+    let csv_s = path_str(&csv);
+    let export = run(&["chart-to-csv", &input_s, "--chart", "1", "-o", &csv_s]);
+    assert_eq!(export.status.code(), Some(0), "{export:?}");
+
+    let output = tmp_dir().join("untitled-roundtrip.hwpx");
+    let output_s = path_str(&output);
+    let imported = run(&[
+        "csv-to-chart",
+        &input_s,
+        "--csv",
+        &csv_s,
+        "--chart",
+        "1",
+        "-o",
+        &output_s,
+        "--json",
+    ]);
+    assert_eq!(imported.status.code(), Some(0), "{imported:?}");
+    let env = json_of(&imported);
+    assert_eq!(env["changedCount"], 0, "{env}");
+    assert!(
+        env["invalid"].as_array().expect("invalid").is_empty(),
+        "{env}"
+    );
+}
+
+/// 계열별 카테고리가 다르면 한 CSV 라벨 열이 어느 계열의 값인지 보장하지 못한다.
+/// 내보내기와 되돌리기 모두 파일을 만들기 전에 fail-closed한다.
+#[test]
+fn nonshared_category_labels_are_refused_by_csv_commands() {
+    let input = synthetic_chart_input(
+        "unshared-category.hwpx",
+        UNSHARED_CATEGORY_CHART.as_bytes(),
+        UNSHARED_CATEGORY_CHART.as_bytes(),
+    );
+    let input_s = path_str(&input);
+    let exported = tmp_dir().join("unshared-category.csv");
+    let exported_s = path_str(&exported);
+    let out = run(&[
+        "chart-to-csv",
+        &input_s,
+        "--chart",
+        "1",
+        "-o",
+        &exported_s,
+        "--json",
+    ]);
+    assert_eq!(out.status.code(), Some(1), "{out:?}");
+    assert!(!exported.exists(), "안전하지 않은 CSV가 만들어졌다");
+
+    let csv = tmp_dir().join("unshared-category-input.csv");
+    let csv_s = path_str(&csv);
+    std::fs::write(&csv, ",첫째,둘째\r\nA,10,3\r\nB,2,4\r\n").expect("CSV 쓰기");
+    let output = tmp_dir().join("unshared-category-output.hwpx");
+    let output_s = path_str(&output);
+    let out = run(&[
+        "csv-to-chart",
+        &input_s,
+        "--csv",
+        &csv_s,
+        "--chart",
+        "1",
+        "-o",
+        &output_s,
+        "--json",
+    ]);
+    assert_eq!(out.status.code(), Some(2), "{out:?}");
+    assert_eq!(
+        json_of(&out)["invalid"][0]["reason"],
+        "sharedCategoryRequired"
+    );
+    assert!(!output.exists(), "안전하지 않은 HWPX가 만들어졌다");
 }
 
 /// `--dry-run` 은 파일을 만들지 않는다.

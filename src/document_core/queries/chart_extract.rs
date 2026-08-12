@@ -282,21 +282,31 @@ pub fn collect_charts(doc: &Document) -> Vec<ChartRef> {
     out
 }
 
-/// 차트의 OOXML XML 을 읽는다. ①이 있으면 ①, 없으면 ②에서 꺼낸다.
+/// ① `Chart/chartN.xml` 에 든 OOXML XML 을 읽는다.
 ///
-/// ①==② 는 코퍼스 28종 전건 SHA-256 일치라 어느 쪽을 읽어도 같다(#4055). ①을 먼저
-/// 보는 이유는 압축 해제 한 번으로 끝나기 때문이다.
-pub fn chart_xml(doc: &Document, chart: &ChartRef) -> Option<(Vec<u8>, ChartSource)> {
-    if let Some(i) = chart.zip_part {
-        let bytes = doc.bin_data_content.get(i)?.data.load();
-        if !bytes.is_empty() {
-            return Some((bytes, ChartSource::ZipPart));
-        }
-    }
+/// 빈 zip 파트는 유효한 차트 표현이 아니다. 호출자는 ②와 함께 쓰기 전에 이 값을 별도로
+/// 확인해, ②의 바이트를 ①에 복제하는 식의 손실 보정을 하지 않아야 한다.
+pub fn zip_chart_xml(doc: &Document, chart: &ChartRef) -> Option<Vec<u8>> {
+    let i = chart.zip_part?;
+    let bytes = doc.bin_data_content.get(i)?.data.load();
+    (!bytes.is_empty()).then_some(bytes)
+}
+
+/// ② 중첩 CFB의 `OOXMLChartContents` 에 든 OOXML XML 을 읽는다.
+pub fn nested_chart_xml(doc: &Document, chart: &ChartRef) -> Option<Vec<u8>> {
     let i = chart.nested_copy?;
     let nested = doc.bin_data_content.get(i)?.data.load();
-    let xml = parse_ole_container(&nested)?.ooxml_chart?;
-    Some((xml, ChartSource::NestedCopy))
+    parse_ole_container(&nested)?.ooxml_chart
+}
+
+/// 차트의 우선 OOXML XML 을 읽는다. ①이 있으면 ①, 없으면 ②에서 꺼낸다.
+///
+/// 이 함수는 읽기 편의용 선택만 한다. ①과 ②의 논리적 동일성 검증과 독립 패치는
+/// `object_ops::chart`의 쓰기 경로가 수행한다.
+pub fn chart_xml(doc: &Document, chart: &ChartRef) -> Option<(Vec<u8>, ChartSource)> {
+    zip_chart_xml(doc, chart)
+        .map(|xml| (xml, ChartSource::ZipPart))
+        .or_else(|| nested_chart_xml(doc, chart).map(|xml| (xml, ChartSource::NestedCopy)))
 }
 
 #[cfg(test)]
