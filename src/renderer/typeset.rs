@@ -41,6 +41,14 @@ use super::pagination::{
     PaginationResult,
 };
 
+/// [#4654] 전면 크기 그림 낱장 배치는 문단의 비인라인 그림 중 엄격한 과반일 때만 쓴다.
+///
+/// 정확히 절반인 문단까지 낱장 정책을 적용하면 기존 pile 문서의 다수 그림 흐름을
+/// 불필요하게 페이지 단위로 분리한다. 두 장 이상이라는 #1995의 하한은 유지한다.
+fn has_majority_fullpage_images(fullpage_count: usize, noninline_picture_count: usize) -> bool {
+    fullpage_count >= 2 && fullpage_count.saturating_mul(2) > noninline_picture_count
+}
+
 /// [#2085] 표 행-스캔 분할점 캐리 (값 왕복). split_end_cut 은 move.
 struct BlockTableRowScan {
     consumed: f64,
@@ -7024,8 +7032,8 @@ impl TypesetEngine {
                 .iter()
                 .filter(|c| matches!(c, Control::Picture(pic) if !pic.common.treat_as_char))
                 .count();
-            let is_multi_fullpage_img_para = fullpage_img_ctrls.len() >= 2
-                && fullpage_img_ctrls.len() * 2 >= noninline_pic_count;
+            let is_multi_fullpage_img_para =
+                has_majority_fullpage_images(fullpage_img_ctrls.len(), noninline_pic_count);
 
             // [#2097] 이 문단의 TopAndBottom 자리차지 float pushdown 가로 컬럼
             // (h_left, h_right, 스택_높이) px — 가로 겹침으로 스택/나란히 판별.
@@ -22945,6 +22953,15 @@ mod issue_3780_line_advance_oob {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn fullpage_image_single_page_policy_requires_strict_majority() {
+        assert!(!super::has_majority_fullpage_images(0, 0));
+        assert!(!super::has_majority_fullpage_images(1, 1));
+        assert!(!super::has_majority_fullpage_images(2, 4));
+        assert!(super::has_majority_fullpage_images(2, 3));
+        assert!(super::has_majority_fullpage_images(3, 5));
+    }
+
     use super::*;
     use crate::model::page::{ColumnDef, PageDef};
     use crate::model::paragraph::{LineSeg, Paragraph};
