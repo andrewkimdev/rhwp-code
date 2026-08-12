@@ -30,4 +30,3 @@ last_verified: 2026-08-12
 ## 시각 검토
 
 픽셀 diff는 p2 12.77%, p3 22.34%다. p3의 PDF 텍스트층 U+F000 6개와 SVG의 U+25A1 6개 차이 및 기존 글꼴·조판 차이가 남아 있어 절대 일치 판정으로 사용하지 않았다. 인라인 도형 높이 변경이 새 페이지 이동이나 구조 누락을 만들었다는 근거는 없으며, 잔여 fidelity는 [#3820](https://github.com/edwardkim/rhwp/issues/3820)에서 계속 추적한다. 산출물은 `output/pr-review/humdrum-4607-sample16-2022-p2/`, `output/pr-review/humdrum-4607-sample16-2022-p3/`에 있다.
-

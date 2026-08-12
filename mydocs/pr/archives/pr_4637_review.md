@@ -33,4 +33,3 @@ last_verified: 2026-08-12
 최종 누적 diff에는 `.github/workflows` 변경이 없다. production bundle 검사에서 Subsecond/Dioxus vendor
 이름과 개발 marker가 모두 부재하며, dev runtime만 동적 경로에서 이를 보유한다. renderer output과
 문서 format은 변경하지 않는다.
-
