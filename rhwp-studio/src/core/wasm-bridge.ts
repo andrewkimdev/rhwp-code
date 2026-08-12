@@ -276,7 +276,9 @@ export class WasmBridge {
     if (this.initialized) return;
     installCanvasFontSubstitution();
     this.installMeasureTextWidth();
-    const wasmModule = await init();
+    // @wasm path alias는 개발 glue를 가리킬 수 있어 init 반환값을 unknown으로 추론한다.
+    // wasm-bindgen의 InitOutput memory만 선택적으로 읽고, subsecond glue의 memory 부재는 허용한다.
+    const wasmModule = await init() as { memory?: WebAssembly.Memory };
     if (!disconnectSubsecondDevtools) {
       disconnectSubsecondDevtools = connectSubsecondDevtools(
         wasmExports as unknown as SubsecondWasmExports,
