@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 import tomllib
 import unittest
 from pathlib import Path
@@ -58,6 +59,18 @@ FORBIDDEN_WORKFLOW_MARKERS = [
 ]
 
 
+def tracked_path(path: str) -> bool:
+    """작업자의 무시된 로컬 산출물은 배포 표면 재도입으로 보지 않는다."""
+    result = subprocess.run(
+        ["git", "ls-files", "--", path],
+        cwd=REPO_ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return bool(result.stdout.strip())
+
+
 class ReleaseChannelPolicyWorkflowTests(unittest.TestCase):
     def test_user_visible_versions_match_release_version(self):
         cargo = tomllib.loads((REPO_ROOT / "Cargo.toml").read_text(encoding="utf-8"))
@@ -98,7 +111,7 @@ class ReleaseChannelPolicyWorkflowTests(unittest.TestCase):
         self.assertEqual(missing, [], f"v0.8.2 공식 배포 자산이 사라졌다: {missing}")
 
     def test_withdrawn_distribution_surfaces_do_not_return(self):
-        present = [path for path in WITHDRAWN if (REPO_ROOT / path).exists()]
+        present = [path for path in WITHDRAWN if tracked_path(path)]
         self.assertEqual(
             present,
             [],
