@@ -152,12 +152,10 @@ class PluginHostFacade implements PluginHost {
 
   async loadDocument(bytes: Uint8Array, fileName?: string): Promise<void> {
     await this.deps.loadDocument(bytes, fileName);
-    this.notifySwap();
   }
 
   createBlankDocument(): void {
     this.deps.createBlankDocument();
-    this.notifySwap();
   }
 
   /**

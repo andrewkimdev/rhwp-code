@@ -22,6 +22,12 @@ export const devProbePlugin: StudioPlugin = {
       /** 살아 있는지 확인 */
       ping: () => 'pong',
 
+      /** studio 소유 경로로 빈 문서로 교체한다. swap 알림 단일 전달 회귀용이다. */
+      replaceWithBlank: () => {
+        host.createBlankDocument();
+        return true;
+      },
+
       /** 읽기 — 히스토리를 건드리지 않는다 */
       pageCount: () => host.read((doc) => JSON.parse(doc.getDocumentInfo()).pageCount as number),
 

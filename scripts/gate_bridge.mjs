@@ -85,8 +85,9 @@ async function waitForPort(port, timeoutMs = 30_000) {
 
 /** node --test 산출에서 pass/fail 을 읽는다. */
 function parseNodeTest(out) {
-  const pass = Number(/^# pass (\d+)$/m.exec(out)?.[1] ?? -1);
-  const fail = Number(/^# fail (\d+)$/m.exec(out)?.[1] ?? -1);
+  // Node 22 이하는 '# pass', Node 24는 'ℹ pass' 요약을 출력한다.
+  const pass = Number(/^(?:#|\u2139) pass (\d+)$/m.exec(out)?.[1] ?? -1);
+  const fail = Number(/^(?:#|\u2139) fail (\d+)$/m.exec(out)?.[1] ?? -1);
   return { pass, fail };
 }
 

@@ -40,6 +40,15 @@ runTest('플러그인 호스트', async ({ page }) => {
   assert(load.ping === 'pong', 'TC1: 표면 호출 동작');
   assert(load.ok.methods.includes('appendRuns'), 'TC1: 표면 메서드 노출');
 
+  // ── TC1.1: 문서 교체 알림은 studio가 한 번만 보낸다 ───
+  const swaps = await page.evaluate(async () => {
+    const p = window.rhwpStudio.plugins;
+    p.invoke('dev-probe', 'replaceWithBlank', []);
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    return p.invoke('dev-probe', 'documentSwapCount', []);
+  });
+  assert(swaps === 1, `TC1.1: 문서 교체 알림 1회 (${swaps})`);
+
   // ── TC2: 읽기는 히스토리를 건드리지 않는다 ─────────────
   const read = await page.evaluate(() => {
     const before = window.rhwpStudio.automation.getContext().canUndo;
