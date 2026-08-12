@@ -8,8 +8,8 @@ docid 는 정렬된 relpath 순서의 5자리 순번 — 모든 후속 산출물
 파일럿 표본은 --take-hwp/--take-hwpx 로 뽑는다. 앞에서 N개가 아니라 등간격 추출이라
 코퍼스 전체의 다양성이 표본에 실린다.
 
-    python make_lists.py --root D:\\hwpdocs_10k_share --out master.tsv
-    python make_lists.py --root D:\\hwpdocs_10k_share --out pilot.tsv --take-hwp 20 --take-hwpx 20
+    python make_lists.py --root C:\\path\\to\\hwp-corpus --out master.tsv
+    python make_lists.py --root C:\\path\\to\\hwp-corpus --out pilot.tsv --take-hwp 20 --take-hwpx 20
 """
 from __future__ import annotations
 

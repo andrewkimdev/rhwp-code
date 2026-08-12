@@ -29,28 +29,41 @@ rhwp 의 HWP/HWPX **불러오기·저장하기**에 누락·오류가 있는지,
 출처 불명 exe 가 유령 회귀를 만든 전례가 있다), Python 3.12, 한글 2018/2022/2024 설치,
 `FilePathCheckerModule` HKCU 등록.
 
+아래는 **저장소 루트에서 PowerShell을 열었을 때의 예제**다. Corpus와 SweepRoot만 각 사용자의
+실제 코퍼스와 쓰기 가능한 대용량 경로로 바꾼다. Repo가 저장소 루트가 아니라면 실제 rhwp
+경로를 직접 넣는다.
+
 ```powershell
-$S = 'D:\loadsave_sweep'   # 스윕 루트 (D: 여유 확인 — 산출물이 코퍼스의 ~2배)
-$T = 'D:\rhwp\tools\loadsave_sweep'
-$PY = "$env:LOCALAPPDATA\Programs\Python\Python312\python.exe"
+$Repo = (Get-Location).Path
+$Tools = Join-Path $Repo 'tools\loadsave_sweep'
+$Corpus = 'C:\경로\to\HWP-HWPX-코퍼스'  # 입력 HWP/HWPX 코퍼스 루트
+$SweepRoot = 'C:\경로\to\rhwp-loadsave-sweep' # 쓰기 가능한 대용량 경로 (산출물은 코퍼스의 약 2배)
+$Rhwp = Join-Path $Repo 'target\release\rhwp.exe'
+$Python = 'py'                            # Python Launcher. py -3.12 --version으로 확인
 
 # 0. 마스터 목록 (파일럿은 --take-hwp 20 --take-hwpx 20)
-& $PY $T\make_lists.py --root D:\hwpdocs_10k_share --out $S\master.tsv
+& $Python -3.12 "$Tools\make_lists.py" --root $Corpus --out "$SweepRoot\master.tsv"
 
 # 1. Phase A — rhwp 변환 매트릭스 (COM 불필요, 병렬, 재개 가능)
-& $PY $T\rhwp_phase.py --master $S\master.tsv --out $S\s1 --rhwp $S\rhwp_devel.exe --jobs 6
+& $Python -3.12 "$Tools\rhwp_phase.py" --master "$SweepRoot\master.tsv" `
+  --out "$SweepRoot\s1" --rhwp $Rhwp --jobs 6
 
 # 2. Phase B — 한글 2022 오라클 패스 (단일 워커, 장시간, 재개 가능)
-powershell -NoProfile -ExecutionPolicy Bypass -File $T\oracle_run.ps1 `
-  -HwpVersion 2022 -TaskPath $S\s1\oracle_tasks.tsv -OutDir $S\s1\oracle_2022 -HideWindow
+powershell -NoProfile -ExecutionPolicy Bypass -File "$Tools\oracle_run.ps1" `
+  -HwpVersion 2022 -TaskPath "$SweepRoot\s1\oracle_tasks.tsv" `
+  -OutDir "$SweepRoot\s1\oracle_2022" -HideWindow
 
 # 3. 판정
-& $PY $T\judge.py --master $S\master.tsv --phase-a $S\s1\phase_a.ndjson `
-  --oracle $S\s1\oracle_2022\result.tsv --texts $S\s1\oracle_2022\texts --out $S\s1\oracle_2022\verdicts
+& $Python -3.12 "$Tools\judge.py" --master "$SweepRoot\master.tsv" `
+  --phase-a "$SweepRoot\s1\phase_a.ndjson" --oracle "$SweepRoot\s1\oracle_2022\result.tsv" `
+  --texts "$SweepRoot\s1\oracle_2022\texts" --out "$SweepRoot\s1\oracle_2022\verdicts"
 
 # 4. 반드시: COM 기본 버전 복원
-powershell -NoProfile -File D:\rhwp\tools\hangul_version_oracle\restore_com_default.ps1
+powershell -NoProfile -File "$Repo\tools\hangul_version_oracle\restore_com_default.ps1"
 ```
+
+SweepRoot 아래에는 재개용 저널과 변환 산출물이 누적된다. 검증이 끝날 때까지 이 경로를
+이동하거나 삭제하지 않는다.
 
 ### 2단계 (2018/2024 확대)
 
