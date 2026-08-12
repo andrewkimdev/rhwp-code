@@ -1062,6 +1062,63 @@ fn every_refusal_writes_nothing() {
     }
 }
 
+/// [#4603 리뷰] 비순차 `c:pt idx` 는 읽기·쓰기 모두 fail-closed — 한 칸도 쓰지 않는다.
+///
+/// 코퍼스는 전건 순차라(계획서 §2 실측 "비순차 0") 실문서 ① 슬롯에 합성 XML 을
+/// 주입해 경계를 밟는다. 라벨 idx 0,1,2 + 값 idx 0·2 — 위치 기반 CSV 라면
+/// A=10, B=30, C=빈칸으로 **조용히 오정렬**될 형상이다(리뷰 재현 그대로).
+#[test]
+fn non_sequential_pt_idx_is_refused_and_writes_nothing() {
+    let path = manifest("samples/chart/세로막대형/묶은세로막대형.hwpx");
+    let mut core = core_of(&path);
+    let chart = collect_charts(core.document())[0].clone();
+    let zip_idx = chart.zip_part.expect("① 은 HWPX 에만 있다");
+    let synthetic = concat!(
+        r#"<c:chartSpace><c:chart><c:plotArea><c:barChart><c:ser>"#,
+        r#"<c:cat><c:strRef><c:strCache><c:ptCount val="3"/>"#,
+        r#"<c:pt idx="0"><c:v>A</c:v></c:pt><c:pt idx="1"><c:v>B</c:v></c:pt>"#,
+        r#"<c:pt idx="2"><c:v>C</c:v></c:pt></c:strCache></c:strRef></c:cat>"#,
+        r#"<c:val><c:numRef><c:numCache><c:ptCount val="3"/>"#,
+        r#"<c:pt idx="0"><c:v>10</c:v></c:pt><c:pt idx="2"><c:v>30</c:v></c:pt>"#,
+        r#"</c:numCache></c:numRef></c:val>"#,
+        r#"</c:ser></c:barChart></c:plotArea></c:chart></c:chartSpace>"#,
+    );
+    core.document_mut().bin_data_content[zip_idx].data = synthetic.as_bytes().to_vec().into();
+    let before = slot_bytes(&core);
+
+    // 읽기 — 주소는 유효하므로 Ok + 부정 봉투. CSV 는 이 봉투를 경유하므로
+    // 오정렬 CSV 가 나갈 길이 없다.
+    let get: serde_json::Value =
+        serde_json::from_str(&core.get_chart_data_by_index_native(0).expect("주소 유효"))
+            .expect("JSON");
+    assert_eq!(get["ok"], false, "{get}");
+    assert_eq!(
+        get["invalid"][0]["reason"], "nonSequentialPointIndex",
+        "{get}"
+    );
+
+    // 쓰기 — 같은 사유로 거부되고 아무것도 쓰지 않는다. 스캔 거부 봉투에는
+    // `wrote` 키가 없으므로 null 허용으로 단언한다.
+    let out = set_chart(
+        &mut core,
+        &serde_json::json!({"series": [{"values": ["10", "20", "30"]}]}),
+    );
+    assert_eq!(out["ok"], false, "{out}");
+    assert_eq!(
+        out["invalid"][0]["reason"], "nonSequentialPointIndex",
+        "{out}"
+    );
+    assert!(
+        out["wrote"].as_array().is_none_or(|a| a.is_empty()),
+        "{out}"
+    );
+    assert_eq!(
+        slot_bytes(&core),
+        before,
+        "거부했는데 슬롯 바이트가 바뀌었다"
+    );
+}
+
 /// `dryRun` 은 diff 만 내고 쓰지 않는다.
 #[test]
 fn dry_run_reports_the_diff_without_writing() {

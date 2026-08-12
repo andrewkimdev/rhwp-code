@@ -197,9 +197,13 @@ CSV** 가 나왔다. 오류도 경고도 없었다.
   `Field.memo_paragraphs`·개체 캡션 안의 차트는 열거되지 않는다. 검증할 합성 문서 없이 재귀
   가지를 늘리는 것이 [#4099 §7-2](task_m100_4099_report.md) 가 지목한 반복 결함을 만드는 방식이라,
   가지를 늘리는 대신 범위를 명시했다
-- **다층 카테고리(`c:multiLvlStrRef`)** 는 평탄화해 싣고 표지(`labels_multi_level`)만 세운다.
-  코퍼스 0건이다
+- **다층 카테고리(`c:multiLvlStrRef`)** 는 표지(`labels_multi_level`)만 세운다 —
+  `multiLvlStrCache` 가 캐시 목록에 없어 층 라벨은 실리지 않는다(빈 목록). 코퍼스 0건이다
 - **빈 값 `<c:v/>`** 는 읽히되 그 점의 편집만 거부된다(`valueNotPatchable`)
+- **비순차 `c:pt idx`(희소·역순·중복)는 읽기·쓰기 모두 거부한다**(`nonSequentialPointIndex`,
+  PR #4603 리뷰 보정). 점 지목이 벡터 출현 순서라 비순차 문서에서는 CSV 행과 편집 주소가
+  조용히 다른 점을 가리킨다 — 오정렬 산출 대신 fail-closed 다. 코퍼스는 전건 순차(실측
+  비순차 0건)이고, `idx`/`ptCount` 논리 행 모델(빈 점 지원)은 후속 PR 몫이다
 
 ## 7. B1 이 하지 않는 것 (= B2)
 
@@ -218,8 +222,8 @@ git diff --check                           통과
 변경 범위 = Rust parser/model/core/CLI. 렌더러·studio 무변경, 신규 fixture 커밋 0 →
 `local_validation.md` §4.3 기준 Native Skia 3종·`wasm-pack`·IR sweep baseline 대상 밖이다.
 
-신규 테스트: `tests/issue_4100_chart_data_edit.rs`(30 + 판정 번들 생성기) ·
-`tests/chart_csv_contract.rs`(14) · 단위 `ooxml_chart::{data,patch}`(20) ·
+신규 테스트: `tests/issue_4100_chart_data_edit.rs`(31 + 판정 번들 생성기) ·
+`tests/chart_csv_contract.rs`(14) · 단위 `ooxml_chart::{data,patch}`(26) ·
 `serializer::ole_container`(8) · `document_core::queries::chart_csv`(10).
 
 PR #4603 리뷰 보정 — 편집 성공 후 `bump_bin_data_epoch()` 만으로는 재렌더가
@@ -227,6 +231,9 @@ PR #4603 리뷰 보정 — 편집 성공 후 `bump_bin_data_epoch()` 만으로�
 `page_tree_cache` 에 남는다). `invalidate_page_tree_cache()` 를 함께 부르도록
 고치고 T8(`t8_rerender_after_an_edit_draws_the_new_chart`, HWPX·HWP5 양 포맷)로
 고정했다 — 무효화를 빼면 전후 layer SVG 바이트 동일로 실패함을 확인했다.
+같은 보정에서 비순차 `c:pt idx` 를 fail-closed 로 거부하게 했다(§6) — 합성
+단위 6건(희소·역순·중복·라벨측·분산형 xVal·다층 면제) + 주입 통합
+1건(`non_sequential_pt_idx_is_refused_and_writes_nothing`)으로 고정했다.
 
 ## 9. 배운 것
 

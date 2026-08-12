@@ -12,7 +12,7 @@ use crate::document_core::queries::chart_extract::{
 };
 use crate::document_core::DocumentCore;
 use crate::error::HwpError;
-use crate::ooxml_chart::data::{scan_chart_values, ChartData, SeriesAxis};
+use crate::ooxml_chart::data::{scan_chart_values, ChartData, ChartScanError, SeriesAxis};
 use crate::ooxml_chart::patch::{apply_value_edits, EditTarget, ValueEdit};
 use crate::serializer::ole_container::replace_ole_stream;
 
@@ -26,6 +26,19 @@ fn invalid(reason: &str, message: String) -> serde_json::Value {
 
 fn refused(reason: &str, message: String) -> String {
     serde_json::json!({ "ok": false, "invalid": [invalid(reason, message)] }).to_string()
+}
+
+/// 스캔 거부의 reason 매핑.
+///
+/// `chartScan` 은 "XML 자체가 깨졌다"(비 UTF-8·파싱 실패·계열 없음)이고, 비순차
+/// `c:pt idx` 는 **정상 XML 의 미지원 형상**이라 별도 reason 으로 가른다 — 판정은
+/// 데이터이므로 에이전트가 메시지 파싱 없이 reason 으로 분기할 수 있어야 한다.
+fn scan_refusal(e: &ChartScanError) -> String {
+    let reason = match e {
+        ChartScanError::NonSequentialPointIndex { .. } => "nonSequentialPointIndex",
+        _ => "chartScan",
+    };
+    refused(reason, e.to_string())
 }
 
 /// 라벨을 **가진** 첫 계열의 라벨.
@@ -422,7 +435,7 @@ impl DocumentCore {
         };
         let data = match scan_chart_values(&xml) {
             Ok(d) => d,
-            Err(e) => return refused("chartScan", e.to_string()),
+            Err(e) => return scan_refusal(&e),
         };
 
         // ② 를 특정하지 못하면 쓰기 전에 멈춘다. HWPX 에서 ①만 고치면 HWP 변환에서
@@ -515,7 +528,7 @@ impl DocumentCore {
         };
         match scan_chart_values(&xml) {
             Ok(data) => chart_data_json(chart, &data, source).to_string(),
-            Err(e) => refused("chartScan", e.to_string()),
+            Err(e) => scan_refusal(&e),
         }
     }
 }

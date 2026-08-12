@@ -63,8 +63,9 @@ pub struct ChartSeries {
     pub values: Vec<ChartPoint>,
     /// 라벨이 `c:multiLvlStrRef`(다층 카테고리)에서 왔는가.
     ///
-    /// 코퍼스 0건이다. 스캐너는 층을 평탄화해 싣기만 하고 판단하지 않는다 — 라벨을
-    /// 행 머리로 쓰는 CSV 층이 이 표지를 보고 거부한다. 값 편집 자체는 막지 않는다.
+    /// 코퍼스 0건이다. 스캐너는 표지만 세우고 판단하지 않는다 — `multiLvlStrCache`
+    /// 는 캐시 목록에 없어 층 라벨이 실리지 않는다(`labels` 빈 목록). 라벨을 행
+    /// 머리로 쓰는 CSV 층이 이 표지를 보고 거부한다. 값 편집 자체는 막지 않는다.
     pub labels_multi_level: bool,
 }
 
@@ -83,6 +84,23 @@ pub enum ChartScanError {
     Xml(String),
     /// `c:ser` 가 하나도 없다 — 편집할 데이터가 없다.
     NoSeries,
+    /// `c:pt idx` 가 벡터 위치와 다르다 — 희소·역순·중복.
+    ///
+    /// B1 은 점을 **벡터 출현 순서**로 지목한다(`idx` 소비처 0). 비순차 문서에서는
+    /// CSV 행 번호와 편집 주소가 조용히 다른 점을 가리키므로, 아무것도 읽지도 쓰지도
+    /// 않는다. `idx`/`c:ptCount` 논리 행 모델(빈 점 지원)은 후속 PR 몫이다.
+    /// `pt_index` 의 0 폴백(파싱 실패 → 0)은 위치 0 에서만 이 검사를 통과한다 —
+    /// `Option` 화도 같은 후속 몫으로 남긴다.
+    NonSequentialPointIndex {
+        /// 계열 번호(0-based) — `validate()` 의 기존 관례.
+        series: usize,
+        /// 어느 블록인가 — `"cat"`/`"val"`/`"xVal"`/`"yVal"`.
+        block: &'static str,
+        /// 벡터 위치.
+        position: usize,
+        /// 그 위치의 실제 `idx` 값.
+        idx: u32,
+    },
 }
 
 impl std::fmt::Display for ChartScanError {
@@ -91,6 +109,17 @@ impl std::fmt::Display for ChartScanError {
             Self::NotUtf8 => write!(f, "차트 XML 이 UTF-8 이 아니다"),
             Self::Xml(msg) => write!(f, "차트 XML 파싱 실패: {msg}"),
             Self::NoSeries => write!(f, "차트에 c:ser 가 없다"),
+            Self::NonSequentialPointIndex {
+                series,
+                block,
+                position,
+                idx,
+            } => write!(
+                f,
+                "계열 {series} 의 c:{block} 에서 c:pt idx 가 순차가 아니다 — \
+                 {position} 번째 점의 idx 가 {idx} 다 (희소·역순·중복 idx 는 아직 \
+                 지원하지 않는다)"
+            ),
         }
     }
 }
@@ -330,6 +359,44 @@ pub fn scan_chart_values(xml: &[u8]) -> Result<ChartData, ChartScanError> {
     if state.series.is_empty() {
         return Err(ChartScanError::NoSeries);
     }
+
+    // [#4603 리뷰] fail-closed — `idx[i] == i` 가 아니면(희소·역순·중복) 여기서 멈춘다.
+    // 읽기(chart_data_at)·쓰기(apply_chart_edits)·CSV 가 전부 이 함수를 지나므로 세
+    // 경로가 한 번에 닫힌다. 코퍼스는 전건 순차(계획서 §2 실측 "비순차 0")라 합성
+    // 테스트만이 이 경로를 밟는다.
+    for (si, series) in state.series.iter().enumerate() {
+        let scatter = series.axis == SeriesAxis::Scatter;
+        let blocks: [(&'static str, &[ChartPoint], bool); 2] = [
+            // 다층 카테고리의 labels 는 면제한다. 지금은 `multiLvlStrCache` 가 캐시
+            // 목록에 없어 층 라벨이 실리지도 않지만(빈 목록 — 자명 통과), 실리게
+            // 되면 idx 가 층마다 0..n-1 로 **반복되는 것이 정상 형상**이라 이 검사를
+            // 통과할 수 없다. values 는 다층 여부와 무관하게 검사한다.
+            (
+                if scatter { "xVal" } else { "cat" },
+                &series.labels,
+                series.labels_multi_level,
+            ),
+            (if scatter { "yVal" } else { "val" }, &series.values, false),
+        ];
+        for (block, points, multi_level_exempt) in blocks {
+            if multi_level_exempt {
+                continue;
+            }
+            if let Some((position, p)) = points
+                .iter()
+                .enumerate()
+                .find(|(i, p)| p.idx as usize != *i)
+            {
+                return Err(ChartScanError::NonSequentialPointIndex {
+                    series: si,
+                    block,
+                    position,
+                    idx: p.idx,
+                });
+            }
+        }
+    }
+
     Ok(ChartData {
         series: state.series,
     })
@@ -531,5 +598,147 @@ mod tests {
             scan_chart_values(&[0xff, 0xfe, 0x00]),
             Err(ChartScanError::NotUtf8)
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // [#4603 리뷰] 비순차 `c:pt idx` fail-closed — 코퍼스는 전건 순차(실측 0건)라
+    // 이 경계는 합성으로만 덮인다.
+    // -----------------------------------------------------------------------
+
+    /// 라벨·값의 idx 를 바꿔 끼운 카테고리 차트 픽스처.
+    fn chart_with_indices(label_idx: &[u32], value_idx: &[(u32, &str)]) -> String {
+        let labels: String = label_idx
+            .iter()
+            .enumerate()
+            .map(|(i, idx)| format!(r#"<c:pt idx="{idx}"><c:v>항목 {i}</c:v></c:pt>"#))
+            .collect();
+        let values: String = value_idx
+            .iter()
+            .map(|(idx, v)| format!(r#"<c:pt idx="{idx}"><c:v>{v}</c:v></c:pt>"#))
+            .collect();
+        format!(
+            concat!(
+                r#"<c:chartSpace><c:chart><c:plotArea><c:barChart><c:ser>"#,
+                r#"<c:cat><c:strRef><c:strCache><c:ptCount val="{n}"/>{labels}"#,
+                r#"</c:strCache></c:strRef></c:cat>"#,
+                r#"<c:val><c:numRef><c:numCache><c:ptCount val="{n}"/>{values}"#,
+                r#"</c:numCache></c:numRef></c:val>"#,
+                r#"</c:ser></c:barChart></c:plotArea></c:chart></c:chartSpace>"#,
+            ),
+            n = label_idx.len(),
+            labels = labels,
+            values = values,
+        )
+    }
+
+    /// 희소 — 메인테이너 합성 그대로: 라벨 idx 0,1,2 + 값 idx 0(10)·2(30).
+    ///
+    /// 현재 위치 기반 CSV 는 이것을 A=10, B=30, C=빈칸으로 **오정렬**한다 —
+    /// 기대(A=10, B=빈칸, C=30)는 `idx`/`ptCount` 논리 행 모델이 필요해 후속 PR
+    /// 몫이고, B1 은 읽기도 쓰기도 거부한다.
+    #[test]
+    fn sparse_point_index_is_refused() {
+        let xml = chart_with_indices(&[0, 1, 2], &[(0, "10"), (2, "30")]);
+        assert_eq!(
+            scan_chart_values(xml.as_bytes()),
+            Err(ChartScanError::NonSequentialPointIndex {
+                series: 0,
+                block: "val",
+                position: 1,
+                idx: 2,
+            })
+        );
+    }
+
+    #[test]
+    fn reversed_point_index_is_refused() {
+        let xml = chart_with_indices(&[0, 1], &[(1, "10"), (0, "20")]);
+        assert_eq!(
+            scan_chart_values(xml.as_bytes()),
+            Err(ChartScanError::NonSequentialPointIndex {
+                series: 0,
+                block: "val",
+                position: 0,
+                idx: 1,
+            })
+        );
+    }
+
+    #[test]
+    fn duplicate_point_index_is_refused() {
+        let xml = chart_with_indices(&[0, 1], &[(0, "10"), (0, "20")]);
+        assert_eq!(
+            scan_chart_values(xml.as_bytes()),
+            Err(ChartScanError::NonSequentialPointIndex {
+                series: 0,
+                block: "val",
+                position: 1,
+                idx: 0,
+            })
+        );
+    }
+
+    /// 값은 순차인데 **라벨만** 비순차 — block 필드가 어느 쪽인지 드러낸다.
+    #[test]
+    fn non_sequential_label_index_is_refused() {
+        let xml = chart_with_indices(&[0, 2], &[(0, "10"), (1, "20")]);
+        assert_eq!(
+            scan_chart_values(xml.as_bytes()),
+            Err(ChartScanError::NonSequentialPointIndex {
+                series: 0,
+                block: "cat",
+                position: 1,
+                idx: 2,
+            })
+        );
+    }
+
+    /// 분산형은 같은 벡터가 `c:xVal` 에서 오므로 block 이름도 그렇게 나간다.
+    #[test]
+    fn scatter_x_block_is_named_xval_in_the_refusal() {
+        let xml = concat!(
+            r#"<c:chartSpace><c:chart><c:plotArea><c:scatterChart><c:ser>"#,
+            r#"<c:xVal><c:numRef><c:numCache><c:ptCount val="2"/>"#,
+            r#"<c:pt idx="0"><c:v>0.7</c:v></c:pt><c:pt idx="2"><c:v>1.8</c:v></c:pt>"#,
+            r#"</c:numCache></c:numRef></c:xVal>"#,
+            r#"<c:yVal><c:numRef><c:numCache><c:ptCount val="2"/>"#,
+            r#"<c:pt idx="0"><c:v>2.7</c:v></c:pt><c:pt idx="1"><c:v>3.2</c:v></c:pt>"#,
+            r#"</c:numCache></c:numRef></c:yVal>"#,
+            r#"</c:ser></c:scatterChart></c:plotArea></c:chart></c:chartSpace>"#,
+        );
+        assert_eq!(
+            scan_chart_values(xml.as_bytes()),
+            Err(ChartScanError::NonSequentialPointIndex {
+                series: 0,
+                block: "xVal",
+                position: 1,
+                idx: 2,
+            })
+        );
+    }
+
+    /// 다층 카테고리(`c:multiLvlStrRef`) 문서는 여전히 읽힌다 — 면제의 회귀 가드.
+    ///
+    /// 층 라벨은 idx 가 층마다 0..n-1 로 반복되는 것이 정상 형상이라 순차 검사
+    /// 대상이 아니다. 현재 스캐너는 `multiLvlStrCache` 를 캐시 목록에 넣지 않아
+    /// 층 라벨을 싣지도 않는다(빈 목록) — 표지(`labels_multi_level`)만 세운다.
+    /// 값 쪽은 다층 여부와 무관하게 검사된다.
+    #[test]
+    fn multi_level_labels_keep_the_document_readable() {
+        let xml = concat!(
+            r#"<c:chartSpace><c:chart><c:plotArea><c:barChart><c:ser>"#,
+            r#"<c:cat><c:multiLvlStrRef><c:multiLvlStrCache><c:ptCount val="2"/>"#,
+            r#"<c:lvl><c:pt idx="0"><c:v>상반기</c:v></c:pt><c:pt idx="1"><c:v>하반기</c:v></c:pt></c:lvl>"#,
+            r#"<c:lvl><c:pt idx="0"><c:v>1월</c:v></c:pt><c:pt idx="1"><c:v>7월</c:v></c:pt></c:lvl>"#,
+            r#"</c:multiLvlStrCache></c:multiLvlStrRef></c:cat>"#,
+            r#"<c:val><c:numRef><c:numCache><c:ptCount val="2"/>"#,
+            r#"<c:pt idx="0"><c:v>1</c:v></c:pt><c:pt idx="1"><c:v>2</c:v></c:pt>"#,
+            r#"</c:numCache></c:numRef></c:val>"#,
+            r#"</c:ser></c:barChart></c:plotArea></c:chart></c:chartSpace>"#,
+        );
+        let data = scan_chart_values(xml.as_bytes()).expect("다층 라벨 문서는 읽혀야 한다");
+        assert!(data.series[0].labels_multi_level);
+        assert!(data.series[0].labels.is_empty(), "층 라벨은 실리지 않는다");
+        assert_eq!(data.series[0].values.len(), 2, "값은 그대로 읽힌다");
     }
 }

@@ -391,6 +391,9 @@ rhwp csv-to-table samples/hwpx/basic-table-01.hwpx --csv /tmp/표0.csv --table 0
 - **분산형**은 첫 열이 X 값이고 머리 행 첫 칸이 `X` 다. 카테고리형은 그 칸이 비어 있다.
 - 행 수는 **값이 정한다**(라벨 수가 아니다). `c:cat` 이 일부 계열에만 있는 문서가 실재하며,
   라벨로 행 수를 잡으면 값이 통째로 빠진 CSV 가 나온다.
+- 비순차 `c:pt idx`(희소·역순·중복) 문서는 `nonSequentialPointIndex` 로 **거부한다** —
+  행 번호가 벡터 출현 순서라, 자리 기반으로 정렬하면 틀린 CSV 를 조용히 내게 된다.
+  오정렬 산출보다 실패가 낫다. 논리 행 모델은 후속 작업이다.
 - `--json` 봉투: `{"schemaVersion":"1.0","source","chartCount","charts":[{"chart","rowCount","colCount","csv","output"?}],"bom","output"?,"outputFormat"?}`
 
 ```bash
@@ -416,7 +419,9 @@ CSV 내용으로 기존 차트 N 의 숫자 값을 덮어쓴다. `chart-to-csv` 
   중첩 CFB 를 되쓰기만 해도 섹터 배치가 달라져 바이트가 바뀐다.
 - 거부 사유: `csvParse`(CSV 구조) · `seriesCountMismatch` · `valueCountMismatch` ·
   `seriesNameMismatch` · `categoryMismatch` · `notANumber` · `valueNotPatchable`(빈 `<c:v/>`) ·
-  `sharedXRequired`(분산형에서 계열별 X 가 달라 한 열로 표현 불가)
+  `sharedXRequired`(분산형에서 계열별 X 가 달라 한 열로 표현 불가) ·
+  `nonSequentialPointIndex`(희소·역순·중복 `c:pt idx` — 자리 대응이 성립하지 않아
+  읽기·쓰기 모두 거부, 후속 작업 전까지 미지원)
 - `-o, --output <파일>` — 출력 파일(기본 `<입력명>_chart.<입력과 같은 확장자>`, §edit 산출 형식)
 - `--dry-run` — 파일을 쓰지 않고 `changed[]`(from→to)만 보고
 - `--verify` — 저장 직후 IR 자기검증(차이 시 exit 3)
