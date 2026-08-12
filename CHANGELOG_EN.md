@@ -6,7 +6,7 @@ This document records the major changes of the rhwp project.
 
 ## [Unreleased]
 
-## [0.8.4] — Unreleased
+## [0.8.4] — 2026-08-12
 
 ### Distribution surface rollback
 
