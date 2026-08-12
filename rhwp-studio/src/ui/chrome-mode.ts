@@ -39,6 +39,46 @@ export const EMBED_HIDDEN_FILE_COMMAND_IDS: readonly string[] = [
   'file:print',
 ];
 
+/**
+ * embed 프로파일에서 등록하지 않는 편집 커맨드.
+ *
+ * 문서 비교는 비교 실행 시 오른쪽 문서를 현재 에디터에 로드하므로, 파일 열기와
+ * 같은 급의 문서 교체 진입점이다 — 호스트는 문서 A를 열었다고 알고 있는데 Studio
+ * 내부 문서가 B로 바뀔 수 있다.
+ */
+export const EMBED_HIDDEN_EDIT_COMMAND_IDS: readonly string[] = [
+  'edit:compare-documents',
+];
+
+/** KeyboardEvent에서 단축키 판정에 쓰는 부분 — 순수 함수 테스트용 구조적 타입. */
+export interface EmbedShortcutKeyEventLike {
+  key: string;
+  ctrlKey: boolean;
+  metaKey: boolean;
+  altKey: boolean;
+  shiftKey: boolean;
+}
+
+/**
+ * embed에서 브라우저 기본 동작으로 새면 안 되는 파일 수명주기 단축키 판정.
+ *
+ * InputHandler가 활성이면 shortcut-map 매칭이 Ctrl+S/Ctrl+Shift+S/Ctrl+P를
+ * preventDefault로 삼키지만, 문서 로드 전에는 그 경로 자체가 없어 브라우저
+ * 저장/인쇄 대화상자로 빠진다. Alt+N/Ctrl+O는 전역 단축키 핸들러가 문서 유무와
+ * 무관하게 이미 삼키므로 제외한다. 한글 IME 키(ㄴ/ㅔ)는 전역 핸들러의 ㅜ/ㅐ
+ * 처리와 같은 이유로 함께 받는다.
+ */
+export function isEmbedSwallowedFileShortcut(e: EmbedShortcutKeyEventLike): boolean {
+  if (!(e.ctrlKey || e.metaKey) || e.altKey) return false;
+  const key = e.key.toLowerCase();
+  // Ctrl+S 저장, Ctrl+Shift+S 다른 이름으로 저장
+  if (key === 's' || key === 'ㄴ') return true;
+  // Ctrl+P 인쇄, Ctrl+Shift+P 크롬 시스템 인쇄 대화상자 — 후자의 문서 로드 후
+  // 매핑(table:block-product)은 InputHandler가 어차피 preventDefault하므로
+  // 전역 흡수가 그 경로를 해치지 않는다.
+  return key === 'p' || key === 'ㅔ';
+}
+
 export function resolveChromeMode(search = ''): ChromeMode {
   return resolveChromeModeRequest(search).mode;
 }
