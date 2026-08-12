@@ -77,7 +77,7 @@ jobs:
 
       - name: Run test suite (native targets only; cross-compiled test binaries can't execute on the build host)
         if: matrix.native
-        run: cargo test --release
+        run: cargo test --profile release-test --tests
         shell: bash
 
       - name: Build release binary
