@@ -149,6 +149,31 @@ class BaselineResolveTests(unittest.TestCase):
             self.assertIn("o1.hwp", out)
             self.assertIn("o2.hwp", out)
 
+    def test_built_submission_is_scored_in_its_pack_directory(self):
+        """생성 성공만으로 통과 처리하지 않고 같은 pack 경로를 실제 채점한다."""
+        from unittest import mock
+
+        build_baseline = load_module(
+            "gym_build_baseline_score", REPO_ROOT / "gym" / "tools" / "build_baseline.py")
+        task = {"id": "T01"}
+        with mock.patch.object(build_baseline.runner, "score_task", return_value={"pass": True}) as score:
+            failure = build_baseline.verify_built_task("/tmp/rhwp", "pack-a", task, "/tmp/sub")
+
+        self.assertIsNone(failure)
+        score.assert_called_once_with(task, "/tmp/sub/pack-a", "/tmp/rhwp")
+
+    def test_failed_built_submission_reports_the_task(self):
+        from unittest import mock
+
+        build_baseline = load_module(
+            "gym_build_baseline_failure", REPO_ROOT / "gym" / "tools" / "build_baseline.py")
+        task = {"id": "T02"}
+        with mock.patch.object(build_baseline.runner, "score_task",
+                               return_value={"pass": False, "error": "제출 폴더 없음"}):
+            failure = build_baseline.verify_built_task("/tmp/rhwp", "pack-b", task, "/tmp/sub")
+
+        self.assertEqual(failure, "pack-b/T02: 제출 폴더 없음")
+
 
 class ProfileTests(unittest.TestCase):
     def test_profiles_reference_existing_packs(self):

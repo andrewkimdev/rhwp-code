@@ -148,6 +148,21 @@ def build_task(bin_path, pack_id, task, reference, sub_root):
     return sub_dir
 
 
+def verify_built_task(bin_path, pack_id, task, sub_root):
+    """방금 만든 제출물을 같은 pack 경로에서 실제 채점한다."""
+    result = runner.score_task(task, os.path.join(sub_root, pack_id), bin_path)
+    if result.get("pass"):
+        return None
+    if result.get("error"):
+        return f"{pack_id}/{task['id']}: {result['error']}"
+    failed = []
+    for check in result.get("checks", []):
+        if not check.get("ok"):
+            name = check.get("name", check.get("op", "검사"))
+            failed.append(f"{name}: {check.get('error', '판정 불일치')}")
+    return f"{pack_id}/{task['id']}: " + "; ".join(failed or ["채점 실패"])
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--agent", default="claude-fable-5")
@@ -175,11 +190,16 @@ def main():
                 reference = json.load(fh)
             try:
                 build_task(bin_path, pack_id, task, reference, sub_root)
-                built += 1
+                failure = verify_built_task(bin_path, pack_id, task, sub_root)
+                if failure:
+                    failed += 1
+                    print(f"  X {failure}")
+                else:
+                    built += 1
             except (RuntimeError, OSError, KeyError, IndexError, TypeError) as e:
                 failed += 1
                 print(f"  X {pack_id}/{task['id']}: {e}")
-    print(f"기준 풀이 실행: 성공 {built} · 실패 {failed} · 기준 풀이 없음 {skipped}")
+    print(f"기준 풀이 왕복: 성공 {built} · 실패 {failed} · 기준 풀이 없음 {skipped}")
     return 0 if failed == 0 else 1
 
 
