@@ -25,21 +25,29 @@ rhwp 의 HWP/HWPX **불러오기·저장하기**에 누락·오류가 있는지,
 
 ## 실행 절차
 
-전제: 클린 devel 에서 새로 빌드한 `rhwp.exe` (기존 target/release 재사용 금지 —
-출처 불명 exe 가 유령 회귀를 만든 전례가 있다), Python 3.12, 한글 2018/2022/2024 설치,
-`FilePathCheckerModule` HKCU 등록.
+전제: Windows에서 동작하는 한글 COM 도구다. 클린 devel 에서 새로 빌드한 `rhwp.exe`
+(기존 `target/release` 재사용 금지 — 출처 불명 exe 가 유령 회귀를 만든 전례가 있다),
+Python 3.12, 한글 2018/2022/2024 설치가 필요하다. `FilePathCheckerModule`은 등록돼 있으면
+파일 접근 확인 대화상자를 줄일 수 있지만 필수는 아니다. worker가 등록을 시도하며, 등록되지
+않은 경우에도 결과 로그로 실제 열기 성공 여부를 판정한다.
 
 아래는 **저장소 루트에서 PowerShell을 열었을 때의 예제**다. Corpus와 SweepRoot만 각 사용자의
 실제 코퍼스와 쓰기 가능한 대용량 경로로 바꾼다. Repo가 저장소 루트가 아니라면 실제 rhwp
 경로를 직접 넣는다.
 
 ```powershell
-$Repo = (Get-Location).Path
+$Repo = (Get-Location).Path                 # rhwp 저장소 루트에서 실행
 $Tools = Join-Path $Repo 'tools\loadsave_sweep'
 $Corpus = 'C:\경로\to\HWP-HWPX-코퍼스'  # 입력 HWP/HWPX 코퍼스 루트
 $SweepRoot = 'C:\경로\to\rhwp-loadsave-sweep' # 쓰기 가능한 대용량 경로 (산출물은 코퍼스의 약 2배)
 $Rhwp = Join-Path $Repo 'target\release\rhwp.exe'
 $Python = 'py'                            # Python Launcher. py -3.12 --version으로 확인
+$HwpVersion = 2022                        # 아래 버전 확인 결과에 맞춰 2018/2022/2024 중 선택
+
+# 준비 확인: 현재 devel에서 새 release 실행 파일을 만든다.
+cargo build --release --bin rhwp
+& $Python -3.12 --version
+powershell -NoProfile -File "$Repo\tools\hangul_version_oracle\list_hangul_versions.ps1"
 
 # 0. 마스터 목록 (파일럿은 --take-hwp 20 --take-hwpx 20)
 & $Python -3.12 "$Tools\make_lists.py" --root $Corpus --out "$SweepRoot\master.tsv"
@@ -50,7 +58,7 @@ $Python = 'py'                            # Python Launcher. py -3.12 --version�
 
 # 2. Phase B — 한글 2022 오라클 패스 (단일 워커, 장시간, 재개 가능)
 powershell -NoProfile -ExecutionPolicy Bypass -File "$Tools\oracle_run.ps1" `
-  -HwpVersion 2022 -TaskPath "$SweepRoot\s1\oracle_tasks.tsv" `
+  -HwpVersion $HwpVersion -TaskPath "$SweepRoot\s1\oracle_tasks.tsv" `
   -OutDir "$SweepRoot\s1\oracle_2022" -HideWindow
 
 # 3. 판정
