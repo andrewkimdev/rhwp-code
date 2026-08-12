@@ -218,9 +218,15 @@ git diff --check                           통과
 변경 범위 = Rust parser/model/core/CLI. 렌더러·studio 무변경, 신규 fixture 커밋 0 →
 `local_validation.md` §4.3 기준 Native Skia 3종·`wasm-pack`·IR sweep baseline 대상 밖이다.
 
-신규 테스트: `tests/issue_4100_chart_data_edit.rs`(29 + 판정 번들 생성기) ·
+신규 테스트: `tests/issue_4100_chart_data_edit.rs`(30 + 판정 번들 생성기) ·
 `tests/chart_csv_contract.rs`(14) · 단위 `ooxml_chart::{data,patch}`(20) ·
 `serializer::ole_container`(8) · `document_core::queries::chart_csv`(10).
+
+PR #4603 리뷰 보정 — 편집 성공 후 `bump_bin_data_epoch()` 만으로는 재렌더가
+갱신되지 않았다(epoch 은 ImageNode 의 `sourceImageKey` 키일 뿐, 차트 RawSvg 는
+`page_tree_cache` 에 남는다). `invalidate_page_tree_cache()` 를 함께 부르도록
+고치고 T8(`t8_rerender_after_an_edit_draws_the_new_chart`, HWPX·HWP5 양 포맷)로
+고정했다 — 무효화를 빼면 전후 layer SVG 바이트 동일로 실패함을 확인했다.
 
 ## 9. 배운 것
 

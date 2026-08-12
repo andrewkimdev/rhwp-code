@@ -1703,9 +1703,12 @@ impl DocumentCore {
     ///
     /// [#4100] **네 번째 자리가 생겼다 — 차트 데이터 편집**(`set_chart_data_native`).
     /// 그것은 문서를 갈아끼우지 않으면서 **기존 id 의 바이트를 제자리에서 바꾸는 첫
-    /// 연산**이라 위 전제를 정면으로 깬다. 올리지 않으면 편집 후 재렌더가 옛 차트를
-    /// 그린다. 대가로 바이트가 그대로인 다른 그림의 캐시 키도 함께 무효화되지만, 그것은
-    /// 성능이고 이쪽은 정확성이다.
+    /// 연산**이라 위 전제를 정면으로 깬다. 대가로 바이트가 그대로인 다른 그림의 캐시
+    /// 키도 함께 무효화되지만, 그것은 성능이고 이쪽은 정확성이다.
+    ///
+    /// [#4603 리뷰] 단, epoch 이 담당하는 것은 그림 키(`sourceImageKey`) 안정성뿐이다.
+    /// RawSvg 로 렌더되는 차트의 재렌더 최신화는 이것으로 해결되지 않는다 — 그쪽은
+    /// `apply_chart_edits`(object_ops/chart.rs)가 `invalidate_page_tree_cache` 로 닫는다.
     pub(crate) fn bump_bin_data_epoch(&mut self) {
         self.bin_data_epoch = self.bin_data_epoch.wrapping_add(1);
     }

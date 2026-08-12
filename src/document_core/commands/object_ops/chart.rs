@@ -487,10 +487,16 @@ impl DocumentCore {
         self.document.bin_data_content[nested_idx].data = nested_new.into();
         wrote.push("nestedCopy");
 
-        // [#4100] `bin_data_epoch` 는 "id→바이트가 세션 중 안정하다"를 전제로 렌더 캐시를
-        // 키잉한다. 이 편집이 **기존 id 의 바이트를 제자리에서 바꾸는 첫 연산**이라 그
-        // 전제를 깬다 — 올리지 않으면 재렌더가 옛 차트를 그린다.
+        // [#4100] `bin_data_epoch` 는 `sourceImageKey`(ImageNode)의 "id→바이트 세션 안정"
+        // 전제를 지키는 키다. 이 편집이 **기존 id 의 바이트를 제자리에서 바꾸는 첫
+        // 연산**이라 그 전제를 깬다 — 올려서 소비자가 그림 바이트를 다시 받게 한다.
         self.bump_bin_data_epoch();
+        // [#4603 리뷰] 차트는 ImageNode 가 아니라 RawSvg 노드라 epoch 키와 무관하다 —
+        // 렌더된 SVG 조각이 page_tree_cache / layer_tree_json_cache 에 소유값으로 남아,
+        // 캐시가 살아 있는 한 재렌더가 옛 차트를 돌려준다. 기하 불변 편집의 관용구대로
+        // (queries/field_query.rs 의 set_active_field 선례) 페이지 캐시를 통째로 비운다.
+        // dry-run·거부·무변경은 위에서 조기 반환했으므로 실제로 쓴 경우에만 닿는다.
+        self.invalidate_page_tree_cache();
 
         serde_json::json!({
             "ok": true, "chart": chart.index + 1,

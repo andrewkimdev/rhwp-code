@@ -1081,6 +1081,63 @@ fn dry_run_reports_the_diff_without_writing() {
     assert_eq!(slot_bytes(&core), before, "dry-run 이 바이트를 바꿨다");
 }
 
+/// **T8 — 선행 렌더가 캐시를 채워도, 성공한 편집 뒤 재렌더는 새 값을 그린다.**
+///
+/// 편집은 `bin_data_content` 의 바이트만 바꾸는데, 렌더된 차트 SVG 는
+/// `page_tree_cache` 에 RawSvg 소유값으로 남는다 — 무효화가 빠지면 재렌더가
+/// 캐시된 옛 그림을 그대로 돌려준다 (PR #4603 리뷰에서 실측된 회귀).
+/// legacy 경로(`render_page_svg_native`)는 캐시를 타지 않으므로 반드시
+/// layer 경로로 잰다.
+#[test]
+fn t8_rerender_after_an_edit_draws_the_new_chart() {
+    let hwpx = manifest("samples/chart/세로막대형/묶은세로막대형.hwpx");
+    for path in [hwpx.with_extension("hwpx"), hwpx.with_extension("hwp")] {
+        let mut core = core_of(&path);
+        // 선행 렌더 — 페이지 0 캐시가 채워진다. 차트가 이 페이지에 실제로
+        // 렌더됐는지 먼저 가드해야 "캐시 경로를 밟았다"가 성립한다.
+        let svg_before = core.render_page_svg_layer_native(0).expect("선행 렌더");
+        assert!(
+            svg_before.contains("hwp-ooxml-chart"),
+            "{}: 페이지 0 에 OOXML 차트 SVG 가 없다",
+            path.display()
+        );
+
+        let mut edits = edits_from(&core, 0);
+        edits["series"][0]["values"][0] = serde_json::json!("91.7");
+        let out = set_chart(&mut core, &edits);
+        assert_eq!(out["ok"], true, "{}: {out}", path.display());
+        assert_eq!(out["changedCount"], 1, "{}: {out}", path.display());
+
+        let svg_after = core.render_page_svg_layer_native(0).expect("재렌더");
+        assert_ne!(
+            svg_before,
+            svg_after,
+            "{}: 재렌더가 캐시된 옛 차트를 그대로 돌려줬다",
+            path.display()
+        );
+
+        // 새 값 반영의 오라클 — 같은 편집을 한 새 코어의 첫(냉간) 렌더와 바이트
+        // 동일해야 한다. 값축 눈금은 nice_axis 로 접히므로 "91.7" 리터럴 검색은
+        // 성립하지 않는다.
+        let mut cold = core_of(&path);
+        let mut cold_edits = edits_from(&cold, 0);
+        cold_edits["series"][0]["values"][0] = serde_json::json!("91.7");
+        assert_eq!(
+            set_chart(&mut cold, &cold_edits)["ok"],
+            true,
+            "{}",
+            path.display()
+        );
+        let svg_cold = cold.render_page_svg_layer_native(0).expect("냉간 렌더");
+        assert_eq!(
+            svg_after,
+            svg_cold,
+            "{}: 재렌더가 편집 반영 냉간 렌더와 다르다 — 무효화가 불완전하다",
+            path.display()
+        );
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Stage 5 — 실사용 문서 회귀 (코퍼스가 못 보여 준 변종)
 // ---------------------------------------------------------------------------
