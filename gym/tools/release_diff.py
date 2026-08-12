@@ -66,7 +66,12 @@ def observe(bin_path, check, task, sub_dir):
     cmd = check.get("cmd")
     if not cmd:
         return {"kind": "no-cmd"}
-    args = runner.resolve_args(cmd, task, sub_dir)
+    try:
+        args = runner.resolve_args(cmd, task, sub_dir)
+    except (FileNotFoundError, OSError, KeyError, IndexError, TypeError) as e:
+        # 제출물 부재도 구/신 양쪽에서 비교할 수 있는 관측 상태다. 여기서
+        # 예외를 내면 legacy baseline이 비어 있는 한 차등 도구 전체가 멈춘다.
+        return {"kind": "resolve-error", "error": type(e).__name__}
     code, env, head = runner.run_cli(bin_path, args)
     expect = check.get("expect_exits") or [check.get("expect_exit", 0)]
     if code not in expect:

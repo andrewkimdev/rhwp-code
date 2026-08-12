@@ -54,6 +54,13 @@ class ObservationTests(unittest.TestCase):
         self.assertEqual(obs["kind"], "exit")
         self.assertEqual(obs["code"], 2)
 
+    def test_missing_hash_placeholder_is_an_observation(self):
+        check = {"name": "재현", "op": "value_eq", "value": "ok",
+                 "cmd": ["replay", "{sha256:o1.hwp}", "--json"], "path": "verdict"}
+        with mock.patch.object(self.rd.runner, "resolve_args", side_effect=FileNotFoundError):
+            obs = self.rd.observe("rhwp", check, self.task, ".")
+        self.assertEqual(obs, {"kind": "resolve-error", "error": "FileNotFoundError"})
+
     def test_file_ops_are_excluded_from_observation(self):
         """파일 존재/동일성은 관측이 아니라 상태라 raw 대조에서 빠진다."""
         self.assertIn("file_exists", self.rd.FILE_OPS)
