@@ -214,7 +214,12 @@ fn validate_labels(
     }
 
     // 라벨이 없는 계열은 대조에서 뺀다 — 없는 것과 다른 것은 다르다.
-    for (i, series) in data.series.iter().enumerate().filter(|(_, s)| !s.labels.is_empty()) {
+    for (i, series) in data
+        .series
+        .iter()
+        .enumerate()
+        .filter(|(_, s)| !s.labels.is_empty())
+    {
         if labels.len() != series.labels.len() {
             out.push(serde_json::json!({
                 "reason": if scatter { "valueCountMismatch" } else { "categoryMismatch" },

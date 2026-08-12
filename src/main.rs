@@ -6359,21 +6359,22 @@ fn chart_to_csv(args: &[String]) -> i32 {
 
     let mut bodies: Vec<(usize, usize, usize, String)> = Vec::new();
     for index in selected {
-        let read: serde_json::Value =
-            match doc.get_chart_data_by_index_native(index).map(|s| {
-                serde_json::from_str::<serde_json::Value>(&s).unwrap_or(serde_json::Value::Null)
-            }) {
-                Ok(v) => v,
-                Err(e) => {
-                    eprintln!("오류: 차트 {} 읽기 실패 - {:?}", index + 1, e);
-                    return EXIT_RUNTIME;
-                }
-            };
+        let read: serde_json::Value = match doc.get_chart_data_by_index_native(index).map(|s| {
+            serde_json::from_str::<serde_json::Value>(&s).unwrap_or(serde_json::Value::Null)
+        }) {
+            Ok(v) => v,
+            Err(e) => {
+                eprintln!("오류: 차트 {} 읽기 실패 - {:?}", index + 1, e);
+                return EXIT_RUNTIME;
+            }
+        };
         if read["ok"] != true {
             eprintln!(
                 "오류: 차트 {} 를 읽을 수 없습니다 - {}",
                 index + 1,
-                read["invalid"][0]["message"].as_str().unwrap_or("사유 미상")
+                read["invalid"][0]["message"]
+                    .as_str()
+                    .unwrap_or("사유 미상")
             );
             return EXIT_RUNTIME;
         }
@@ -6454,7 +6455,11 @@ fn chart_to_csv(args: &[String]) -> i32 {
     }
 
     if out_path.is_some() {
-        println!("차트 CSV 내보내기 완료: {} (차트 {}개)", file_path, bodies.len());
+        println!(
+            "차트 CSV 내보내기 완료: {} (차트 {}개)",
+            file_path,
+            bodies.len()
+        );
         for out in written.iter().flatten() {
             println!("  {out}");
         }
@@ -6991,7 +6996,10 @@ fn csv_to_chart(args: &[String]) -> i32 {
 
     let chart_count = collect_charts(doc.document()).len();
     if chart_no > chart_count {
-        eprintln!("오류: 차트 {} 번이 없습니다 (차트 {}개).", chart_no, chart_count);
+        eprintln!(
+            "오류: 차트 {} 번이 없습니다 (차트 {}개).",
+            chart_no, chart_count
+        );
         return EXIT_RUNTIME;
     }
     let index = chart_no - 1;
@@ -7056,7 +7064,9 @@ fn csv_to_chart(args: &[String]) -> i32 {
             for item in invalid.as_array().unwrap_or(&Vec::new()) {
                 eprintln!(
                     "오류: {}",
-                    item["message"].as_str().unwrap_or("CSV 가 차트와 맞지 않습니다.")
+                    item["message"]
+                        .as_str()
+                        .unwrap_or("CSV 가 차트와 맞지 않습니다.")
                 );
             }
         }
@@ -7130,7 +7140,10 @@ fn csv_to_chart(args: &[String]) -> i32 {
     }
 
     if dry_run {
-        println!("변경 예정: {} 차트{} — {}칸", file_path, chart_no, changed_count);
+        println!(
+            "변경 예정: {} 차트{} — {}칸",
+            file_path, chart_no, changed_count
+        );
     } else {
         println!(
             "차트 기록 완료: {} → {} — 차트{} {}칸 ({})",

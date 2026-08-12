@@ -87,7 +87,12 @@ impl std::fmt::Display for ChartCsvError {
 ///
 /// 모자란 칸은 빈 문자열로 채운다. 여기서 거부하지 않는 이유는 이 함수가 **내보내기**이고,
 /// 되돌릴 때 코어 검증기가 개수를 다시 보기 때문이다.
-pub fn to_csv(labels: &[String], names: &[String], values: &[Vec<String>], scatter: bool) -> String {
+pub fn to_csv(
+    labels: &[String],
+    names: &[String],
+    values: &[Vec<String>],
+    scatter: bool,
+) -> String {
     let rows = values
         .iter()
         .map(|s| s.len())
@@ -170,7 +175,10 @@ mod tests {
             &[s(&["4.3", "2.5"]), s(&["2.4", "4.4"])],
             false,
         );
-        assert_eq!(csv, ",계열 1,계열 2\r\n항목 1,4.3,2.4\r\n항목 2,2.5,4.4\r\n");
+        assert_eq!(
+            csv,
+            ",계열 1,계열 2\r\n항목 1,4.3,2.4\r\n항목 2,2.5,4.4\r\n"
+        );
     }
 
     #[test]
@@ -246,7 +254,12 @@ mod tests {
     /// 틀린 산출이라 회귀 가드를 여기 둔다.
     #[test]
     fn values_survive_even_when_labels_are_missing() {
-        let csv = to_csv(&[], &s(&["계열 1", "계열 2"]), &[s(&["1", "2"]), s(&["3", "4"])], false);
+        let csv = to_csv(
+            &[],
+            &s(&["계열 1", "계열 2"]),
+            &[s(&["1", "2"]), s(&["3", "4"])],
+            false,
+        );
         assert_eq!(csv, ",계열 1,계열 2\r\n,1,3\r\n,2,4\r\n");
     }
 

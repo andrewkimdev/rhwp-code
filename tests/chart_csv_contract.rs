@@ -99,7 +99,10 @@ fn charts_with_missing_category_labels_still_emit_every_value() {
 
     let chart = &json_of(&out)["charts"][0];
     assert_eq!(chart["colCount"], 6, "계열 6개");
-    assert_eq!(chart["rowCount"], 6, "값이 6개인데 행이 0개면 CSV 가 값을 잃은 것이다");
+    assert_eq!(
+        chart["rowCount"], 6,
+        "값이 6개인데 행이 0개면 CSV 가 값을 잃은 것이다"
+    );
     let csv = chart["csv"].as_str().expect("csv");
     assert!(
         csv.lines().count() >= 7,

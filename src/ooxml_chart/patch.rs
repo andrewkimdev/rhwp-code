@@ -33,26 +33,50 @@ pub struct ValueEdit {
 /// 치환 거부 사유. **하나라도 걸리면 한 바이트도 쓰지 않는다.**
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PatchError {
-    SeriesOutOfRange { series: usize, len: usize },
-    PointOutOfRange { series: usize, point: usize, len: usize },
+    SeriesOutOfRange {
+        series: usize,
+        len: usize,
+    },
+    PointOutOfRange {
+        series: usize,
+        point: usize,
+        len: usize,
+    },
     /// 카테고리 라벨을 바꾸려 했다 — B2 범위다.
-    LabelNotEditable { series: usize },
+    LabelNotEditable {
+        series: usize,
+    },
     /// 같은 점을 두 번 지목했다.
-    DuplicateTarget { series: usize, point: usize },
+    DuplicateTarget {
+        series: usize,
+        point: usize,
+    },
     /// 빈 요소 `<c:v/>` — 결측치라 텍스트 구간이 없다.
     ///
     /// 읽기는 되고 이 점의 쓰기만 막힌다. 값을 넣으려면 요소 자체를 다시 써야 하는데
     /// 그건 최소 diff 가 아니라 구조 변경이라 B2 다.
-    ValueNotPatchable { series: usize, point: usize },
+    ValueNotPatchable {
+        series: usize,
+        point: usize,
+    },
     /// XML 을 깨뜨리는 문자(`<`, `>`, `&`, 제어문자)가 들어 있다.
     ///
     /// 이스케이프해서 넣지 않고 거부한다. 최소 diff 의 전제는 "쓴 텍스트가 곧
     /// 파일의 바이트"이고, 몰래 이스케이프하면 왕복이 그 전제를 잃는다.
-    UnsafeText { series: usize, point: usize },
+    UnsafeText {
+        series: usize,
+        point: usize,
+    },
     /// 구간이 입력 바이트 밖이다 — 스캔에 쓴 XML 과 다른 바이트를 넘겼다는 뜻이다.
-    SpanOutOfRange { series: usize, point: usize },
+    SpanOutOfRange {
+        series: usize,
+        point: usize,
+    },
     /// 두 구간이 겹친다.
-    OverlappingSpans { series: usize, point: usize },
+    OverlappingSpans {
+        series: usize,
+        point: usize,
+    },
 }
 
 impl std::fmt::Display for PatchError {
@@ -157,13 +181,10 @@ pub fn apply_value_edits(
         }
         seen.push(key);
 
-        let span = point
-            .span
-            .clone()
-            .ok_or(PatchError::ValueNotPatchable {
-                series: edit.series,
-                point: edit.point,
-            })?;
+        let span = point.span.clone().ok_or(PatchError::ValueNotPatchable {
+            series: edit.series,
+            point: edit.point,
+        })?;
 
         if span.start > span.end || span.end > xml.len() {
             return Err(PatchError::SpanOutOfRange {
@@ -333,7 +354,8 @@ mod tests {
                 point: 0
             })
         );
-        let out = apply_value_edits(xml.as_bytes(), &data, &[edit(0, 1, "5")]).expect("이웃은 된다");
+        let out =
+            apply_value_edits(xml.as_bytes(), &data, &[edit(0, 1, "5")]).expect("이웃은 된다");
         assert!(String::from_utf8_lossy(&out).contains("<c:v>5</c:v>"));
     }
 

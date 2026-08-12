@@ -157,7 +157,15 @@ fn collect_from_paragraph(
                             paragraph,
                             cell: None,
                         });
-                        collect_from_paragraph(doc, p, section, root_paragraph, &path, depth + 1, out);
+                        collect_from_paragraph(
+                            doc,
+                            p,
+                            section,
+                            root_paragraph,
+                            &path,
+                            depth + 1,
+                            out,
+                        );
                     }
                 }
             }
@@ -171,16 +179,40 @@ fn collect_from_paragraph(
                             paragraph,
                             cell: Some(cell),
                         });
-                        collect_from_paragraph(doc, p, section, root_paragraph, &path, depth + 1, out);
+                        collect_from_paragraph(
+                            doc,
+                            p,
+                            section,
+                            root_paragraph,
+                            &path,
+                            depth + 1,
+                            out,
+                        );
                     }
                 }
             }
-            Control::Header(h) => {
-                collect_from_container(doc, &h.paragraphs, section, root_paragraph, container, control, "header", depth, out)
-            }
-            Control::Footer(f) => {
-                collect_from_container(doc, &f.paragraphs, section, root_paragraph, container, control, "footer", depth, out)
-            }
+            Control::Header(h) => collect_from_container(
+                doc,
+                &h.paragraphs,
+                section,
+                root_paragraph,
+                container,
+                control,
+                "header",
+                depth,
+                out,
+            ),
+            Control::Footer(f) => collect_from_container(
+                doc,
+                &f.paragraphs,
+                section,
+                root_paragraph,
+                container,
+                control,
+                "footer",
+                depth,
+                out,
+            ),
             Control::Footnote(fnote) => collect_from_container(
                 doc,
                 &fnote.paragraphs,

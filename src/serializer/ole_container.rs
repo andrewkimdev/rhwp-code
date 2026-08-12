@@ -120,8 +120,14 @@ mod tests {
         let original = sample();
         let out = replace_ole_stream(&original, "OOXMLChartContents", b"<c:new/>").expect("재포장");
 
-        assert_eq!(stream(&out, "OOXMLChartContents").as_deref(), Some(&b"<c:new/>"[..]));
-        assert_eq!(stream(&out, "Contents").as_deref(), Some(&b"legacy-grid"[..]));
+        assert_eq!(
+            stream(&out, "OOXMLChartContents").as_deref(),
+            Some(&b"<c:new/>"[..])
+        );
+        assert_eq!(
+            stream(&out, "Contents").as_deref(),
+            Some(&b"legacy-grid"[..])
+        );
         assert_eq!(
             stream(&out, "\u{2}OlePres000").as_deref(),
             Some(&b"emf-preview"[..])
@@ -138,8 +144,8 @@ mod tests {
     #[test]
     fn identical_content_is_not_repacked() {
         let original = sample();
-        let out =
-            replace_ole_stream(&original, "OOXMLChartContents", b"<c:chartSpace/>").expect("재포장");
+        let out = replace_ole_stream(&original, "OOXMLChartContents", b"<c:chartSpace/>")
+            .expect("재포장");
         assert_eq!(out, original, "바뀐 게 없으면 원본 바이트 그대로여야 한다");
     }
 
@@ -164,8 +170,10 @@ mod tests {
     #[test]
     fn leading_slash_is_ignored_in_the_name() {
         let original = sample();
-        let a = replace_ole_stream(&original, "OOXMLChartContents", b"<c:x/>").expect("슬래시 없이");
-        let b = replace_ole_stream(&original, "/OOXMLChartContents", b"<c:x/>").expect("슬래시 붙여");
+        let a =
+            replace_ole_stream(&original, "OOXMLChartContents", b"<c:x/>").expect("슬래시 없이");
+        let b =
+            replace_ole_stream(&original, "/OOXMLChartContents", b"<c:x/>").expect("슬래시 붙여");
         assert_eq!(a, b);
     }
 

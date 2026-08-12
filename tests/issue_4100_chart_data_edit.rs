@@ -297,7 +297,12 @@ fn scatter_series_expose_editable_x_values_shared_across_series() {
             .collect();
         for (i, series) in scan.series.iter().enumerate().skip(1) {
             let xs: Vec<&str> = series.labels.iter().map(|p| p.text.as_str()).collect();
-            assert_eq!(xs, first, "{}: 계열 {i} 의 X 가 계열 0 과 다르다", path.display());
+            assert_eq!(
+                xs,
+                first,
+                "{}: 계열 {i} 의 X 가 계열 0 과 다르다",
+                path.display()
+            );
         }
         scatter_files += 1;
     }
@@ -324,7 +329,10 @@ fn category_labels_are_not_editable() {
         }],
     )
     .expect_err("카테고리 라벨 편집은 거부되어야 한다");
-    assert!(matches!(err, PatchError::LabelNotEditable { series: 0 }), "{err:?}");
+    assert!(
+        matches!(err, PatchError::LabelNotEditable { series: 0 }),
+        "{err:?}"
+    );
 }
 
 /// 패처는 주소 오류·중복·XML 안전하지 않은 텍스트를 **쓰기 전에** 거부한다.
@@ -376,7 +384,9 @@ fn repack_preserves_every_stream_and_leaves_the_others_byte_identical() {
         let before = all_ole_streams(&nested)
             .unwrap_or_else(|| panic!("{}: 중첩 CFB 열거 실패", path.display()));
         assert!(
-            before.iter().any(|(p, _)| p.trim_start_matches('/') == OOXML_STREAM),
+            before
+                .iter()
+                .any(|(p, _)| p.trim_start_matches('/') == OOXML_STREAM),
             "{}: OOXMLChartContents 가 없다",
             path.display()
         );
@@ -454,7 +464,12 @@ fn repack_preserves_the_root_class_id() {
         let repacked = replace_ole_stream(&nested, OOXML_STREAM, &patched).expect("재포장");
 
         assert_eq!(root_clsid(&repacked), original, "{}", path.display());
-        assert_eq!(ole_root_clsid(&repacked), Some(original), "{}", path.display());
+        assert_eq!(
+            ole_root_clsid(&repacked),
+            Some(original),
+            "{}",
+            path.display()
+        );
         checked += 1;
     }
     assert_eq!(checked, CORPUS_FILES);
@@ -470,7 +485,12 @@ fn unchanged_stream_content_skips_the_repack_entirely() {
     for (path, nested) in corpus_nested_cfbs() {
         let ooxml = stream_of(&nested, OOXML_STREAM).expect("OOXML");
         let out = replace_ole_stream(&nested, OOXML_STREAM, &ooxml).expect("재포장");
-        assert_eq!(out, nested, "{}: 무편집인데 바이트가 바뀌었다", path.display());
+        assert_eq!(
+            out,
+            nested,
+            "{}: 무편집인데 바이트가 바뀌었다",
+            path.display()
+        );
         checked += 1;
     }
     assert_eq!(checked, CORPUS_FILES);
@@ -491,7 +511,9 @@ fn repack_refuses_to_invent_a_missing_stream() {
 
     assert_eq!(
         replace_ole_stream(&nested, "OOXMLChartContent", b"x"),
-        Err(OleRepackError::StreamNotFound("OOXMLChartContent".to_string()))
+        Err(OleRepackError::StreamNotFound(
+            "OOXMLChartContent".to_string()
+        ))
     );
 }
 
@@ -520,7 +542,11 @@ fn every_corpus_document_resolves_its_chart_slots() {
             let charts = collect_charts(core.document());
             assert_eq!(charts.len(), 1, "{}: 차트 수", path.display());
             let chart = &charts[0];
-            assert!(chart.is_top_level(), "{}: 본문 직속이어야 한다", path.display());
+            assert!(
+                chart.is_top_level(),
+                "{}: 본문 직속이어야 한다",
+                path.display()
+            );
             assert!(chart.nested_copy.is_some(), "{}: ② 미해소", path.display());
 
             if path.extension().is_some_and(|e| e == "hwpx") {
@@ -597,8 +623,18 @@ fn get_chart_data_native_matches_the_model_parser() {
             }
 
             let is_hwpx = path.extension().is_some_and(|e| e == "hwpx");
-            assert_eq!(json["representations"]["zipPart"], is_hwpx, "{}", path.display());
-            assert_eq!(json["representations"]["nestedCopy"], true, "{}", path.display());
+            assert_eq!(
+                json["representations"]["zipPart"],
+                is_hwpx,
+                "{}",
+                path.display()
+            );
+            assert_eq!(
+                json["representations"]["nestedCopy"],
+                true,
+                "{}",
+                path.display()
+            );
             assert_eq!(
                 json["source"],
                 if is_hwpx { "zipPart" } else { "nestedCopy" },
@@ -621,9 +657,12 @@ fn values_keep_their_original_spelling() {
     let (xml, _) = chart_xml(core.document(), chart).expect("XML");
     let scan = scan_chart_values(&xml).expect("스캔");
 
-    let json: serde_json::Value =
-        serde_json::from_str(&core.get_chart_data_native(chart.section, chart.paragraph, chart.control).expect("읽기"))
-            .expect("JSON");
+    let json: serde_json::Value = serde_json::from_str(
+        &core
+            .get_chart_data_native(chart.section, chart.paragraph, chart.control)
+            .expect("읽기"),
+    )
+    .expect("JSON");
 
     for (si, series) in scan.series.iter().enumerate() {
         for (pi, point) in series.values.iter().enumerate() {
@@ -805,7 +844,12 @@ fn writing_the_current_values_back_changes_nothing() {
                 "{}",
                 path.display()
             );
-            assert_eq!(slot_bytes(&core), before, "{}: 슬롯 바이트가 바뀌었다", path.display());
+            assert_eq!(
+                slot_bytes(&core),
+                before,
+                "{}: 슬롯 바이트가 바뀌었다",
+                path.display()
+            );
             checked += 1;
         }
     }
@@ -905,7 +949,10 @@ fn the_edit_survives_conversion_to_hwp5() {
                 .expect("값")
                 .to_string()
         };
-        assert_ne!(original, "91.7", "{name}: 센티널이 원본과 같으면 판정이 공허하다");
+        assert_ne!(
+            original, "91.7",
+            "{name}: 센티널이 원본과 같으면 판정이 공허하다"
+        );
 
         // ── 본 시험 — ①② 함께 기록 → 변환 → 새 값이 남는다
         let mut core = core_of(&path);
@@ -972,7 +1019,10 @@ fn every_refusal_writes_nothing() {
     cases.push(("seriesCountMismatch", e));
 
     let mut e = good.clone();
-    e["series"][0]["values"].as_array_mut().expect("values").pop();
+    e["series"][0]["values"]
+        .as_array_mut()
+        .expect("values")
+        .pop();
     cases.push(("valueCountMismatch", e));
 
     let mut e = good.clone();
@@ -1000,8 +1050,15 @@ fn every_refusal_writes_nothing() {
             .map(|v| v["reason"].as_str().expect("reason"))
             .collect();
         assert!(reasons.contains(&reason), "{reason} 가 없다: {reasons:?}");
-        assert!(out["wrote"].as_array().expect("wrote").is_empty(), "{reason}");
-        assert_eq!(slot_bytes(&core), before, "{reason}: 거부했는데 바이트가 바뀌었다");
+        assert!(
+            out["wrote"].as_array().expect("wrote").is_empty(),
+            "{reason}"
+        );
+        assert_eq!(
+            slot_bytes(&core),
+            before,
+            "{reason}: 거부했는데 바이트가 바뀌었다"
+        );
     }
 }
 
