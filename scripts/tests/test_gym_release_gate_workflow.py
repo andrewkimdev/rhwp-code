@@ -102,6 +102,16 @@ class GateRunnerContractTests(unittest.TestCase):
             v = self.rg.gate(None, "new", "agent", None, verify_board=True)
         self.assertEqual(v["exit"], 3)
 
+    def test_leaderboard_uses_the_selected_new_binary(self):
+        """기본 PATH가 아니라 게이트의 새 바이너리로 원장을 검증한다."""
+        from unittest import mock
+        with mock.patch("os.path.exists", return_value=True), \
+                mock.patch.object(self.rg, "run_tool", return_value=(0, "무결")) as run_tool:
+            v = self.rg.gate(None, "/tmp/rhwp-new", "agent", None, verify_board=True)
+        self.assertEqual(v["verdict"], "pass")
+        run_tool.assert_called_once_with(
+            "leaderboard.py", ["--bin", "/tmp/rhwp-new", "verify"])
+
     def test_missing_old_binary_skips_diff_not_fail(self):
         from unittest import mock
         # old 경로가 없으면(find_bin 이 그대로 반환, exists=False) 차등은 skipped.

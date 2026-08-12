@@ -74,7 +74,10 @@ def gate(old_bin, new_bin, agent, packs, verify_board):
 
     # 2) 리더보드 해시 체인 — 커밋된 원장이 있으면.
     if verify_board and os.path.exists(os.path.join(runner.GYM, "leaderboard", "ledger.ndjson")):
-        code, out = run_tool("leaderboard.py", ["verify"])
+        # 게이트가 판정한 현재 바이너리와 같은 실행 파일로 서명·앵커를 검증한다.
+        # 기본 탐색에 맡기면 CI/로컬의 target 배치에 따라 `rhwp`를 찾지 못해
+        # 정상 원장을 파손으로 오판할 수 있다.
+        code, out = run_tool("leaderboard.py", ["--bin", new_bin, "verify"])
         verdict["leaderboard"] = {"ok": code == 0, "exit": code}
     else:
         verdict["leaderboard"] = {"ok": None, "reason": "커밋된 리더보드 없음 — 검증 생략"}
