@@ -514,9 +514,29 @@ pub(crate) fn layout_rect_to_bbox(rect: &LayoutRect) -> BoundingBox {
 
 #[cfg(test)]
 mod tests {
-    use super::{find_bin_data, picture_display_size_hu};
+    use super::{drawing_to_line_style, find_bin_data, picture_display_size_hu};
     use crate::model::bin_data::BinDataContent;
     use crate::model::image::Picture;
+    use crate::model::shape::DrawingObjAttr;
+    use crate::renderer::ArrowStyle;
+
+    /// #17958715: `hp:lineShape@headStyle="SPEAR"` (bit 10~15=2) + `headfill="1"`
+    /// (bit 30) 로 파싱된 attr 이 실제로 시작(head) 화살표로 그려지는지 확인한다 —
+    /// 별지 제30호양식의 8.6cm/5.4cm 치수선 화살촉 누락 버그의 렌더 단 회귀 테스트.
+    #[test]
+    fn drawing_to_line_style_maps_spear_head_arrow() {
+        let mut drawing = DrawingObjAttr::default();
+        // head=SPEAR(2, bit10~15) + headfill(bit30); tail=NORMAL(0, bit16~21) + no tailfill
+        drawing.border_line.attr = (2u32 << 10) | (1 << 30);
+
+        let style = drawing_to_line_style(&drawing);
+        assert_eq!(
+            style.start_arrow,
+            ArrowStyle::Arrow,
+            "SPEAR(2) 는 arrow_type_from_hwp 매핑상 Arrow 로 그려져야 함"
+        );
+        assert_eq!(style.end_arrow, ArrowStyle::None);
+    }
 
     fn mk(id: u16, ext: &str) -> BinDataContent {
         BinDataContent {
