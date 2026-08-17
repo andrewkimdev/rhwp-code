@@ -797,8 +797,11 @@ pub(crate) fn write_line_shape<W: Write>(
         2 => "SQUARE",
         _ => "ROUND",
     };
-    let head_fill_b = bl.attr & 0x8000_0000 != 0;
-    let tail_fill_b = bl.attr & 0x4000_0000 != 0;
+    // head(bit 10~15 모양) ↔ bit 30 채움, tail(bit 16~21 모양) ↔ bit 31 채움
+    // (utils.rs::drawing_to_line_style 의 start_fill/end_fill 과 정합 — #2956 이후
+    // 재확인된 head/tail↔bit 매핑, parse_line_shape_attr 의 역매핑도 동일 규약).
+    let head_fill_b = bl.attr & 0x4000_0000 != 0;
+    let tail_fill_b = bl.attr & 0x8000_0000 != 0;
     let headfill = bool01(head_fill_b);
     let tailfill = bool01(tail_fill_b);
     let head_style = arrow_style_str((bl.attr >> 10) & 0x3F, head_fill_b);
@@ -1380,13 +1383,16 @@ mod tests {
         assert_eq!(line_shape_style(none_with_flat_end_cap), "NONE");
     }
 
-    /// #2956: attr 에 파싱된 화살표 끝 모양(bit 16~21, 채움 bit 30)이 저장 시
+    /// #2956: attr 에 파싱된 화살표 끝 모양(bit 16~21, 채움 bit 31)이 저장 시
     /// "NORMAL" 로 하드코딩되지 않고 보존돼야 한다.
+    /// (bit 30/31 이 head/tail 채움 어느 쪽인지는 #17958715 조사에서 재확인·정정됨 —
+    /// utils.rs::drawing_to_line_style 의 start_fill=bit30/end_fill=bit31 과 정합시켜
+    /// tail(끝) 채움은 bit31 이 맞다. 종전엔 bit30 으로 잘못 짝지어져 있었다.)
     #[test]
     fn task2956_line_shape_arrow_style_preserved() {
         use crate::model::style::ShapeBorderLine;
-        // tail = FILLED_DIAMOND(4) + tail_fill(bit30)
-        let attr = (4u32 << 16) | (1 << 30);
+        // tail = FILLED_DIAMOND(4) + tail_fill(bit31)
+        let attr = (4u32 << 16) | (1 << 31);
         let bl = ShapeBorderLine {
             attr,
             ..Default::default()

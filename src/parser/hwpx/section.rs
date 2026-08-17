@@ -3546,6 +3546,21 @@ fn parse_rendering_info(
     Ok(())
 }
 
+/// OWPML Core `ArrowType` (`headStyle`/`tailStyle`) → hwplib `LineArrowShape` 코드.
+/// `src/serializer/hwpx/shape.rs::arrow_style_str` 의 역매핑 — fill 여부는 별도
+/// `headfill`/`tailfill` 속성(bit 30/31)이 담당하므로 여기서는 모양 코드만 뽑는다.
+fn arrow_shape_code(value: &str) -> u32 {
+    match value {
+        "ARROW" => 1,
+        "SPEAR" => 2,
+        "CONCAVE_ARROW" => 3,
+        "EMPTY_DIAMOND" | "FILLED_DIAMOND" => 4,
+        "EMPTY_CIRCLE" | "FILLED_CIRCLE" => 5,
+        "EMPTY_BOX" | "FILLED_BOX" => 6,
+        _ => 0, // NORMAL 및 미인식 값
+    }
+}
+
 /// `<hp:lineShape>` 요소에서 ShapeBorderLine을 파싱한다.
 fn parse_line_shape_attr(e: &quick_xml::events::BytesStart) -> ShapeBorderLine {
     fn arrow_size(value: &str) -> Option<u32> {
@@ -3598,18 +3613,30 @@ fn parse_line_shape_attr(e: &quick_xml::events::BytesStart) -> ShapeBorderLine {
                 };
                 bl.attr = (bl.attr & !(0x0F << 6)) | ((end_cap & 0x0F) << 6);
             }
-            b"headfill" => {
-                if parse_bool(&attr) {
-                    bl.attr |= 0x8000_0000;
-                } else {
-                    bl.attr &= !0x8000_0000;
-                }
+            b"headStyle" => {
+                // 화살표 시작(head) 모양 → bit 10~15 (hwplib LineArrowShape, utils.rs::arrow_type_from_hwp 참조)
+                let code = arrow_shape_code(&attr_str(&attr));
+                bl.attr = (bl.attr & !(0x3F << 10)) | ((code & 0x3F) << 10);
             }
-            b"tailfill" => {
+            b"tailStyle" => {
+                // 화살표 끝(tail) 모양 → bit 16~21
+                let code = arrow_shape_code(&attr_str(&attr));
+                bl.attr = (bl.attr & !(0x3F << 16)) | ((code & 0x3F) << 16);
+            }
+            b"headfill" => {
+                // head(시작) 채움 → bit 30 (utils.rs::drawing_to_line_style 의 start_fill 과 정합)
                 if parse_bool(&attr) {
                     bl.attr |= 0x4000_0000;
                 } else {
                     bl.attr &= !0x4000_0000;
+                }
+            }
+            b"tailfill" => {
+                // tail(끝) 채움 → bit 31 (utils.rs::drawing_to_line_style 의 end_fill 과 정합)
+                if parse_bool(&attr) {
+                    bl.attr |= 0x8000_0000;
+                } else {
+                    bl.attr &= !0x8000_0000;
                 }
             }
             b"headSz" => {
@@ -7891,6 +7918,51 @@ mod tests {
         assert_eq!(line.start.y, 0);
         assert_eq!(line.end.x, 100);
         assert_eq!(line.end.y, 100);
+    }
+
+    /// #17958715: `hp:lineShape@headStyle`/`tailStyle` 는 지금까지 파서에서 아예
+    /// 읽히지 않아, 실제 문서에 `headStyle="SPEAR"` 가 있어도 화살표가 항상
+    /// `ArrowStyle::None` 으로 렌더링됐다(별지 제30호양식의 8.6cm/5.4cm 치수선
+    /// 화살촉 미표시 버그). bit 10~15(head)/16~21(tail) 에 반영돼야 한다.
+    #[test]
+    fn bugfind_17958715_line_shape_head_tail_style_parsed() {
+        let xml = r##"<?xml version="1.0" encoding="UTF-8"?>
+<hs:sec xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph"
+        xmlns:hs="http://www.hancom.co.kr/hwpml/2011/section">
+  <hp:p id="0" paraPrIDRef="0" styleIDRef="0">
+    <hp:run charPrIDRef="0">
+      <hp:line id="1" zOrder="0" textWrap="IN_FRONT_OF_TEXT" instid="1">
+        <hp:offset x="0" y="0"/>
+        <hp:orgSz width="100" height="100"/>
+        <hp:curSz width="0" height="12334"/>
+        <hp:lineShape color="#000000" width="33" style="SOLID" endCap="FLAT"
+                      headStyle="SPEAR" tailStyle="NORMAL"
+                      headfill="1" tailfill="0"
+                      headSz="SMALL_SMALL" tailSz="MEDIUM_MEDIUM" outlineStyle="NORMAL"/>
+        <hc:startPt x="0" y="0"/>
+        <hc:endPt x="100" y="100"/>
+      </hp:line>
+      <hp:t/>
+    </hp:run>
+  </hp:p>
+</hs:sec>"##;
+
+        let section = parse_hwpx_section(xml).unwrap();
+        let Control::Shape(shape) = &section.paragraphs[0].controls[0] else {
+            panic!("expected shape control");
+        };
+        let ShapeObject::Line(line) = shape.as_ref() else {
+            panic!("expected line shape");
+        };
+
+        let attr = line.drawing.border_line.attr;
+        // head(SPEAR=2) → bit 10~15
+        assert_eq!((attr >> 10) & 0x3F, 2, "headStyle=SPEAR 가 bit 10~15 에 반영돼야 함");
+        // tail(NORMAL=0) → bit 16~21
+        assert_eq!((attr >> 16) & 0x3F, 0, "tailStyle=NORMAL 은 bit 16~21 이 0 이어야 함");
+        // headfill=1 → bit 30, tailfill=0 → bit 31 은 꺼져 있어야 함
+        assert_ne!(attr & 0x4000_0000, 0, "headfill=1 은 bit 30 이어야 함");
+        assert_eq!(attr & 0x8000_0000, 0, "tailfill=0 은 bit 31 이 꺼져 있어야 함");
     }
 
     #[test]
