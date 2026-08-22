@@ -2,13 +2,14 @@
    에디터 영역
    ================================================================ */
 
-/* editor-area: 눈금자 + 스크롤 영역을 2×2 Grid로 배치 */
+/* editor-area: 눈금자 + 스크롤 영역을 2×2 Grid로 배치, 3번째 열은 템플릿 패널
+   (도킹, 숨김 시 auto 트랙이 0으로 접혀 다른 트랙에 영향 없음) */
 #editor-area {
   display: grid;
   /* minmax(0, 1fr): 1fr(=minmax(auto,1fr))은 콘텐츠 기반 최소 크기가 한 방향
      래칫으로 작동해 창을 넓혔다 줄이면 트랙이 줄지 않는다(#1191). 최소를 0으로
      고정해 창 축소 시에도 트랙이 정상 축소되어 가운데 정렬이 유지된다. */
-  grid-template-columns: 20px minmax(0, 1fr);
+  grid-template-columns: 20px minmax(0, 1fr) auto;
   grid-template-rows: 20px minmax(0, 1fr);
   flex: 1;
   overflow: hidden;
@@ -16,6 +17,8 @@
 
 /* 눈금자 교차 코너 (좌상단) */
 #ruler-corner {
+  grid-column: 1;
+  grid-row: 1;
   background: var(--ruler-bg);
   border-right: 1px solid var(--ui-border-strong);
   border-bottom: 1px solid var(--ui-border-strong);
@@ -23,6 +26,8 @@
 
 /* 가로 눈금자 */
 #h-ruler {
+  grid-column: 2;
+  grid-row: 1;
   display: block;
   border-bottom: 1px solid var(--ui-border-strong);
   background: var(--ruler-bg);
@@ -31,13 +36,24 @@
 
 /* 세로 눈금자 */
 #v-ruler {
+  grid-column: 1;
+  grid-row: 2;
   display: block;
   border-right: 1px solid var(--ui-border-strong);
   background: var(--ruler-bg);
   cursor: default;
 }
 
+/* grid-column/row을 명시하지 않으면 auto-placement가 DOM 순서로 셀을 채우는데,
+   #template-panel(3번째 열, 명시적 배치)이 `hidden`(display:none)일 때는 grid
+   박스 생성 자체에서 빠져 자리를 전혀 차지하지 않는다 — 그러면 아래 4개
+   요소(이 요소들도 auto-placement 대상)가 3열×2행 그리드의 앞 4칸을 순서대로
+   채우면서 v-ruler가 3열/1행에, #scroll-container가 1열/2행(20px 폭의
+   ruler-corner 열)에 잘못 배치돼 문서 페이지가 뷰포트 밖으로 밀려난다(#2612).
+   그래서 이 4개도 명시적으로 배치해 패널의 hidden 여부와 무관하게 고정한다. */
 #scroll-container {
+  grid-column: 2;
+  grid-row: 2;
   position: relative;
   overflow-y: auto;
   overflow-x: auto;

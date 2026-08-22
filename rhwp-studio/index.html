@@ -106,6 +106,8 @@
           <div class="md-item" data-cmd="view:toggle-grid"><span class="md-icon icon-grid"></span><span class="md-label">격자 보기</span></div>
           <div class="md-item" data-cmd="view:grid-settings"><span class="md-icon icon-grid"></span><span class="md-label">격자 설정</span></div>
           <div class="md-sep"></div>
+          <div class="md-item" data-cmd="template:toggle-panel"><span class="md-icon"></span><span class="md-label">템플릿 패널</span></div>
+          <div class="md-sep"></div>
           <div class="md-sub">
             <span class="md-label">도구 상자</span><span class="md-arrow">▶</span>
             <div class="md-sub-panel">
@@ -647,6 +649,8 @@
       <div id="scroll-container" role="region" aria-label="문서 페이지" tabindex="0">
         <div id="scroll-content"></div>
       </div>
+      <!-- 템플릿 마커 authoring 패널 (hwpx-template-engine 용) — 내용은 template-panel.ts가 채운다 -->
+      <aside id="template-panel" class="tp-panel" hidden aria-label="템플릿 패널"></aside>
     </main>
 
     <!-- 하단 상태 바 -->

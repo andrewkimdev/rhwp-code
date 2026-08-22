@@ -23,6 +23,7 @@ import { syncClipMenu, syncTextMarkMenu, viewCommands } from '@/command/commands
 import { formatCommands } from '@/command/commands/format';
 import { insertCommands } from '@/command/commands/insert';
 import { tableCommands } from '@/command/commands/table';
+import { templateCommands } from '@/command/commands/template';
 import { pageCommands } from '@/command/commands/page';
 import { toolCommands } from '@/command/commands/tool';
 import { templateValidatorCommands } from '@/command/commands/template-validator';
@@ -33,6 +34,7 @@ import {
 } from '@/command/file-system-access';
 import { forgetConvertedHmlSaveHandle } from '@/command/save-target';
 import { ContextMenu } from '@/ui/context-menu';
+import { TemplatePanel } from '@/ui/template-panel';
 import { CommandPalette } from '@/ui/command-palette';
 import { showHmlImportWarning } from '@/ui/hml-import-warning';
 import { showLocalFontsModalIfNeeded } from '@/ui/local-fonts-modal';
@@ -120,6 +122,7 @@ if (import.meta.env.DEV) {
 let canvasView: CanvasView | null = null;
 let inputHandler: InputHandler | null = null;
 let toolbar: Toolbar | null = null;
+let templatePanel: TemplatePanel | null = null;
 let ruler: Ruler | null = null;
 let rendererSession: RendererSession | null = null;
 let editMode: EditorEditMode = 'normal';
@@ -263,6 +266,7 @@ registry.registerAll(viewCommands);
 registry.registerAll(formatCommands);
 registry.registerAll(insertCommands);
 registry.registerAll(tableCommands);
+registry.registerAll(templateCommands);
 registry.registerAll(pageCommands);
 registry.registerAll(toolCommands);
 registry.registerAll(templateValidatorCommands);
@@ -303,6 +307,15 @@ if (chromeMode === 'embed') {
   document.addEventListener('keydown', (e) => {
     if (isEmbedSwallowedFileShortcut(e)) e.preventDefault();
   }, true);
+}
+
+// [Template 마커 authoring — Phase 1] 아직 전용 패널 UI가 없어, 개발 중
+// 콘솔/e2e 에서 `template:tag-selection`/`template:clear-marker`를 직접 두드려
+// 볼 수 있게 임시로 노출한다. 패널이 생기면 이 콘솔 훅은 그대로 둬도 되고
+// (다른 __wasm 등과 같은 디버그 표면) 제거해도 된다.
+if (import.meta.env.DEV) {
+  (window as any).__dispatchCommand = (id: string, params?: Record<string, unknown>) =>
+    dispatcher.dispatch(id, params);
 }
 
 // 상태 바 요소
@@ -547,6 +560,12 @@ async function initialize(): Promise<void> {
 
     toolbar = new Toolbar(document.getElementById('style-bar')!, wasm, eventBus, dispatcher);
     toolbar.setEnabled(false);
+
+    templatePanel = new TemplatePanel(
+      document.getElementById('template-panel')!,
+      wasm, eventBus, dispatcher,
+      () => inputHandler,
+    );
 
     // InputHandler에 커맨드 디스패처 및 컨텍스트 메뉴 주입
     inputHandler.setDispatcher(dispatcher);
@@ -1058,6 +1077,9 @@ async function initializeDocument(
     console.log('[initDoc] 8. inputHandler activateWithCaretPosition');
     await updateLoadProgress(96, '편집 상태 초기화 중...');
     inputHandler?.activateWithCaretPosition();
+    // 문서 로드는 dirty=false→false(setDirty의 no-op 가드)라 항상
+    // command-state-changed를 유발하진 않는다 — 패널은 직접 갱신을 요청한다.
+    templatePanel?.refresh();
     // 최종 단계 뒤에는 비동기 작업이 없으므로 100% progress paint를 기다리지 않는다.
     msg.textContent = displayName;
     console.log('[initDoc] 9. 완료');

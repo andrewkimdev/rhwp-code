@@ -194,6 +194,28 @@ function tagSelectionOperation(
 
 export const templateCommands: CommandDef[] = [
   {
+    id: 'template:toggle-panel',
+    label: '템플릿 패널',
+    canExecute: (ctx) => ctx.hasDocument,
+    // 표를 뮤테이션하지 않는 순수 UI 토글이라 executeOperation 이 필요 없다 —
+    // view:toggle-grid(view.ts) 와 같은 패턴으로 DOM을 직접 다룬다. 패널
+    // 내용 자체는 `ui/template-panel.ts`의 TemplatePanel 이
+    // `template-panel-visibility-changed` 를 구독해 채운다(지연 렌더링 —
+    // 숨겨진 동안은 갱신하지 않는다).
+    execute(services) {
+      const panel = document.getElementById('template-panel');
+      if (!panel) return;
+      // HTMLElement.hidden 타입에 "until-found"도 있어(lib.dom) boolean으로 좁힌다 —
+      // 이 패널은 그 값을 절대 쓰지 않으므로 참이면 곧 "숨김"으로 취급해도 안전하다.
+      const willShow = panel.hidden === true;
+      panel.hidden = !willShow;
+      document.querySelectorAll('[data-cmd="template:toggle-panel"]').forEach(el => {
+        el.classList.toggle('active', willShow);
+      });
+      services.eventBus.emit('template-panel-visibility-changed', willShow);
+    },
+  },
+  {
     id: 'template:tag-selection',
     label: '템플릿 마커 지정',
     canExecute: (ctx) => ctx.inTable,
