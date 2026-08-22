@@ -212,3 +212,6 @@ PR 댓글 톤은 과장하지 않는다. "정말 감사합니다", "정성스러
 - collaborator·maintainer가 원 PR에 보정하거나 merge 후 운영 기록을 반영하는 경우에도
   [PR 리뷰·통합 워크플로우](../pr_review_workflow.md)의 선택표가 지정한 역할별 경로를 따른다.
 - `local/*`은 로컬 작업 이름일 뿐 원격 `devel`을 갱신하는 명령의 근거가 아니다.
+- 오래 유지되는 로컬 patch 브랜치(`patch/*` 등)를 최신 `upstream/devel`(또는 `main`) 위에
+  다시 얹어야 할 때는 [로컬 패치 스택 upstream 재적용 절차](../patch_stack_upstream_sync.md)를
+  따른다 — 오래된 base를 기준으로 `git merge`하지 않는다.
