@@ -2398,17 +2398,23 @@ impl HwpDocument {
     }
 
     /// 현재 위치 이후의 가장 가까운 선택 가능 컨트롤을 찾는다 (Shift+F11).
+    ///
+    /// `inclusive`: `find_nearest_control_forward_native`와 동일한 의미. wasm-bindgen은 인자
+    /// 기본값을 지원하지 않으므로 JS 쪽 기본값은 `wasm-bridge.ts`의 래퍼가 담당한다(기존 유일한
+    /// 실사용 호출자 Shift+F11은 `false`로 고정해 회귀 없음).
     #[wasm_bindgen(js_name = findNearestControlForward)]
     pub fn find_nearest_control_forward(
         &self,
         section_idx: u32,
         para_idx: u32,
         char_offset: u32,
+        inclusive: bool,
     ) -> String {
         self.find_nearest_control_forward_native(
             section_idx as usize,
             para_idx as usize,
             char_offset as usize,
+            inclusive,
         )
     }
 

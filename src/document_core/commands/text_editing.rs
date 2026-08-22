@@ -4384,11 +4384,22 @@ impl DocumentCore {
     }
 
     /// 현재 위치 이후의 가장 가까운 선택 가능 컨트롤을 찾는다 (Shift+F11).
+    ///
+    /// `inclusive=false`(기존 동작, Shift+F11 전용): `char_offset` 위치에 정확히 있는 컨트롤은
+    /// 건너뛰고 그 다음 컨트롤만 찾는다 — 현재 선택된 컨트롤을 다시 찾지 않고 전진하는 데 필요하다.
+    /// `inclusive=true`: `char_offset` 위치에 정확히 있는 컨트롤도 포함한다. `char_offsets`가 비어
+    /// 있는 문단(텍스트 없이 컨트롤만 있는 문단)에서는 흐름 시작 전 컨트롤이 모두 position 0에
+    /// 눌려 담기므로([`crate::model::paragraph::Paragraph::control_text_positions`]의 정밀도
+    /// 손실 분기), `char_offset=0`으로 탐색을 시작하는 호출자(표 outline 워커 등)는 exclusive
+    /// 모드로는 그 컨트롤을 구조적으로 절대 찾을 수 없다 — position 0은 어떤 음수 아닌
+    /// char_offset으로도 `pos > char_offset`을 만족시킬 수 없기 때문이다. 이 구분은 같은 문단
+    /// (1단계) 검색에만 적용된다 — 이후 문단/섹션(2·3단계)은 원래부터 offset 검사가 없다.
     pub fn find_nearest_control_forward_native(
         &self,
         section_idx: usize,
         para_idx: usize,
         char_offset: usize,
+        inclusive: bool,
     ) -> String {
         let sections = &self.document.sections;
 
@@ -4407,11 +4418,17 @@ impl DocumentCore {
         fn find_in_para_after(
             para: &crate::model::paragraph::Paragraph,
             char_offset: usize,
+            inclusive: bool,
         ) -> Option<(usize, usize, &'static str)> {
             let positions = crate::document_core::find_control_text_positions(para);
             for ci in 0..para.controls.len() {
                 if let Some(&pos) = positions.get(ci) {
-                    if pos > char_offset {
+                    let matches = if inclusive {
+                        pos >= char_offset
+                    } else {
+                        pos > char_offset
+                    };
+                    if matches {
                         if let Some(ty) = classify_control(&para.controls[ci]) {
                             return Some((ci, pos, ty));
                         }
@@ -4444,7 +4461,7 @@ impl DocumentCore {
         // 1) 같은 문단에서 char_offset 이후 탐색
         if let Some(section) = sections.get(section_idx) {
             if let Some(para) = section.paragraphs.get(para_idx) {
-                if let Some((ci, cp, ty)) = find_in_para_after(para, char_offset) {
+                if let Some((ci, cp, ty)) = find_in_para_after(para, char_offset, inclusive) {
                     return fmt_result(ty, section_idx, para_idx, ci, cp);
                 }
             }
@@ -5648,6 +5665,72 @@ mod tests {
             1,
         );
         assert!(result.is_ok(), "캡션 문단 병합이 패닉 없이 처리되어야 함");
+    }
+
+    /// char_offsets가 비어 있는 문단(텍스트 없이 컨트롤만 있는 문단)에서 흐름 시작 전 첫
+    /// 컨트롤은 position 0으로 눌려 담긴다(Paragraph::control_text_positions의 정밀도 손실
+    /// 분기, paragraph.rs:1424-1445). 표가 그 첫 컨트롤이면서 동시에 검색 호출 자신의 시작
+    /// 문단에 있으면, exclusive 모드(`pos > char_offset`)는 구조상 그 표를 절대 찾을 수 없다.
+    fn table_at_para_start() -> Document {
+        use crate::model::document::Section;
+        use crate::model::table::Table;
+
+        Document {
+            sections: vec![Section {
+                paragraphs: vec![Paragraph {
+                    controls: vec![Control::Table(Box::default())],
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn find_nearest_control_forward_exclusive_cannot_find_position_zero_control() {
+        let mut core = DocumentCore::new_empty();
+        core.document = table_at_para_start();
+
+        // exclusive 모드는 Shift+F11이 "현재 선택된 컨트롤을 다시 찾지 않는" 데 의존하는
+        // 시맨틱이다 — 이 case가 여전히 none이어야 그 시맨틱이 보존된다.
+        let result = core.find_nearest_control_forward_native(0, 0, 0, false);
+        assert_eq!(result, "{\"type\":\"none\"}");
+    }
+
+    #[test]
+    fn find_nearest_control_forward_inclusive_finds_position_zero_control() {
+        let mut core = DocumentCore::new_empty();
+        core.document = table_at_para_start();
+
+        let result = core.find_nearest_control_forward_native(0, 0, 0, true);
+        assert!(result.contains("\"type\":\"table\""), "got: {result}");
+        assert!(result.contains("\"para\":0"), "got: {result}");
+        assert!(result.contains("\"ci\":0"), "got: {result}");
+        assert!(result.contains("\"charPos\":0"), "got: {result}");
+    }
+
+    /// Shift+F11의 실제 사용 패턴: 현재 선택된 컨트롤 자신의 anchor position에서 exclusive
+    /// 탐색을 시작해 자기 자신은 건너뛰고 다음 컨트롤로 전진한다. inclusive 모드 추가가
+    /// 이 경로를 바꾸지 않는지 고정한다.
+    #[test]
+    fn find_nearest_control_forward_exclusive_skips_currently_selected_control_shift_f11() {
+        use crate::model::table::Table;
+
+        let mut core = DocumentCore::new_empty();
+        core.document = table_at_para_start(); // 표 #1: (sec0, para0, ci0), pos 0
+                                               // 같은 문단에 흐름상 다음 자리(pos 1)를 차지하는 두 번째 표를 추가한다.
+        core.document.sections[0].paragraphs[0]
+            .controls
+            .push(Control::Table(Box::default()));
+
+        // 현재 표 #1(pos 0)이 선택된 상태를 흉내: 그 anchor position에서 exclusive 탐색.
+        let result = core.find_nearest_control_forward_native(0, 0, 0, false);
+        assert!(result.contains("\"type\":\"table\""), "got: {result}");
+        assert!(
+            result.contains("\"ci\":1"),
+            "자기 자신(ci 0)이 아니라 다음 컨트롤을 찾아야 한다: {result}"
+        );
     }
 
     /// 본문 문단 병합의 undo 가 사라진 문단의 스코프 메타데이터를 되돌리는지 (Task #2342).

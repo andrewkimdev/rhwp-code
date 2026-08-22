@@ -68,6 +68,14 @@ export function readTableMarkerText(
  * 바로 다음(`result.para + 1`)부터 다시 탐색하면 같은 컨트롤을 다시 찾지 않고
  * 전진한다(Shift+F11 핸들러, `input-handler-keyboard.ts`의 `handleShiftF11`와
  * 같은 전진 패턴).
+ *
+ * `inclusive: true`로 호출한다 — 텍스트 없이 컨트롤만 있는 문단(`char_offsets`가
+ * 비어 있는 문단)에서는 흐름 시작 전 첫 컨트롤이 항상 position 0으로 눌려 담기므로
+ * (`Paragraph::control_text_positions`의 정밀도 손실 분기), `charOffset=0`으로 매
+ * 이터레이션을 시작하는 이 워커는 exclusive 모드로는 그 자리의 표를 구조적으로
+ * 절대 찾을 수 없다 — 워커 자신의 시작 문단(searchPara)에 있는 표라서 "이후 문단"
+ * 폴백도 거치지 않는다. 이 문제는 최초 호출(문단 0)만이 아니라, 재개한 문단
+ * 자신이 다시 position 0에서 시작하면 매 반복에서 재발할 수 있다.
  */
 export function listTopLevelTables(wasm: WasmBridge, sec: number): TableOutlineEntry[] {
   const entries: TableOutlineEntry[] = [];
@@ -75,7 +83,7 @@ export function listTopLevelTables(wasm: WasmBridge, sec: number): TableOutlineE
   let searchPara = 0;
   let searchCharOffset = 0;
   while (searchPara < paraCount) {
-    const result = wasm.findNearestControlForward(sec, searchPara, searchCharOffset);
+    const result = wasm.findNearestControlForward(sec, searchPara, searchCharOffset, true);
     if (!result || result.type === 'none') break;
     if (result.type === 'table') {
       const dims = wasm.getTableDimensions(result.sec, result.para, result.ci);

@@ -1334,10 +1334,17 @@ export class WasmBridge {
     return JSON.parse(this.doc.findNearestControlBackward(sec, para, charOffset));
   }
 
-  /** 현재 위치 이후의 가장 가까운 선택 가능 컨트롤 (Shift+F11) */
-  findNearestControlForward(sec: number, para: number, charOffset: number): { type: string; sec: number; para: number; ci: number; charPos?: number } {
+  /**
+   * 현재 위치 이후의 가장 가까운 선택 가능 컨트롤을 찾는다.
+   * `inclusive=false`(기본값, 기존 Shift+F11 동작 그대로): charOffset 위치 자체의 컨트롤은 건너뛴다.
+   * `inclusive=true`: charOffset 위치에 정확히 있는 컨트롤도 포함한다(표 outline 콜드스타트/이터레이션
+   * 워커가 문단 시작(0) 컨트롤을 놓치지 않게 하려는 용도 — `table-outline.ts`의 `listTopLevelTables`).
+   */
+  findNearestControlForward(
+    sec: number, para: number, charOffset: number, inclusive: boolean = false,
+  ): { type: string; sec: number; para: number; ci: number; charPos?: number } {
     if (!this.doc) throw new Error('문서가 로드되지 않았습니다');
-    return JSON.parse((this.doc as any).findNearestControlForward(sec, para, charOffset));
+    return JSON.parse((this.doc as any).findNearestControlForward(sec, para, charOffset, inclusive));
   }
 
   /** 문단 내 컨트롤의 텍스트 위치 배열 반환 */
