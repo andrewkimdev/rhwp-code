@@ -10,10 +10,11 @@
  * `command-state-changed`는 커서 이동마다(사실상 매 클릭/키 입력) 발생하므로,
  * 패널이 숨겨진 동안은 `refresh()`가 즉시 반환해 불필요한 재렌더링을 피한다.
  *
- * v1 범위: 11개 역할을 항상 모두 보여준다. `-NESTED:` 부모 후보를
- * `availableNestedParentBlockNames`(table-outline.ts)로 채우기는 하지만,
- * 유효하지 않을 때 NESTED 옵션 자체를 감추는 라이브 검증(계획의 §5)은 아직
- * 하지 않는다 — 그건 다음 단계.
+ * `-NESTED:` 역할 4종은 문서에 `#REPEAT-BODY:<name>` 표가 하나도 없으면 역할
+ * 선택지에서 감춘다(`updateNestedRoleAvailability`) — 고를 수 있어도 만들 수
+ * 없는 옵션이라서다. 부모 후보 목록 자체는 `availableNestedParentBlockNames`
+ * (table-outline.ts)가 낸다. v1은 존재 여부만 확인한다 — 정확한 인접성
+ * 재검증은 `#6. "Validate now"`의 실제 lint가 최종 권위다.
  */
 import type { WasmBridge } from '@/core/wasm-bridge';
 import type { EventBus } from '@/core/event-bus';
@@ -53,6 +54,7 @@ export class TemplatePanel {
   private outlineEl!: HTMLElement;
   private hintEl!: HTMLElement;
   private roleSelect!: HTMLSelectElement;
+  private nestedRoleOptionEls: HTMLOptionElement[] = [];
   private blockNameField!: HTMLElement;
   private blockNameInput!: HTMLInputElement;
   private nestedParentField!: HTMLElement;
@@ -72,6 +74,9 @@ export class TemplatePanel {
     this.eventBus.on('table-object-selection-changed', () => this.refresh());
     this.eventBus.on('command-state-changed', () => this.refresh());
     this.eventBus.on('template-panel-visibility-changed', () => this.refresh());
+    // 패널이 기본으로 열려 있으므로, 문서 로드가 처음 refresh()를 유발하기 전에도
+    // 빈 상태/내용 영역이 올바르게 갈라져 있어야 한다(둘 다 노출되는 걸 방지).
+    this.refresh();
   }
 
   /** 문서 로드 등 다른 트리거에서 강제로 다시 그리고 싶을 때 (main.ts에서 호출). */
@@ -98,7 +103,9 @@ export class TemplatePanel {
     }
 
     this.renderOutline(entries, pos);
-    this.renderNestedParentOptions(availableNestedParentBlockNames(entries));
+    const nestedParentNames = availableNestedParentBlockNames(entries);
+    this.renderNestedParentOptions(nestedParentNames);
+    this.updateNestedRoleAvailability(nestedParentNames.length > 0);
 
     const inTable = pos?.parentParaIndex !== undefined && pos?.controlIndex !== undefined;
     const isNested = (pos?.cellPath?.length ?? 0) > 1;
@@ -186,6 +193,20 @@ export class TemplatePanel {
       this.nestedParentSelect.appendChild(opt);
     }
     if (names.includes(current)) this.nestedParentSelect.value = current;
+  }
+
+  /**
+   * `#REPEAT-BODY:<name>` 표가 문서에 하나도 없으면 `-NESTED:` 역할 옵션 자체를
+   * 역할 선택지에서 감춘다 — 나열 가능한 부모가 없으므로 골라도 만들 수 없는
+   * 옵션이라서다. 이미 그 역할이 선택된 채로 부모가 사라지면(마커 지우기 등)
+   * 기본 역할로 되돌린다.
+   */
+  private updateNestedRoleAvailability(available: boolean): void {
+    for (const el of this.nestedRoleOptionEls) el.hidden = !available;
+    if (!available && this.currentRoleOption().needsNestedParent) {
+      this.roleSelect.value = ROLE_OPTIONS[0].value;
+      this.onRoleChanged();
+    }
   }
 
   private currentRoleOption(): RoleOption {
@@ -278,6 +299,7 @@ export class TemplatePanel {
       el.value = opt.value;
       el.textContent = opt.label;
       this.roleSelect.appendChild(el);
+      if (opt.needsNestedParent) this.nestedRoleOptionEls.push(el);
     }
     this.roleSelect.addEventListener('change', () => this.onRoleChanged());
     roleField.appendChild(roleLabel);
