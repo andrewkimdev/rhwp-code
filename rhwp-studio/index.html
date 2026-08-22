@@ -477,6 +477,7 @@
         </div>
         <button class="tb-btn" data-cmd="edit:document-history" title="문서 이력 관리 (Ctrl+Shift+H)"><span class="tb-icon-text">⧉</span><span class="tb-label">이력<br/>관리</span></button>
         <button class="tb-btn" data-cmd="edit:compare-documents" title="문서 비교 (Alt+Shift+V)"><span class="tb-icon-text">≍</span><span class="tb-label">문서<br/>비교</span></button>
+        <button class="tb-btn" data-cmd="template:toggle-panel" title="템플릿 패널"><span class="tb-icon-text">●</span><span class="tb-label">템플릿<br/>패널</span></button>
       </div>
       <!-- 머리말/꼬리말 편집 모드 전용 도구상자 (숨김) -->
       <div class="tb-group tb-headerfooter-group" style="display:none">
@@ -650,7 +651,7 @@
         <div id="scroll-content"></div>
       </div>
       <!-- 템플릿 마커 authoring 패널 (hwpx-template-engine 용) — 내용은 template-panel.ts가 채운다 -->
-      <aside id="template-panel" class="tp-panel" hidden aria-label="템플릿 패널"></aside>
+      <aside id="template-panel" class="tp-panel" aria-label="템플릿 패널"></aside>
     </main>
 
     <!-- 하단 상태 바 -->

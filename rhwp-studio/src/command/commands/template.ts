@@ -204,7 +204,10 @@ export const templateCommands: CommandDef[] = [
   {
     id: 'template:toggle-panel',
     label: '템플릿 패널',
-    canExecute: (ctx) => ctx.hasDocument,
+    // 문서가 없어도 열고 닫을 수 있어야 한다 — 패널이 기본으로 열려 있으므로
+    // hasDocument 를 요구하면 문서를 열기 전에는 닫을 방법이 없어진다.
+    // 문서가 없을 때의 내용은 TemplatePanel.refresh() 의 빈 상태 안내로 처리한다.
+    canExecute: () => true,
     // 표를 뮤테이션하지 않는 순수 UI 토글이라 executeOperation 이 필요 없다 —
     // view:toggle-grid(view.ts) 와 같은 패턴으로 DOM을 직접 다룬다. 패널
     // 내용 자체는 `ui/template-panel.ts`의 TemplatePanel 이
