@@ -10,11 +10,24 @@
  * `command-state-changed`는 커서 이동마다(사실상 매 클릭/키 입력) 발생하므로,
  * 패널이 숨겨진 동안은 `refresh()`가 즉시 반환해 불필요한 재렌더링을 피한다.
  *
- * `-NESTED:` 역할 4종은 문서에 `#REPEAT-BODY:<name>` 표가 하나도 없으면 역할
- * 선택지에서 감춘다(`updateNestedRoleAvailability`) — 고를 수 있어도 만들 수
- * 없는 옵션이라서다. 부모 후보 목록 자체는 `availableNestedParentBlockNames`
- * (table-outline.ts)가 낸다. v1은 존재 여부만 확인한다 — 정확한 인접성
- * 재검증은 `#6. "Validate now"`의 실제 lint가 최종 권위다.
+ * 역할 선택은 라디오 그룹 2개("일반"/"반복 블록") + 중첩 체크박스 1개로
+ * 구성한다(11개 항목을 한 줄로 나열하던 select 대신) — `-NESTED:` 4종은 실제로는
+ * 별도 역할이 아니라 "반복 블록 역할 + 이미 있는 `#REPEAT-BODY:<name>` 표 아래
+ * 중첩"이라는 수정자이므로, 체크박스로 표현하는 쪽이 실제 마커 문법과 더 정확히
+ * 대응하고 전체 어휘도 한눈에 보인다. 문서에 `#REPEAT-BODY:<name>` 표가 하나도
+ * 없으면(`availableNestedParentBlockNames`, table-outline.ts) 중첩 체크박스
+ * 자체를 감춘다(`updateNestedRoleAvailability`) — 골라도 만들 수 없는 옵션이라서다.
+ * v1은 존재 여부만 확인한다 — 정확한 인접성 재검증은 `#6. "Validate now"`의 실제
+ * lint가 최종 권위다.
+ *
+ * 각 역할에는 `hwpx-template-engine/docs/TEMPLATE_MARKER_SYNTAX.md` §3/§3e 요약을
+ * 한 줄로 압축한 설명이 붙는다 — 라디오 `label`의 `title`(hover)과, 선택된 역할이
+ * 바뀔 때마다 갱신되는 `roleDescEl`(항상 보이는 캡션) 두 군데에 쓴다.
+ *
+ * 역할 라디오 1~7과 중첩 체크박스(N)에는 숫자/문자 키보드 단축키가 있다 —
+ * `#template-panel` 컨테이너의 `keydown`에서 처리하며(전역 단축키가 아니다),
+ * 블록명 입력/부모 블록 select에 포커스가 있을 때는 숫자를 그대로 입력해야 하므로
+ * 그 두 컨트롤에 포커스가 있으면 무시한다.
  */
 import type { WasmBridge } from '@/core/wasm-bridge';
 import type { EventBus } from '@/core/event-bus';
@@ -27,36 +40,54 @@ import {
 } from '@/core/table-outline';
 import { buildTableRoleMarkerText, type TemplateTableRole } from '@/command/commands/template';
 
-interface RoleOption {
-  value: TemplateTableRole;
+interface GeneralRoleOption {
+  value: 'HEADER' | 'FOOTER' | 'PAGENO';
   label: string;
-  needsBlockName: boolean;
-  needsNestedParent: boolean;
+  description: string;
 }
 
-const ROLE_OPTIONS: readonly RoleOption[] = [
-  { value: 'HEADER', label: '#HEADER', needsBlockName: false, needsNestedParent: false },
-  { value: 'FOOTER', label: '#FOOTER', needsBlockName: false, needsNestedParent: false },
-  { value: 'PAGENO', label: '#PAGENO', needsBlockName: false, needsNestedParent: false },
-  { value: 'REPEAT_TITLE', label: '#REPEAT-TITLE:', needsBlockName: true, needsNestedParent: false },
-  { value: 'REPEAT_HEADER', label: '#REPEAT-HEADER:', needsBlockName: true, needsNestedParent: false },
-  { value: 'REPEAT_BODY', label: '#REPEAT-BODY:', needsBlockName: true, needsNestedParent: false },
-  { value: 'REPEAT_FOOTER', label: '#REPEAT-FOOTER:', needsBlockName: true, needsNestedParent: false },
-  { value: 'REPEAT_TITLE_NESTED', label: '#REPEAT-TITLE-NESTED: (중첩)', needsBlockName: true, needsNestedParent: true },
-  { value: 'REPEAT_HEADER_NESTED', label: '#REPEAT-HEADER-NESTED: (중첩)', needsBlockName: true, needsNestedParent: true },
-  { value: 'REPEAT_BODY_NESTED', label: '#REPEAT-BODY-NESTED: (중첩)', needsBlockName: true, needsNestedParent: true },
-  { value: 'REPEAT_FOOTER_NESTED', label: '#REPEAT-FOOTER-NESTED: (중첩)', needsBlockName: true, needsNestedParent: true },
+interface RepeatRoleOption {
+  value: 'REPEAT_TITLE' | 'REPEAT_HEADER' | 'REPEAT_BODY' | 'REPEAT_FOOTER';
+  nestedValue: 'REPEAT_TITLE_NESTED' | 'REPEAT_HEADER_NESTED' | 'REPEAT_BODY_NESTED' | 'REPEAT_FOOTER_NESTED';
+  label: string;
+  description: string;
+}
+
+const GENERAL_ROLES: readonly GeneralRoleOption[] = [
+  { value: 'HEADER', label: '#HEADER', description: '표의 역할을 문서화만 합니다 — 렌더링에는 영향을 주지 않습니다.' },
+  { value: 'FOOTER', label: '#FOOTER', description: '표의 역할을 문서화만 합니다 — 렌더링에는 영향을 주지 않습니다.' },
+  { value: 'PAGENO', label: '#PAGENO', description: '표 전체를 반복 꼬리말로 승격해 모든 페이지에 쪽 번호를 표시합니다. 문서당 최대 1개.' },
 ];
+
+const REPEAT_ROLES: readonly RepeatRoleOption[] = [
+  { value: 'REPEAT_TITLE', nestedValue: 'REPEAT_TITLE_NESTED', label: '#REPEAT-TITLE:', description: '반복 블록 전체의 제목 표 — 문서에서 한 번만 렌더됩니다. (선택)' },
+  { value: 'REPEAT_HEADER', nestedValue: 'REPEAT_HEADER_NESTED', label: '#REPEAT-HEADER:', description: '컬럼 라벨 표 — 블록 맨 앞에 한 번, 항목이 페이지를 넘기면 다음 페이지 첫머리에도 다시 찍힙니다. (선택)' },
+  { value: 'REPEAT_BODY', nestedValue: 'REPEAT_BODY_NESTED', label: '#REPEAT-BODY:', description: '항목 1개 분량의 표 — 데이터 개수만큼 복제됩니다. (필수, 블록당 정확히 1개)' },
+  { value: 'REPEAT_FOOTER', nestedValue: 'REPEAT_FOOTER_NESTED', label: '#REPEAT-FOOTER:', description: '항목들 뒤에 한 번만 렌더되는 합계 등 요약 표. (선택)' },
+];
+
+/** 역할 값 → 설명 한 줄. 라디오 label의 title(hover)과 상시 캡션(roleDescEl)이 공유한다. */
+const ROLE_DESCRIPTIONS: Readonly<Record<string, string>> = Object.fromEntries(
+  [...GENERAL_ROLES, ...REPEAT_ROLES].map(r => [r.value, r.description]),
+);
+
+const NESTED_TOGGLE_DESCRIPTION =
+  '이미 있는 #REPEAT-BODY:<부모블록> 표 바로 뒤에, 그 항목마다 자기만의 하위 반복 목록을 붙입니다(최대 1단계 중첩).';
+
+const DEFAULT_ROLE: TemplateTableRole = GENERAL_ROLES[0].value;
 
 export class TemplatePanel {
   private emptyEl!: HTMLElement;
   private contentEl!: HTMLElement;
   private outlineEl!: HTMLElement;
   private hintEl!: HTMLElement;
-  private roleSelect!: HTMLSelectElement;
-  private nestedRoleOptionEls: HTMLOptionElement[] = [];
+  private roleRadios: HTMLInputElement[] = [];
+  private roleDescEl!: HTMLElement;
+  private nestedRoleAvailable = false;
   private blockNameField!: HTMLElement;
   private blockNameInput!: HTMLInputElement;
+  private nestedToggleField!: HTMLElement;
+  private nestedToggle!: HTMLInputElement;
   private nestedParentField!: HTMLElement;
   private nestedParentSelect!: HTMLSelectElement;
   private previewEl!: HTMLElement;
@@ -196,36 +227,47 @@ export class TemplatePanel {
   }
 
   /**
-   * `#REPEAT-BODY:<name>` 표가 문서에 하나도 없으면 `-NESTED:` 역할 옵션 자체를
-   * 역할 선택지에서 감춘다 — 나열 가능한 부모가 없으므로 골라도 만들 수 없는
-   * 옵션이라서다. 이미 그 역할이 선택된 채로 부모가 사라지면(마커 지우기 등)
-   * 기본 역할로 되돌린다.
+   * `#REPEAT-BODY:<name>` 표가 문서에 하나도 없으면 중첩 체크박스 자체를 감추고
+   * 해제한다 — 나열 가능한 부모가 없으므로 체크해도 만들 수 없는 옵션이라서다.
    */
   private updateNestedRoleAvailability(available: boolean): void {
-    for (const el of this.nestedRoleOptionEls) el.hidden = !available;
-    if (!available && this.currentRoleOption().needsNestedParent) {
-      this.roleSelect.value = ROLE_OPTIONS[0].value;
-      this.onRoleChanged();
+    this.nestedRoleAvailable = available;
+    if (!available && this.nestedToggle.checked) {
+      this.nestedToggle.checked = false;
     }
+    this.onRoleChanged();
   }
 
-  private currentRoleOption(): RoleOption {
-    return ROLE_OPTIONS.find(o => o.value === this.roleSelect.value) ?? ROLE_OPTIONS[0];
+  private selectedRepeatRole(): RepeatRoleOption | null {
+    const checked = this.roleRadios.find(r => r.checked)?.value;
+    return REPEAT_ROLES.find(r => r.value === checked) ?? null;
+  }
+
+  private resolveSelectedRole(): TemplateTableRole {
+    const repeat = this.selectedRepeatRole();
+    if (repeat && this.nestedToggle.checked) return repeat.nestedValue;
+    return (this.roleRadios.find(r => r.checked)?.value as TemplateTableRole | undefined) ?? DEFAULT_ROLE;
   }
 
   private onRoleChanged(): void {
-    const opt = this.currentRoleOption();
-    this.blockNameField.style.display = opt.needsBlockName ? '' : 'none';
-    this.nestedParentField.style.display = opt.needsNestedParent ? '' : 'none';
+    const repeat = this.selectedRepeatRole();
+    this.blockNameField.style.display = repeat ? '' : 'none';
+    const nestedTogglable = Boolean(repeat) && this.nestedRoleAvailable;
+    this.nestedToggleField.style.display = nestedTogglable ? '' : 'none';
+    if (!nestedTogglable) this.nestedToggle.checked = false;
+    this.nestedParentField.style.display = (nestedTogglable && this.nestedToggle.checked) ? '' : 'none';
+    const checkedValue = this.roleRadios.find(r => r.checked)?.value;
+    this.roleDescEl.textContent = (checkedValue && ROLE_DESCRIPTIONS[checkedValue]) || '';
     this.updatePreview();
   }
 
   private buildParamsFromForm(): { role: TemplateTableRole; blockName?: string; nestedParent?: string } {
-    const opt = this.currentRoleOption();
+    const repeat = this.selectedRepeatRole();
+    const nested = Boolean(repeat) && this.nestedToggle.checked;
     return {
-      role: opt.value,
-      blockName: opt.needsBlockName ? (this.blockNameInput.value.trim() || undefined) : undefined,
-      nestedParent: opt.needsNestedParent ? (this.nestedParentSelect.value || undefined) : undefined,
+      role: this.resolveSelectedRole(),
+      blockName: repeat ? (this.blockNameInput.value.trim() || undefined) : undefined,
+      nestedParent: nested ? (this.nestedParentSelect.value || undefined) : undefined,
     };
   }
 
@@ -245,6 +287,68 @@ export class TemplatePanel {
   private clearTag(): void {
     this.dispatcher.dispatch('template:clear-marker');
     this.refresh();
+  }
+
+  private buildRoleGroup(
+    legendText: string,
+    roles: readonly { value: string; label: string; description: string }[],
+  ): HTMLFieldSetElement {
+    const fieldset = document.createElement('fieldset');
+    fieldset.className = 'tp-role-group';
+    const legend = document.createElement('legend');
+    legend.className = 'tp-role-group-legend';
+    legend.textContent = legendText;
+    fieldset.appendChild(legend);
+    for (const role of roles) {
+      const label = document.createElement('label');
+      label.className = 'tp-radio-label';
+      label.title = role.description;
+      const input = document.createElement('input');
+      input.type = 'radio';
+      input.name = 'tp-role';
+      input.value = role.value;
+      input.checked = role.value === DEFAULT_ROLE;
+      input.addEventListener('change', () => this.onRoleChanged());
+      // 단축키 배지(1~7)는 buildRoleGroup이 두 그룹에 걸쳐 순서대로 불리므로
+      // roleRadios.length(=push 전 현재 길이)가 곧 0-based 순번이다 —
+      // 실제 키 처리는 이 순번 그대로 this.roleRadios를 인덱싱한다(handleShortcutKey).
+      const keyBadge = document.createElement('span');
+      keyBadge.className = 'tp-role-key';
+      keyBadge.textContent = String(this.roleRadios.length + 1);
+      this.roleRadios.push(input);
+      label.appendChild(input);
+      label.appendChild(document.createTextNode(role.label));
+      label.appendChild(keyBadge);
+      fieldset.appendChild(label);
+    }
+    return fieldset;
+  }
+
+  /**
+   * 패널 안(블록명 입력/부모 블록 select 제외)에서 숫자 1~7 → 해당 역할 라디오,
+   * `n` → 중첩 체크박스(보일 때만) 토글. 조합키가 있으면 무시해 브라우저/전역
+   * 단축키와 겹치지 않게 한다. 전역 리스너가 아니라 `#template-panel`의
+   * keydown이라 포커스가 패널 밖(에디터 캔버스 등)에 있을 때는 애초에 안 불린다.
+   */
+  private handleShortcutKey(e: KeyboardEvent): void {
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
+    if (e.target === this.blockNameInput || e.target === this.nestedParentSelect) return;
+
+    const digit = Number(e.key);
+    if (Number.isInteger(digit) && digit >= 1 && digit <= this.roleRadios.length) {
+      e.preventDefault();
+      const radio = this.roleRadios[digit - 1];
+      radio.checked = true;
+      radio.focus();
+      this.onRoleChanged();
+      return;
+    }
+    if (e.key.toLowerCase() === 'n' && this.nestedToggleField.style.display !== 'none') {
+      e.preventDefault();
+      this.nestedToggle.checked = !this.nestedToggle.checked;
+      this.nestedToggle.focus();
+      this.onRoleChanged();
+    }
   }
 
   private build(): void {
@@ -286,24 +390,18 @@ export class TemplatePanel {
     this.hintEl = document.createElement('div');
     this.hintEl.className = 'tp-hint';
 
-    // 역할 선택
+    // 역할 선택 — 라디오 그룹 2개("일반"/"반복 블록")
     const roleField = document.createElement('div');
     roleField.className = 'tp-field';
-    const roleLabel = document.createElement('label');
+    const roleLabel = document.createElement('span');
     roleLabel.className = 'tp-label';
     roleLabel.textContent = '역할';
-    this.roleSelect = document.createElement('select');
-    this.roleSelect.className = 'tp-select';
-    for (const opt of ROLE_OPTIONS) {
-      const el = document.createElement('option');
-      el.value = opt.value;
-      el.textContent = opt.label;
-      this.roleSelect.appendChild(el);
-      if (opt.needsNestedParent) this.nestedRoleOptionEls.push(el);
-    }
-    this.roleSelect.addEventListener('change', () => this.onRoleChanged());
     roleField.appendChild(roleLabel);
-    roleField.appendChild(this.roleSelect);
+    roleField.appendChild(this.buildRoleGroup('일반', GENERAL_ROLES));
+    roleField.appendChild(this.buildRoleGroup('반복 블록', REPEAT_ROLES));
+    this.roleDescEl = document.createElement('div');
+    this.roleDescEl.className = 'tp-role-desc';
+    roleField.appendChild(this.roleDescEl);
 
     // 블록명
     this.blockNameField = document.createElement('div');
@@ -318,6 +416,24 @@ export class TemplatePanel {
     this.blockNameInput.addEventListener('input', () => this.updatePreview());
     this.blockNameField.appendChild(blockNameLabel);
     this.blockNameField.appendChild(this.blockNameInput);
+
+    // 중첩 여부 체크박스 — REPEAT_* 역할에서만, 유효한 부모가 있을 때만 노출
+    this.nestedToggleField = document.createElement('div');
+    this.nestedToggleField.className = 'tp-field';
+    const nestedToggleLabel = document.createElement('label');
+    nestedToggleLabel.className = 'tp-checkbox-label';
+    nestedToggleLabel.title = NESTED_TOGGLE_DESCRIPTION;
+    this.nestedToggle = document.createElement('input');
+    this.nestedToggle.type = 'checkbox';
+    this.nestedToggle.className = 'tp-checkbox';
+    this.nestedToggle.addEventListener('change', () => this.onRoleChanged());
+    const nestedKeyBadge = document.createElement('span');
+    nestedKeyBadge.className = 'tp-role-key';
+    nestedKeyBadge.textContent = 'N';
+    nestedToggleLabel.appendChild(this.nestedToggle);
+    nestedToggleLabel.appendChild(document.createTextNode('중첩 자식 블록으로 지정'));
+    nestedToggleLabel.appendChild(nestedKeyBadge);
+    this.nestedToggleField.appendChild(nestedToggleLabel);
 
     // 중첩 부모 블록명
     this.nestedParentField = document.createElement('div');
@@ -355,6 +471,7 @@ export class TemplatePanel {
     this.contentEl.appendChild(this.hintEl);
     this.contentEl.appendChild(roleField);
     this.contentEl.appendChild(this.blockNameField);
+    this.contentEl.appendChild(this.nestedToggleField);
     this.contentEl.appendChild(this.nestedParentField);
     this.contentEl.appendChild(this.previewEl);
     this.contentEl.appendChild(actions);
@@ -365,13 +482,14 @@ export class TemplatePanel {
     this.container.appendChild(header);
     this.container.appendChild(body);
 
-    // #780과 같은 이유(icon-toolbar/style-bar) — 패널 안 select/input 클릭이
-    // 에디터 캐럿에 영향을 주면 안 되지만, 텍스트 입력 자체는 정상 동작해야
+    // #780과 같은 이유(icon-toolbar/style-bar) — 패널 안 컨트롤 클릭이 에디터
+    // 캐럿에 영향을 주면 안 되지만, 그 컨트롤 자체의 입력/토글은 정상 동작해야
     // 하므로 INPUT/SELECT는 제외하고 preventDefault한다.
     this.container.addEventListener('mousedown', (e) => {
       const tag = (e.target as HTMLElement).tagName;
       if (tag !== 'INPUT' && tag !== 'SELECT') e.preventDefault();
     });
+    this.container.addEventListener('keydown', (e) => this.handleShortcutKey(e));
 
     this.onRoleChanged();
   }

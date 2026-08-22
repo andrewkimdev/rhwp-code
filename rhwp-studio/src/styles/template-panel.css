@@ -141,6 +141,61 @@
   color: var(--color-text-secondary);
 }
 
+.tp-role-group {
+  border: 1px solid var(--color-border-lighter);
+  border-radius: var(--radius-sm);
+  margin: 0;
+  padding: var(--space-3) var(--space-4) var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.tp-role-group-legend {
+  padding: 0 var(--space-2);
+  font-weight: bold;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}
+
+.tp-radio-label,
+.tp-checkbox-label {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.tp-radio-label:hover,
+.tp-checkbox-label:hover {
+  background: var(--color-hover-bg);
+}
+
+.tp-radio-label input[type="radio"],
+.tp-checkbox-label input[type="checkbox"] {
+  accent-color: var(--color-primary);
+  margin: 0;
+}
+
+/* 역할/중첩 단축키 배지(1~7, N) — md-shortcut(menu-bar.css)과 같은 자리(오른쪽 끝) */
+.tp-role-key {
+  margin-left: auto;
+  padding: 0 var(--space-2);
+  border: 1px solid var(--color-border-lighter);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-hint);
+}
+
+/* 선택된 역할 설명 — 역할이 바뀔 때마다 onRoleChanged()가 갱신 */
+.tp-role-desc {
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+}
+
 .tp-select,
 .tp-input {
   height: var(--control-height-md);
