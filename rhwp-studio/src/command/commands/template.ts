@@ -129,8 +129,15 @@ function applyMarkerRowStyle(
 }
 
 function setTableRoleMarker(wasm: WasmBridge, sec: number, ppi: number, ci: number, markerText: string): void {
+  // `readTableMarkerText`는 표의 첫 행 첫 셀 텍스트를 무엇이든 그대로 돌려준다
+  // (마커 여부를 스스로 판단하지 않는다) — "이미 마커 행이 있는가"는 그 텍스트가
+  // `#`로 시작하는지로 여기서 직접 판정해야 한다. 이 판정 없이 existing이 그냥
+  // non-null이기만 하면 재사용 분기를 타면, 아직 마커를 단 적 없는 표(첫 셀에
+  // 원본 서식의 실제 라벨 텍스트, 예: "처분재산"이 있는 표)를 태깅할 때 그 라벨을
+  // 마커 텍스트로 덮어써 원본 내용을 파괴한다 — 새 마커 행을 위에 삽입하는 대신.
   const existing = readTableMarkerText(wasm, sec, ppi, ci);
-  if (existing === null) {
+  const alreadyMarked = existing !== null && existing.startsWith('#');
+  if (!alreadyMarked) {
     wasm.insertTableRow(sec, ppi, ci, 0, false);
     const dims = wasm.getTableDimensions(sec, ppi, ci);
     if (dims.colCount > 1) {
@@ -147,7 +154,8 @@ function setTableRoleMarker(wasm: WasmBridge, sec: number, ppi: number, ci: numb
 }
 
 function clearTableRoleMarker(wasm: WasmBridge, sec: number, ppi: number, ci: number): void {
-  if (readTableMarkerText(wasm, sec, ppi, ci) === null) return;
+  const existing = readTableMarkerText(wasm, sec, ppi, ci);
+  if (existing === null || !existing.startsWith('#')) return; // 실제 마커 행이 아니면 지울 것이 없다
   wasm.deleteTableRow(sec, ppi, ci, 0);
 }
 
