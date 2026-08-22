@@ -2,7 +2,7 @@
 kind: reference
 status: active
 canonical: mydocs/manual/rhwp_studio_ui_conventions.md
-last_verified: 2026-07-17
+last_verified: 2026-08-22
 ---
 
 # rhwp-studio UI 명칭과 CSS 접두어
@@ -16,6 +16,7 @@ last_verified: 2026-07-17
 | 서식 도구 모음 | `#style-bar` | 스타일·글꼴·크기·정렬 등 서식 제어 |
 | 편집 영역 | `#scroll-container` | 문서 페이지 렌더링과 스크롤 영역 |
 | 상태 표시줄 | `#status-bar` | 쪽·구역·편집 모드·확대 배율 표시 |
+| 템플릿 패널 | `#template-panel` | hwpx-template-engine 마커 authoring 도킹 패널 (표 개요·역할 지정) |
 
 ## CSS 접두어
 
@@ -28,6 +29,7 @@ last_verified: 2026-07-17
 | `dialog-` | 대화상자 공통 요소 |
 | `cs-` | 글자 모양 대화상자 |
 | `ps-` | 문단 모양 대화상자 |
+| `tp-` | 템플릿 패널 요소 |
 
 새 UI 영역이나 접두어를 도입할 때는 기존 DOM과 CSS에서 실제 사용 여부를 확인하고 이 표를 함께
 갱신한다.
