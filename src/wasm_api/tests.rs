@@ -27196,6 +27196,123 @@ fn merge_cells_across_columns_only_preserves_auto_fit_zero_height() {
     }
 }
 
+/// 회귀 재현: 병합 셀이 걸친 위치에 insert_row()로 새 행을 끼워 넣으면
+/// row_span은 늘지만 height는 그대로 남아, merge_cells()가 구운 총합(옛
+/// row_span개 행의 합)이 이제 (row_span+1)개 행을 나타내야 하는데도
+/// stale하게 남는다. 렌더러(table_layout.rs)는 이 총합을 span에 걸친 행들에
+/// 나눠 맞추므로, 새로 끼어든 행이 예산을 나눠 가지면서 편집과 무관한 기존
+/// 걸침 행(대개 마지막 행)이 오히려 줄어드는 왜곡이 생긴다 — delete_row 쪽
+/// 하이라인 붕괴(위 테스트)의 거울상. grow_row_span_height()가 shrink_row_
+/// span_height()와 대칭으로 height를 비례 확장해 이를 막는다.
+#[test]
+fn insert_row_into_merged_span_grows_height_proportionally() {
+    let mut doc = HwpDocument::create_empty();
+    // 단일 열: "다른 열이 max()로 가려주는" 탈출구를 제거해 버그를 노출시킨다.
+    let created = doc.create_table_native(0, 0, 0, 4, 1).expect("표 생성");
+    let para_idx = issue_1481_json_usize(&created, "paraIdx");
+
+    // HWPX에서 가져온 "자동 맞춤" 표를 재현: 모든 셀 height를 0으로 강제
+    // (create_table_native는 항상 0이 아닌 height를 채우므로 직접 주입해야 한다).
+    match &mut doc.document.sections[0].paragraphs[para_idx].controls[0] {
+        Control::Table(table) => {
+            for cell in &mut table.cells {
+                cell.height = 0;
+            }
+        }
+        _ => panic!("target table"),
+    }
+
+    // 자동맞춤(height==0) 3행을 세로 병합 -> merge_cells()의 0->400 fallback으로
+    // height=1200(400*3)이 구워진다 (row_span=3, 4행째는 병합 밖에 남는다).
+    doc.merge_table_cells_native(0, para_idx, 0, 0, 0, 2, 0)
+        .expect("세로 병합");
+    match &doc.document.sections[0].paragraphs[para_idx].controls[0] {
+        Control::Table(table) => {
+            assert_eq!(table.cells.len(), 2, "병합 후 셀은 2개(병합 셀 + 4행)");
+            let merged = table
+                .cells
+                .iter()
+                .find(|c| c.row_span > 1)
+                .expect("병합 셀");
+            assert_eq!(merged.row_span, 3, "사전 조건: row_span==3");
+            assert_eq!(merged.height, 1200, "사전 조건: 0->400 fallback 합 1200");
+        }
+        _ => panic!("target table"),
+    }
+
+    // 병합 span(행 0~2) 내부(행 1 아래, target_row=2)에 새 행을 끼워 넣는다.
+    doc.insert_table_row_native(0, para_idx, 0, 1, true)
+        .expect("병합 span 내부에 행 삽입");
+
+    match &doc.document.sections[0].paragraphs[para_idx].controls[0] {
+        Control::Table(table) => {
+            assert_eq!(table.row_count, 5, "행이 하나 늘어 5행이어야 한다");
+            let merged = table
+                .cells
+                .iter()
+                .find(|c| c.row_span > 1)
+                .expect("병합 셀");
+            assert_eq!(merged.row_span, 4, "row_span이 4로 늘어야 한다");
+            assert_eq!(
+                merged.height, 1600,
+                "#(insert_row 비대칭) 회귀: height가 옛 row_span(3) 기준 1행 몫(400)만큼 \
+                 비례 확장되어 1600이 되어야 하는데, {}로 stale하게 남았다 — 렌더러가 이 \
+                 총합을 4행에 나눠 맞추면서 편집과 무관한 기존 걸침 행이 줄어든다.",
+                merged.height
+            );
+        }
+        _ => panic!("target table"),
+    }
+}
+
+/// 비회귀 가드: row_span>1인데 height==0(자동맞춤)인 셀에 insert_row()로 새
+/// 행이 끼어들어도 height==0(자동맞춤) 의미론이 그대로 보존되어야 한다 —
+/// shrink_row_span_height()가 delete_row() 쪽에서 0을 방어적으로 되살리는
+/// 것과 반대로, grow_row_span_height()는 0을 그대로 둔다(렌더러가 항상
+/// 형제 열의 콘텐츠 기준 높이로 채우므로 고정값으로 바꿀 이유가 없다).
+#[test]
+fn insert_row_into_merged_span_preserves_auto_fit_zero_height() {
+    let mut doc = HwpDocument::create_empty();
+    let created = doc.create_table_native(0, 0, 0, 4, 2).expect("표 생성");
+    let para_idx = issue_1481_json_usize(&created, "paraIdx");
+
+    doc.merge_table_cells_native(0, para_idx, 0, 0, 0, 2, 0)
+        .expect("세로 병합");
+    // 실제 파일에서 파싱된 row_span>1·height==0(자동맞춤) 상태를 직접 주입한다
+    // (merge_cells()는 항상 0->400 fallback을 굽기 때문에 이 상태를 자체적으로
+    // 만들 수 없다 -- 손상/레거시 문서 방어 경로를 재현하는 것).
+    match &mut doc.document.sections[0].paragraphs[para_idx].controls[0] {
+        Control::Table(table) => {
+            let merged = table
+                .cells
+                .iter_mut()
+                .find(|c| c.row_span > 1)
+                .expect("병합 셀");
+            merged.height = 0;
+        }
+        _ => panic!("target table"),
+    }
+
+    doc.insert_table_row_native(0, para_idx, 0, 1, true)
+        .expect("병합 span 내부에 행 삽입");
+
+    match &doc.document.sections[0].paragraphs[para_idx].controls[0] {
+        Control::Table(table) => {
+            let merged = table
+                .cells
+                .iter()
+                .find(|c| c.row_span > 1)
+                .expect("병합 셀");
+            assert_eq!(merged.row_span, 4, "row_span이 4로 늘어야 한다");
+            assert_eq!(
+                merged.height, 0,
+                "자동맞춤(height==0)은 insert_row() 이후에도 보존되어야 한다"
+            );
+        }
+        _ => panic!("target table"),
+    }
+}
+
 #[test]
 fn split_table_at_first_row_is_rejected() {
     let mut doc = HwpDocument::create_empty();

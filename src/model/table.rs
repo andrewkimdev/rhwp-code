@@ -189,6 +189,29 @@ fn shrink_row_span_height(cell: &mut Cell) {
     cell.row_span = cell.row_span.saturating_sub(1);
 }
 
+/// 병합 셀(row_span>=1)에 새 행이 끼어들어 row_span이 1 늘어날 때 height도
+/// 비례 확장한다. `shrink_row_span_height()`의 반대 방향(호출부는
+/// row_span을 늘리기 *직전*에, 옛 row_span 기준으로 불러야 한다).
+///
+/// insert_row()가 병합 셀이 걸친 위치에 새 행을 끼워 넣으며 span만 늘리고
+/// height를 그대로 두면, merge_cells()가 구운 총합(옛 row_span개 행의 합)이
+/// 이제 (row_span+1)개 행을 나타내야 하는데도 stale하게 남는다. 렌더러
+/// (table_layout.rs)는 이 총합을 span에 걸친 행들에 나눠 맞추므로, 새로
+/// 끼어든 행이 예산을 나눠 가지면서 편집과 무관한 기존 걸침 행(대개 마지막
+/// 행)이 오히려 줄어드는 왜곡이 생긴다(#4323류 표 마커 드리프트 계열,
+/// delete_row 쪽 하이라인 붕괴의 거울상).
+///
+/// height==0(자동 맞춤)은 그대로 보존한다 — shrink 쪽과 달리 여기서는 0을
+/// 되살릴 이유가 없다: 자동 맞춤 셀은 애초에 이 총합 제약에 사실상
+/// 참여하지 않으므로(렌더러가 항상 형제 열의 콘텐츠 기준 높이로 채움) 굳이
+/// 고정값으로 바꾸면 오히려 자동 맞춤 의미론만 깨진다.
+fn grow_row_span_height(cell: &mut Cell) {
+    if cell.height > 0 && cell.row_span > 0 {
+        let per_row_share = cell.height / cell.row_span as u32;
+        cell.height = cell.height.saturating_add(per_row_share.max(1));
+    }
+}
+
 /// 손상된 표 메타데이터를 편집할 때 u16 좌표·span·개수가 넘지 않게 한다.
 fn checked_table_u16_add(value: u16, delta: u16, field: &str) -> Result<u16, String> {
     value
@@ -1125,6 +1148,8 @@ impl Table {
             if cell.row < target_row
                 && checked_table_span_end(cell.row, cell.row_span, "행")? > target_row
             {
+                // row_span을 늘리기 전, 옛 row_span 기준으로 height를 비례 확장한다.
+                grow_row_span_height(cell);
                 cell.row_span = checked_table_u16_add(cell.row_span, 1, "셀 행 span")?;
                 // 이 셀이 커버하는 열 표시
                 for c in cell.col..cell.col.saturating_add(cell.col_span).min(self.col_count) {
