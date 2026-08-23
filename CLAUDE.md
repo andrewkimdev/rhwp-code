@@ -39,3 +39,6 @@ rhwp는 Rust로 HWP/HWPX/HWP3 문서를 읽고 편집·렌더링하며, WebAssem
 
 UI 명칭과 CSS 접두어는
 [`rhwp_studio_ui_conventions.md`](mydocs/manual/rhwp_studio_ui_conventions.md)를 따른다.
+
+## 현재 작업중 컨텍스트 파일
+[`HWP-STUDIO-CONTEXT.md`](HWP-STUDIO-CONTEXT.md) 를 읽는다.
