@@ -356,6 +356,7 @@ fn main() {
         Some("bench") => exit_with(rhwp::diagnostics::bench::run(&args[2..])),
         Some("thumbnail") => exit_with(extract_thumbnail(&args[2..])),
         Some("fields") => exit_with(show_fields(&args[2..])),
+        Some("template-entity") => exit_with(cmd_template_entity(&args[2..])),
         Some("explain") => exit_with(explain_document(&args[2..])),
         Some("edit") => exit_with(run_edit(&args[2..])),
         Some("run") => exit_with(cmd_run_plan(&args[2..])),
@@ -2980,6 +2981,25 @@ fn capabilities_command_entries() -> Vec<serde_json::Value> {
             false,
             &["--json"],
             &["schemaVersion", "source", "fieldCount", "fields"],
+        ),
+        // [연구 스파이크] hwpx-template-engine TemplateEntityGenerator 클라이언트 포트 —
+        // 표 역할 마커(#REPEAT-*, #PAGENO)와 누름틀 이름에서 서버 없이 Java record 데이터
+        // 클래스 + 모듈 클래스 초안을 만든다. 마커 검증 실패는 크래시가 아니라 errors 데이터.
+        cmd_json(
+            "template-entity",
+            "query",
+            "hwpx 표 역할 마커·누름틀에서 Java record 데이터/모듈 클래스 초안 생성(서버 없이)",
+            false,
+            &["--code", "--package", "--out-dir", "--json"],
+            &[
+                "code",
+                "packageName",
+                "dataClassName",
+                "moduleClassName",
+                "dataClassSource",
+                "moduleClassSource",
+                "errors",
+            ],
         ),
         // [#3828] 새 판정 로직이 아니라 info/export-structure/export-tables/fields의
         // 조합 — 처음 보는 문서를 사람/에이전트가 한 번에 파악하는 결정론적 요약.
@@ -24464,6 +24484,122 @@ fn show_fields(args: &[String]) -> i32 {
             }
         );
     }
+    EXIT_OK
+}
+
+/// hwpx-template-engine `TemplateEntityGenerator` 의 클라이언트 포트
+/// (`document_core::queries::template_entity`) 를 CLI 로 노출한다. 서버 없이, 문서
+/// 자체(표 역할 마커·누름틀 이름)만으로 Java record 데이터 클래스 + 모듈 클래스 초안을
+/// 만든다. 마커 검증 실패는 크래시가 아니라 `errors` 데이터로 낸다("판정=데이터") — 문서를
+/// 정상적으로 읽었고 결과가 "생성 불가"일 뿐이므로 항상 EXIT_OK 다.
+fn cmd_template_entity(args: &[String]) -> i32 {
+    const USAGE: &str = "사용법: rhwp template-entity <파일.hwpx> --code <코드> [--package <패키지>] [--out-dir <디렉터리>] [--json]";
+    // 실제 조직 패키지(com.ktnet.aspline...)를 기본값으로 박아두면 다른 조직에서도 그대로
+    // 컴파일되는 것처럼 보이는 깨지기 쉬운(brittle) 값이 된다 — 관례적인 com.example 로 시작해
+    // 사용자가 항상 자기 패키지로 바꿔 써야 함을 드러낸다.
+    const DEFAULT_PACKAGE: &str = "com.example.hwpx.templates";
+
+    let mut file_path: Option<&str> = None;
+    let mut code: Option<&str> = None;
+    let mut package: &str = DEFAULT_PACKAGE;
+    let mut out_dir: Option<&str> = None;
+    let mut json_mode = false;
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--json" => json_mode = true,
+            "--code" => {
+                i += 1;
+                code = args.get(i).map(String::as_str);
+            }
+            "--package" => {
+                i += 1;
+                package = match args.get(i) {
+                    Some(p) => p.as_str(),
+                    None => {
+                        eprintln!("{USAGE}");
+                        return EXIT_USAGE;
+                    }
+                };
+            }
+            "--out-dir" => {
+                i += 1;
+                out_dir = args.get(i).map(String::as_str);
+            }
+            other if other.starts_with('-') => {
+                eprintln!("알 수 없는 옵션: {other}");
+                return EXIT_USAGE;
+            }
+            other => file_path = Some(other),
+        }
+        i += 1;
+    }
+
+    let (Some(file_path), Some(code)) = (file_path, code) else {
+        eprintln!("{USAGE}");
+        return EXIT_USAGE;
+    };
+
+    let data = match fs::read(file_path) {
+        Ok(d) => d,
+        Err(e) => {
+            eprintln!("오류: 파일을 읽을 수 없습니다 - {}: {}", file_path, e);
+            return EXIT_RUNTIME;
+        }
+    };
+    let doc = match load_document(&data) {
+        Ok(d) => d,
+        Err(e) => return e.report(),
+    };
+
+    let result = doc.template_entity(code, package);
+
+    if json_mode {
+        println!("{}", doc.template_entity_json(code, package));
+        return EXIT_OK;
+    }
+
+    if !result.errors.is_empty() {
+        println!("표 역할 마커 검증 실패 — 소스를 생성하지 않았습니다:");
+        for e in &result.errors {
+            println!("  - {e}");
+        }
+        return EXIT_OK;
+    }
+
+    if let Some(out_dir) = out_dir {
+        if let Err(e) = fs::create_dir_all(out_dir) {
+            eprintln!(
+                "오류: 출력 디렉터리를 만들 수 없습니다 - {}: {}",
+                out_dir, e
+            );
+            return EXIT_RUNTIME;
+        }
+        let data_path = Path::new(out_dir).join(format!("{}.java", result.data_class_name));
+        let module_path = Path::new(out_dir).join(format!("{}.java", result.module_class_name));
+        if let Err(e) = fs::write(&data_path, &result.data_class_source) {
+            eprintln!(
+                "오류: 파일을 쓸 수 없습니다 - {}: {}",
+                data_path.display(),
+                e
+            );
+            return EXIT_RUNTIME;
+        }
+        if let Err(e) = fs::write(&module_path, &result.module_class_source) {
+            eprintln!(
+                "오류: 파일을 쓸 수 없습니다 - {}: {}",
+                module_path.display(),
+                e
+            );
+            return EXIT_RUNTIME;
+        }
+        println!("{}", data_path.display());
+        println!("{}", module_path.display());
+        return EXIT_OK;
+    }
+
+    println!("{}", result.data_class_source);
+    println!("{}", result.module_class_source);
     EXIT_OK
 }
 

@@ -2,7 +2,7 @@
 kind: canonical
 status: active
 canonical: mydocs/manual/cli_commands.md
-last_verified: 2026-08-09
+last_verified: 2026-08-23
 ---
 
 # rhwp CLI 명령어 매뉴얼
@@ -722,6 +722,37 @@ rhwp 는 이미 필드에 값을 쓸 수 있지만(`set_field_value_by_name`) �
 ```bash
 # 서식이 요구하는 항목과 지시문 확인
 rhwp fields 신청서.hwp --json | jq -r '.fields[] | "\(.name): \(.memo // .guide)"'
+```
+
+### `template-entity <파일.hwpx> --code <코드> [--package <패키지>] [--out-dir <디렉터리>] [--json]` (연구 스파이크)
+hwpx-template-engine(자매 저장소)의 `TemplateEntityGenerator` 를 **서버 없이** 클라이언트에서
+재현한다 — 표 역할 마커(`#REPEAT-TITLE:`/`-HEADER:`/`-BODY:`/`-FOOTER:` + `-NESTED:` 계열,
+`#PAGENO`)와 누름틀 이름만으로 Java record 데이터 클래스 + 모듈 클래스 초안(`XxxData.java`,
+`XxxTemplateModule.java`)을 만든다. 구현은
+[`document_core::queries::template_entity`](../../src/document_core/queries/template_entity.rs) —
+Java 원본과 바이트 단위로 같은 출력을 내도록 `tests/template_entity_contract.rs` 가
+`tests/fixtures/template-entity/golden/` 를 대조해 고정한다.
+- `--package` 기본값은 `com.example.hwpx.templates` — 실제 조직 패키지를 하드코딩하면
+  다른 조직에서도 그대로 컴파일되는 것처럼 보이는 깨지기 쉬운 기본값이 되므로, 관례적인
+  `com.example` 로 시작해 사용자가 항상 자기 패키지로 바꿔 써야 함을 드러낸다
+- 표 역할 마커 검증 실패(예: BODY 마커 2개)는 크래시가 아니라 **데이터**다 —
+  `--json` 봉투의 `errors[]` 에 Java 원본과 같은 한국어 메시지가 실리고, 사람용 출력에서도
+  같은 메시지를 나열한다. 두 경우 모두 종료 코드는 0(문서를 정상적으로 읽었고 결과가
+  "생성 불가"일 뿐이므로 — §종료 코드 계약)
+- `--out-dir` 없이 실행하면 두 소스를 표준출력에 순서대로 찍는다. `--out-dir` 를 주면
+  `<out-dir>/<dataClassName>.java`, `<out-dir>/<moduleClassName>.java` 두 파일을 쓰고 경로를
+  출력한다
+- `--json` 봉투: `{"code","packageName","dataClassName","moduleClassName","dataClassSource","moduleClassSource","errors":[…]}`
+- rhwp-studio 쪽 진입점은 템플릿 패널의 "Java 엔티티 생성" fieldset — 같은 질의를
+  `wasm_api::generate_template_entity`(WASM export) 로 호출해 `template-entity-window.ts`
+  오버레이 창에 보여준다(§rhwp-studio UI 명칭과 CSS 접두어 규칙)
+
+```bash
+# 표준출력에 두 소스 찍기
+rhwp template-entity 신청서.hwpx --code shincheong
+
+# 파일로 저장, Java Gradle 태스크 산출물과 diff 로 패리티 확인
+rhwp template-entity 신청서.hwpx --code shincheong --out-dir /tmp/entity-out
 ```
 
 ### `export-provenance-map [--json]`

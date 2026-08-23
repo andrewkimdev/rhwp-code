@@ -1,0 +1,151 @@
+/* ================================================================
+   Java 엔티티 초안 창 — template-entity-window.ts
+   compare-inspector-window(compare-dialog.css)와 같은 인앱 오버레이 패턴,
+   entity- 접두어(mydocs/manual/rhwp_studio_ui_conventions.md).
+   ================================================================ */
+.entity-window {
+  position: fixed;
+  left: 50%;
+  top: 28px;
+  transform: translateX(-50%);
+  width: min(900px, 96vw);
+  height: min(80vh, 760px);
+  max-height: 80vh;
+  background: var(--color-surface);
+  border: 1px solid var(--ui-border-light);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-dialog);
+  z-index: 1300;
+  display: flex;
+  flex-direction: column;
+  /* entity-tok-* 팔레트 — 기존 --ui-* 토큰으로 못 채우는 두 색(문자열/타입)만 지역 정의한다. */
+  --entity-tok-string: #1a7f37;
+  --entity-tok-type: #8250df;
+}
+
+:root[data-theme-effective="dark"] .entity-window {
+  --entity-tok-string: #7ee787;
+  --entity-tok-type: #d2a8ff;
+}
+
+.entity-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  border-bottom: 1px solid var(--ui-border-subtle);
+  padding: 10px 12px;
+  font-weight: 600;
+}
+
+.entity-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  overflow: hidden;
+  min-height: 0;
+}
+
+.entity-config-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.entity-code-input {
+  width: 160px;
+}
+
+.entity-package-input {
+  width: 260px;
+}
+
+.entity-errors {
+  overflow-y: auto;
+}
+
+.entity-errors-title {
+  color: var(--ui-danger);
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+
+.entity-errors-list {
+  margin: 0;
+  padding-left: 18px;
+  font-size: var(--font-size-sm);
+  line-height: 1.6;
+  color: var(--ui-danger);
+}
+
+.entity-tabs-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.entity-tabs {
+  display: flex;
+  gap: 4px;
+}
+
+.entity-tab {
+  padding: 4px 10px;
+  border: 1px solid var(--ui-border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-raised);
+  color: var(--ui-text-secondary);
+  font-family: monospace;
+  font-size: var(--font-size-sm);
+  cursor: pointer;
+}
+
+.entity-tab--active {
+  background: var(--color-accent-bg);
+  color: var(--color-text);
+  border-color: var(--ui-border-strong);
+  font-weight: 600;
+}
+
+.entity-tab-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.entity-code {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  background: var(--color-surface-raised);
+  border: 1px solid var(--color-border-lighter);
+  border-radius: var(--radius-sm);
+  padding: 10px 12px;
+  font-family: monospace;
+  font-size: var(--font-size-sm);
+  white-space: pre;
+  color: var(--color-text);
+  margin: 0;
+}
+
+.entity-tok-comment {
+  color: var(--ui-text-secondary);
+}
+
+.entity-tok-string {
+  color: var(--entity-tok-string);
+}
+
+.entity-tok-annotation {
+  color: var(--ui-warning-text);
+}
+
+.entity-tok-keyword {
+  color: var(--ui-link);
+}
+
+.entity-tok-type {
+  color: var(--entity-tok-type);
+}

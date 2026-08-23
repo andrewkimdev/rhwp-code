@@ -33,3 +33,5 @@ pub mod chart_csv;
 pub mod chart_extract;
 pub mod table_csv;
 pub mod table_extract;
+/// hwpx-template-engine `TemplateEntityGenerator` 포트 — 누름틀 스키마 → Java record 초안.
+pub mod template_entity;

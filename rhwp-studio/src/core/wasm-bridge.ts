@@ -2918,6 +2918,24 @@ export class WasmBridge {
     return JSON.parse((this.doc as any).getFieldList());
   }
 
+  /**
+   * 문서 누름틀 스키마에서 hwpx-template-engine `TemplateEntityGenerator`와 같은 Java
+   * record 데이터 클래스 + 모듈 클래스 초안을 만든다(서버 왕복 없이 클라이언트에서 생성).
+   * `errors`가 비어있지 않으면 두 소스는 빈 문자열이다. 읽기 전용 — 문서를 바꾸지 않는다.
+   */
+  generateTemplateEntity(code: string, packageName: string): {
+    code: string;
+    packageName: string;
+    dataClassName: string;
+    moduleClassName: string;
+    dataClassSource: string;
+    moduleClassSource: string;
+    errors: string[];
+  } {
+    if (!this.doc) throw new Error('문서가 로드되지 않았습니다');
+    return JSON.parse((this.doc as any).generateTemplateEntity(code, packageName));
+  }
+
   /** field_id로 필드 값을 조회한다. */
   getFieldValue(fieldId: number): { ok: boolean; value: string } {
     if (!this.doc) throw new Error('문서가 로드되지 않았습니다');

@@ -4699,6 +4699,17 @@ impl HwpDocument {
         self.get_field_list_json()
     }
 
+    /// 문서 누름틀 스키마에서 hwpx-template-engine `TemplateEntityGenerator`와 같은
+    /// Java record 데이터 클래스 + 모듈 클래스 초안을 만든다(서버 왕복 없이 클라이언트에서).
+    ///
+    /// 반환: `{code, packageName, dataClassName, moduleClassName, dataClassSource,
+    /// moduleClassSource, errors}` — `errors`가 비어있지 않으면 두 소스는 빈 문자열이다.
+    /// 읽기 전용 질의라 문서를 바꾸지 않는다.
+    #[wasm_bindgen(js_name = generateTemplateEntity)]
+    pub fn generate_template_entity(&self, code: &str, package: &str) -> String {
+        self.template_entity_json(code, package)
+    }
+
     /// field_id로 필드 값을 조회한다.
     ///
     /// 반환: `{ok, value}`

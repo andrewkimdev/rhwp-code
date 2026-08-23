@@ -45,6 +45,7 @@ import { suggestFieldNames, isTemplateTableMarkerText, type FieldNameSuggestion 
 import { extractSelectedLabel } from '@/core/selection-text';
 import { resolveUniqueName } from '@/core/field-name-dedup';
 import { MAX_FIELD_NAME_LEN } from '@/ui/field-edit-dialog';
+import { TemplateEntityWindow } from '@/ui/template-entity-window';
 
 interface GeneralRoleOption {
   value: 'HEADER' | 'FOOTER' | 'PAGENO';
@@ -81,6 +82,24 @@ const NESTED_TOGGLE_DESCRIPTION =
   '이미 있는 #REPEAT-BODY:<부모블록> 표 바로 뒤에, 그 항목마다 자기만의 하위 반복 목록을 붙입니다(최대 1단계 중첩).';
 
 const DEFAULT_ROLE: TemplateTableRole = GENERAL_ROLES[0].value;
+
+/**
+ * 미리 채워두는 패키지명 — 실제 조직 패키지(`com.ktnet.aspline...`)를 하드코딩하면 다른
+ * 조직에서 그대로 컴파일되는 것처럼 보이는 깨지기 쉬운(brittle) 기본값이 되므로, 관례적인
+ * `com.example` 로 시작해 사용자가 항상 자기 패키지로 바꿔 써야 함을 드러낸다.
+ */
+const DEFAULT_ENTITY_PACKAGE = 'com.example.hwpx.templates';
+
+/**
+ * 파일명에서 hwpx-template-engine의 code 제약([a-z0-9_-]+)을 만족하는 값을 만든다.
+ * `template-validator.ts`의 `codeFromFileName`과 같은 정규화 규칙이지만, 서버에 코드를
+ * 예약하는 게 아니라 클라이언트 전용 생성이라 "_preview" 접미사는 붙이지 않는다.
+ */
+function defaultEntityCodeFromFileName(fileName: string): string {
+  const base = fileName.replace(/\.(hwpx?|hml)$/i, '');
+  const sanitized = base.toLowerCase().replace(/[^a-z0-9_-]+/g, '_').replace(/^_+|_+$/g, '');
+  return sanitized || 'template';
+}
 
 interface FieldSuggestRow {
   suggestion: FieldNameSuggestion;
@@ -119,6 +138,14 @@ export class TemplatePanel {
    * 표에 배치가 적용되는 것을 막는다(blockNameManuallyEdited 리셋과 같은 취지). */
   private fieldSuggestTable: { sec: number; ppi: number; ci: number } | null = null;
 
+  // Java 엔티티 생성 그룹 — TemplateEntityGenerator 클라이언트 포트(template_entity.rs)
+  private entityCodeInput!: HTMLInputElement;
+  private entityPackageInput!: HTMLInputElement;
+  private entityGenerateBtn!: HTMLButtonElement;
+  private entityWindow!: TemplateEntityWindow;
+  /** 사용자가 코드 입력란을 직접 고쳤는지 — 파일명 기본값으로 덮어쓰지 않게 막는다. */
+  private entityCodeManuallyEdited = false;
+
   constructor(
     private container: HTMLElement,
     private wasm: WasmBridge,
@@ -126,6 +153,7 @@ export class TemplatePanel {
     private dispatcher: CommandDispatcher,
     private getInputHandler: () => InputHandler | null,
   ) {
+    this.entityWindow = new TemplateEntityWindow(this.wasm);
     this.build();
     this.eventBus.on('table-object-selection-changed', () => this.refresh());
     this.eventBus.on('command-state-changed', () => this.refresh());
@@ -146,6 +174,15 @@ export class TemplatePanel {
     }
     this.emptyEl.style.display = 'none';
     this.contentEl.style.display = '';
+
+    const isHwpx = this.wasm.getSourceFormat() === 'hwpx';
+    this.entityGenerateBtn.disabled = !isHwpx;
+    this.entityGenerateBtn.title = isHwpx
+      ? ''
+      : 'hwpx 문서에서만 사용할 수 있습니다(누름틀 스키마는 hwpx 마커를 기준으로 합니다).';
+    if (!this.entityCodeManuallyEdited) {
+      this.entityCodeInput.value = defaultEntityCodeFromFileName(this.wasm.fileName);
+    }
 
     const ih = this.getInputHandler();
     const pos = ih?.getCursorPosition();
@@ -831,6 +868,57 @@ export class TemplatePanel {
     this.fieldSuggestApplyBtn.addEventListener('click', () => this.applyFieldSuggestions());
     fieldSuggestSection.appendChild(this.fieldSuggestApplyBtn);
 
+    // Java 엔티티 생성 — 서버 왕복 없이 template_entity.rs(TemplateEntityGenerator 포트)로
+    // record 데이터 클래스 + 모듈 클래스 초안을 만든다. 결과는 별도 오버레이 창(entity-window)에.
+    const entitySection = document.createElement('fieldset');
+    entitySection.className = 'tp-role-group';
+    const entityLegend = document.createElement('legend');
+    entityLegend.className = 'tp-role-group-legend';
+    entityLegend.textContent = 'Java 엔티티 생성';
+    entitySection.appendChild(entityLegend);
+
+    const entityCodeField = document.createElement('div');
+    entityCodeField.className = 'tp-field';
+    const entityCodeLabel = document.createElement('label');
+    entityCodeLabel.className = 'tp-label';
+    entityCodeLabel.textContent = '코드';
+    this.entityCodeInput = document.createElement('input');
+    this.entityCodeInput.type = 'text';
+    this.entityCodeInput.className = 'tp-input';
+    this.entityCodeInput.addEventListener('input', () => {
+      this.entityCodeManuallyEdited = true;
+    });
+    entityCodeField.appendChild(entityCodeLabel);
+    entityCodeField.appendChild(this.entityCodeInput);
+    entitySection.appendChild(entityCodeField);
+
+    const entityPackageField = document.createElement('div');
+    entityPackageField.className = 'tp-field';
+    const entityPackageLabel = document.createElement('label');
+    entityPackageLabel.className = 'tp-label';
+    entityPackageLabel.textContent = '패키지';
+    this.entityPackageInput = document.createElement('input');
+    this.entityPackageInput.type = 'text';
+    this.entityPackageInput.className = 'tp-input';
+    this.entityPackageInput.value = DEFAULT_ENTITY_PACKAGE;
+    entityPackageField.appendChild(entityPackageLabel);
+    entityPackageField.appendChild(this.entityPackageInput);
+    entitySection.appendChild(entityPackageField);
+
+    this.entityGenerateBtn = document.createElement('button');
+    this.entityGenerateBtn.type = 'button';
+    this.entityGenerateBtn.className = 'tp-btn tp-btn--primary';
+    this.entityGenerateBtn.textContent = 'Java 엔티티 생성';
+    this.entityGenerateBtn.title =
+      '표 역할 마커(#REPEAT-*, #PAGENO)와 누름틀 이름에서 hwpx-template-engine의 '
+      + 'TemplateEntityGenerator와 같은 record 데이터 클래스 + 모듈 클래스 초안을 만듭니다.';
+    this.entityGenerateBtn.addEventListener('click', () => {
+      const code = this.entityCodeInput.value.trim() || defaultEntityCodeFromFileName(this.wasm.fileName);
+      const packageName = this.entityPackageInput.value.trim() || DEFAULT_ENTITY_PACKAGE;
+      this.entityWindow.show(code, packageName);
+    });
+    entitySection.appendChild(this.entityGenerateBtn);
+
     this.contentEl.appendChild(outlineSection);
     this.contentEl.appendChild(this.hintEl);
     this.contentEl.appendChild(roleField);
@@ -840,6 +928,7 @@ export class TemplatePanel {
     this.contentEl.appendChild(this.previewEl);
     this.contentEl.appendChild(actions);
     this.contentEl.appendChild(fieldSuggestSection);
+    this.contentEl.appendChild(entitySection);
 
     body.appendChild(this.emptyEl);
     body.appendChild(this.contentEl);
