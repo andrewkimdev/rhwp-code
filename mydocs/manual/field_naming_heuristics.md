@@ -7,7 +7,7 @@ last_verified: 2026-08-23
 
 # 누름틀 이름 자동 제안 — 감지 규칙
 
-rhwp-studio `#template-panel`의 "누름틀 이름 제안" 그룹(`src/core/field-name-suggest.ts`)이
+rhwp-studio `#template-panel`의 "누름틀 만들기" 그룹(`src/core/field-name-suggest.ts`)이
 표의 라벨/빈 칸 모양에서 self-describing한 누름틀 이름을 어떻게 뽑아내는지 정리한다. 이 규칙
 자체가 확장 대상이므로(새 서식에서 다른 레이아웃이 관찰될 때마다), 이름 하드코딩이 아니라
 "어떤 모양을 어떻게 이름으로 바꾸는가"를 순서 있는 규칙 목록으로 유지한다.
@@ -51,7 +51,7 @@ col/colSpan**을 가진 `rowSpan === 1` 빈 셀이 있으면, 그 빈 셀을 후
 
 `suggestedName`은 규칙 2와 같은 공식(`sectionPrefix ? prefix_leafText : leafText`)이고,
 채우는 대상도 똑같이 "빈 셀"이므로(`RowPatternCandidate.insertAt` 없음)
-`applyFieldSuggestions`/`field-suggest:apply`에서 규칙 2의 후보와 구분 없이 처리된다.
+`createFieldsFromRows`/`field-suggest:apply`에서 규칙 2의 후보와 구분 없이 처리된다.
 
 **colSpan이 정확히 같아야** 한다는 조건은 의도적으로 엄격하다 — col만 같고 colSpan이
 다르면(예: 라벨은 전체 폭인데 아래는 반으로 쪼개진 두 칸) 그 아래 칸이 정말 이
@@ -73,7 +73,7 @@ col/colSpan**을 가진 `rowSpan === 1` 빈 셀이 있으면, 그 빈 셀을 후
 
 규칙 1/2/3과 달리 대상 셀(`cellIdx`)이 **빈 셀이 아니라 라벨 셀 자신**이다 —
 `RowPatternCandidate`/`FieldNameSuggestion`에 `insertAt: { cellParaIndex, charOffset }`
-(그 셀의 마지막 문단 끝)가 실리고, `applyFieldSuggestions`(`template-panel.ts`)는
+(그 셀의 마지막 문단 끝)가 실리고, `createFieldsFromRows`(`template-panel.ts`)는
 `insertAt`이 있으면 `field-suggest:apply`에 `{kind:'cell', cellIdx}` 대신
 `{kind:'selection', insertPos}`를 넘긴다 — `selection-text.ts`의 수동 경로가 이미
 쓰는 것과 같은 삽입 방식(선택 영역 끝에 삽입)을 재사용하는 것이다. `field-suggest.ts`의
@@ -115,25 +115,30 @@ col/colSpan**을 가진 `rowSpan === 1` 빈 셀이 있으면, 그 빈 셀을 후
 
 후보 이름은 ① 문서에 이미 존재하는 필드명(`wasm.getFieldList()`), ② 같은 배치(batch) 안에서
 먼저 배정된 이름과 비교해, 충돌하면 `_2`, `_3`, ... 접미어를 붙인다(출력 파일명 충돌 시 쓰는
-`_2` 관행과 동일 — [`cli_commands.md`](cli_commands.md)). 후보가 결코 버려지지 않는다 —
-review list는 항상 편집 가능하므로 접미어가 마음에 안 들면 사용자가 직접 고친다.
+`_2` 관행과 동일 — [`cli_commands.md`](cli_commands.md)). 조정된 최종 이름은 삽입 직후
+결과 메시지로 보여준다 — review list 없이 클릭 1회로 즉시 생성되므로, 접미어가 마음에
+안 들면 만들어진 필드를 다시 열어 이름을 고쳐야 한다(생성 전에 미리 편집하는 단계는 없다).
 
 ## 이미 필드가 있는 셀
 
-후보 빈 셀에 이미 누름틀/셀 필드가 있으면(`getCellProperties(...).fieldName`) 그 후보는
-`alreadyHasField: true`로 표시되고 "삽입" 대상에서 제외된다(review list에는 플래그로만
-남는다) — v1은 기존 필드를 이름 변경(rename)하지 않는다, 오직 진짜 빈 칸에만 삽입한다.
+후보 하나마다 실제 삽입 지점(빈 셀 채우기는 그 셀의 첫 문단 charOffset 0, 규칙 4(label-
+inline-room)처럼 `insertAt`이 있는 인라인 삽입은 그 지점)에 이미 `insertClickHereField`로
+넣은 누름틀이 있는지를 `wasm.getFieldInfoAt(...)`으로 직접 물어본다 — apply가 실제로 쓰는
+지점과 같은 지점이므로, 이미 채워진 후보를 다시 스캔해도 정확히 감지된다. 여기에 더해
+셀 자체가 "셀 필드"로 지정돼 있으면(`getCellProperties(...).fieldName` — 표 셀 속성
+대화상자의 별개 기능, `insertClickHereField`와는 무관) 그것도 같은 신호로 취급한다. 둘
+중 하나라도 참이면 `alreadyHasField: true`로 표시되고 "생성" 대상에서 제외된다 — v1은
+기존 필드를 이름 변경(rename)하지 않는다, 오직 진짜 빈 칸/삽입 지점에만 만든다. 몇 개가
+건너뛰어졌는지는 클릭 후 결과 메시지로 보고된다("N개는 건너뛰었습니다").
 
-규칙 4(label-inline-room)처럼 `insertAt`이 있는 후보는 빈 셀을 채우는 게 아니라 라벨
-셀 자신에 인라인 삽입하므로, 셀 필드 API로는 재스캔 시 중복 제안을 막을 수 없다(그
-셀은 삽입 후에도 여전히 텍스트가 있고, 규칙 4의 가드도 다시 통과한다) — 대신
-`wasm.getFieldInfoAt(...)`을 삽입 지점(`insertAt`)에 직접 호출해 이미 필드 안인지
-확인한다(`selection-text.ts`의 수동 경로가 이미 쓰는 것과 같은 API).
+(과거에는 빈 셀 채우기 후보를 `getCellProperties(...).fieldName`만으로 판정했다 — 그런데
+`insertClickHereField`는 이 셀 속성을 전혀 건드리지 않으므로, 같은 행에 두 번째로 만들기를
+누르면 이미 채워진 후보를 놓치고 셀 하나에 필드를 중복 삽입했다. `getFieldInfoAt`을 항상
+함께 확인하도록 고쳐 이 문제를 해소했다.)
 
 ## 마커 게이트와 검색 범위
 
-호출부(`template-panel.ts`의 `generateFieldSuggestions`)는 두 조건으로 제안 생성을
-게이트한다:
+호출부(`template-panel.ts`의 `createFieldsFromRows`)는 두 조건으로 생성을 게이트한다:
 
 1. **마커 게이트** — 현재 표의 첫 셀 텍스트(`readTableMarkerText`)가 역할 마커
    어휘(`#HEADER`/`#FOOTER`/`#PAGENO`/`#REPEAT-*:`, `isTemplateTableMarkerText`) 안에
@@ -142,10 +147,10 @@ review list는 항상 편집 가능하므로 접미어가 마음에 안 들면 �
    않는다. 마커가 없으면 "위 '태그 지정'으로 먼저 역할을 지정하세요" 안내만 나온다.
 2. **행 범위** — 검색 범위는 선택된 행(셀 선택 모드 범위, 없으면 커서가 있는 행,
    `getSelectedRowRange`)이다. 힌트 영역("선택된 행: N~M")과 같은 정의를 공유하므로
-   "힌트에 보이는 행 = 제안이 검색하는 행"이 항상 성립한다. 후보의 **대상 셀**(빈 칸
-   또는 인라인 삽입의 라벨 셀, review list의 R 표시 행)이 범위 밖이면 그 후보는
-   제외된다 — 규칙 3처럼 라벨 행과 빈 칸 행이 다른 행에 걸쳐 있을 때는 "채워질
-   대상"이 있는 행을 기준으로 판정한다.
+   "힌트에 보이는 행 = 실제로 생성되는 행"이 항상 성립한다. 후보의 **대상 셀**(빈 칸
+   또는 인라인 삽입의 라벨 셀)이 범위 밖이면 그 후보는 제외된다 — 규칙 3처럼 라벨
+   행과 빈 칸 행이 다른 행에 걸쳐 있을 때는 "채워질 대상"이 있는 행을 기준으로
+   판정한다.
 
 태깅은 마커 행(전체 폭 병합 셀)을 row 0에 삽입하므로(`setTableRoleMarker`,
 `command/commands/template.ts`), 태깅된 표의 마커 셀 텍스트는 규칙 2/3/4의 라벨 후보에서
@@ -163,17 +168,16 @@ review list는 항상 편집 가능하므로 접미어가 마음에 안 들면 �
 이 모호성이 발생하지 않는다 — 어느 행의 후보를 뽑을지 사용자가 행 선택으로 직접
 정하므로, 반복 표도 게이트가 허용하는 표 중 하나로 남는다.
 
-## 규칙과 무관한 별도 소스 — 선택 텍스트 기반 제안
+## 규칙과 무관한 별도 소스 — 선택 텍스트 기반 생성
 
-위 규칙 1/2와 `ROW_PATTERN_RULES`는 모두 표 그리드를 스캔해 **여러** 후보를 한 번에 만들고
-review list로 검토·적용하는 **자동** 소스다. 이와 별개로, `src/core/selection-text.ts` +
-`src/core/field-name-dedup.ts`가 제공하는 **수동** 소스가 있다 — 사용자가 문서에서
-텍스트("신청인")를 직접 드래그 선택하고 `#template-panel`의 "선택한 텍스트로 누름틀 만들기"
-버튼을 누르면, 그 선택 텍스트를 그대로 이름/안내문으로 갖는 누름틀이 **review list를 거치지
-않고 그 자리에서 즉시** 삽입된다. 후보가 항상 하나뿐이라 배치 검토가 필요 없기 때문이다 —
-자동 스캔은 표 하나에서 여러 빈 칸을 한 번에 찾아내므로 review list(체크/이름 편집/일괄
-적용)가 그대로 필요하지만, 선택 텍스트 경로는 사용자가 이미 정확히 어느 텍스트를 어떤
-이름으로 쓸지 직접 골랐으므로 한 번 더 확인받을 이유가 없다.
+위 규칙 1/2와 `ROW_PATTERN_RULES`는 모두 표 그리드를 스캔해 **여러** 후보를 한 번에 찾는
+**자동** 소스다. 이와 별개로, `src/core/selection-text.ts` + `src/core/field-name-dedup.ts`가
+제공하는 **수동** 소스가 있다 — 사용자가 문서에서 텍스트("신청인")를 직접 드래그 선택하고
+`#template-panel`의 "누름틀 만들기" 버튼을 누르면, 그 선택 텍스트를 그대로 이름/안내문으로
+갖는 누름틀이 삽입된다. 두 소스 모두 review list 없이 클릭 1회로 즉시 생성한다(버튼은
+하나뿐이고, 셀 선택 모드/텍스트 선택 여부로 어느 소스를 쓸지 자동 판단한다 —
+`template-panel.ts`의 `createFields`) — 남은 차이는 오직 "행 스캔은 한 번에 여러 필드를
+만들 수 있고, 선택 텍스트는 항상 정확히 하나만 만든다"는 것뿐이다.
 
 이 소스가 필요한 이유: "신청인" 텍스트 뒤에 긴 공백, 그 뒤에 "(인)"이 오는 서명란 패턴은
 표의 두 셀로 나뉘어 있지 않고 본문 문단 또는 표 셀 하나 안에 통짜 텍스트로 들어있는 경우가
@@ -191,7 +195,7 @@ review list로 검토·적용하는 **자동** 소스다. 이와 별개로, `src
 
 **알려진 비대칭**: 위 규칙 1~4는 모두 섹션 접두어(`buildSectionPrefixMap`)를 적용하지만,
 이 수동 선택 텍스트 경로는 여전히 적용하지 않는다 — `extracted.text`를 그대로
-`resolveUniqueName`에 넘긴다(`insertFieldFromSelection`, `template-panel.ts`). 사용자가
+`resolveUniqueName`에 넘긴다(`createFieldFromSelectionText`, `template-panel.ts`). 사용자가
 "인적사항" 섹션 안에서 "성명"을 드래그 선택해 삽입해도 이름은 `인적사항_성명`이 아니라
 그냥 `성명`이 된다. 이번 규칙 3/4 작업 범위 밖으로 남겨둔 후속 과제다.
 
@@ -221,7 +225,7 @@ review list로 검토·적용하는 **자동** 소스다. 이와 별개로, `src
 cellParaIndex, charOffset }`가 있다 — 규칙 1~3처럼 "빈 셀을 채우는" 후보는 이 필드를
 비워 두고(`cellIdx`가 그 빈 셀), 규칙 4처럼 "이미 텍스트가 있는 셀 자신에 인라인
 삽입하는" 후보는 이 필드에 삽입 지점을 채운다(`cellIdx`가 그 텍스트 셀 자신). UI
-(`applyFieldSuggestions`, `template-panel.ts`)는 `insertAt` 유무로 `field-suggest:apply`에
+(`createFieldsFromRows`, `template-panel.ts`)는 `insertAt` 유무로 `field-suggest:apply`에
 `{kind:'cell', cellIdx}`와 `{kind:'selection', insertPos}` 중 무엇을 넘길지 정한다 —
 새 규칙이 "빈 셀 채우기"가 아니라 "기존 텍스트 뒤 인라인 삽입" 모양이면 `insertAt`을
 채우면 된다.
@@ -231,17 +235,16 @@ cellParaIndex, charOffset }`가 있다 — 규칙 1~3처럼 "빈 셀을 채우�
 - 분석 범위는 커서가 있는 "현재 표"뿐이다 — 문서 전체 다중 표 스캔은 하지 않는다
   (`#template-panel`의 기존 UX와 동일 전제). 그리고 그 표 안에서도 **마커 게이트를
   통과한 표의 선택된 행**만 검색한다("마커 게이트와 검색 범위" 참고).
-- 자동 스캔(표 인접 셀)은 실제 삽입 전에는 아무것도 쓰지 않는다 — review list에서
-  체크/이름 편집을 마친 뒤 "적용"을 눌러야 `field-suggest:apply` 커맨드가 한 번의 undo
-  단위로 실행된다. 선택 텍스트 경로는 후보가 항상 하나뿐이므로 review 단계 없이 버튼
-  클릭 한 번이 곧 `field-suggest:apply` 단일 아이템 호출이다(undo는 여전히 한 단위).
+- 두 소스 모두 review list나 "적용" 단계 없이, 버튼 클릭 한 번이 곧
+  `field-suggest:apply` 호출이다(자동 스캔은 후보 여러 개를 한 아이템 배열로, 선택
+  텍스트는 단일 아이템으로) — undo는 항상 한 단위다.
 
 ## 관련 코드
 
 - 감지(표 인접 셀, 자동): `rhwp-studio/src/core/field-name-suggest.ts`
 - 감지(선택 텍스트, 수동): `rhwp-studio/src/core/selection-text.ts`
 - 이름 유일성 공유 로직: `rhwp-studio/src/core/field-name-dedup.ts`
-- UI: `rhwp-studio/src/ui/template-panel.ts` ("누름틀 이름 제안" 그룹)
+- UI: `rhwp-studio/src/ui/template-panel.ts` ("누름틀 만들기" 그룹)
 - 적용 커맨드: `rhwp-studio/src/command/commands/field-suggest.ts`
 - 단위 테스트: `rhwp-studio/tests/field-name-suggest.test.ts`(규칙 1~4 및 각 가드의
   positive/negative 케이스, 17856415.hwp 표 전체를 옮긴 회귀 테스트, 마커 게이트

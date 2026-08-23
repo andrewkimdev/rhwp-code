@@ -16,7 +16,7 @@ last_verified: 2026-08-23
 | 서식 도구 모음 | `#style-bar` | 스타일·글꼴·크기·정렬 등 서식 제어 |
 | 편집 영역 | `#scroll-container` | 문서 페이지 렌더링과 스크롤 영역 |
 | 상태 표시줄 | `#status-bar` | 쪽·구역·편집 모드·확대 배율 표시 |
-| 템플릿 패널 | `#template-panel` | hwpx-template-engine 마커 authoring 도킹 패널 (표 개요·역할 지정) + 누름틀 이름 제안 — 표 인접 셀 자동 스캔(`field-name-suggest.ts`, 여러 후보를 review list로 검토 후 일괄 적용) + 선택 텍스트 기반 즉시 삽입(`selection-text.ts`, review list 없이 버튼 1클릭으로 바로 삽입) + Java 엔티티 생성(`template-entity-window.ts` 오버레이 창을 여는 코드/패키지 입력 + 버튼, `template_entity.rs`의 `TemplateEntityGenerator` 클라이언트 포트를 서버 왕복 없이 호출) 세 소스가 별도 fieldset으로 공존 |
+| 템플릿 패널 | `#template-panel` | hwpx-template-engine 마커 authoring 도킹 패널 (표 개요·역할 지정) + 누름틀 만들기 — 버튼 하나(`tp-fieldsuggest-btn`)가 표 인접 셀 자동 스캔(`field-name-suggest.ts`)과 선택 텍스트 기반 삽입(`selection-text.ts`) 두 소스를 모두 review list 없이 클릭 1회로 즉시 생성한다(셀 선택 모드 → 행 스캔, 텍스트 선택 → 그 텍스트로 단건 생성, 둘 다 없으면 커서 행 스캔) + Java 엔티티 생성(`template-entity-window.ts` 오버레이 창을 여는 코드/패키지 입력 + 버튼, `template_entity.rs`의 `TemplateEntityGenerator` 클라이언트 포트를 서버 왕복 없이 호출) 두 소스가 별도 fieldset으로 공존 |
 
 ## CSS 접두어
 

@@ -181,6 +181,25 @@ test('suggestFieldNames: 이미 필드가 있는 셀은 삽입 대상에서 빠�
   assert.equal(suggestions[0].existingFieldName, '전화번호_기존');
 });
 
+test('suggestFieldNames: 빈 셀 채우기 후보도 실제 삽입 지점에 이미 필드가 있으면(getFieldInfoAt) 감지한다', () => {
+  // insertClickHereField로 실제 생성되는 누름틀은 셀의 `fieldName` 속성(표 셀 속성
+  // 대화상자의 별개 기능)이 아니라 그 셀 첫 문단(charOffset 0)에 들어간다 — 같은
+  // 행을 다시 스캔했을 때 getCellProperties().fieldName만 보면 놓치므로, apply가
+  // 실제로 쓰는 지점(cellParaIndex 0, charOffset 0)에 getFieldInfoAt으로 물어본다.
+  const cells: FakeCell[] = [
+    { row: 0, col: 0, rowSpan: 1, colSpan: 1, text: '전화번호' },
+    { row: 0, col: 1, rowSpan: 1, colSpan: 1, text: '' }, // fieldName 속성은 없음
+  ];
+  const wasm = makeFakeTableWasm(cells, [], (pos) =>
+    pos.cellIndex === 1 && pos.charOffset === 0 && pos.cellParaIndex === 0
+      ? { inField: true }
+      : { inField: false },
+  );
+  const suggestions = suggestFieldNames(wasm, 0, 0, 0);
+  assert.equal(suggestions.length, 1);
+  assert.equal(suggestions[0].alreadyHasField, true);
+});
+
 test('suggestFieldNames: 라벨 옆에 빈 칸이 없으면 후보를 만들지 않는다', () => {
   const cells: FakeCell[] = [
     { row: 0, col: 0, rowSpan: 1, colSpan: 1, text: '전화번호' },

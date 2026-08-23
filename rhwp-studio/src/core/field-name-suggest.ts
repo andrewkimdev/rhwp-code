@@ -339,8 +339,8 @@ export interface SuggestFieldNamesOptions {
   /** 후보를 이 행 범위(양 끝 포함, 0-based)로 한정한다 — **후보 대상 셀**(빈 칸
    * 또는 인라인 삽입의 라벨 셀, `FieldNameSuggestion.row`)이 범위 밖이면 제외된다.
    * 규칙 3(label-above-blank)처럼 라벨 행과 대상 빈 칸이 서로 다른 행에 걸쳐 있을
-   * 때는 "채워질 대상"이 있는 행을 기준으로 한다 — review list의 R 표시가 항상
-   * 선택된 행 안에 들어오므로 사용자가 범위를 눈으로 검증할 수 있다. 생략하면
+   * 때는 "채워질 대상"이 있는 행을 기준으로 한다 — hint(`describeSelectedRows`)에
+   * 보이는 행 범위와 항상 일치해야 사용자가 범위를 눈으로 검증할 수 있다. 생략하면
    * 표 전체를 스캔한다(단위 테스트가 쓰는 기본 동작). */
   rowRange?: { startRow: number; endRow: number };
 }
@@ -380,24 +380,26 @@ export function suggestFieldNames(
 
   for (const candidate of candidates) {
     const gridCell = grid.find((c) => c.cellIdx === candidate.cellIdx);
-    // 빈 셀 채우기 후보는 `getCellProperties(...).fieldName`(셀 필드)로 판정한다.
-    // 인라인 삽입 후보(`insertAt` 있음)는 셀 필드를 쓰지 않으므로 — 그 셀은
-    // 재스캔해도 여전히 텍스트가 있고 규칙 자체도 다시 후보를 낼 수 있다 — 삽입
-    // 지점 바로 앞에 이미 누름틀이 있는지를 직접 물어봐야 중복 제안을 막는다.
+    // 두 신호를 함께 본다: ① `getCellProperties(...).fieldName` — 셀 자체가
+    // "셀 필드"로 지정된 경우(표 셀 속성 대화상자의 별개 기능, insertClickHereField와
+    // 무관). ② 실제 삽입 지점(빈 셀 채우기는 그 셀의 첫 문단 charOffset 0, 인라인
+    // 삽입은 `insertAt`이 가리키는 지점)에 이미 `insertClickHereField`로 넣은
+    // 누름틀이 있는지 — apply가 실제로 쓰는 지점과 같은 지점을 물어봐야, 이미
+    // 채워진 후보를 다시 스캔했을 때 중복 삽입 없이 정확히 건너뛴다.
     let alreadyHasField = Boolean(gridCell?.existingFieldName);
-    if (candidate.insertAt) {
+    if (!alreadyHasField) {
       try {
         alreadyHasField = wasm.getFieldInfoAt({
           sectionIndex: sec,
           paragraphIndex: 0,
-          charOffset: candidate.insertAt.charOffset,
+          charOffset: candidate.insertAt?.charOffset ?? 0,
           parentParaIndex: parentPara,
           controlIndex,
           cellIndex: candidate.cellIdx,
-          cellParaIndex: candidate.insertAt.cellParaIndex,
+          cellParaIndex: candidate.insertAt?.cellParaIndex ?? 0,
         }).inField;
       } catch {
-        alreadyHasField = false;
+        // 조회 실패는 무시 — existingFieldName 신호만 남는다.
       }
     }
     const baseName = candidate.sectionPrefix
