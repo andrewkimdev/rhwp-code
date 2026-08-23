@@ -36,6 +36,7 @@ import type { InputHandler } from '@/engine/input-handler';
 import {
   listTopLevelTables,
   availableNestedParentBlockNames,
+  findCellIndexForRowCol,
   type TableOutlineEntry,
 } from '@/core/table-outline';
 import { buildTableRoleMarkerText, type TemplateTableRole } from '@/command/commands/template';
@@ -86,6 +87,8 @@ export class TemplatePanel {
   private nestedRoleAvailable = false;
   private blockNameField!: HTMLElement;
   private blockNameInput!: HTMLInputElement;
+  /** 사용자가 블록명을 직접 입력했는지 — 자동 제안이 이를 덮어쓰지 않게 막는다. */
+  private blockNameManuallyEdited = false;
   private nestedToggleField!: HTMLElement;
   private nestedToggle!: HTMLInputElement;
   private nestedParentField!: HTMLElement;
@@ -183,6 +186,46 @@ export class TemplatePanel {
     return startRow === endRow ? `선택된 행: ${startRow + 1}` : `선택된 행: ${startRow + 1}~${endRow + 1}`;
   }
 
+  /**
+   * REPEAT_TITLE 역할일 때, 현재 셀(셀 선택 모드면 선택 범위 좌상단 셀)의
+   * 텍스트에서 공백을 모두 제거해 블록명 입력란에 제안한다. 사용자가 이미
+   * 손댔거나(blockNameManuallyEdited) 입력란에 값이 있으면 절대 덮어쓰지 않는다.
+   * REPEAT_TITLE에만 한정하는 이유: 이 역할만 "셀 하나의 텍스트 = 블록명"이라는
+   * 전제가 성립한다(HEADER는 여러 라벨 셀, BODY/FOOTER는 반복되는 데이터 행).
+   */
+  private suggestBlockNameFromCurrentCell(
+    ih: InputHandler | null,
+    pos: ReturnType<InputHandler['getCursorPosition']> | undefined,
+  ): void {
+    if (this.selectedRepeatRole()?.value !== 'REPEAT_TITLE') return;
+    if (this.blockNameManuallyEdited) return;
+    if (this.blockNameInput.value.trim() !== '') return;
+    if (!pos || pos.parentParaIndex === undefined || pos.controlIndex === undefined) return;
+    if ((pos.cellPath?.length ?? 0) > 1) return; // 중첩 표는 지원하지 않음
+
+    const sec = pos.sectionIndex;
+    const ppi = pos.parentParaIndex;
+    const ci = pos.controlIndex;
+    try {
+      const range = ih?.isInCellSelectionMode() ? ih.getSelectedCellRange() : null;
+      const cellIdx = range
+        ? findCellIndexForRowCol(this.wasm, sec, ppi, ci, range.startRow, range.startCol)
+        : (pos.cellIndex ?? null);
+      if (cellIdx === null) return;
+
+      const len = this.wasm.getCellParagraphLength(sec, ppi, ci, cellIdx, 0);
+      if (len <= 0) return;
+      const text = this.wasm.getTextInCell(sec, ppi, ci, cellIdx, 0, 0, len);
+      const stripped = text.replace(/\s+/g, ''); // trim보다 강함 — 텍스트 내부 공백까지 전부 제거
+      if (!stripped) return;
+
+      this.blockNameInput.value = stripped;
+      this.updatePreview();
+    } catch {
+      // 조회 실패는 조용히 무시 — 제안은 optional UX이지 필수 경로가 아니다
+    }
+  }
+
   private renderOutline(
     entries: readonly TableOutlineEntry[],
     pos: ReturnType<InputHandler['getCursorPosition']> | undefined,
@@ -258,6 +301,8 @@ export class TemplatePanel {
     this.nestedParentField.style.display = (nestedTogglable && this.nestedToggle.checked) ? '' : 'none';
     const checkedValue = this.roleRadios.find(r => r.checked)?.value;
     this.roleDescEl.textContent = (checkedValue && ROLE_DESCRIPTIONS[checkedValue]) || '';
+    const ih = this.getInputHandler();
+    this.suggestBlockNameFromCurrentCell(ih, ih?.getCursorPosition());
     this.updatePreview();
   }
 
@@ -308,7 +353,10 @@ export class TemplatePanel {
       input.name = 'tp-role';
       input.value = role.value;
       input.checked = role.value === DEFAULT_ROLE;
-      input.addEventListener('change', () => this.onRoleChanged());
+      input.addEventListener('change', () => {
+        this.blockNameManuallyEdited = false;
+        this.onRoleChanged();
+      });
       // 단축키 배지(1~7)는 buildRoleGroup이 두 그룹에 걸쳐 순서대로 불리므로
       // roleRadios.length(=push 전 현재 길이)가 곧 0-based 순번이다 —
       // 실제 키 처리는 이 순번 그대로 this.roleRadios를 인덱싱한다(handleShortcutKey).
@@ -413,7 +461,15 @@ export class TemplatePanel {
     this.blockNameInput.type = 'text';
     this.blockNameInput.className = 'tp-input';
     this.blockNameInput.placeholder = '예: 품목내역';
-    this.blockNameInput.addEventListener('input', () => this.updatePreview());
+    this.blockNameInput.addEventListener('input', () => {
+      this.blockNameManuallyEdited = true;
+      this.updatePreview();
+    });
+    this.blockNameInput.addEventListener('keydown', (e) => {
+      if (e.key !== 'Enter' || e.isComposing) return;
+      e.preventDefault();
+      this.applyTag();
+    });
     this.blockNameField.appendChild(blockNameLabel);
     this.blockNameField.appendChild(this.blockNameInput);
 
