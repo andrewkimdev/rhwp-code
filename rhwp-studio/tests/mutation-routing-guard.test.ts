@@ -192,6 +192,7 @@ const BASELINE: Readonly<Record<string, number>> = {
   'src/command/commands/page.ts': 13,
   'src/command/commands/table.ts': 36, // +1: 블록계산 이관 시 evaluateTableFormula dry-run(write=false, 검증) 추가 / +2: 표 나누기·붙이기(splitTable·mergeTableWithNext) — 둘 다 executeOperation snapshot 으로 라우팅 (undo 기록됨)
   'src/command/commands/template.ts': 12, // hwpx-template-engine 마커 authoring: template:tag-selection(splitTable×2 + insertTableRow + mergeTableCells + deleteTextInCell + insertTextInCell) / template:clear-marker(deleteTableRow) — 전부 executeOperation snapshot 안에서 호출 (undo 기록됨) / +3: 마커 행 시각 스타일 강제(applyCharFormatInCell·applyParaFormatInCell·setCellProperties, applyMarkerRowStyle) / +1: 마커 행 높이 22px 고정(resizeTableCells, 세로 가운데 정렬은 같은 setCellProperties 호출에 얹음) / +1: 마커 행 글꼴을 이름이 아니라 fontId 로만 적용할 수 있어 findOrCreateFontId 로 등록·조회(#HEADER/#REPEAT-TITLE 등 마커 행 서체 강제 일관화)
+  'src/command/commands/field-suggest.ts': 1, // 누름틀 이름 자동 제안 review list 적용: field-suggest:apply 가 N개 항목에 대해 insertClickHereField 를 반복 호출하는 호출부 1곳 — executeOperation snapshot 안에서 호출(undo 기록됨)
   'src/ui/bookmark-dialog.ts': 3,
   'src/ui/cell-border-bg-dialog.ts': 5,
   'src/ui/column-settings-dialog.ts': 1,

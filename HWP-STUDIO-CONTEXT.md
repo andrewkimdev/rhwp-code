@@ -273,3 +273,147 @@ the apply button specifically, but may still apply to the outline (표 개요)
 panel / hint text, which this fix did not touch -- those still only refresh
 on the same `command-state-changed`/`table-object-selection-changed` events
 as before.]
+
+NEXT SESSION / LATEST STATE (new feature, separate from everything above):
+누름틀 이름 자동 제안 (field-name-suggest), `#template-panel` new group. Fully
+implemented per a pre-written plan (~/.claude/plans/we-will-talk-about-jaunty-
+toucan.md), all steps done and verified except the manual open-in-browser
+check and the e2e test (deferred -- see below).
+
+Motivating case: `kr-gov-form-harvester/data/files/5555817/5555817.hwpx`
+(법인설립허가신청서) has `fieldCount: 0` and a label column with two
+vertically-merged parent cells ("신\n청\n인", "법\n인\n명") whose child rows
+each have a leaf label immediately followed by a blank cell -- naively naming
+each blank cell after its adjacent label collides the moment the same label
+(e.g. "전화번호") appears under more than one parent.
+
+New files:
+- `rhwp-studio/src/core/field-name-suggest.ts` -- pure, read-only detector.
+  `readTableGrid()` reads every cell's row/col/rowSpan/colSpan + all-paragraph
+  text (stripped of whitespace, incl. newlines -- same idiom as
+  `suggestBlockNameFromCurrentCell()`) + any existing `fieldName`
+  (`getCellProperties`). `buildSectionPrefixMap()` maps every row covered by
+  a column-0 `rowSpan>1` anchor to that anchor's stripped text. An ordered
+  `ROW_PATTERN_RULES: RowPatternRule[]` (v1 has exactly one:
+  `leafLabelAdjacentBlankRule` -- label cell + the blank cell immediately to
+  its right, i.e. `col+colSpan`, with `rowSpan===1`) produces candidates;
+  `suggestFieldNames()` turns candidates into `sectionPrefix_leafText` (or
+  bare `leafText` with no prefix), de-dupes against `wasm.getFieldList()` +
+  in-batch names via `_2`/`_3` suffixes, and flags (but does not rename) any
+  candidate cell that already carries a field. `isRepeatTaggedTable()`
+  (exported from this same file, not the panel) tests the
+  `#REPEAT-(BODY|HEADER|FOOTER|TITLE)(-NESTED)?:` pattern -- kept as a
+  standalone pure function specifically so it's unit-testable without
+  instantiating the DOM-heavy `TemplatePanel` class.
+- `rhwp-studio/src/command/commands/field-suggest.ts` -- single command
+  `field-suggest:apply`, `canExecute: hasDocument && inTable`. Mirrors
+  `template.ts`'s `tagSelectionOperation`: loops `wasm.insertClickHereField()`
+  (guide `'입력하세요'`, matching `field-insert-dialog.ts`'s default) once per
+  checked item inside one `executeOperation({kind:'snapshot', ...})` so the
+  whole batch undoes in one step. Registered in `main.ts` next to
+  `templateCommands`.
+- `rhwp-studio/tests/field-name-suggest.test.ts` -- new fake-WasmBridge
+  fixture (simpler than `template-marker-authoring.test.ts`'s, since this
+  detector always operates on one already-resolved table, no
+  `findNearestControlForward` multi-table walk needed). Covers: the
+  신청인/법인명-shaped fixture (rowSpan 2/3, not the literal 4-leaf-row count
+  mentioned in early scoping notes -- rowSpan count and leaf-row count are
+  the same number in this synthetic fixture, by construction) asserting
+  `신청인_전화번호`/`법인명_전화번호` disambiguation; in-batch `_2`/`_3`
+  suffixing; collision against an existing document field name; the
+  already-has-field exclusion+flag path; the no-adjacent-blank no-candidate
+  case; and `isRepeatTaggedTable` truth table. All pass.
+
+Changed files:
+- `rhwp-studio/src/ui/template-panel.ts` -- new "누름틀 이름 제안" `<fieldset>`
+  appended after the existing 태그 지정/마커 지우기 actions block (own
+  `tp-fieldsuggest-*` sub-classes, reusing `.tp-btn`/`.tp-btn--primary`). "현재
+  표에서 제안 생성" button calls `suggestFieldNames()` directly (no
+  dispatcher -- same precedent as `suggestBlockNameFromCurrentCell`), but
+  first checks `readTableMarkerText()` + `isRepeatTaggedTable()` and shows an
+  explanatory message instead of generating if the current table is
+  REPEAT-tagged. Review list: one row per suggestion, `R{row+1}` location +
+  checkbox (default checked, disabled+"이미 필드가 있음: <name>" badge for
+  `alreadyHasField` rows) + editable name `<input>` prefilled with
+  `suggestedName`. "적용" button (disabled until >=1 checked+non-empty-name
+  insertable row -- recomputed via `updateFieldSuggestApplyState()` on every
+  checkbox/input change, same pattern as `updatePreview()` gating
+  `applyBtn`) dispatches `field-suggest:apply` with the checked rows' final
+  (possibly hand-edited) names, then clears the list and calls `refresh()`.
+  `refresh()` now also tracks `fieldSuggestTable: {sec,ppi,ci} | null` (the
+  table the current suggestion batch was generated against) and clears the
+  list whenever the cursor's current table no longer matches it (moved to a
+  different table, or left any table/entered a nested one) -- same spirit as
+  the existing `blockNameManuallyEdited` reset, prevents applying a stale
+  batch to the wrong table.
+- `rhwp-studio/src/styles/template-panel.css` -- `.tp-fieldsuggest-list`
+  (column flex), `.tp-fieldsuggest-row` (bordered row), `.tp-fieldsuggest-
+  row-loc`/`-input`/`-badge`, all using existing `--space-*`/`--radius-sm`/
+  `--color-*` tokens, no new tokens introduced.
+- `rhwp-studio/tests/mutation-routing-guard.test.ts` -- `BASELINE` gained
+  `'src/command/commands/field-suggest.ts': 1` (one `insertClickHereField`
+  call site inside the apply loop -- the guard counts call *sites*, not
+  runtime invocation count, so looping over N items is still 1).
+  `MUTATING_METHODS` needed no change -- `insertClickHereField` was already
+  registered there (used by `insert:field`).
+- `mydocs/manual/rhwp_studio_ui_conventions.md` -- extended the
+  `#template-panel` row's description; `last_verified` bumped.
+- New `mydocs/manual/field_naming_heuristics.md` -- documents the section-
+  prefix + leaf-label-adjacent-blank rule, the uniqueness/suffix pass, the
+  REPEAT-tagged exclusion, and how to add a new `RowPatternRule` when a
+  different layout shape shows up.
+
+Verification done this session: `npx tsc --noEmit` clean; `node --test
+tests/*.test.ts` full suite green (870 pass, 1 pre-existing unrelated skip);
+`node --test tests/mutation-routing-guard.test.ts` green with the new
+baseline entry; `node --test tests/field-name-suggest.test.ts` green (7/7);
+`python3 scripts/check_document_metadata.py` and
+`check_markdown_links.py` clean on both touched/new manual docs.
+
+Also done (beyond the plan's minimum): e2e test
+`rhwp-studio/e2e/field-suggest-panel.test.mjs` -- COMMITTED as a permanent
+addition (first e2e test for `#template-panel`), builds a synthetic 6-row/
+3-col table via `wasm.createTable`+`mergeTableCells`+`insertTextInCell`
+(신청인 rowSpan2/법인명 rowSpan3 shape + one row outside any section),
+clicks the real `.tp-fieldsuggest-generate-btn`, asserts the 6 rendered
+review rows' names, unchecks one row + edits another row's name via real
+DOM events, clicks `.tp-fieldsuggest-apply-btn`, then asserts
+`wasm.getFieldList()` has exactly the 5 expected names (edited name applied,
+unchecked row excluded) and the list clears after apply. Ran green against
+the live dev server (`localhost:7700`, headless Chrome via
+`CHROME_PATH="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+node e2e/field-suggest-panel.test.mjs --mode=headless`).
+
+Manual real-fixture verification (plan's last step) was also completed, but
+NOT via the browser extension (Claude-in-Chrome was not connected this
+session) -- instead via a temporary ad-hoc puppeteer script (written, run,
+then deleted per the established convention, not committed): loaded the
+actual `kr-gov-form-harvester/data/files/5555817/5555817.hwpx` bytes
+directly into `window.__wasm.loadDocument()` (bypassing the e2e harness's
+`/samples`-relative-path restriction), found its one top-level table via
+`findNearestControlForward`, placed the cursor in it, clicked "현재 표에서
+제안 생성", and confirmed the review list renders **exactly** the 8 expected
+names -- `신청인_주소`/`신청인_전화번호`/`신청인_성명`/`신청인_생년월일` and
+`법인명_명칭`/`법인명_전화번호`/`법인명_소재지`/`법인명_대표자성명` -- then
+clicked "적용" and confirmed `wasm.getFieldList()` has exactly those 8 names,
+no duplicates, no extras. Note the real file's actual shape differs from
+what earlier scoping notes assumed: it's a 5-column table (two independent
+label+blank pairs per row, e.g. row2 has "주소"+blank at col1-2 AND
+"전화번호"+blank at col3-4) and 신청인's rowSpan really is 2 (covering
+"주소"/"전화번호" at row2 and "성명"/"생년월일" at row3 as two labels-per-row
+each), not 4 separate anchor rows -- confirmed via
+`rhwp export-tables 5555817.hwpx --json` before writing the check. The
+per-cell (not per-row) design of `leafLabelAdjacentBlankRule` handled this
+shape correctly with no code changes needed.
+
+Nothing else has been committed -- `git status -s` in `rhwp-code` will show
+`HWP-STUDIO-CONTEXT.md`, `mydocs/manual/rhwp_studio_ui_conventions.md`,
+`rhwp-studio/src/main.ts`, `rhwp-studio/src/styles/template-panel.css`,
+`rhwp-studio/src/ui/template-panel.ts`, and
+`rhwp-studio/tests/mutation-routing-guard.test.ts` modified, plus new
+`mydocs/manual/field_naming_heuristics.md`,
+`rhwp-studio/e2e/field-suggest-panel.test.mjs`,
+`rhwp-studio/src/command/commands/field-suggest.ts`,
+`rhwp-studio/src/core/field-name-suggest.ts`, and
+`rhwp-studio/tests/field-name-suggest.test.ts` -- all staged for the user to
+review/commit.

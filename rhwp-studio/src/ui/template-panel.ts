@@ -37,9 +37,11 @@ import {
   listTopLevelTables,
   availableNestedParentBlockNames,
   findCellIndexForRowCol,
+  readTableMarkerText,
   type TableOutlineEntry,
 } from '@/core/table-outline';
 import { buildTableRoleMarkerText, type TemplateTableRole } from '@/command/commands/template';
+import { suggestFieldNames, isRepeatTaggedTable, type FieldNameSuggestion } from '@/core/field-name-suggest';
 
 interface GeneralRoleOption {
   value: 'HEADER' | 'FOOTER' | 'PAGENO';
@@ -77,6 +79,12 @@ const NESTED_TOGGLE_DESCRIPTION =
 
 const DEFAULT_ROLE: TemplateTableRole = GENERAL_ROLES[0].value;
 
+interface FieldSuggestRow {
+  suggestion: FieldNameSuggestion;
+  checkbox: HTMLInputElement;
+  nameInput: HTMLInputElement;
+}
+
 export class TemplatePanel {
   private emptyEl!: HTMLElement;
   private contentEl!: HTMLElement;
@@ -96,6 +104,16 @@ export class TemplatePanel {
   private previewEl!: HTMLElement;
   private applyBtn!: HTMLButtonElement;
   private clearBtn!: HTMLButtonElement;
+
+  // 누름틀 이름 제안 그룹
+  private fieldSuggestGenerateBtn!: HTMLButtonElement;
+  private fieldSuggestListEl!: HTMLElement;
+  private fieldSuggestApplyBtn!: HTMLButtonElement;
+  private fieldSuggestMessageEl!: HTMLElement;
+  private fieldSuggestRows: FieldSuggestRow[] = [];
+  /** 현재 제안 목록이 계산된 표 — 커서가 다른 표로 옮겨가면 무효화해 잘못된
+   * 표에 배치가 적용되는 것을 막는다(blockNameManuallyEdited 리셋과 같은 취지). */
+  private fieldSuggestTable: { sec: number; ppi: number; ci: number } | null = null;
 
   constructor(
     private container: HTMLElement,
@@ -157,6 +175,22 @@ export class TemplatePanel {
     }
     this.hintEl.textContent = hintText;
     this.hintEl.classList.toggle('tp-hint--warning', hintWarning);
+
+    this.fieldSuggestGenerateBtn.disabled = !canTag;
+    const currentTable = canTag
+      ? { sec: pos!.sectionIndex, ppi: pos!.parentParaIndex!, ci: pos!.controlIndex! }
+      : null;
+    if (
+      this.fieldSuggestTable &&
+      (!currentTable ||
+        currentTable.sec !== this.fieldSuggestTable.sec ||
+        currentTable.ppi !== this.fieldSuggestTable.ppi ||
+        currentTable.ci !== this.fieldSuggestTable.ci)
+    ) {
+      this.fieldSuggestTable = null;
+      this.renderFieldSuggestRows([]);
+      this.fieldSuggestMessageEl.textContent = '';
+    }
 
     this.updatePreview();
   }
@@ -346,6 +380,107 @@ export class TemplatePanel {
 
   private clearTag(): void {
     this.dispatcher.dispatch('template:clear-marker');
+    this.refresh();
+  }
+
+  /**
+   * 현재 표에서 누름틀 이름 제안을 계산해 review list로 렌더링한다. 순수 조회라
+   * `template:tag-selection`과 달리 dispatcher를 거치지 않고 wasm을 직접 읽는다
+   * (`suggestBlockNameFromCurrentCell`과 같은 전례). 반복 블록(`#REPEAT-*:`)으로
+   * 태깅된 표는 행마다 이름이 반복되는 게 의도된 설계이므로 제안 자체를 막는다.
+   */
+  private generateFieldSuggestions(): void {
+    const ih = this.getInputHandler();
+    const pos = ih?.getCursorPosition();
+    if (!pos || pos.parentParaIndex === undefined || pos.controlIndex === undefined) return;
+    if ((pos.cellPath?.length ?? 0) > 1) return; // 중첩 표는 지원하지 않음
+
+    const sec = pos.sectionIndex;
+    const ppi = pos.parentParaIndex;
+    const ci = pos.controlIndex;
+
+    const marker = readTableMarkerText(this.wasm, sec, ppi, ci);
+    if (isRepeatTaggedTable(marker)) {
+      this.fieldSuggestTable = null;
+      this.renderFieldSuggestRows([]);
+      this.fieldSuggestMessageEl.textContent = '이 표는 반복 블록으로 태깅되어 있어 제안을 생성하지 않습니다.';
+      return;
+    }
+
+    let suggestions: FieldNameSuggestion[] = [];
+    try {
+      suggestions = suggestFieldNames(this.wasm, sec, ppi, ci);
+    } catch (err) {
+      console.warn('[template-panel] 누름틀 이름 제안 실패:', err);
+    }
+    this.fieldSuggestTable = { sec, ppi, ci };
+    this.fieldSuggestMessageEl.textContent = suggestions.length === 0 ? '제안할 빈 칸을 찾지 못했습니다.' : '';
+    this.renderFieldSuggestRows(suggestions);
+  }
+
+  private renderFieldSuggestRows(suggestions: readonly FieldNameSuggestion[]): void {
+    this.fieldSuggestListEl.textContent = '';
+    this.fieldSuggestRows = [];
+
+    for (const suggestion of suggestions) {
+      const row = document.createElement('div');
+      row.className = 'tp-fieldsuggest-row';
+
+      const loc = document.createElement('span');
+      loc.className = 'tp-fieldsuggest-row-loc';
+      loc.textContent = `R${suggestion.row + 1}`;
+      row.appendChild(loc);
+
+      const checkbox = document.createElement('input');
+      checkbox.type = 'checkbox';
+      checkbox.className = 'tp-checkbox';
+      checkbox.checked = !suggestion.alreadyHasField;
+      checkbox.disabled = suggestion.alreadyHasField;
+      checkbox.addEventListener('change', () => this.updateFieldSuggestApplyState());
+      row.appendChild(checkbox);
+
+      const nameInput = document.createElement('input');
+      nameInput.type = 'text';
+      nameInput.className = 'tp-input tp-fieldsuggest-row-input';
+      nameInput.value = suggestion.suggestedName;
+      nameInput.disabled = suggestion.alreadyHasField;
+      nameInput.addEventListener('input', () => this.updateFieldSuggestApplyState());
+      row.appendChild(nameInput);
+
+      if (suggestion.alreadyHasField) {
+        const badge = document.createElement('span');
+        badge.className = 'tp-fieldsuggest-row-badge';
+        badge.textContent = `이미 필드가 있음: ${suggestion.existingFieldName ?? ''}`;
+        row.appendChild(badge);
+      }
+
+      this.fieldSuggestListEl.appendChild(row);
+      this.fieldSuggestRows.push({ suggestion, checkbox, nameInput });
+    }
+
+    this.updateFieldSuggestApplyState();
+  }
+
+  /** applyBtn/clearBtn과 같은 패턴 — 체크·입력이 바뀔 때마다 이 지점에서 재계산한다. */
+  private updateFieldSuggestApplyState(): void {
+    const hasInsertable = this.fieldSuggestRows.some(
+      (r) => r.checkbox.checked && !r.suggestion.alreadyHasField && r.nameInput.value.trim() !== '',
+    );
+    this.fieldSuggestApplyBtn.disabled = !hasInsertable;
+  }
+
+  private applyFieldSuggestions(): void {
+    if (!this.fieldSuggestTable) return;
+    const items = this.fieldSuggestRows
+      .filter((r) => r.checkbox.checked && !r.suggestion.alreadyHasField)
+      .map((r) => ({ cellIdx: r.suggestion.cellIdx, name: r.nameInput.value.trim() }))
+      .filter((item) => item.name !== '');
+    if (items.length === 0) return;
+
+    this.dispatcher.dispatch('field-suggest:apply', { items });
+    this.fieldSuggestTable = null;
+    this.renderFieldSuggestRows([]);
+    this.fieldSuggestMessageEl.textContent = '';
     this.refresh();
   }
 
@@ -539,6 +674,38 @@ export class TemplatePanel {
     actions.appendChild(this.applyBtn);
     actions.appendChild(this.clearBtn);
 
+    // 누름틀 이름 제안 — "템플릿" 마커 authoring과는 다른 개념(누름틀 필드)이지만
+    // 같은 "현재 표"를 다루므로 같은 패널에 별도 fieldset으로 둔다.
+    const fieldSuggestSection = document.createElement('fieldset');
+    fieldSuggestSection.className = 'tp-role-group';
+    const fieldSuggestLegend = document.createElement('legend');
+    fieldSuggestLegend.className = 'tp-role-group-legend';
+    fieldSuggestLegend.textContent = '누름틀 이름 제안';
+    fieldSuggestSection.appendChild(fieldSuggestLegend);
+
+    this.fieldSuggestGenerateBtn = document.createElement('button');
+    this.fieldSuggestGenerateBtn.type = 'button';
+    this.fieldSuggestGenerateBtn.className = 'tp-btn tp-fieldsuggest-generate-btn';
+    this.fieldSuggestGenerateBtn.textContent = '현재 표에서 제안 생성';
+    this.fieldSuggestGenerateBtn.addEventListener('click', () => this.generateFieldSuggestions());
+    fieldSuggestSection.appendChild(this.fieldSuggestGenerateBtn);
+
+    this.fieldSuggestMessageEl = document.createElement('div');
+    this.fieldSuggestMessageEl.className = 'tp-hint';
+    fieldSuggestSection.appendChild(this.fieldSuggestMessageEl);
+
+    this.fieldSuggestListEl = document.createElement('div');
+    this.fieldSuggestListEl.className = 'tp-fieldsuggest-list';
+    fieldSuggestSection.appendChild(this.fieldSuggestListEl);
+
+    this.fieldSuggestApplyBtn = document.createElement('button');
+    this.fieldSuggestApplyBtn.type = 'button';
+    this.fieldSuggestApplyBtn.className = 'tp-btn tp-btn--primary tp-fieldsuggest-apply-btn';
+    this.fieldSuggestApplyBtn.textContent = '적용';
+    this.fieldSuggestApplyBtn.disabled = true;
+    this.fieldSuggestApplyBtn.addEventListener('click', () => this.applyFieldSuggestions());
+    fieldSuggestSection.appendChild(this.fieldSuggestApplyBtn);
+
     this.contentEl.appendChild(outlineSection);
     this.contentEl.appendChild(this.hintEl);
     this.contentEl.appendChild(roleField);
@@ -547,6 +714,7 @@ export class TemplatePanel {
     this.contentEl.appendChild(this.nestedParentField);
     this.contentEl.appendChild(this.previewEl);
     this.contentEl.appendChild(actions);
+    this.contentEl.appendChild(fieldSuggestSection);
 
     body.appendChild(this.emptyEl);
     body.appendChild(this.contentEl);

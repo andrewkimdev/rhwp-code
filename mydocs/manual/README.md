@@ -2,7 +2,7 @@
 kind: guide
 status: active
 canonical: mydocs/manual/README.md
-last_verified: 2026-08-07
+last_verified: 2026-08-23
 ---
 
 # manual 문서 지도
@@ -40,6 +40,7 @@ last_verified: 2026-08-07
 | 품질 지표와 리팩터링 검토 | [코드 품질 대시보드](dashboard.md) | [SOLID 채점 기준](solid_scoring_guide.md) |
 | release 준비와 배포 | [배포 가이드](publish_guide.md) | [개발 환경 가이드](dev_environment_guide.md) |
 | rhwp-studio UI 명칭·CSS 접두어 | [rhwp-studio UI 명칭과 CSS 접두어](rhwp_studio_ui_conventions.md) | [개발 환경 가이드](dev_environment_guide.md) |
+| rhwp-studio에서 누름틀(ClickHere 필드) 삽입·수정·자동 제안 구현 | [rhwp-studio 누름틀 편집 가이드](rhwp_studio_clickhere_field_guide.md) | [누름틀 이름 자동 제안 감지 규칙](field_naming_heuristics.md) |
 
 ## 문서 경계
 

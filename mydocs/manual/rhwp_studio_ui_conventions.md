@@ -2,7 +2,7 @@
 kind: reference
 status: active
 canonical: mydocs/manual/rhwp_studio_ui_conventions.md
-last_verified: 2026-08-22
+last_verified: 2026-08-23
 ---
 
 # rhwp-studio UI 명칭과 CSS 접두어
@@ -16,7 +16,7 @@ last_verified: 2026-08-22
 | 서식 도구 모음 | `#style-bar` | 스타일·글꼴·크기·정렬 등 서식 제어 |
 | 편집 영역 | `#scroll-container` | 문서 페이지 렌더링과 스크롤 영역 |
 | 상태 표시줄 | `#status-bar` | 쪽·구역·편집 모드·확대 배율 표시 |
-| 템플릿 패널 | `#template-panel` | hwpx-template-engine 마커 authoring 도킹 패널 (표 개요·역할 지정) |
+| 템플릿 패널 | `#template-panel` | hwpx-template-engine 마커 authoring 도킹 패널 (표 개요·역할 지정) + 누름틀 이름 자동 제안(라벨/섹션 접두어 기반, `field-name-suggest.ts`) — 같은 "현재 표" 컨텍스트를 공유하는 별도 fieldset |
 
 ## CSS 접두어
 
