@@ -22,7 +22,7 @@ rhwp-studio에서 누름틀(ClickHere 필드) 삽입·조회·수정·삭제 기
 | 누름틀 고치기 대화상자 (+ `ClickHereProps`, 길이 상한 3종) | `rhwp-studio/src/ui/field-edit-dialog.ts` |
 | `insert:field`/`field:edit`/`field:remove` 커맨드 | `rhwp-studio/src/command/commands/insert.ts`, `edit.ts` |
 | 누름틀 **이름 자동 제안**(라벨→빈칸 감지, 접두어, 유일성) | `rhwp-studio/src/core/field-name-suggest.ts` |
-| 이름 제안 review list UI (`#template-panel` "누름틀 이름 제안" 그룹) | `rhwp-studio/src/ui/template-panel.ts` |
+| 누름틀 즉시 생성 UI (`#template-panel` "누름틀 만들기" 그룹) | `rhwp-studio/src/ui/template-panel.ts` |
 | 이름 제안 일괄 삽입 커맨드 | `rhwp-studio/src/command/commands/field-suggest.ts` |
 | 이름 자동 제안 규칙 설명(왜 접두어를 붙이는가) | [`field_naming_heuristics.md`](field_naming_heuristics.md) |
 | Rust 쪽 필드 조회/설정 엔진 | `src/document_core/queries/field_query.rs` (`FieldLocation`, `NestedEntry`, `collect_all_fields` 계열) |

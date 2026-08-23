@@ -1,18 +1,23 @@
-// E2E: #template-panel 의 "누름틀 이름 제안" review list
+// E2E: #template-panel 의 "누름틀 만들기" — 행 선택 시 즉시 다건 생성
 //
 // 5555817.hwpx(법인설립허가신청서) 모양을 재현한 합성 표(3열: 섹션 앵커 col0/
 // 라벨 col1/빈 값 col2, "신청인"(rowSpan 2)·"법인명"(rowSpan 3) 두 섹션 +
-// 섹션 밖 한 행)에서 "선택된 행에서 제안 생성"을 눌러 review list가 올바른
-// 접두어 붙은 이름을 렌더링하는지, 체크 해제/이름 편집이 반영되는지, "적용" 후
-// 실제 문서에 정확한 누름틀만 생기는지 검증한다(field-name-suggest.test.ts의
+// 섹션 밖 한 행)에서 "누름틀 만들기"를 눌러 review list 없이 클릭 한 번으로
+// 올바른 접두어 붙은 이름의 누름틀이 즉시 전부 생성되는지, 이미 필드가 있는
+// 후보는 건너뛰고 메시지로 보고하는지 검증한다(field-name-suggest.test.ts의
 // 순수 로직 단위 테스트를 실제 UI+wasm 경로로 재확인 — #template-panel 첫 e2e).
 //
-// 제안 생성은 두 조건이 게이트다 — ① 역할 마커(#HEADER/#FOOTER/#PAGENO/#REPEAT-*)
+// 생성은 두 조건이 게이트다 — ① 역할 마커(#HEADER/#FOOTER/#PAGENO/#REPEAT-*)
 // 가 지정된 표에서만, ② 검색 범위는 선택된 행(셀 선택 모드) 또는 커서 행만.
 // 그래서 각 TC는 먼저 마커 없는 표에서 게이트 메시지가 나오는지 확인하고(TC-1b),
 // 전체 행을 선택해 #HEADER 태깅한 뒤(TC-1c — 태그 지정은 선택 행만 표로 분리하므로
 // 표 전체에 마커를 붙이려면 전체 범위 선택이 필요), 마커 행 다음 행부터 끝까지
-// 다시 선택해 제안을 생성한다.
+// 다시 선택해 누름틀을 만든다.
+//
+// 클릭 1회 = 즉시 생성이므로(review list/"적용" 단계 없음) 개별 후보를 체크
+// 해제하거나 이름을 편집하는 UX는 더 이상 없다 — 그 대신, 같은 행 선택으로
+// 버튼을 두 번 누르면 두 번째는 모든 후보가 "이미 필드가 있음"으로 건너뛰어져야
+// 한다는 것으로 skip 경로를 검증한다(TC-2b/TC-7).
 //
 // 실행: CHROME_PATH=... node e2e/field-suggest-panel.test.mjs --mode=headless
 
@@ -20,7 +25,7 @@ import { runTest, createNewDocument, setTestCase, screenshot, assert } from './h
 
 const sleep = (page, ms) => page.evaluate((t) => new Promise((r) => setTimeout(r, t)), ms);
 
-runTest('누름틀 이름 제안 review list — 생성/편집/적용', async ({ page }) => {
+runTest('누름틀 만들기 — 행 선택 시 즉시 생성/skip', async ({ page }) => {
   // ── TC-1: 신청인/법인명 모양의 표 생성 ──────────────────────
   setTestCase('TC-1: 합성 표 생성');
   await createNewDocument(page);
@@ -81,21 +86,21 @@ runTest('누름틀 이름 제안 review list — 생성/편집/적용', async ({
   await sleep(page, 300);
   await screenshot(page, 'field-suggest-01-table-ready');
 
-  // ── TC-1b: 마커 없는 표에서는 게이트 메시지 + 빈 목록 ────────
+  // ── TC-1b: 마커 없는 표에서는 게이트 메시지만, 필드는 생성되지 않는다 ──
   setTestCase('TC-1b: 마커 게이트');
   await page.evaluate(() => {
-    document.querySelector('#template-panel .tp-fieldsuggest-generate-btn').click();
+    document.querySelector('#template-panel .tp-fieldsuggest-btn').click();
   });
   await sleep(page, 200);
   const gateState = await page.evaluate(() => ({
     message: document.querySelector('#template-panel .tp-fieldsuggest-message')?.textContent ?? '',
-    rowCount: document.querySelectorAll('#template-panel .tp-fieldsuggest-row').length,
+    fieldCount: window.__wasm.getFieldList().length,
   }));
   assert(
     gateState.message.includes('역할 마커'),
     `마커 없는 표에서 게이트 메시지가 나온다: ${JSON.stringify(gateState.message)}`,
   );
-  assert(gateState.rowCount === 0, '마커 없는 표에서는 review list가 비어 있다');
+  assert(gateState.fieldCount === 0, '마커 없는 표에서는 필드가 생성되지 않는다');
   await screenshot(page, 'field-suggest-01b-gated');
 
   // ── TC-1c: 전체 행 선택 → #HEADER 태깅 → 내용 행 재선택 ──────
@@ -115,7 +120,7 @@ runTest('누름틀 이름 제안 review list — 생성/편집/적용', async ({
   await page.evaluate(({ ppi, ci }) => {
     const ih = window.__inputHandler;
     const wasm = window.__wasm;
-    // 태깅으로 전체 폭 마커 행이 row 0에 삽입됐다 — 제안 범위는 마커 행 다음
+    // 태깅으로 전체 폭 마커 행이 row 0에 삽입됐다 — 생성 범위는 마커 행 다음
     // 행(row 1)부터 끝(row 6)까지 다시 선택한다.
     ih.cursor.exitCellSelectionMode();
     const findCellIdx = (row, col) => {
@@ -153,84 +158,75 @@ runTest('누름틀 이름 제안 review list — 생성/편집/적용', async ({
     `hint가 선택된 행(2~7)을 표시한다: ${taggedMarker.hint}`,
   );
 
-  // ── TC-2: "선택된 행에서 제안 생성" 클릭 → review list 렌더링 ──
-  setTestCase('TC-2: 제안 생성');
-  const generateBtnFound = await page.evaluate(() => {
-    const btn = document.querySelector('#template-panel .tp-fieldsuggest-generate-btn');
+  // ── TC-2: "누름틀 만들기" 클릭 → 후보 6개가 review list 없이 즉시 생성 ──
+  setTestCase('TC-2: 즉시 생성');
+  const createBtnFound = await page.evaluate(() => {
+    const btn = document.querySelector('#template-panel .tp-fieldsuggest-btn');
     if (!btn || btn.disabled) return false;
     btn.click();
     return true;
   });
-  assert(generateBtnFound, '"선택된 행에서 제안 생성" 버튼이 활성 상태로 존재한다');
-  await sleep(page, 200);
-
-  const rows = await page.evaluate(() =>
-    Array.from(document.querySelectorAll('#template-panel .tp-fieldsuggest-row')).map((row) => ({
-      loc: row.querySelector('.tp-fieldsuggest-row-loc')?.textContent ?? '',
-      checked: row.querySelector('input[type="checkbox"]')?.checked ?? false,
-      name: row.querySelector('.tp-fieldsuggest-row-input')?.value ?? '',
-    })),
-  );
-  console.log('review list:', JSON.stringify(rows));
-  assert(rows.length === 6, `review list 6행 렌더링: ${rows.length}행`);
-  assert(rows[0]?.name === '신청인_주소', `R1=신청인_주소: ${rows[0]?.name}`);
-  assert(rows[1]?.name === '신청인_전화번호', `R2=신청인_전화번호: ${rows[1]?.name}`);
-  assert(rows[2]?.name === '법인명_명칭', `R3=법인명_명칭: ${rows[2]?.name}`);
-  assert(rows[3]?.name === '법인명_전화번호', `R4=법인명_전화번호: ${rows[3]?.name}`);
-  assert(rows[4]?.name === '법인명_소재지', `R5=법인명_소재지: ${rows[4]?.name}`);
-  assert(rows[5]?.name === '담당자', `R6(섹션 밖)=담당자(접두어 없음): ${rows[5]?.name}`);
-  assert(rows.every((r) => r.checked), '기본적으로 모든 행이 체크되어 있다');
-  await screenshot(page, 'field-suggest-02-review-list');
-
-  // ── TC-3: 한 행 체크 해제 + 다른 행 이름 편집 ────────────────
-  setTestCase('TC-3: 체크 해제 + 이름 편집');
-  await page.evaluate(() => {
-    const rowEls = Array.from(document.querySelectorAll('#template-panel .tp-fieldsuggest-row'));
-    // R4(법인명_전화번호) 체크 해제 — 적용에서 제외되어야 한다.
-    const checkbox = rowEls[3].querySelector('input[type="checkbox"]');
-    checkbox.checked = false;
-    checkbox.dispatchEvent(new Event('change', { bubbles: true }));
-    // R1(신청인_주소) 이름을 사용자가 직접 수정.
-    const nameInput = rowEls[0].querySelector('.tp-fieldsuggest-row-input');
-    nameInput.value = '신청인_거주지';
-    nameInput.dispatchEvent(new Event('input', { bubbles: true }));
-  });
-  await sleep(page, 100);
-
-  const applyBtnEnabled = await page.evaluate(() => {
-    const btn = document.querySelector('#template-panel .tp-fieldsuggest-apply-btn');
-    return !!btn && !btn.disabled;
-  });
-  assert(applyBtnEnabled, '체크된 행이 남아 있으므로 "적용" 버튼이 활성화된다');
-
-  // ── TC-4: 적용 → 실제 문서에 정확한 누름틀만 생성 ────────────
-  setTestCase('TC-4: 적용 및 결과 확인');
-  await page.evaluate(() => {
-    document.querySelector('#template-panel .tp-fieldsuggest-apply-btn').click();
-  });
+  assert(createBtnFound, '"누름틀 만들기" 버튼이 활성 상태로 존재한다');
   await sleep(page, 300);
-  await screenshot(page, 'field-suggest-03-applied');
+  await screenshot(page, 'field-suggest-02-created');
 
-  const fields = await page.evaluate(() =>
-    window.__wasm.getFieldList().map((f) => ({ name: f.name, guide: f.guide })),
-  );
-  const fieldNames = fields.map((f) => f.name).sort();
-  console.log('적용 후 필드 목록:', JSON.stringify(fields));
-  const expected = ['담당자', '법인명_명칭', '법인명_소재지', '신청인_거주지', '신청인_전화번호'].sort();
+  const afterCreate = await page.evaluate(() => ({
+    fields: window.__wasm.getFieldList().map((f) => ({ name: f.name, guide: f.guide })),
+    message: document.querySelector('#template-panel .tp-fieldsuggest-message')?.textContent ?? '',
+  }));
+  console.log('생성 후:', JSON.stringify(afterCreate));
+  const fieldNames = afterCreate.fields.map((f) => f.name).sort();
+  const expected = ['신청인_주소', '신청인_전화번호', '법인명_명칭', '법인명_전화번호', '법인명_소재지', '담당자'].sort();
   assert(
     JSON.stringify(fieldNames) === JSON.stringify(expected),
-    `적용 후 필드 5개(체크 해제한 법인명_전화번호 제외, 편집한 이름 반영): ${JSON.stringify(fieldNames)}`,
+    `클릭 한 번으로 후보 6개가 전부 생성된다: ${JSON.stringify(fieldNames)} (기대: ${JSON.stringify(expected)})`,
   );
-  assert(!fieldNames.includes('법인명_전화번호'), '체크 해제한 행은 삽입되지 않는다');
   assert(
-    fields.every((f) => f.guide === f.name),
-    `안내문(guide)이 이름과 동기화된다(범용 "입력하세요" 대신): ${JSON.stringify(fields)}`,
+    afterCreate.fields.every((f) => f.guide === f.name),
+    `안내문(guide)이 이름과 동기화된다: ${JSON.stringify(afterCreate.fields)}`,
+  );
+  assert(
+    afterCreate.message.includes('6개'),
+    `메시지가 생성 개수(6개)를 보고한다: ${afterCreate.message}`,
   );
 
-  const rowsAfterApply = await page.evaluate(
-    () => document.querySelectorAll('#template-panel .tp-fieldsuggest-row').length,
+  // ── TC-2b: 같은 행을 다시 선택해 한 번 더 클릭 → 전부 "이미 필드가 있음"으로 skip ──
+  setTestCase('TC-2b: 재클릭 시 전량 skip');
+  await page.evaluate(({ ppi, ci }) => {
+    const ih = window.__inputHandler;
+    const wasm = window.__wasm;
+    const findCellIdx = (row, col) => {
+      const dims = wasm.getTableDimensions(0, ppi, ci);
+      for (let idx = 0; idx < dims.cellCount; idx++) {
+        const c = wasm.getCellInfo(0, ppi, ci, idx);
+        if (row >= c.row && row < c.row + c.rowSpan && col >= c.col && col < c.col + c.colSpan) return idx;
+      }
+      return -1;
+    };
+    ih.cursor.moveTo({
+      sectionIndex: 0, paragraphIndex: 0, charOffset: 0,
+      parentParaIndex: ppi, controlIndex: ci, cellIndex: findCellIdx(1, 2),
+    });
+    ih.cursor.enterCellSelectionMode();
+    ih.cursor.expandCellSelection(5, 0); // rows 1~6, TC-2와 동일한 범위
+    window.__eventBus?.emit('command-state-changed');
+  }, { ppi: tbl.ppi, ci: tbl.ci });
+  await sleep(page, 200);
+  await page.evaluate(() => {
+    document.querySelector('#template-panel .tp-fieldsuggest-btn').click();
+  });
+  await sleep(page, 300);
+
+  const afterRetry = await page.evaluate(() => ({
+    fieldCount: window.__wasm.getFieldList().length,
+    message: document.querySelector('#template-panel .tp-fieldsuggest-message')?.textContent ?? '',
+  }));
+  console.log('재클릭 후:', JSON.stringify(afterRetry));
+  assert(afterRetry.fieldCount === 6, `중복 생성 없이 필드 6개 그대로 유지된다: ${afterRetry.fieldCount}개`);
+  assert(
+    afterRetry.message.includes('이미 필드가 있') && afterRetry.message.includes('6'),
+    `이미 태그된 6개를 모두 건너뛰었다는 메시지가 나온다: ${afterRetry.message}`,
   );
-  assert(rowsAfterApply === 0, '적용 후 review list가 비워진다(다음 배치 오적용 방지)');
 
   // ── TC-5: 인적사항/그 밖의 특이사항 모양의 표 생성(새 문서) ────
   // 17856415.hwp(의무경찰 지원서) row5-8(인적사항 섹션)과 row9-10(그 밖의 특이사항)
@@ -331,39 +327,16 @@ runTest('누름틀 이름 제안 review list — 생성/편집/적용', async ({
   await sleep(page, 200);
   await screenshot(page, 'field-suggest-inline-01-tagged');
 
-  setTestCase('TC-6: 제안 생성');
-  const generateBtnFound2 = await page.evaluate(() => {
-    const btn = document.querySelector('#template-panel .tp-fieldsuggest-generate-btn');
+  setTestCase('TC-6: 즉시 생성(인라인 삽입 포함)');
+  const createBtnFound2 = await page.evaluate(() => {
+    const btn = document.querySelector('#template-panel .tp-fieldsuggest-btn');
     if (!btn || btn.disabled) return false;
     btn.click();
     return true;
   });
-  assert(generateBtnFound2, '"선택된 행에서 제안 생성" 버튼이 활성 상태로 존재한다');
-  await sleep(page, 200);
-
-  const rows2 = await page.evaluate(() =>
-    Array.from(document.querySelectorAll('#template-panel .tp-fieldsuggest-row')).map((row) => ({
-      loc: row.querySelector('.tp-fieldsuggest-row-loc')?.textContent ?? '',
-      checked: row.querySelector('input[type="checkbox"]')?.checked ?? false,
-      name: row.querySelector('.tp-fieldsuggest-row-input')?.value ?? '',
-    })),
-  );
-  console.log('review list:', JSON.stringify(rows2));
-  assert(rows2.length === 3, `review list 3행 렌더링(성명/병적지청/그 밖의 특이사항): ${rows2.length}행`);
-  const names = rows2.map((r) => r.name).sort();
-  const expectedNames = ['인적사항_성명', '인적사항_병적지청', '그밖의특이사항'].sort();
-  assert(
-    JSON.stringify(names) === JSON.stringify(expectedNames),
-    `review list 이름: ${JSON.stringify(names)} (기대: ${JSON.stringify(expectedNames)})`,
-  );
-  await screenshot(page, 'field-suggest-inline-02-review-list');
-
-  setTestCase('TC-7: 적용 및 결과 확인');
-  await page.evaluate(() => {
-    document.querySelector('#template-panel .tp-fieldsuggest-apply-btn').click();
-  });
+  assert(createBtnFound2, '"누름틀 만들기" 버튼이 활성 상태로 존재한다');
   await sleep(page, 300);
-  await screenshot(page, 'field-suggest-inline-03-applied');
+  await screenshot(page, 'field-suggest-inline-02-created');
 
   const result = await page.evaluate(({ ppi, ci }) => {
     const wasm = window.__wasm;
@@ -379,17 +352,22 @@ runTest('누름틀 이름 제안 review list — 생성/편집/적용', async ({
       }
       cellTexts.push(text);
     }
-    return { fields, cellTexts };
+    return {
+      fields,
+      cellTexts,
+      message: document.querySelector('#template-panel .tp-fieldsuggest-message')?.textContent ?? '',
+    };
   }, { ppi: tbl2.ppi, ci: tbl2.ci });
-  console.log('적용 후 필드 목록:', JSON.stringify(result.fields));
-  console.log('적용 후 셀 텍스트:', JSON.stringify(result.cellTexts));
+  console.log('생성 후 필드 목록:', JSON.stringify(result.fields));
+  console.log('생성 후 셀 텍스트:', JSON.stringify(result.cellTexts));
 
   const fieldNames2 = result.fields.map((f) => f.name).sort();
   const expectedFieldNames = ['인적사항_성명', '인적사항_병적지청', '그밖의특이사항'].sort();
   assert(
     JSON.stringify(fieldNames2) === JSON.stringify(expectedFieldNames),
-    `적용 후 필드 3개: ${JSON.stringify(fieldNames2)}`,
+    `클릭 한 번으로 필드 3개(인라인 삽입 포함)가 즉시 생성된다: ${JSON.stringify(fieldNames2)}`,
   );
+  assert(result.message.includes('3개'), `메시지가 생성 개수(3개)를 보고한다: ${result.message}`);
   // 인라인 삽입(성명/병적지청)은 라벨 텍스트를 지우지 않고 그 뒤에 필드를 붙인다 —
   // 셀 텍스트가 라벨 문자열로 "시작"해야 한다(필드 자체는 getTextInCell 평문에
   // 나타나지 않을 수 있으므로 완전 일치가 아니라 startsWith로 확인한다).
@@ -408,8 +386,41 @@ runTest('누름틀 이름 제안 review list — 생성/편집/적용', async ({
     `"그 밖의 특이사항" 라벨 셀 텍스트가 보존된다: ${JSON.stringify(result.cellTexts)}`,
   );
 
-  const rowsAfterApply2 = await page.evaluate(
-    () => document.querySelectorAll('#template-panel .tp-fieldsuggest-row').length,
+  // ── TC-7: 같은 행을 다시 선택해 한 번 더 클릭 → 인라인 삽입 후보도 전량 skip ──
+  setTestCase('TC-7: 재클릭 시 전량 skip(인라인 삽입 포함)');
+  await page.evaluate(({ ppi, ci }) => {
+    const ih = window.__inputHandler;
+    const wasm = window.__wasm;
+    const findCellIdx = (row, col) => {
+      const dims = wasm.getTableDimensions(0, ppi, ci);
+      for (let idx = 0; idx < dims.cellCount; idx++) {
+        const c = wasm.getCellInfo(0, ppi, ci, idx);
+        if (row >= c.row && row < c.row + c.rowSpan && col >= c.col && col < c.col + c.colSpan) return idx;
+      }
+      return -1;
+    };
+    ih.cursor.moveTo({
+      sectionIndex: 0, paragraphIndex: 0, charOffset: 0,
+      parentParaIndex: ppi, controlIndex: ci, cellIndex: findCellIdx(1, 1),
+    });
+    ih.cursor.enterCellSelectionMode();
+    ih.cursor.expandCellSelection(3, 0); // rows 1~4, TC-6과 동일한 범위
+    window.__eventBus?.emit('command-state-changed');
+  }, { ppi: tbl2.ppi, ci: tbl2.ci });
+  await sleep(page, 200);
+  await page.evaluate(() => {
+    document.querySelector('#template-panel .tp-fieldsuggest-btn').click();
+  });
+  await sleep(page, 300);
+
+  const afterRetry2 = await page.evaluate(() => ({
+    fieldCount: window.__wasm.getFieldList().length,
+    message: document.querySelector('#template-panel .tp-fieldsuggest-message')?.textContent ?? '',
+  }));
+  console.log('재클릭 후:', JSON.stringify(afterRetry2));
+  assert(afterRetry2.fieldCount === 3, `중복 생성 없이 필드 3개 그대로 유지된다: ${afterRetry2.fieldCount}개`);
+  assert(
+    afterRetry2.message.includes('이미 필드가 있') && afterRetry2.message.includes('3'),
+    `이미 태그된 3개(인라인 삽입 포함)를 모두 건너뛰었다는 메시지가 나온다: ${afterRetry2.message}`,
   );
-  assert(rowsAfterApply2 === 0, '적용 후 review list가 비워진다(다음 배치 오적용 방지)');
 });
