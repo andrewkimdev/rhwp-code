@@ -27001,6 +27001,58 @@ fn split_table_divides_rows_and_inherits_attrs() {
 }
 
 #[test]
+fn split_preserves_width_when_column_loses_its_only_unmerged_row() {
+    // 회귀 재현 (5446234.hwp 실측): 열이 일부 행에서는 col_span==1 이고 다른
+    // 행에서는 병합돼 사라지는 표를, 그 열의 유일한 col_span==1 대표 행이 반대
+    // 반쪽으로 가도록 나누면, update_ctrl_dimensions() 로 폭을 재계산하는 옛
+    // 방식은 대표 행 없는 반쪽에서 그 열을 1800 HU 기본값으로 축소해 표 폭이
+    // 줄어들었다. 나누기는 폭을 그대로 보존해야 한다(함수 doc comment).
+    use crate::model::control::Control;
+    let mut doc = HwpDocument::create_empty();
+    let created = doc.create_table_native(0, 0, 0, 4, 3).expect("표 생성");
+    let para_idx = issue_1481_json_usize(&created, "paraIdx");
+
+    let orig_width = issue_1481_table(&doc, para_idx).common.width;
+
+    // 행 1~3의 열1·열2를 colspan=2 로 병합한다 — 열2는 행0에만 col_span==1 로
+    // 남고, 나머지 행(1~3)에는 대표 셀이 없다.
+    for c in &mut doc.document.sections[0].paragraphs[para_idx].controls {
+        if let Control::Table(t) = c {
+            let (col1_width, col2_width) = {
+                let c1 = t.cells.iter().find(|c| c.row == 0 && c.col == 1).unwrap();
+                let c2 = t.cells.iter().find(|c| c.row == 0 && c.col == 2).unwrap();
+                (c1.width, c2.width)
+            };
+            for r in 1..4u16 {
+                if let Some(cell) = t.cells.iter_mut().find(|c| c.row == r && c.col == 1) {
+                    cell.col_span = 2;
+                    cell.width = col1_width + col2_width;
+                }
+                t.cells.retain(|c| !(c.row == r && c.col == 2));
+            }
+        }
+    }
+
+    // 행 1 부터 나눠, 열2의 유일한 col_span==1 대표 행(행0)은 앞 표에만 남고
+    // 뒤 표(원 행 1~3)에는 남지 않게 한다.
+    doc.split_table_native(0, para_idx, 0, 1)
+        .expect("표 나누기");
+
+    let tables = table_control_paras(&doc);
+    assert_eq!(tables.len(), 2, "나누면 표가 두 개여야 한다");
+    let front = issue_1481_table(&doc, tables[0]);
+    let back = issue_1481_table(&doc, tables[1]);
+    assert_eq!(
+        front.common.width, orig_width,
+        "앞 표 폭은 나누기 전과 같아야 한다"
+    );
+    assert_eq!(
+        back.common.width, orig_width,
+        "뒤 표 폭은 나누기 전과 같아야 한다 (열2 대표 행이 앞 표에만 남아도)"
+    );
+}
+
+#[test]
 fn split_table_at_first_row_is_rejected() {
     let mut doc = HwpDocument::create_empty();
     let created = doc.create_table_native(0, 0, 0, 3, 2).expect("표 생성");

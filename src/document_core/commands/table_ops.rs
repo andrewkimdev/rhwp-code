@@ -259,6 +259,8 @@ impl DocumentCore {
                 }
             }
 
+            let orig_width = table.common.width;
+
             // 뒤 표: 속성 상속을 위해 통째로 복제한 뒤 행을 갈라낸다.
             let mut back = table.clone();
             back.cells.retain(|c| c.row >= at_row);
@@ -337,7 +339,12 @@ impl DocumentCore {
                 .map(|(idx, h)| (idx - front_cell_count, *h))
                 .collect();
             back.rebuild_grid();
-            back.update_ctrl_dimensions();
+            // 표 나누기는 행 수/높이만 바뀌고 폭은 그대로 유지되어야 한다
+            // (함수 doc comment 참조). update_ctrl_dimensions() 로 셀에서 폭을
+            // 재계산하면, 행별 병합 패턴에 따라 이 반쪽에 col_span==1 대표 셀이
+            // 없는 열이 1800 HU 기본값으로 축소되어 표 폭이 잘못 줄어든다.
+            back.sync_ctrl_height(back.get_row_heights().iter().sum());
+            back.sync_ctrl_width(orig_width);
             back.dirty = true;
 
             // 앞 표: at_row 이후를 잘라낸다.
@@ -360,7 +367,8 @@ impl DocumentCore {
                 .local_resize_cell_heights
                 .retain(|(idx, _)| *idx < front_cell_count);
             table.rebuild_grid();
-            table.update_ctrl_dimensions();
+            table.sync_ctrl_height(table.get_row_heights().iter().sum());
+            table.sync_ctrl_width(orig_width);
             table.dirty = true;
             back
         };

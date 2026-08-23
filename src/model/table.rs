@@ -875,10 +875,17 @@ impl Table {
         self.common.height = total_height;
     }
 
-    fn sync_ctrl_height(&mut self, height: HwpUnit) {
+    pub(crate) fn sync_ctrl_height(&mut self, height: HwpUnit) {
         self.common.height = height;
         if self.raw_ctrl_data.len() >= common_obj_offsets::HEIGHT.end {
             self.raw_ctrl_data[common_obj_offsets::HEIGHT].copy_from_slice(&height.to_le_bytes());
+        }
+    }
+
+    pub(crate) fn sync_ctrl_width(&mut self, width: HwpUnit) {
+        self.common.width = width;
+        if self.raw_ctrl_data.len() >= common_obj_offsets::WIDTH.end {
+            self.raw_ctrl_data[common_obj_offsets::WIDTH].copy_from_slice(&width.to_le_bytes());
         }
     }
 
