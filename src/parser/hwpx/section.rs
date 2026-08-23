@@ -7957,12 +7957,24 @@ mod tests {
 
         let attr = line.drawing.border_line.attr;
         // head(SPEAR=2) → bit 10~15
-        assert_eq!((attr >> 10) & 0x3F, 2, "headStyle=SPEAR 가 bit 10~15 에 반영돼야 함");
+        assert_eq!(
+            (attr >> 10) & 0x3F,
+            2,
+            "headStyle=SPEAR 가 bit 10~15 에 반영돼야 함"
+        );
         // tail(NORMAL=0) → bit 16~21
-        assert_eq!((attr >> 16) & 0x3F, 0, "tailStyle=NORMAL 은 bit 16~21 이 0 이어야 함");
+        assert_eq!(
+            (attr >> 16) & 0x3F,
+            0,
+            "tailStyle=NORMAL 은 bit 16~21 이 0 이어야 함"
+        );
         // headfill=1 → bit 30, tailfill=0 → bit 31 은 꺼져 있어야 함
         assert_ne!(attr & 0x4000_0000, 0, "headfill=1 은 bit 30 이어야 함");
-        assert_eq!(attr & 0x8000_0000, 0, "tailfill=0 은 bit 31 이 꺼져 있어야 함");
+        assert_eq!(
+            attr & 0x8000_0000,
+            0,
+            "tailfill=0 은 bit 31 이 꺼져 있어야 함"
+        );
     }
 
     #[test]

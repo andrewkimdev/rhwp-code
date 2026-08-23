@@ -5742,8 +5742,9 @@ fn export_pdf(args: &[String]) -> i32 {
                     }
                 };
                 let convert_start = std::time::Instant::now();
-                let result = rhwp::renderer::pdf::svgs_to_pdf_with_options(&svg_pages, &pdf_options)
-                    .map_err(rhwp::error::HwpError::RenderError);
+                let result =
+                    rhwp::renderer::pdf::svgs_to_pdf_with_options(&svg_pages, &pdf_options)
+                        .map_err(rhwp::error::HwpError::RenderError);
                 convert_ms = convert_start.elapsed().as_millis();
                 result
             }
