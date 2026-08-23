@@ -922,6 +922,16 @@ impl Table {
     }
 
     /// 열별 폭을 추출한다 (col_span==1인 셀 기준).
+    ///
+    /// col_span==1 대표 셀이 하나도 없는 열(예: 그 열을 지나는 모든 행이 이미
+    /// 병합돼 있는 경우 — `setTableRoleMarker()`가 완전 병합 행 위에 마커 행을
+    /// 삽입할 때 실제로 발생)은 실제 열 경계를 셀 데이터만으로 복원할 수 없다.
+    /// 이런 열에 고정 상수를 채우면(과거 1800 HWPUNIT) 그 합이 `common.width`와
+    /// 어긋나고, 이 함수를 표 폭으로 쓰는 호출부(update_ctrl_dimensions, 렌더러
+    /// text-wrap 등)가 표를 잘못된 폭으로 재추정해 위치가 밀리거나(#4478) 마커
+    /// 텍스트가 한 글자 폭으로 줄바꿈된다. 대신 표의 마지막으로 알려진 실제 폭
+    /// (common.width)에서 이미 확인된 열들의 합을 뺀 나머지를 남은 열에 고르게
+    /// 나눠, 적어도 합계는 실제 표 폭과 일치하게 한다.
     pub fn get_column_widths(&self) -> Vec<HwpUnit> {
         let mut widths = vec![0u32; self.col_count as usize];
         for cell in &self.cells {
@@ -931,10 +941,18 @@ impl Table {
                 }
             }
         }
-        // 폭이 0인 열은 기본값 1800 HWPUNIT (약 6.35mm)
-        for w in &mut widths {
-            if *w == 0 {
-                *w = 1800;
+        let missing: Vec<usize> = widths
+            .iter()
+            .enumerate()
+            .filter(|(_, w)| **w == 0)
+            .map(|(idx, _)| idx)
+            .collect();
+        if !missing.is_empty() {
+            let known_sum: u32 = widths.iter().sum();
+            let remaining = self.common.width.saturating_sub(known_sum);
+            let shares = distribute_hwp_units(remaining, missing.len() as u16);
+            for (slot, share) in missing.into_iter().zip(shares) {
+                widths[slot] = share.max(1);
             }
         }
         widths

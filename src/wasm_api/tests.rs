@@ -27053,6 +27053,49 @@ fn split_preserves_width_when_column_loses_its_only_unmerged_row() {
 }
 
 #[test]
+fn tagging_a_fully_merged_row_preserves_table_width() {
+    // 회귀 재현 (#4478 — "Table Marker Drift" 조사): rhwp-studio의
+    // setTableRoleMarker()(template.ts)가 표 마커를 달 때 실제로 호출하는 순서
+    // 그대로 — insertTableRow(0, false) 로 마커 행을 삽입한 뒤, 열이 2개
+    // 이상이면 mergeTableCells 로 그 행 전체를 하나의 셀로 합친다.
+    //
+    // 태깅 대상 표가 이미 "행 전체가 하나로 병합된 셀"만으로 이뤄져 있으면
+    // (예: #REPEAT-TITLE/#REPEAT-HEADER 로 태깅하는 소제목 행), col_span==1인
+    // 대표 셀이 단 하나도 없다. 옛 get_column_widths()는 이런 열을 전부 1800
+    // HWPUNIT 고정값으로 채웠고, insert_row()의 update_ctrl_dimensions() 가 그
+    // 잘못된 합계로 common.width를 덮어써 표가 옆으로 밀렸다(마커 삽입만으로
+    // 폭이 바뀌면 안 된다).
+    let mut doc = HwpDocument::create_empty();
+    let created = doc.create_table_native(0, 0, 0, 1, 3).expect("표 생성");
+    let para_idx = issue_1481_json_usize(&created, "paraIdx");
+
+    let orig_width = issue_1481_table(&doc, para_idx).common.width;
+
+    // 유일한 행을 하나의 셀로 완전 병합 — 이 시점부터 col_span==1 대표 셀이
+    // 전혀 없다(소제목/구분 행의 실제 모양).
+    doc.merge_table_cells_native(0, para_idx, 0, 0, 0, 0, 2)
+        .expect("행 전체 병합");
+    assert_eq!(
+        issue_1481_table(&doc, para_idx).common.width,
+        orig_width,
+        "사전 조건: 병합 자체는 표 폭을 바꾸지 않는다"
+    );
+
+    // setTableRoleMarker()와 동일한 시퀀스: 마커 행 삽입 후 그 행 전체 병합.
+    doc.insert_table_row_native(0, para_idx, 0, 0, false)
+        .expect("마커 행 삽입");
+    let dims_cols = issue_1481_table(&doc, para_idx).col_count;
+    doc.merge_table_cells_native(0, para_idx, 0, 0, 0, 0, dims_cols - 1)
+        .expect("마커 행 병합");
+
+    assert_eq!(
+        issue_1481_table(&doc, para_idx).common.width,
+        orig_width,
+        "완전 병합된 표에 마커 행을 달아도 표 폭은 그대로여야 한다"
+    );
+}
+
+#[test]
 fn split_table_at_first_row_is_rejected() {
     let mut doc = HwpDocument::create_empty();
     let created = doc.create_table_native(0, 0, 0, 3, 2).expect("표 생성");
