@@ -58,6 +58,7 @@ function ensureHeaderFooter(
 function enterHeaderFooterEditing(
   services: Parameters<CommandDef['execute']>[0],
   isHeader: boolean,
+  options?: { positionAtEnd?: boolean },
 ): void {
   const ih = services.getInputHandler();
   if (!ih) return;
@@ -74,6 +75,9 @@ function enterHeaderFooterEditing(
   const bodyPos = cursor.getPosition();
   ensureHeaderFooter(services, ih, bodyPos, target, isHeader);
   cursor.enterHeaderFooterMode(isHeader, target.sectionIndex, target.applyTo, currentPage);
+  if (options?.positionAtEnd) {
+    positionHfCursorAtEnd(services, cursor, isHeader, target.sectionIndex, target.applyTo);
+  }
 
   services.eventBus.emit('headerFooterModeChanged', isHeader ? 'header' : 'footer');
   (ih as any).updateCaret?.();
@@ -149,6 +153,30 @@ function navigateHeaderFooter(
   services.eventBus.emit('headerFooterModeChanged', result.isHeader ? 'header' : 'footer');
   (ih as any).updateCaret?.();
   (ih as any).textarea?.focus();
+}
+
+/**
+ * 머리말/꼬리말 커서를 마지막 문단의 끝으로 옮긴다. enterHeaderFooterMode()는
+ * 항상 (0,0)으로 초기화하므로, 기존 내용 뒤에 이어 쓰고 싶은 호출부만
+ * 이 함수로 위치를 보정한다.
+ */
+function positionHfCursorAtEnd(
+  services: Parameters<CommandDef['execute']>[0],
+  cursor: any,
+  isHeader: boolean,
+  sectionIdx: number,
+  applyTo: number,
+): void {
+  try {
+    let info = JSON.parse(services.wasm.getHeaderFooterParaInfo(sectionIdx, isHeader, applyTo, 0));
+    let lastParaIdx = Math.max((info.paraCount ?? 1) - 1, 0);
+    if (lastParaIdx > 0) {
+      info = JSON.parse(services.wasm.getHeaderFooterParaInfo(sectionIdx, isHeader, applyTo, lastParaIdx));
+    }
+    cursor.setHfCursorPosition(lastParaIdx, info.charCount ?? 0);
+  } catch (e) {
+    console.warn('[page] 머리말/꼬리말 끝 위치 계산 실패:', e);
+  }
 }
 
 /** 머리말/꼬리말 마당 템플릿 적용 공통 함수 */
@@ -410,19 +438,40 @@ export const pageCommands: CommandDef[] = [
     id: 'page:insert-field-pagenum',
     label: '쪽 번호 삽입',
     canExecute: (ctx) => ctx.hasDocument,
-    execute(services) { insertHfField(services, 1); },
+    execute(services) {
+      const ih = services.getInputHandler();
+      const cursor = ih ? (ih as any).cursor : null;
+      if (cursor && !cursor.isInHeaderFooter()) {
+        enterHeaderFooterEditing(services, false, { positionAtEnd: true });
+      }
+      insertHfField(services, 1);
+    },
   },
   {
     id: 'page:insert-field-totalpage',
     label: '총 쪽수 삽입',
     canExecute: (ctx) => ctx.hasDocument,
-    execute(services) { insertHfField(services, 2); },
+    execute(services) {
+      const ih = services.getInputHandler();
+      const cursor = ih ? (ih as any).cursor : null;
+      if (cursor && !cursor.isInHeaderFooter()) {
+        enterHeaderFooterEditing(services, false, { positionAtEnd: true });
+      }
+      insertHfField(services, 2);
+    },
   },
   {
     id: 'page:insert-field-filename',
     label: '파일 이름 삽입',
     canExecute: (ctx) => ctx.hasDocument,
-    execute(services) { insertHfField(services, 3); },
+    execute(services) {
+      const ih = services.getInputHandler();
+      const cursor = ih ? (ih as any).cursor : null;
+      if (cursor && !cursor.isInHeaderFooter()) {
+        enterHeaderFooterEditing(services, false, { positionAtEnd: true });
+      }
+      insertHfField(services, 3);
+    },
   },
   // ─── 머리말/꼬리말 마당 (템플릿) ─────────────────────
   {

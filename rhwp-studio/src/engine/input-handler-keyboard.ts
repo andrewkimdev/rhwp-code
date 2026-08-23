@@ -614,6 +614,24 @@ export function onKeyDown(this: any, e: KeyboardEvent): void {
       return;
     }
 
+    // Home/End → 머리말/꼬리말 내 현재 문단 처음/끝으로 이동
+    if (e.key === 'Home' || e.key === 'End') {
+      e.preventDefault();
+      const isHeader = this.cursor.headerFooterMode === 'header';
+      if (e.key === 'Home') {
+        this.cursor.setHfCursorPosition(this.cursor.hfParaIdx, 0);
+      } else {
+        try {
+          const info = JSON.parse(this.wasm.getHeaderFooterParaInfo(
+            this.cursor.hfSectionIdx, isHeader, this.cursor.hfApplyTo, this.cursor.hfParaIdx,
+          ));
+          this.cursor.setHfCursorPosition(this.cursor.hfParaIdx, info.charCount ?? 0);
+        } catch { /* ignore */ }
+      }
+      this.updateCaret();
+      return;
+    }
+
     // Shift+Enter → 머리말/꼬리말 내 강제 줄바꿈
     if (e.key === 'Enter' && e.shiftKey) {
       e.preventDefault();
