@@ -74,19 +74,34 @@ export function buildTableRoleMarkerText(params: TagSelectionParams): string {
  * 같은 모양(행 삽입 → 전체 열 병합 → 텍스트 입력)을 wasm 호출로 재현한다.
  */
 /**
- * 마커 행이 원본 표에서 그대로 복제된 서식(원래 셀의 글자 크기·정렬·배경·행
- * 높이)을 물려받으면 눈에 잘 안 띈다 — 이 표가 authoring 마커라는 걸 한눈에
- * 알 수 있도록 고정된 시각 스타일을 강제한다: 18pt 굵게, 왼쪽 정렬, 검정
- * 글자, 옅은 회색 배경, 22px 행 높이, 세로 가운데 정렬.
+ * 마커 행이 원본 표에서 그대로 복제된 서식(원래 셀의 글꼴·자간·장평·안 여백·
+ * 정렬·배경·행 높이)을 물려받으면 눈에 잘 안 띄고, 표마다 제각각으로 보인다
+ * — 이 표가 authoring 마커라는 걸 한눈에 알 수 있도록, 그리고 어떤 원본 행에
+ * 붙였든 모든 마커 행이 서로 동일하게 보이도록 고정된 시각 스타일을 강제한다:
+ * 돋움체 18pt 굵게(자간·장평 100% 고정), 왼쪽 정렬, 검정 글자, 옅은 회색
+ * 배경, 22px 행 높이, 세로 가운데 정렬, 141 HWPUNIT(약 1.9px) 안 여백.
+ *
+ * [자체 발견] 글꼴·자간·장평·안 여백을 강제하지 않았을 때는 원본 셀에 이미
+ * 있던 값을 그대로 물려받았다 — 이 문서 안에서는 우연히 대부분 일치했지만,
+ * 새로 삽입된 마커 행(`insertTableRow`)의 문단이 원본 문서의 다른 행과 다른
+ * 기본 서식(예: 자간이 들어간 글자 모양)을 물려받으면 같은 문서 안에서도
+ * 마커 행끼리 눈에 띄게 다르게 렌더링됐다.
  */
 const MARKER_ROW_STYLE = {
   charFontSizeHwpUnit: 1800, // HWPUNIT: 1pt = 100 → 18pt
   charTextColor: '#000000',
+  /** 한컴 표준 산세리프 — 기존에 이미 쓰이던 서체를 명시적으로 고정한다. */
+  charFontFace: '돋움체',
+  /** CharShape.ratios/spacings 7언어 슬롯 전부에 강제할 장평/자간(기본값). */
+  charWidthRatioPercent: 100,
+  charLetterSpacingPercent: 0,
   paraAlignment: 'left',
   cellFillColor: '#D9D9D9',
   cellHeightPx: 22,
   /** CellProperties.verticalAlign: 0=top, 1=center, 2=bottom */
   cellVerticalAlign: 1,
+  /** 좌우상하 공통 안 여백(HWPUNIT) — 이 문서군의 기존 표준값. */
+  cellPaddingHwp: 141,
 } as const;
 
 /**
@@ -103,10 +118,18 @@ function applyMarkerRowStyle(
   cellIdx: number,
   markerText: string,
 ): void {
+  // 글꼴은 이름이 아니라 fontId(문서 글꼴 표 인덱스)로만 적용된다 — 없으면
+  // 새로 등록한다. char-shape-dialog.ts의 fontName→fontId 변환과 동일 계약.
+  const fontId = wasm.findOrCreateFontId(MARKER_ROW_STYLE.charFontFace);
+  const ratios = new Array(7).fill(MARKER_ROW_STYLE.charWidthRatioPercent);
+  const spacings = new Array(7).fill(MARKER_ROW_STYLE.charLetterSpacingPercent);
   wasm.applyCharFormatInCell(sec, ppi, ci, cellIdx, 0, 0, markerText.length, JSON.stringify({
     fontSize: MARKER_ROW_STYLE.charFontSizeHwpUnit,
     bold: true,
     textColor: MARKER_ROW_STYLE.charTextColor,
+    ...(fontId >= 0 ? { fontId } : {}),
+    ratios,
+    spacings,
   }));
   wasm.applyParaFormatInCell(sec, ppi, ci, cellIdx, 0, JSON.stringify({
     alignment: MARKER_ROW_STYLE.paraAlignment,
@@ -115,6 +138,13 @@ function applyMarkerRowStyle(
     fillType: 'solid',
     fillColor: MARKER_ROW_STYLE.cellFillColor,
     verticalAlign: MARKER_ROW_STYLE.cellVerticalAlign,
+    // 표 기본 안 여백에 얹혀가지 않도록 셀 자체에 명시적으로 고정한다 —
+    // 그래야 원본 표의 기본 안 여백이 뭐였든 마커 행은 항상 동일하다.
+    applyInnerMargin: true,
+    paddingLeft: MARKER_ROW_STYLE.cellPaddingHwp,
+    paddingRight: MARKER_ROW_STYLE.cellPaddingHwp,
+    paddingTop: MARKER_ROW_STYLE.cellPaddingHwp,
+    paddingBottom: MARKER_ROW_STYLE.cellPaddingHwp,
   });
 
   // `resizeTableCells`는 delta 기반이라(TableCellResizeUpdate) 목표 높이가
