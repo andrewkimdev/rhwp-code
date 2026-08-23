@@ -2,7 +2,7 @@
 kind: reference
 status: active
 canonical: mydocs/manual/field_naming_heuristics.md
-last_verified: 2026-08-23
+last_verified: 2026-08-24
 ---
 
 # 누름틀 이름 자동 제안 — 감지 규칙
@@ -110,6 +110,54 @@ col/colSpan**을 가진 `rowSpan === 1` 빈 셀이 있으면, 그 빈 셀을 후
    묶음"이라는 저자 의도가 구조적으로 드러난 경우이므로, 이 신호가 있을 때만 인라인
    후보를 만든다.
 7. **라벨치고 너무 길면 제외.** 규칙 3과 같은 `MAX_PLAUSIBLE_LABEL_LEN` 가드.
+
+## 규칙 5 — repeat-header-column-match (표 간 규칙, `ROW_PATTERN_RULES` 밖)
+
+`#REPEAT-BODY:<segment>` 표의 콘텐츠 행은 전부 빈 칸이라(라벨이 없다) 규칙 2/3/4 중
+어느 것도 후보를 찾지 못한다 — 마커 게이트는 통과하지만 실질적으로 아무 제안도 나오지
+않는 사각지대였다. 규칙 5는 이 사각지대를, **같은 반복 블록의 `#REPEAT-HEADER:<segment>`
+표에 실제로 적힌 열 이름**을 근거로 메운다.
+
+발동 조건(모두 참이어야 한다):
+
+1. 현재 표가 `#REPEAT-BODY(-NESTED)?:<segment>`다.
+2. 문서 순서상 **바로 앞** 최상위 표가 `#REPEAT-HEADER(-NESTED)?:<같은 segment>`다(nested
+   여부도 같아야 한다). `#REPEAT-TITLE`이나 태깅 안 된 일반 표가 바로 앞이면 발동하지 않는다.
+3. 두 표의 마커 행(row 0)을 제외한 **콘텐츠 셀 배치가 완전히 같다** — 행 수, 열 경계
+   (colSpan 시퀀스), 세로 병합(rowSpan)까지 전부. 텍스트는 비교하지 않는다. 하나라도 다르면
+   (예: 헤더 3열/바디 2열) 후보를 전혀 만들지 않는다 — 부분적으로 안전하게 매칭할 방법이
+   없으므로 전부 수동 처리로 남긴다.
+
+조건을 통과하면, 바디의 각 빈 셀마다 같은 위치(같은 상대 행·열)의 헤더 셀 텍스트로
+`<segment>_<헤더 셀 텍스트>`를 제안한다. 헤더 셀 텍스트가 비어 있는 열은 그 열만 건너뛰고
+(이름 지을 근거가 없다), 나머지 열은 정상적으로 제안된다.
+
+**5446234.hwp**("변경 사항" 표)가 전형적인 예다: `#REPEAT-TITLE:변경사항` → 헤더 행("구분"/
+"변경내용"/"변경일")이 있는 `#REPEAT-HEADER:변경사항` → 3칸 모두 빈 칸인
+`#REPEAT-BODY:변경사항` → `#REPEAT-FOOTER` 순서. 이때 `변경사항_구분`/`변경사항_변경내용`/
+`변경사항_변경일`이 제안된다.
+
+**"바로 앞"만 보는 이유**: hwpx-template-engine 엔진(`TableRoleMarkerLintValidator`, Rust 포트
+`src/document_core/queries/template_entity.rs`의 `find_group`)이 이미 TITLE→HEADER→BODY→
+FOOTER를 연속한 최상위 형제 표로 요구한다 — 같은 반복 블록에 속하는 REPEAT-HEADER/
+REPEAT-BODY는 애초에 인접해야 하므로, 그 기존 불변조건을 그대로 재사용한다
+(`table-outline.ts`의 `findMatchingRepeatHeaderEntry`).
+
+### seqno 특례 — 첫 열이 일련번호 라벨이면 `#seqno:<segment>`
+
+헤더 콘텐츠 행의 **첫 열**(col 0) 텍스트가 대소문자 무시하고 `No`/`번호`/`순번`으로
+**시작**하면, 그 열은 일반 조합(`<segment>_<열 이름>`) 대신 **`#seqno:<segment>`**로
+제안한다(접두어 조합 없이 그대로) — 반복 블록의 일련번호 칸이라는 것을 이름 자체가
+드러내는 marker 성격의 이름이다. 이 문자열을 채움(fill) 시점에 어떻게 소비할지는 이
+감지 규칙의 범위 밖이다. 첫 열이 아닌 곳의 "No"로 시작하는 텍스트(예: "Note")에는 적용되지
+않는다 — `col === 0` 조건이 있어야만 특례가 발동한다.
+
+**표-간(cross-table) 소스임을 유의**: 규칙 5는 표 하나의 그리드만 보는
+`(grid, prefixMap) => RowPatternCandidate[]` 시그니처(`RowPatternRule`)에 맞지 않는다 —
+인접한 두 최상위 표(헤더 표, 바디 표)를 함께 봐야 하므로 `ROW_PATTERN_RULES` 배열에 들어가지
+않고, `suggestFieldNames`가 별도 코드 경로로 직접 호출한다(`repeatHeaderColumnMatchCandidates`,
+`field-name-suggest.ts`). "선택 텍스트 기반 생성"이 `ROW_PATTERN_RULES` 밖의 별도 소스로
+문서화된 것과 같은 방식이다.
 
 ## 유일성 보정
 
@@ -242,16 +290,21 @@ cellParaIndex, charOffset }`가 있다 — 규칙 1~3처럼 "빈 셀을 채우�
 ## 관련 코드
 
 - 감지(표 인접 셀, 자동): `rhwp-studio/src/core/field-name-suggest.ts`
+- 감지(표 간, 규칙 5): `rhwp-studio/src/core/field-name-suggest.ts`의
+  `repeatHeaderColumnMatchCandidates`/`hasIdenticalContentStructure`,
+  `rhwp-studio/src/core/table-outline.ts`의 `findMatchingRepeatHeaderEntry`
 - 감지(선택 텍스트, 수동): `rhwp-studio/src/core/selection-text.ts`
 - 이름 유일성 공유 로직: `rhwp-studio/src/core/field-name-dedup.ts`
 - UI: `rhwp-studio/src/ui/template-panel.ts` ("누름틀 만들기" 그룹)
 - 적용 커맨드: `rhwp-studio/src/command/commands/field-suggest.ts`
 - 단위 테스트: `rhwp-studio/tests/field-name-suggest.test.ts`(규칙 1~4 및 각 가드의
   positive/negative 케이스, 17856415.hwp 표 전체를 옮긴 회귀 테스트, 마커 게이트
-  어휘/행 범위/마커 셀 제외 케이스 포함),
-  `rhwp-studio/tests/selection-text.test.ts`, `rhwp-studio/tests/field-name-dedup.test.ts`
+  어휘/행 범위/마커 셀 제외 케이스, 규칙 5(5446234.hwp "변경 사항" 재현·구조 불일치·
+  헤더 빈 텍스트·직전 표 불일치·seqno 특례) 포함),
+  `rhwp-studio/tests/selection-text.test.ts`, `rhwp-studio/tests/field-name-dedup.test.ts`,
+  `rhwp-studio/tests/table-outline.test.ts`(`findMatchingRepeatHeaderEntry` 케이스)
 - e2e: `rhwp-studio/e2e/field-suggest-panel.test.mjs`(표 인접 셀 — 게이트 메시지 TC-1b,
-  #HEADER 태깅 후 규칙 1/2 TC-1c~4, 규칙 3/4 TC-5~7),
+  #HEADER 태깅 후 규칙 1/2 TC-1c~4, 규칙 3/4 TC-5~7, 규칙 5 TC-8 — 5446234.hwp "변경 사항"),
   `rhwp-studio/e2e/field-suggest-selection.test.mjs`(선택 텍스트)
 
 이 문서는 **감지 규칙**(무엇을 어떻게 이름으로 바꾸는가)만 다룬다. wasm 필드 API 시그니처,

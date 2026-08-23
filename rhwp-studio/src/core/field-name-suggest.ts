@@ -22,6 +22,7 @@
  */
 import type { WasmBridge } from './wasm-bridge';
 import { resolveUniqueName } from './field-name-dedup.ts';
+import { findMatchingRepeatHeaderEntry, listTopLevelTables, readTableMarkerText } from './table-outline.ts';
 
 /** 표의 한 셀에서 읽은 텍스트/서식 정보 (제안 계산의 기초 자료). */
 export interface GridCellText {
@@ -315,6 +316,85 @@ export const ROW_PATTERN_RULES: readonly RowPatternRule[] = [
   labelInlineRoomRule,
 ];
 
+/**
+ * 현재 표가 `#REPEAT-BODY(-NESTED)?:<segment>`인지 판정하고 segment를 뽑는다.
+ * `table-outline.ts`의 같은 이름 패턴과 별개 인스턴스다(모듈 경계를 넘는 정규식 공유보다
+ * 각 파일이 자기 파싱만 책임지는 편이 더 단순하다 — 둘 다 리터럴이라 드리프트 위험이 없다).
+ */
+const REPEAT_BODY_MARKER_PATTERN = /^#REPEAT-BODY(-NESTED)?:(.+)$/;
+
+/** 헤더 콘텐츠 행의 첫 열이 "일련번호" 라벨인지 — 규칙 5의 seqno 특례가 쓴다. */
+const SEQNO_HEADER_PATTERN = /^(no|번호|순번)/i;
+
+/** 마커 행(row 0)을 제외한 콘텐츠 셀만 남기고, row를 0부터 다시 매긴 모양 배열. */
+function contentCellShapes(
+  grid: readonly GridCellText[],
+): { row: number; col: number; rowSpan: number; colSpan: number }[] {
+  return grid
+    .filter((c) => c.row >= 1)
+    .map((c) => ({ row: c.row - 1, col: c.col, rowSpan: c.rowSpan, colSpan: c.colSpan }));
+}
+
+/**
+ * 두 표의 콘텐츠 영역(마커 행 제외)이 셀 배치(행 수·열 경계·세로 병합)까지 완전히
+ * 같은지 판정한다. 텍스트는 보지 않는다 — 오직 기하 구조만.
+ */
+function hasIdenticalContentStructure(
+  headerGrid: readonly GridCellText[],
+  bodyGrid: readonly GridCellText[],
+): boolean {
+  const key = (c: { row: number; col: number; rowSpan: number; colSpan: number }) =>
+    `${c.row}:${c.col}:${c.rowSpan}:${c.colSpan}`;
+  const headerKeys = contentCellShapes(headerGrid).map(key).sort();
+  const bodyKeys = contentCellShapes(bodyGrid).map(key).sort();
+  if (headerKeys.length !== bodyKeys.length) return false;
+  return headerKeys.every((k, i) => k === bodyKeys[i]);
+}
+
+/**
+ * 규칙 5 — repeat-header-column-match: `#REPEAT-BODY:<segment>` 표의 콘텐츠 영역이
+ * 바로 앞 `#REPEAT-HEADER:<같은 segment>` 표와 구조(행 수·열 경계·세로 병합)가 완전히
+ * 같을 때만, 바디의 각 빈 셀에 같은 위치 헤더 셀의 텍스트로 이름을 제안한다.
+ *
+ * `ROW_PATTERN_RULES`(단일 표 그리드만 보는 `RowPatternRule` 시그니처)에 들어가지 않는
+ * 표-간(cross-table) 별도 소스다 — `suggestFieldNames`가 직접 호출한다. 자세한 근거는
+ * `mydocs/manual/field_naming_heuristics.md` 규칙 5.
+ */
+function repeatHeaderColumnMatchCandidates(
+  headerGrid: readonly GridCellText[],
+  bodyGrid: readonly GridCellText[],
+  segment: string,
+): RowPatternCandidate[] {
+  if (!hasIdenticalContentStructure(headerGrid, bodyGrid)) return [];
+
+  const candidates: RowPatternCandidate[] = [];
+  for (const bodyCell of bodyGrid) {
+    if (!isBlankCell(bodyCell)) continue;
+    const headerCell = findGridCellAt(headerGrid, bodyCell.row, bodyCell.col);
+    if (!headerCell || !headerCell.strippedText) continue;
+
+    const isSeqnoColumn = headerCell.col === 0 && SEQNO_HEADER_PATTERN.test(headerCell.strippedText);
+    candidates.push(
+      isSeqnoColumn
+        ? {
+            cellIdx: bodyCell.cellIdx,
+            row: bodyCell.row,
+            col: bodyCell.col,
+            leafText: `#seqno:${segment}`,
+            sectionPrefix: null,
+          }
+        : {
+            cellIdx: bodyCell.cellIdx,
+            row: bodyCell.row,
+            col: bodyCell.col,
+            leafText: headerCell.strippedText,
+            sectionPrefix: segment,
+          },
+    );
+  }
+  return candidates;
+}
+
 /** 검토 목록 한 행 — UI가 그대로 렌더링하는 단위. */
 export interface FieldNameSuggestion {
   cellIdx: number;
@@ -370,15 +450,28 @@ export function suggestFieldNames(
   // 봐야 정확하다(인접 셀 탐색, rowSpan 앵커의 접두어 매핑).
   const inRowRange = (row: number) =>
     rowRange === undefined || (row >= rowRange.startRow && row <= rowRange.endRow);
-  const candidates = ROW_PATTERN_RULES.flatMap((rule) => rule(grid, prefixMap)).filter((c) =>
-    inRowRange(c.row),
-  );
+  const candidates = ROW_PATTERN_RULES.flatMap((rule) => rule(grid, prefixMap));
+
+  // 규칙 5(repeat-header-column-match) — 현재 표가 REPEAT-BODY 표면, 바로 앞
+  // REPEAT-HEADER 표(같은 segment)를 찾아 구조가 같을 때만 열 이름을 매칭한다.
+  const bodyMatch = readTableMarkerText(wasm, sec, parentPara, controlIndex)?.match(REPEAT_BODY_MARKER_PATTERN);
+  if (bodyMatch) {
+    const entries = listTopLevelTables(wasm, sec);
+    const bodyEntry = entries.find((e) => e.parentPara === parentPara && e.controlIndex === controlIndex);
+    const headerEntry = bodyEntry ? findMatchingRepeatHeaderEntry(entries, bodyEntry) : null;
+    if (headerEntry) {
+      const headerGrid = readTableGrid(wasm, sec, headerEntry.parentPara, headerEntry.controlIndex);
+      candidates.push(...repeatHeaderColumnMatchCandidates(headerGrid, grid, bodyMatch[2]));
+    }
+  }
+
+  const filteredCandidates = candidates.filter((c) => inRowRange(c.row));
 
   const existingNames = new Set(wasm.getFieldList().map((f) => f.name));
   const usedInBatch = new Set<string>();
   const suggestions: FieldNameSuggestion[] = [];
 
-  for (const candidate of candidates) {
+  for (const candidate of filteredCandidates) {
     const gridCell = grid.find((c) => c.cellIdx === candidate.cellIdx);
     // 두 신호를 함께 본다: ① `getCellProperties(...).fieldName` — 셀 자체가
     // "셀 필드"로 지정된 경우(표 셀 속성 대화상자의 별개 기능, insertClickHereField와

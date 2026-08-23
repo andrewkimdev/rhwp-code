@@ -147,6 +147,45 @@ export function expandRowRangeForMerges(
 
 const REPEAT_BODY_PATTERN = /^#REPEAT-BODY:(.+)$/;
 
+// `REPEAT_BODY_PATTERN`과 별개 정규식이다 — `-NESTED`를 옵셔널 그룹으로 넣으면 이름
+// capture group 위치가 바뀌므로(1→2), `availableNestedParentBlockNames`가 쓰는 그룹 번호를
+// 깨지 않기 위해 새로 둔다.
+const REPEAT_HEADER_MARKER_PATTERN = /^#REPEAT-HEADER(-NESTED)?:(.+)$/;
+const REPEAT_BODY_MARKER_PATTERN = /^#REPEAT-BODY(-NESTED)?:(.+)$/;
+
+/**
+ * `bodyEntry`(`#REPEAT-BODY(-NESTED)?:<segment>` 표)의 문서 순서상 **바로 앞** 최상위
+ * 표가 같은 `<segment>`(그리고 같은 nested 여부)를 가진 `#REPEAT-HEADER(-NESTED)?:` 표인지
+ * 확인한다. 그렇지 않으면(앞 표가 없거나, 헤더 마커가 아니거나, segment가 다르면) `null`.
+ *
+ * "바로 앞"만 보는 이유: hwpx-template-engine 엔진(`TableRoleMarkerLintValidator`, Rust 포트
+ * `src/document_core/queries/template_entity.rs`의 `find_group`)이 이미 TITLE→HEADER→
+ * BODY→FOOTER를 연속한 최상위 형제 표로 요구한다 — 같은 반복 블록에 속하는
+ * REPEAT-HEADER/REPEAT-BODY는 애초에 인접해야 하므로, 그 기존 불변조건을 그대로 재사용한다.
+ */
+export function findMatchingRepeatHeaderEntry(
+  entries: readonly TableOutlineEntry[],
+  bodyEntry: TableOutlineEntry,
+): TableOutlineEntry | null {
+  const bodyMatch = bodyEntry.markerText?.match(REPEAT_BODY_MARKER_PATTERN);
+  if (!bodyMatch) return null;
+  const [, bodyNested, bodySegment] = bodyMatch;
+
+  const index = entries.findIndex(
+    (e) => e.parentPara === bodyEntry.parentPara && e.controlIndex === bodyEntry.controlIndex,
+  );
+  if (index <= 0) return null;
+
+  const prev = entries[index - 1];
+  const headerMatch = prev.markerText?.match(REPEAT_HEADER_MARKER_PATTERN);
+  if (!headerMatch) return null;
+  const [, headerNested, headerSegment] = headerMatch;
+
+  if (headerSegment !== bodySegment) return null;
+  if (Boolean(headerNested) !== Boolean(bodyNested)) return null;
+  return prev;
+}
+
 /**
  * `-NESTED:` 마커를 authoring할 수 있는 부모 블록명 목록.
  *

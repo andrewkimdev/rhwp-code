@@ -423,4 +423,181 @@ runTest('누름틀 만들기 — 행 선택 시 즉시 생성/skip', async ({ pa
     afterRetry2.message.includes('이미 필드가 있') && afterRetry2.message.includes('3'),
     `이미 태그된 3개(인라인 삽입 포함)를 모두 건너뛰었다는 메시지가 나온다: ${afterRetry2.message}`,
   );
+
+  // ── TC-8: 규칙 5(repeat-header-column-match) — 5446234.hwp "변경 사항" 모양 ──
+  // 2행 3열 표(row0="구분"/"변경내용"/"변경일", row1=빈칸 3개)를 만든 뒤 row0을
+  // REPEAT_HEADER, row1을 REPEAT_BODY(같은 블록명 "변경사항")로 각각 태깅한다.
+  // `template:tag-selection`은 태깅한 범위를 `splitTable`로 별도 최상위 표로
+  // 떼어내므로(template.ts의 tagSelectionOperation), 이 시점에 문서에는 실제로
+  // 서로 다른 두 표(REPEAT-HEADER 표, REPEAT-BODY 표)가 인접해 존재한다 —
+  // field-name-suggest.test.ts의 fake wasm 단위 테스트는 이 표-간 관계를 손으로
+  // 구성하지만, 이 TC는 실제 태깅 커맨드가 만들어낸 표 배치로 규칙 5가 wasm 경로
+  // 전체를 통해 정상 동작하는지 검증한다.
+  setTestCase('TC-8: 규칙 5 — REPEAT-HEADER/REPEAT-BODY 열 매칭');
+  await createNewDocument(page);
+
+  const tbl3 = await page.evaluate(() => {
+    const ih = window.__inputHandler;
+    const wasm = window.__wasm;
+    let info = null;
+    ih.executeOperation({
+      kind: 'snapshot',
+      operationType: 'createTable',
+      operation: () => {
+        const ret = wasm.createTable(0, 0, 0, 2, 3);
+        info = typeof ret === 'string' ? JSON.parse(ret) : ret;
+        return ih.getCursorPosition();
+      },
+    });
+    const ppi = info.paraIdx;
+    const ci = info.controlIdx;
+
+    const findCellIdx = (row, col) => {
+      const dims = wasm.getTableDimensions(0, ppi, ci);
+      for (let idx = 0; idx < dims.cellCount; idx++) {
+        const c = wasm.getCellInfo(0, ppi, ci, idx);
+        if (row >= c.row && row < c.row + c.rowSpan && col >= c.col && col < c.col + c.colSpan) return idx;
+      }
+      return -1;
+    };
+
+    // row0 = 헤더 라벨, row1은 빈 채로 둔다(REPEAT-BODY 콘텐츠).
+    [[0, 0, '구분'], [0, 1, '변경내용'], [0, 2, '변경일']].forEach(([row, col, text]) => {
+      wasm.insertTextInCell(0, ppi, ci, findCellIdx(row, col), 0, 0, text);
+    });
+
+    ih.cursor.moveTo({
+      sectionIndex: 0, paragraphIndex: 0, charOffset: 0,
+      parentParaIndex: ppi, controlIndex: ci, cellIndex: findCellIdx(0, 0),
+    });
+    window.__eventBus?.emit('command-state-changed');
+    return { ppi, ci };
+  });
+  assert(tbl3.ci !== undefined, `표 생성 완료 (ppi=${tbl3.ppi}, ci=${tbl3.ci})`);
+  await sleep(page, 200);
+
+  // row0(헤더 라벨 행)만 선택 → REPEAT_HEADER:변경사항으로 태깅.
+  await page.evaluate(({ ppi, ci }) => {
+    const ih = window.__inputHandler;
+    const wasm = window.__wasm;
+    const findCellIdx = (row, col) => {
+      const dims = wasm.getTableDimensions(0, ppi, ci);
+      for (let idx = 0; idx < dims.cellCount; idx++) {
+        const c = wasm.getCellInfo(0, ppi, ci, idx);
+        if (row >= c.row && row < c.row + c.rowSpan && col >= c.col && col < c.col + c.colSpan) return idx;
+      }
+      return -1;
+    };
+    ih.cursor.moveTo({
+      sectionIndex: 0, paragraphIndex: 0, charOffset: 0,
+      parentParaIndex: ppi, controlIndex: ci, cellIndex: findCellIdx(0, 0),
+    });
+    ih.cursor.enterCellSelectionMode();
+    ih.cursor.expandCellSelection(0, 2); // row0만, col0~2
+    window.__eventBus?.emit('command-state-changed');
+    document.querySelector('#template-panel input[name="tp-role"][value="REPEAT_HEADER"]').click();
+    const blockNameInput = document.querySelector('#template-panel .tp-input');
+    blockNameInput.value = '변경사항';
+    blockNameInput.dispatchEvent(new Event('input', { bubbles: true }));
+    document.querySelector('#template-panel .tp-actions .tp-btn--primary').click();
+  }, { ppi: tbl3.ppi, ci: tbl3.ci });
+  await sleep(page, 300);
+  await screenshot(page, 'field-suggest-08-header-tagged');
+
+  // 태깅으로 원래 표가 (헤더 표, 나머지 표)로 splitTable됐다 — 문서의 최상위
+  // 표를 순서대로 훑어 "나머지" 표(원래 row1, 아직 태깅 안 됨)의 (para, ci)를 찾는다
+  // (table-outline.ts의 listTopLevelTables와 동일한 순회 로직).
+  const bodyLoc = await page.evaluate(() => {
+    const wasm = window.__wasm;
+    const paraCount = wasm.getParagraphCount(0);
+    const tables = [];
+    let searchPara = 0;
+    let searchOffset = 0;
+    while (searchPara < paraCount) {
+      const result = wasm.findNearestControlForward(0, searchPara, searchOffset, true);
+      if (!result || result.type === 'none') break;
+      if (result.type === 'table') tables.push({ para: result.para, ci: result.ci });
+      if (result.para < searchPara) break;
+      searchPara = result.para + 1;
+      searchOffset = 0;
+    }
+    return tables;
+  });
+  assert(bodyLoc.length === 2, `태깅 후 최상위 표가 2개(헤더/나머지)여야 한다: ${JSON.stringify(bodyLoc)}`);
+  const bodyPpi = bodyLoc[1].para;
+  const bodyCi = bodyLoc[1].ci;
+
+  // 나머지 표(원래 row1, 지금은 그 표의 유일한 행 row0)를 REPEAT_BODY:변경사항으로 태깅.
+  await page.evaluate(({ ppi, ci }) => {
+    const ih = window.__inputHandler;
+    const wasm = window.__wasm;
+    const findCellIdx = (row, col) => {
+      const dims = wasm.getTableDimensions(0, ppi, ci);
+      for (let idx = 0; idx < dims.cellCount; idx++) {
+        const c = wasm.getCellInfo(0, ppi, ci, idx);
+        if (row >= c.row && row < c.row + c.rowSpan && col >= c.col && col < c.col + c.colSpan) return idx;
+      }
+      return -1;
+    };
+    ih.cursor.exitCellSelectionMode();
+    ih.cursor.moveTo({
+      sectionIndex: 0, paragraphIndex: 0, charOffset: 0,
+      parentParaIndex: ppi, controlIndex: ci, cellIndex: findCellIdx(0, 0),
+    });
+    ih.cursor.enterCellSelectionMode();
+    ih.cursor.expandCellSelection(0, 2); // 이 표의 유일한 행 전체
+    window.__eventBus?.emit('command-state-changed');
+    document.querySelector('#template-panel input[name="tp-role"][value="REPEAT_BODY"]').click();
+    const blockNameInput = document.querySelector('#template-panel .tp-input');
+    blockNameInput.value = '변경사항';
+    blockNameInput.dispatchEvent(new Event('input', { bubbles: true }));
+    document.querySelector('#template-panel .tp-actions .tp-btn--primary').click();
+  }, { ppi: bodyPpi, ci: bodyCi });
+  await sleep(page, 300);
+  await screenshot(page, 'field-suggest-08-body-tagged');
+
+  // 마커 행(row0) 다음 콘텐츠 행(row1)만 선택 → "누름틀 만들기".
+  await page.evaluate(({ ppi, ci }) => {
+    const ih = window.__inputHandler;
+    const wasm = window.__wasm;
+    const findCellIdx = (row, col) => {
+      const dims = wasm.getTableDimensions(0, ppi, ci);
+      for (let idx = 0; idx < dims.cellCount; idx++) {
+        const c = wasm.getCellInfo(0, ppi, ci, idx);
+        if (row >= c.row && row < c.row + c.rowSpan && col >= c.col && col < c.col + c.colSpan) return idx;
+      }
+      return -1;
+    };
+    ih.cursor.exitCellSelectionMode();
+    ih.cursor.moveTo({
+      sectionIndex: 0, paragraphIndex: 0, charOffset: 0,
+      parentParaIndex: ppi, controlIndex: ci, cellIndex: findCellIdx(1, 0),
+    });
+    ih.cursor.enterCellSelectionMode();
+    ih.cursor.expandCellSelection(1, 2); // 콘텐츠 행(row1)만, col0~2
+    window.__eventBus?.emit('command-state-changed');
+  }, { ppi: bodyPpi, ci: bodyCi });
+  await sleep(page, 200);
+
+  const createBtnFound3 = await page.evaluate(() => {
+    const btn = document.querySelector('#template-panel .tp-fieldsuggest-btn');
+    if (!btn || btn.disabled) return false;
+    btn.click();
+    return true;
+  });
+  assert(createBtnFound3, '"누름틀 만들기" 버튼이 활성 상태로 존재한다');
+  await sleep(page, 300);
+  await screenshot(page, 'field-suggest-08-created');
+
+  const afterRule5 = await page.evaluate(() => ({
+    fields: window.__wasm.getFieldList().map((f) => f.name).sort(),
+    message: document.querySelector('#template-panel .tp-fieldsuggest-message')?.textContent ?? '',
+  }));
+  console.log('규칙 5 생성 후:', JSON.stringify(afterRule5));
+  const expectedRule5 = ['변경사항_구분', '변경사항_변경내용', '변경사항_변경일'].sort();
+  assert(
+    JSON.stringify(afterRule5.fields) === JSON.stringify(expectedRule5),
+    `REPEAT-HEADER 열 텍스트로 REPEAT-BODY 빈 칸 3개가 제안·생성된다: ${JSON.stringify(afterRule5.fields)} (기대: ${JSON.stringify(expectedRule5)})`,
+  );
+  assert(afterRule5.message.includes('3개'), `메시지가 생성 개수(3개)를 보고한다: ${afterRule5.message}`);
 });

@@ -1,8 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { expandRowRangeForMerges } from '../src/core/table-outline.ts';
+import { expandRowRangeForMerges, findMatchingRepeatHeaderEntry } from '../src/core/table-outline.ts';
 import type { CellBbox } from '../src/core/types.ts';
+import type { TableOutlineEntry } from '../src/core/table-outline.ts';
 
 /** 테스트에 필요한 row/col/rowSpan/colSpan만 채우고 나머지 bbox 필드는 0으로 둔다. */
 function cell(row: number, col: number, rowSpan = 1, colSpan = 1): CellBbox {
@@ -55,4 +56,62 @@ test('expandRowRangeForMerges: 5446216.hwpx 헤더 레이아웃 — 일부 컬�
   // {startRow:2, endRow:2}만 잡힌다 — row 3("사업장 소재지")이 빠진 상태.
   const result = expandRowRangeForMerges(cells, { startRow: 2, endRow: 2 });
   assert.deepEqual(result, { startRow: 2, endRow: 3 });
+});
+
+/** 필요한 필드만 채우고 나머지는 임의 값으로 둔다. */
+function entry(parentPara: number, controlIndex: number, markerText: string | null): TableOutlineEntry {
+  return { sec: 0, parentPara, controlIndex, rowCount: 2, colCount: 3, markerText };
+}
+
+test('findMatchingRepeatHeaderEntry: 바로 앞 표가 같은 segment의 REPEAT-HEADER면 매칭된다', () => {
+  const entries = [
+    entry(0, 0, '#REPEAT-TITLE:변경사항'),
+    entry(1, 0, '#REPEAT-HEADER:변경사항'),
+    entry(2, 0, '#REPEAT-BODY:변경사항'),
+    entry(3, 0, '#REPEAT-FOOTER'),
+  ];
+  const result = findMatchingRepeatHeaderEntry(entries, entries[2]);
+  assert.equal(result, entries[1]);
+});
+
+test('findMatchingRepeatHeaderEntry: segment가 다르면 null', () => {
+  const entries = [
+    entry(0, 0, '#REPEAT-HEADER:다른섹션'),
+    entry(1, 0, '#REPEAT-BODY:변경사항'),
+  ];
+  assert.equal(findMatchingRepeatHeaderEntry(entries, entries[1]), null);
+});
+
+test('findMatchingRepeatHeaderEntry: 직전 표가 REPEAT-HEADER가 아니면 null', () => {
+  const entries = [
+    entry(0, 0, '#REPEAT-TITLE:변경사항'),
+    entry(1, 0, '#REPEAT-BODY:변경사항'),
+  ];
+  assert.equal(findMatchingRepeatHeaderEntry(entries, entries[1]), null);
+});
+
+test('findMatchingRepeatHeaderEntry: 문서 첫 표(직전 표 없음)면 null', () => {
+  const entries = [entry(0, 0, '#REPEAT-BODY:변경사항')];
+  assert.equal(findMatchingRepeatHeaderEntry(entries, entries[0]), null);
+});
+
+test('findMatchingRepeatHeaderEntry: 현재 표가 REPEAT-BODY 마커가 아니면 null', () => {
+  const entries = [entry(0, 0, '#REPEAT-HEADER:변경사항'), entry(1, 0, '#HEADER')];
+  assert.equal(findMatchingRepeatHeaderEntry(entries, entries[1]), null);
+});
+
+test('findMatchingRepeatHeaderEntry: -NESTED 짝은 부모/자식 segment까지 정확히 일치해야 한다', () => {
+  const entries = [
+    entry(0, 0, '#REPEAT-HEADER-NESTED:부모/자식'),
+    entry(1, 0, '#REPEAT-BODY-NESTED:부모/자식'),
+  ];
+  assert.equal(findMatchingRepeatHeaderEntry(entries, entries[1]), entries[0]);
+});
+
+test('findMatchingRepeatHeaderEntry: nested 여부가 서로 다르면 segment 문자열이 같아도 null', () => {
+  const entries = [
+    entry(0, 0, '#REPEAT-HEADER:부모/자식'), // non-nested인데 마침 슬래시가 든 segment
+    entry(1, 0, '#REPEAT-BODY-NESTED:부모/자식'),
+  ];
+  assert.equal(findMatchingRepeatHeaderEntry(entries, entries[1]), null);
 });

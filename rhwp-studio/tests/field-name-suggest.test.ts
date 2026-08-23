@@ -32,6 +32,12 @@ function makeFakeTableWasm(
   const rowCount = Math.max(0, ...cells.map((c) => c.row + c.rowSpan));
   const colCount = Math.max(0, ...cells.map((c) => c.col + c.colSpan));
   return {
+    // 규칙 5(repeat-header-column-match)가 `listTopLevelTables`로 문서를 훑는다 —
+    // 이 fake는 표가 (sec=0, ppi=0, ci=0) 하나뿐이라고 가정하므로, 그 표 하나만
+    // 돌려주면 충분하다(직전 표가 없으니 규칙 5는 항상 후보 0개로 조용히 빠진다).
+    getParagraphCount: (_sec: number) => 1,
+    findNearestControlForward: (_sec: number, para: number, _charOffset: number, _inclusive = false) =>
+      para > 0 ? { type: 'none' } : { type: 'table', sec: 0, para: 0, ci: 0 },
     getFieldInfoAt: getFieldInfoAt ?? (() => ({ inField: false })),
     getTableDimensions: (_sec: number, _ppi: number, _ci: number) => ({
       rowCount,
@@ -521,6 +527,166 @@ test('태깅된 표 전체 흐름: #HEADER 마커 행 + 마커 행 다음부터 
   assert.equal(byLeaf.get('담당자')?.sectionPrefix, null);
   // 마커 셀 텍스트는 후보에 절대 등장하지 않는다.
   assert.ok(!suggestions.some((s) => s.leafText.startsWith('#')));
+});
+
+// ─── 규칙 5 (repeat-header-column-match): #REPEAT-BODY 표는 다른 표(직전
+// #REPEAT-HEADER 표)의 텍스트를 봐야 하므로, table-marker-authoring.test.ts의
+// 다중 표 fake 패턴을 참고해 표 여러 개를 (para, ci)로 구분하는 fake를 쓴다. ───
+
+interface MultiFakeCell {
+  row: number;
+  col: number;
+  rowSpan: number;
+  colSpan: number;
+  text: string;
+}
+
+interface MultiFakeTable {
+  para: number;
+  ci: number;
+  cells: MultiFakeCell[];
+}
+
+function makeFakeMultiTableWasm(tables: MultiFakeTable[]) {
+  const findTable = (para: number, ci: number): MultiFakeTable => {
+    const t = tables.find((x) => x.para === para && x.ci === ci);
+    if (!t) throw new Error(`no fake table at para=${para} ci=${ci}`);
+    return t;
+  };
+  return {
+    getParagraphCount: (_sec: number) => Math.max(0, ...tables.map((t) => t.para)) + 1,
+    findNearestControlForward: (_sec: number, para: number, charOffset: number, inclusive = false) => {
+      const candidates = tables.filter((t) => {
+        if (t.para < para) return false;
+        if (t.para > para) return true;
+        return inclusive ? 0 >= charOffset : 0 > charOffset;
+      });
+      const next = candidates.sort((a, b) => a.para - b.para)[0];
+      return next ? { type: 'table', sec: 0, para: next.para, ci: next.ci } : { type: 'none' };
+    },
+    getTableDimensions: (_sec: number, para: number, ci: number) => {
+      const t = findTable(para, ci);
+      return {
+        rowCount: Math.max(0, ...t.cells.map((c) => c.row + c.rowSpan)),
+        colCount: Math.max(0, ...t.cells.map((c) => c.col + c.colSpan)),
+        cellCount: t.cells.length,
+      };
+    },
+    getCellInfo: (_sec: number, para: number, ci: number, cellIdx: number) => {
+      const { row, col, rowSpan, colSpan } = findTable(para, ci).cells[cellIdx];
+      return { row, col, rowSpan, colSpan };
+    },
+    getCellParagraphCount: (_sec: number, _para: number, _ci: number, _cellIdx: number) => 1,
+    getCellParagraphLength: (_sec: number, para: number, ci: number, cellIdx: number, _cpi: number) =>
+      findTable(para, ci).cells[cellIdx].text.length,
+    getTextInCell: (_sec: number, para: number, ci: number, cellIdx: number) => findTable(para, ci).cells[cellIdx].text,
+    getCellProperties: (_sec: number, _para: number, _ci: number, _cellIdx: number) => ({ fieldName: undefined }),
+    getFieldList: () => [],
+    getFieldInfoAt: () => ({ inField: false }),
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  } as any;
+}
+
+/** 5446234.hwp "변경 사항" 표 모양 — REPEAT-HEADER(para 1) 바로 뒤 REPEAT-BODY(para 2). */
+function buildRepeatHeaderBodyTables(
+  headerRow: MultiFakeCell[],
+  bodyRow: MultiFakeCell[],
+  headerMarker = '#REPEAT-HEADER:변경사항',
+  bodyMarker = '#REPEAT-BODY:변경사항',
+): MultiFakeTable[] {
+  const headerColCount = Math.max(0, ...headerRow.map((c) => c.col + c.colSpan));
+  const bodyColCount = Math.max(0, ...bodyRow.map((c) => c.col + c.colSpan));
+  return [
+    {
+      para: 1,
+      ci: 0,
+      cells: [{ row: 0, col: 0, rowSpan: 1, colSpan: headerColCount, text: headerMarker }, ...headerRow],
+    },
+    {
+      para: 2,
+      ci: 0,
+      cells: [{ row: 0, col: 0, rowSpan: 1, colSpan: bodyColCount, text: bodyMarker }, ...bodyRow],
+    },
+  ];
+}
+
+const CHANGE_HEADER_ROW: MultiFakeCell[] = [
+  { row: 1, col: 0, rowSpan: 1, colSpan: 1, text: '구분' },
+  { row: 1, col: 1, rowSpan: 1, colSpan: 1, text: '변경내용' },
+  { row: 1, col: 2, rowSpan: 1, colSpan: 1, text: '변경일' },
+];
+const CHANGE_BODY_ROW: MultiFakeCell[] = [
+  { row: 1, col: 0, rowSpan: 1, colSpan: 1, text: '' },
+  { row: 1, col: 1, rowSpan: 1, colSpan: 1, text: '' },
+  { row: 1, col: 2, rowSpan: 1, colSpan: 1, text: '' },
+];
+
+test('규칙 5: REPEAT-HEADER 열 텍스트로 REPEAT-BODY 빈 칸 이름을 제안한다(5446234.hwp "변경 사항")', () => {
+  const wasm = makeFakeMultiTableWasm(buildRepeatHeaderBodyTables(CHANGE_HEADER_ROW, CHANGE_BODY_ROW));
+  const suggestions = suggestFieldNames(wasm, 0, 2, 0, { rowRange: { startRow: 1, endRow: 1 } });
+  assert.deepEqual(
+    suggestions.map((s) => s.suggestedName),
+    ['변경사항_구분', '변경사항_변경내용', '변경사항_변경일'],
+  );
+});
+
+test('규칙 5: 열 개수가 다르면(구조 불일치) 후보를 만들지 않는다', () => {
+  const bodyRow: MultiFakeCell[] = [
+    { row: 1, col: 0, rowSpan: 1, colSpan: 1, text: '' },
+    { row: 1, col: 1, rowSpan: 1, colSpan: 1, text: '' },
+  ];
+  const wasm = makeFakeMultiTableWasm(buildRepeatHeaderBodyTables(CHANGE_HEADER_ROW, bodyRow));
+  const suggestions = suggestFieldNames(wasm, 0, 2, 0, { rowRange: { startRow: 1, endRow: 1 } });
+  assert.deepEqual(suggestions, []);
+});
+
+test('규칙 5: 헤더 셀 텍스트가 비어 있는 열은 건너뛰고 나머지 열은 정상 제안한다', () => {
+  const headerRow: MultiFakeCell[] = [
+    { row: 1, col: 0, rowSpan: 1, colSpan: 1, text: '구분' },
+    { row: 1, col: 1, rowSpan: 1, colSpan: 1, text: '' },
+    { row: 1, col: 2, rowSpan: 1, colSpan: 1, text: '변경일' },
+  ];
+  const wasm = makeFakeMultiTableWasm(buildRepeatHeaderBodyTables(headerRow, CHANGE_BODY_ROW));
+  const suggestions = suggestFieldNames(wasm, 0, 2, 0, { rowRange: { startRow: 1, endRow: 1 } });
+  assert.deepEqual(
+    suggestions.map((s) => s.suggestedName),
+    ['변경사항_구분', '변경사항_변경일'],
+  );
+});
+
+test('규칙 5: 직전 표가 REPEAT-HEADER가 아니면(예: REPEAT-TITLE) 후보를 만들지 않는다', () => {
+  const tables = buildRepeatHeaderBodyTables(CHANGE_HEADER_ROW, CHANGE_BODY_ROW, '#REPEAT-TITLE:변경사항');
+  const wasm = makeFakeMultiTableWasm(tables);
+  const suggestions = suggestFieldNames(wasm, 0, 2, 0, { rowRange: { startRow: 1, endRow: 1 } });
+  assert.deepEqual(suggestions, []);
+});
+
+test('규칙 5 — seqno 특례: 헤더 첫 열이 "번호"로 시작하면 그 열만 #seqno:<segment>로 제안한다', () => {
+  const headerRow: MultiFakeCell[] = [
+    { row: 1, col: 0, rowSpan: 1, colSpan: 1, text: '번호' },
+    { row: 1, col: 1, rowSpan: 1, colSpan: 1, text: '변경내용' },
+    { row: 1, col: 2, rowSpan: 1, colSpan: 1, text: '변경일' },
+  ];
+  const wasm = makeFakeMultiTableWasm(buildRepeatHeaderBodyTables(headerRow, CHANGE_BODY_ROW));
+  const suggestions = suggestFieldNames(wasm, 0, 2, 0, { rowRange: { startRow: 1, endRow: 1 } });
+  assert.deepEqual(
+    suggestions.map((s) => s.suggestedName),
+    ['#seqno:변경사항', '변경사항_변경내용', '변경사항_변경일'],
+  );
+});
+
+test('규칙 5 — seqno 특례: 첫 열이 아닌 곳의 "No"로 시작하는 텍스트는 특례가 적용되지 않는다', () => {
+  const headerRow: MultiFakeCell[] = [
+    { row: 1, col: 0, rowSpan: 1, colSpan: 1, text: '구분' },
+    { row: 1, col: 1, rowSpan: 1, colSpan: 1, text: 'Note' },
+    { row: 1, col: 2, rowSpan: 1, colSpan: 1, text: '변경일' },
+  ];
+  const wasm = makeFakeMultiTableWasm(buildRepeatHeaderBodyTables(headerRow, CHANGE_BODY_ROW));
+  const suggestions = suggestFieldNames(wasm, 0, 2, 0, { rowRange: { startRow: 1, endRow: 1 } });
+  assert.deepEqual(
+    suggestions.map((s) => s.suggestedName),
+    ['변경사항_구분', '변경사항_Note', '변경사항_변경일'],
+  );
 });
 
 test('태깅된 표 전체 흐름: #REPEAT-BODY 마커 표에서도 행 범위 제안이 동작한다(과거의 반복 표 제외 정책 폐지)', () => {
