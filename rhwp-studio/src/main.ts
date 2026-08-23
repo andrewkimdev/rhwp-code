@@ -38,7 +38,6 @@ import { ContextMenu } from '@/ui/context-menu';
 import { TemplatePanel } from '@/ui/template-panel';
 import { CommandPalette } from '@/ui/command-palette';
 import { showHmlImportWarning } from '@/ui/hml-import-warning';
-import { showLocalFontsModalIfNeeded } from '@/ui/local-fonts-modal';
 import { showToast } from '@/ui/toast';
 import { addRecentDoc, listRecentDocs } from '@/recent/recent-store';
 import { showDropConfirmDialog } from '@/ui/drop-confirm-dialog';
@@ -52,8 +51,6 @@ import {
 import { initRhwpDev } from '@/core/rhwp-dev';
 import { DocumentDirtyState } from '@/core/document-dirty-state';
 import { initThemeSync, setThemeMode, getThemeMode, getEffectiveTheme } from '@/core/theme';
-import { analyzeDocumentFonts } from '@/core/document-font-status';
-import { detectLocalFonts, getLocalFontState, loadStoredLocalFonts } from '@/core/local-fonts';
 import { userSettings } from '@/core/user-settings';
 import { AutosaveManager, type AutosaveScheduleSettings, type AutosaveStatus } from '@/recovery/autosave-manager';
 import { clearAutosaveDrafts, deleteAutosaveDraft, listAutosaveDrafts, type AutosaveDraft } from '@/recovery/autosave-store';
@@ -134,6 +131,14 @@ let rendererInitialized = false;
 let extensionViewerSettings: ExtensionViewerSettings = {
   disableExternalWebFonts: false,
 };
+// hwpx-template-engine에 vendor된 /rhwp base로 배포될 때만 native-fonts/ 상대 경로를
+// 서버가 실제로 서빙하는 절대 경로(HwpxTemplateEngineApplication의 /rhwp-fonts 컨텍스트)로
+// 바꾼다. 로컬 dev/미리보기에서는 vite 플러그인이 같은 상대 경로를 그대로 서빙하므로
+// 미지정(undefined)으로 둔다.
+const nativeFontBaseUrl = import.meta.env.BASE_URL === '/rhwp/' ? '/rhwp-fonts/' : undefined;
+function fontLoadOptions(): ExtensionViewerSettings & { nativeFontBaseUrl?: string } {
+  return { ...extensionViewerSettings, nativeFontBaseUrl };
+}
 
 
 // ─── UI chrome 프로파일 (#4564) ─────────────────────────────
@@ -396,32 +401,6 @@ async function updateLoadProgress(percent: number, label: string): Promise<void>
   await waitForNextPaint();
 }
 
-/**
- * CanvasKit은 browser CSS font fallback을 사용하지 않는다. 첫 replay의 preflight가 요구한
- * face는 prepareCanvasKitDocument에서 먼저 준비하고, 여기서는 문서 전체 face 및 사용자가
- * 새로 승인한 local face를 보충한 뒤 현재 뷰만 다시 그린다.
- */
-function prepareCanvasKitLocalFonts(fontNames: readonly string[] | undefined): void {
-  const renderer = canvasView?.getRenderBackend() === 'canvaskit'
-    ? rendererSession?.getCanvasKitRenderer() ?? null
-    : null;
-  if (!renderer || !fontNames?.length) return;
-  const requestedFonts = [...fontNames];
-  void (async () => {
-    await loadStoredLocalFonts();
-    await renderer.prepareLocalFonts(requestedFonts);
-    if (
-      renderer === rendererSession?.getCanvasKitRenderer()
-      && canvasView?.getRenderBackend() === 'canvaskit'
-    ) {
-      // 등록 성공 여부와 관계없이 pending 진단이 끝난 상태를 page snapshot에 반영한다.
-      eventBus.emit('document-view-changed');
-    }
-  })().catch((error) => {
-    console.warn('[CanvasKit] 로컬 Typeface 준비 실패, 기본 fallback으로 계속 표시합니다:', error);
-  });
-}
-
 async function initialize(): Promise<void> {
   const msg = sbMessage();
   try {
@@ -432,7 +411,7 @@ async function initialize(): Promise<void> {
     msg.textContent = extensionViewerSettings.disableExternalWebFonts
       ? '로컬 폰트 준비 중...'
       : '웹폰트 로딩 중...';
-    await loadWebFonts([], undefined, extensionViewerSettings);  // CSS @font-face 등록 + CRITICAL 폰트만 로드
+    await loadWebFonts([], undefined, fontLoadOptions());  // CSS @font-face 등록 + CRITICAL 폰트만 로드
     msg.textContent = 'WASM 로딩 중...';
     await wasm.initialize();
     if (import.meta.env.DEV) {
@@ -480,7 +459,7 @@ async function initialize(): Promise<void> {
         transformCanvasKitPreflight(report) {
           const plan = resolveCanvasKitFontPlan(
             report.requiredFontFamilies,
-            extensionViewerSettings,
+            fontLoadOptions(),
           );
           const blockers = plan.unavailableFonts.map(font => `fontUnavailable:${font}`);
           if (wasm.getShowControlCodes()) blockers.push('viewOption:showControlCodes');
@@ -492,22 +471,10 @@ async function initialize(): Promise<void> {
         async prepareCanvasKitDocument(renderer, report) {
           const plan = resolveCanvasKitFontPlan(
             report.requiredFontFamilies,
-            extensionViewerSettings,
+            fontLoadOptions(),
           );
           if (plan.unavailableFonts.length > 0) {
             throw new Error(`CanvasKit font family가 준비되지 않았습니다: ${plan.unavailableFonts.join(', ')}`);
-          }
-          try {
-            // 저장된 Local Font Access 권한이 있으면 첫 replay부터 원 face의 SFNT bytes를
-            // CanvasKit에 전달한다. CSS local()에서 EBDT face가 두부로 바뀌는 경로를 타지 않는다.
-            await loadStoredLocalFonts();
-            await renderer.prepareLocalFonts(report.requiredFontFamilies);
-          } catch (error) {
-            // 로컬 권한이 만료됐거나 face 읽기에 실패해도 portable bundled face로 계속 연다.
-            console.warn(
-              '[CanvasKit] 저장된 로컬 Typeface 사전 준비 실패, bundled fallback으로 계속합니다:',
-              error,
-            );
           }
           await renderer.prepareBundledFonts(plan.sources);
         },
@@ -1031,7 +998,7 @@ async function initializeDocument(
       await loadWebFonts(docInfo.fontsUsed, (loaded, total) => {
         const fontPercent = total > 0 ? 55 + Math.round((loaded / total) * 20) : 65;
         msg.textContent = `파일 로딩 ${fontPercent}% - 폰트 로딩 중... (${loaded}/${total})`;
-      }, extensionViewerSettings);
+      }, fontLoadOptions());
     }
     console.log('[initDoc] 2. 폰트 로딩 완료');
     await updateLoadProgress(75, '문서 상태 적용 중...');
@@ -1043,15 +1010,14 @@ async function initializeDocument(
     console.log('[initDoc] 4. canvasView loadDocument');
     await updateLoadProgress(82, '페이지 렌더 준비 중...');
     await canvasView?.loadDocument();
-    prepareCanvasKitLocalFonts(docInfo.fontsUsed);
     console.log('[initDoc] 5. toolbar setEnabled');
     await updateLoadProgress(90, '도구 모음 준비 중...');
     toolbar?.setEnabled(true);
     console.log('[initDoc] 6. toolbar initFontDropdown + initStyleDropdown');
     toolbar?.initFontDropdown(docInfo.fontsUsed);
     toolbar?.initStyleDropdown();
-    console.log('[initDoc] 7. 사전 검증 및 로컬 글꼴 확인');
-    await updateLoadProgress(94, '문서 검증 및 글꼴 확인 중...');
+    console.log('[initDoc] 7. 사전 검증');
+    await updateLoadProgress(94, '문서 검증 중...');
 
     // #177: HWPX 비표준 lineseg 감지 (진단 로그).
     // #2527: 자동 보정(reflowLinesegs)이 빈-lineseg 문서에서 글리프 좌표를 붕괴시켜
@@ -1071,11 +1037,6 @@ async function initializeDocument(
       console.warn('[validation] 감지 실패 (치명적이지 않음):', e);
     }
 
-    if (!options.suppressDialogs) {
-      await promptLocalFontsIfNeeded(docInfo, displayName);
-    }
-
-    // 로컬 글꼴 감지 결과가 뷰를 갱신한 뒤에 캐럿을 연결해야 입력 포커스가 재설정과 경합하지 않는다.
     console.log('[initDoc] 8. inputHandler activateWithCaretPosition');
     await updateLoadProgress(96, '편집 상태 초기화 중...');
     inputHandler?.activateWithCaretPosition();
@@ -1091,46 +1052,6 @@ async function initializeDocument(
   } catch (error) {
     console.error('[initDoc] 오류:', error);
     if (window.innerWidth < 768) alert(`초기화 오류: ${error}`);
-  }
-}
-
-async function promptLocalFontsIfNeeded(docInfo: DocumentInfo, displayName: string): Promise<void> {
-  if (!docInfo.fontsUsed?.length) return;
-
-  const msg = sbMessage();
-  try {
-    await loadStoredLocalFonts();
-    const report = analyzeDocumentFonts(docInfo.fontsUsed);
-    if (!report.shouldPromptLocalAccess) return;
-
-    const choice = await showLocalFontsModalIfNeeded(report, {
-      disableExternalWebFonts: extensionViewerSettings.disableExternalWebFonts,
-    });
-    if (choice !== 'detect') return;
-
-    msg.textContent = '로컬 글꼴 감지 중...';
-    const fonts = await detectLocalFonts({
-      force: true,
-      includeRegistered: true,
-      candidateFamilies: docInfo.fontsUsed,
-    });
-    const nextReport = analyzeDocumentFonts(docInfo.fontsUsed);
-    eventBus.emit('local-fonts-changed', { fonts, report: nextReport });
-    prepareCanvasKitLocalFonts(docInfo.fontsUsed);
-    const state = getLocalFontState();
-    const resultLabel = state.source === 'font-presence-probe' ? '확인됨' : '감지됨';
-    msg.textContent = `${displayName} (로컬 글꼴 ${fonts.length}개 ${resultLabel})`;
-    showToast({
-      message: `로컬 글꼴 ${fonts.length}개를 ${resultLabel.replace('됨', '')}하고 저장했습니다.\n다음 문서 로드부터 감지 결과를 재사용합니다.`,
-      durationMs: 5000,
-    });
-  } catch (error) {
-    console.warn('[local-fonts] 감지 안내/실행 실패 (치명적이지 않음):', error);
-    msg.textContent = displayName;
-    showToast({
-      message: '로컬 글꼴 감지에 실패했습니다.\n웹 대체 글꼴로 계속 표시합니다.',
-      durationMs: 8000,
-    });
   }
 }
 

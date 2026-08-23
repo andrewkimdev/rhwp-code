@@ -89,7 +89,6 @@ import {
   glyphOutlinePayloadStatus,
 } from './glyph-outline-payload-status';
 import { parseStaticSvgPathLayers, type StaticSvgPathLayer } from './static-svg-path-layers';
-import { loadLocalFontBytesFor, localFontFaceKey, resolveLocalFont, type LocalFontRecord } from '@/core/local-fonts';
 import type { CanvasKitBundledFontSource } from '@/core/font-loader';
 import { readBoundedResponseArrayBuffer } from './canvaskit/bounded-response';
 
@@ -233,9 +232,6 @@ export interface CanvasKitRenderDiagnostics {
   imageCacheEvictions: number;
   imageFailureCacheHits: number;
   imageFailures: CanvasKitImageFailureDiagnostic[];
-  localTypefaceCount: number;
-  localTypefaceLoadFailureCount: number;
-  localTypefacePendingCount: number;
   bundledTypefaceCount: number;
   bundledTypefaceLoadFailureCount: number;
   glyphRunFontBlobCount: number;
@@ -274,8 +270,7 @@ export type CanvasKitReadinessBlocker =
   | 'renderNotCompleted'
   | 'renderError'
   | 'unexpectedUnsupportedOps'
-  | 'imageReplayFailure'
-  | 'localFontsPending';
+  | 'imageReplayFailure';
 
 export class CanvasKitLayerRenderer {
   // Prevent pathological tiled fills from monopolizing the render loop.
@@ -297,16 +292,16 @@ export class CanvasKitLayerRenderer {
   private static readonly MAX_FONT_SUBSTITUTION_DIAGNOSTICS = 4096;
   // 단일 text run은 줄바꿈 없이 문서가 지정한 위치에 재생한다.
   private static readonly MAX_SHAPED_TEXT_WIDTH = 1_000_000;
-  private static readonly MAX_BUNDLED_FONT_BYTES = 32 * 1024 * 1024;
+  // 48MB: 함초롬 Bold(HANBatangB/HANDotumB, 각 약 30.5MB)가 32MB 상한에 근접해 있어
+  // 상한을 넉넉히 올려둔다 — readBoundedResponseArrayBuffer는 초과 시 truncate가 아니라
+  // throw 하므로 tight한 상한은 향후 폰트 개정에서 조용한 실패 트랩이 된다.
+  private static readonly MAX_BUNDLED_FONT_BYTES = 48 * 1024 * 1024;
 
   private readonly imageCache = new Map<string, { image: SkImage; pixels: number }>();
   private readonly imageDecodeFailures = new Map<string, CanvasKitImageFailureReason>();
   private readonly currentImageFailures = new Map<string, CanvasKitImageFailureDiagnostic>();
   private readonly svgGlyphPathCache = new Map<string, StaticSvgPathLayer[]>();
   private readonly svgGlyphParseFailures = new Set<string>();
-  private readonly localTypefaces = new Map<string, CanvasKitLocalTypeface>();
-  private readonly localTypefaceLoadFailures = new Set<string>();
-  private readonly localTypefacePending = new Map<string, number>();
   private readonly bundledTypefaces = new Map<string, CanvasKitLocalTypeface>();
   private readonly bundledTypefaceAliases = new Map<string, CanvasKitLocalTypeface>();
   private readonly bundledTypefaceLoadFailures = new Set<string>();
@@ -531,65 +526,6 @@ export class CanvasKitLayerRenderer {
     return registered;
   }
 
-  /** 현재 문서가 실제로 사용하는 설치 글꼴만 CanvasKit native 객체로 등록한다. */
-  async prepareLocalFonts(fontNames: readonly string[] | undefined): Promise<number> {
-    if (this.disposed || !fontNames?.length) return 0;
-    const generation = this.documentGeneration;
-    const pendingRecords = new Map<string, LocalFontRecord>();
-    for (const fontName of fontNames) {
-      const record = resolveLocalFont(fontName);
-      const faceKey = record ? localFontFaceKey(record) : '';
-      if (!record || !faceKey || this.localTypefaces.has(faceKey)
-        || this.localTypefaceLoadFailures.has(faceKey) || this.localTypefacePending.has(faceKey)) continue;
-      pendingRecords.set(faceKey, record);
-      this.localTypefacePending.set(faceKey, generation);
-    }
-
-    let registered = 0;
-    try {
-      const bytesByFace = await loadLocalFontBytesFor([...pendingRecords.values()].map(record => record.fullName));
-      for (const [faceKey, record] of pendingRecords) {
-        const bytes = bytesByFace.get(faceKey);
-        if (this.disposed || generation !== this.documentGeneration) return registered;
-        if (this.localTypefaces.has(faceKey) || this.localTypefaceLoadFailures.has(faceKey)) continue;
-        if (!bytes) {
-          this.localTypefaceLoadFailures.add(faceKey);
-          continue;
-        }
-        let typeface: Typeface | null = null;
-        let fontManager: FontMgr | null = null;
-        try {
-          typeface = this.canvasKit.Typeface.MakeFreeTypeFaceFromData(bytes)
-            ?? this.canvasKit.Typeface.MakeTypefaceFromData(bytes);
-          fontManager = this.canvasKit.FontMgr.FromData(bytes.slice(0));
-          if (!typeface && !fontManager) {
-            this.localTypefaceLoadFailures.add(faceKey);
-            continue;
-          }
-          const fontFamily = fontManager && fontManager.countFamilies() > 0
-            ? fontManager.getFamilyName(0)
-            : record.family;
-          this.localTypefaces.set(faceKey, { typeface, fontManager, fontFamily });
-          registered += 1;
-        } catch (error) {
-          typeface?.delete?.();
-          fontManager?.delete?.();
-          this.localTypefaceLoadFailures.add(faceKey);
-          console.warn(`[CanvasKitLayerRenderer] ${record.displayName} local Typeface 등록 실패:`, error);
-        }
-        // native font parsing은 동기 작업이므로 face 사이에서 paint/event loop에 양보한다.
-        await new Promise<void>(resolve => window.setTimeout(resolve, 0));
-      }
-    } finally {
-      for (const faceKey of pendingRecords.keys()) {
-        if (this.localTypefacePending.get(faceKey) === generation) {
-          this.localTypefacePending.delete(faceKey);
-        }
-      }
-    }
-    return registered;
-  }
-
   renderPage(
     tree: PageLayerTree,
     targetCanvas: HTMLCanvasElement,
@@ -695,13 +631,6 @@ export class CanvasKitLayerRenderer {
     this.currentFontResources = undefined;
     this.selectedTextVariantOps = new WeakSet<LayerPaintOp>();
     this.glyphRunFonts.clear();
-    for (const { typeface, fontManager } of this.localTypefaces.values()) {
-      typeface?.delete?.();
-      fontManager?.delete?.();
-    }
-    this.localTypefaces.clear();
-    this.localTypefaceLoadFailures.clear();
-    this.localTypefacePending.clear();
     for (const { typeface, fontManager } of this.bundledTypefaces.values()) {
       typeface?.delete?.();
       fontManager?.delete?.();
@@ -742,7 +671,6 @@ export class CanvasKitLayerRenderer {
     if (this.lastRenderError !== null) readinessBlockers.push('renderError');
     if (lastUnexpectedUnsupportedOps.length > 0) readinessBlockers.push('unexpectedUnsupportedOps');
     if (this.currentImageFailures.size > 0) readinessBlockers.push('imageReplayFailure');
-    if (this.localTypefacePending.size > 0) readinessBlockers.push('localFontsPending');
     return {
       mode: this.renderMode,
       surfacePreference: this.surfaceRequest.preference,
@@ -767,9 +695,6 @@ export class CanvasKitLayerRenderer {
       imageCacheEvictions: this.imageCacheEvictions,
       imageFailureCacheHits: this.imageFailureCacheHits,
       imageFailures: [...this.currentImageFailures.values()].map((failure) => ({ ...failure })),
-      localTypefaceCount: this.localTypefaces.size,
-      localTypefaceLoadFailureCount: this.localTypefaceLoadFailures.size,
-      localTypefacePendingCount: this.localTypefacePending.size,
       bundledTypefaceCount: this.bundledTypefaces.size,
       bundledTypefaceLoadFailureCount: this.bundledTypefaceLoadFailures.size,
       glyphRunFontBlobCount: glyphRunFontDiagnostics.blobs,
@@ -2922,14 +2847,11 @@ export class CanvasKitLayerRenderer {
   private findPreparedTypeface(fontFamily: string | undefined): CanvasKitLocalTypeface | null {
     const key = normalizedFontFamily(fontFamily);
     if (!key) return null;
-    const record = resolveLocalFont(primaryFontFamily(fontFamily));
-    const local = record ? this.localTypefaces.get(localFontFaceKey(record)) ?? null : null;
     const bundled = this.bundledTypefaceAliases.get(key);
     if (key === normalizedFontFamily(OLD_HANGUL_FONT_FAMILY)) {
-      return [this.oldHangulTypeface, local, bundled]
+      return [this.oldHangulTypeface, bundled]
         .find(candidate => candidate?.fontManager) ?? null;
     }
-    if (local) return local;
     if (bundled) return bundled;
     if (key === normalizedFontFamily(this.defaultFontFamily) || key === 'noto sans kr') {
       return this.defaultTypeface || this.defaultFontManager

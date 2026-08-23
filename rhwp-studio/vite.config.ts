@@ -1,6 +1,7 @@
 import { defineConfig } from 'vite';
 import { resolve, extname, join } from 'path';
-import { readFileSync, readFile } from 'fs';
+import { readFileSync, readFile, existsSync } from 'fs';
+import { cp } from 'fs/promises';
 import { VitePWA } from 'vite-plugin-pwa';
 
 const pkg = JSON.parse(readFileSync(resolve(__dirname, 'package.json'), 'utf-8'));
@@ -19,6 +20,22 @@ const useSubsecondWasm = process.env.RHWP_SUBSECOND === '1';
  * `studio-plugin` 청크 자체가 남지 않는다. studio 만 떼어 배포할 때 쓴다.
  */
 const withHwpctrl = process.env.RHWP_WITHOUT_HWPCTRL !== '1';
+// hcr/kopub 실물 TTF는 hwpx-template-engine 저장소(sibling checkout)에만 있다 — rhwp-code는
+// 저작권 있는 폰트를 git에 커밋하지 않는 정책(assets/fonts/FONTS.md)이라 여기 vendor하지 않는다.
+const nativeFontsDir = resolve(
+  __dirname,
+  '..',
+  '..',
+  'hwpx-template-engine',
+  'src',
+  'main',
+  'resources',
+  'fonts',
+);
+// sync:hwpx-template-engine 빌드에서는 native-fonts/를 dist에 담지 않는다 — 배포 시엔 같은
+// TTF를 HwpxTemplateEngineApplication의 /rhwp-fonts 컨텍스트가 직접 서빙하므로, dist에 담으면
+// static-rhwp/에 159MB를 중복 vendor하게 된다.
+const skipNativeFontsBuildCopy = process.env.RHWP_SYNC_HWPX_TEMPLATE_ENGINE === '1';
 
 export default defineConfig({
   define: {
@@ -108,6 +125,43 @@ export default defineConfig({
         });
       },
     },
+    // hcr/kopub 실물 폰트(native-fonts/)를 sibling hwpx-template-engine 체크아웃에서 그대로
+    // 서빙한다. sibling이 없으면(rhwp-code 단독 체크아웃) dev는 항상 404, build는 복사를
+    // 건너뛴다 — public/ symlink와 달리 Vite의 자체 copyDir을 타지 않으므로 dangling 상태가
+    // 빌드를 깨뜨리지 않는다. font-loader.ts는 개별 폰트 fetch 실패를 substitution chain으로
+    // 흡수하므로 이 경우 함초롬 계열은 대체 글꼴로 조용히 내려간다.
+    {
+      name: 'serve-native-fonts-dir',
+      configureServer(server) {
+        server.middlewares.use('/native-fonts', (req, res, next) => {
+          if (!req.url) return next();
+          if (!existsSync(nativeFontsDir)) { res.statusCode = 404; return res.end(); }
+          const reqPath = decodeURIComponent(req.url.split('?')[0]);
+          const relPath = reqPath.replace(/^\/+/, '');
+          if (relPath.includes('..')) { res.statusCode = 403; return res.end(); }
+          const full = join(nativeFontsDir, relPath);
+          if (!full.startsWith(nativeFontsDir)) { res.statusCode = 403; return res.end(); }
+          readFile(full, (err: NodeJS.ErrnoException | null, data: Buffer) => {
+            if (err) { res.statusCode = 404; return res.end(); }
+            const ext = extname(full).toLowerCase();
+            const mime: Record<string, string> = { '.ttf': 'font/ttf', '.otf': 'font/otf' };
+            res.setHeader('Content-Type', mime[ext] ?? 'application/octet-stream');
+            res.end(data);
+          });
+        });
+      },
+      async closeBundle() {
+        if (skipNativeFontsBuildCopy) return;
+        if (!existsSync(nativeFontsDir)) {
+          console.warn(
+            `[serve-native-fonts-dir] ${nativeFontsDir} 를 찾을 수 없어 native-fonts/를 dist에 담지 않습니다 ` +
+            '(hwpx-template-engine sibling checkout 없음 — 함초롬/KoPub 계열은 substitution fallback으로 내려갑니다).',
+          );
+          return;
+        }
+        await cp(nativeFontsDir, resolve(__dirname, 'dist', 'native-fonts'), { recursive: true });
+      },
+    },
     VitePWA({
       registerType: 'autoUpdate',
       includeAssets: ['favicon.ico', 'icons/*.png'],
@@ -141,9 +195,11 @@ export default defineConfig({
         ],
       },
       workbox: {
-        // WASM (~12 MB) is kept out of precache to avoid blocking SW installation;
-        // CacheFirst at runtime still gives offline access after the first load.
+        // WASM (~12 MB)과 native-fonts/(hcr/kopub 실물 TTF, 최대 ~160MB)는 precache에서
+        // 제외한다 — SW 설치를 막지 않기 위해서다. 둘 다 CacheFirst 런타임 캐시로 최초
+        // 사용 뒤 오프라인 접근을 준다.
         globPatterns: ['**/*.{js,css,html,png,svg,ico,woff,woff2,ttf,otf}'],
+        globIgnores: ['native-fonts/**'],
         maximumFileSizeToCacheInBytes: 20 * 1024 * 1024,
         runtimeCaching: [
           {
@@ -152,6 +208,14 @@ export default defineConfig({
             options: {
               cacheName: 'wasm-cache',
               expiration: { maxEntries: 5, maxAgeSeconds: 30 * 24 * 60 * 60 },
+            },
+          },
+          {
+            urlPattern: /\/native-fonts\//,
+            handler: 'CacheFirst',
+            options: {
+              cacheName: 'native-fonts-cache',
+              expiration: { maxEntries: 16, maxAgeSeconds: 30 * 24 * 60 * 60 },
             },
           },
         ],

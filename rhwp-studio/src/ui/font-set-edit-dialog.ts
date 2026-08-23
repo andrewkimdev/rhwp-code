@@ -7,7 +7,6 @@ import { ModalDialog } from './dialog';
 import { LANG_LABELS } from '@/core/user-settings';
 import type { FontSet } from '@/core/user-settings';
 import { REGISTERED_FONTS } from '@/core/font-loader';
-import { getLocalFonts } from '@/core/local-fonts';
 
 /** 웹폰트 목록 (중복 제거 + 정렬) */
 function getWebFonts(): string[] {
@@ -33,7 +32,6 @@ export class FontSetEditDialog extends ModalDialog {
     const body = document.createElement('div');
     body.className = 'fse-body';
     const webFonts = getWebFonts();
-    const localFonts = getLocalFonts();
     const langKeys: (keyof Omit<FontSet, 'name'>)[] = [
       'korean', 'english', 'chinese', 'japanese', 'other', 'symbol', 'user',
     ];
@@ -83,19 +81,6 @@ export class FontSetEditDialog extends ModalDialog {
         webGroup.appendChild(opt);
       }
       select.appendChild(webGroup);
-
-      // 로컬 글꼴 optgroup (감지된 경우에만)
-      if (localFonts.length > 0) {
-        const localGroup = document.createElement('optgroup');
-        localGroup.label = '로컬 글꼴';
-        for (const fontName of localFonts) {
-          const opt = document.createElement('option');
-          opt.value = fontName;
-          opt.textContent = fontName;
-          localGroup.appendChild(opt);
-        }
-        select.appendChild(localGroup);
-      }
 
       // 기존 값 설정
       if (this.editTarget) {

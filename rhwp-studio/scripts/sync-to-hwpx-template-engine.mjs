@@ -55,6 +55,20 @@ async function main() {
   await mkdir(targetDir, { recursive: true });
   await cp(distDir, targetDir, { recursive: true });
 
+  // hcr/kopub 실물 TTF(native-fonts/)는 vite.config.ts가 RHWP_SYNC_HWPX_TEMPLATE_ENGINE=1일 때
+  // dist/에 담지 않는다 — 이미 hwpx-template-engine의 resources/fonts에 있는 같은 파일을
+  // static-rhwp/에 159MB 중복 vendor하지 않기 위해서다. 배포本은 HwpxTemplateEngineApplication의
+  // /rhwp-fonts 컨텍스트가 그 원본을 직접 서빙한다. 여기서는 그 가정이 깨지지 않았는지만 확인한다.
+  if (existsSync(join(targetDir, 'native-fonts'))) {
+    console.error(
+      `${join(targetDir, 'native-fonts')} 가 존재합니다 — native-fonts/가 dist/에 잘못 포함된 채 ` +
+        '동기화됐습니다. package.json의 sync:hwpx-template-engine이 RHWP_SYNC_HWPX_TEMPLATE_ENGINE=1로 ' +
+        'vite build를 실행하는지 확인하세요.',
+    );
+    process.exitCode = 1;
+    return;
+  }
+
   const commit = gitCommit(studioDir);
   const timestamp = new Date().toISOString();
   await writeFile(

@@ -9,8 +9,8 @@
 interface FontEntry {
   name: string;
   file: string;
-  /** woff2(기본) 또는 woff — CDN woff 파일용 */
-  format?: 'woff2' | 'woff';
+  /** woff2(기본) / woff / truetype(hcr, kopub 원본 TTF) */
+  format?: 'woff2' | 'woff' | 'truetype';
   /** CSS unicode-range — 지정 시 해당 코드포인트만 매칭, 다운로드도 해당 영역 사용 시에만 발생 */
   unicodeRange?: string;
 }
@@ -18,6 +18,12 @@ interface FontEntry {
 export interface WebFontLoadOptions {
   /** true면 CDN 등 외부 URL 웹폰트 등록/로드를 건너뛴다. */
   disableExternalWebFonts?: boolean;
+  /**
+   * `native-fonts/` 상대 경로를 이 URL 아래의 자산으로 바꾼다. dev 서버는 별도
+   * 미들웨어(vite.config.ts)가 상대 경로 그대로 서빙하므로 미지정으로 두고,
+   * hwpx-template-engine에 vendor된 배포 빌드는 `/rhwp-fonts`로 지정한다.
+   */
+  nativeFontBaseUrl?: string;
 }
 
 export interface CanvasKitBundledFontSource {
@@ -37,23 +43,39 @@ export interface CanvasKitFontPlan {
   unavailableFonts: string[];
 }
 
-// 함초롬체 CDN (눈누 jsdelivr — 비상업적 사용 허용, 한컴 라이선스)
-const CDN_HAMCHOB_R = 'https://cdn.jsdelivr.net/gh/projectnoonnu/noonfonts_2104@1.0/HANBatang.woff';
-const CDN_HAMCHOB_B = 'https://cdn.jsdelivr.net/gh/projectnoonnu/noonfonts_2104@1.0/HANBatangB.woff';
-const CDN_HAMCHOD_R = 'https://cdn.jsdelivr.net/gh/projectnoonnu/noonfonts_four@1.0/HCRDotum.woff';
-
 // 한컴 webhwp CSS(@font-face) 매핑 기준 + HWP 문서에서 사용하는 별칭
 const FONT_LIST: FontEntry[] = [
-  // === 함초롬/함초롱/한컴 폰트 (CDN 참조) ===
-  { name: '함초롬돋움', file: CDN_HAMCHOD_R, format: 'woff' },
-  { name: '함초롬바탕', file: CDN_HAMCHOB_R, format: 'woff' },
-  { name: '함초롱돋움', file: CDN_HAMCHOD_R, format: 'woff' },
-  { name: '함초롱바탕', file: CDN_HAMCHOB_R, format: 'woff' },
-  { name: '한컴돋움', file: CDN_HAMCHOD_R, format: 'woff' },
-  { name: '한컴바탕', file: CDN_HAMCHOB_R, format: 'woff' },
-  { name: '한컴산뜻돋움', file: CDN_HAMCHOD_R, format: 'woff' },
-  { name: '새돋움', file: CDN_HAMCHOD_R, format: 'woff' },
-  { name: '새바탕', file: CDN_HAMCHOB_R, format: 'woff' },
+  // === 함초롬(HCR)/한컴 폰트 — hwpx-template-engine 소스 트리의 실물 HWP 네이티브 TTF.
+  // (HANBatang.ttf/HANDotum.ttf의 내부 name 테이블 family 이름이 그대로 함초롬바탕/
+  // 함초롬돋움이다.) CDN·시스템 폰트 대신 이 파일들만 사용한다 — native-fonts/ 는
+  // dev 서버 미들웨어 또는 배포 시 /rhwp-fonts 엔드포인트에서 서빙된다.
+  { name: '함초롬돋움', file: 'native-fonts/hcr/HANDotum.ttf', format: 'truetype' },
+  { name: '함초롬바탕', file: 'native-fonts/hcr/HANBatang.ttf', format: 'truetype' },
+  { name: '함초롱돋움', file: 'native-fonts/hcr/HANDotum.ttf', format: 'truetype' },
+  { name: '함초롱바탕', file: 'native-fonts/hcr/HANBatang.ttf', format: 'truetype' },
+  { name: '한컴돋움', file: 'native-fonts/hcr/HANDotum.ttf', format: 'truetype' },
+  { name: '한컴바탕', file: 'native-fonts/hcr/HANBatang.ttf', format: 'truetype' },
+  { name: '한컴산뜻돋움', file: 'native-fonts/hcr/HANDotum.ttf', format: 'truetype' },
+  { name: '새돋움', file: 'native-fonts/hcr/HANDotum.ttf', format: 'truetype' },
+  { name: '새바탕', file: 'native-fonts/hcr/HANBatang.ttf', format: 'truetype' },
+  // === KoPub World (공공 배포용, hwpx-template-engine 소스 트리의 실물 TTF) ===
+  // KoPub는 무가중치 "Regular"가 없어 Medium을 기본 별칭으로 쓴다.
+  { name: 'KoPubWorldBatang', file: 'native-fonts/kopub/KoPubWorld Batang Medium.ttf', format: 'truetype' },
+  { name: 'KoPubWorld바탕체', file: 'native-fonts/kopub/KoPubWorld Batang Medium.ttf', format: 'truetype' },
+  { name: 'KoPubWorldBatang Light', file: 'native-fonts/kopub/KoPubWorld Batang Light.ttf', format: 'truetype' },
+  { name: 'KoPubWorld바탕체 Light', file: 'native-fonts/kopub/KoPubWorld Batang Light.ttf', format: 'truetype' },
+  { name: 'KoPubWorldBatang Medium', file: 'native-fonts/kopub/KoPubWorld Batang Medium.ttf', format: 'truetype' },
+  { name: 'KoPubWorld바탕체 Medium', file: 'native-fonts/kopub/KoPubWorld Batang Medium.ttf', format: 'truetype' },
+  { name: 'KoPubWorldBatang Bold', file: 'native-fonts/kopub/KoPubWorld Batang Bold.ttf', format: 'truetype' },
+  { name: 'KoPubWorld바탕체 Bold', file: 'native-fonts/kopub/KoPubWorld Batang Bold.ttf', format: 'truetype' },
+  { name: 'KoPubWorldDotum', file: 'native-fonts/kopub/KoPubWorld Dotum Medium.ttf', format: 'truetype' },
+  { name: 'KoPubWorld돋움체', file: 'native-fonts/kopub/KoPubWorld Dotum Medium.ttf', format: 'truetype' },
+  { name: 'KoPubWorldDotum Light', file: 'native-fonts/kopub/KoPubWorld Dotum Light.ttf', format: 'truetype' },
+  { name: 'KoPubWorld돋움체 Light', file: 'native-fonts/kopub/KoPubWorld Dotum Light.ttf', format: 'truetype' },
+  { name: 'KoPubWorldDotum Medium', file: 'native-fonts/kopub/KoPubWorld Dotum Medium.ttf', format: 'truetype' },
+  { name: 'KoPubWorld돋움체 Medium', file: 'native-fonts/kopub/KoPubWorld Dotum Medium.ttf', format: 'truetype' },
+  { name: 'KoPubWorldDotum Bold', file: 'native-fonts/kopub/KoPubWorld Dotum Bold.ttf', format: 'truetype' },
+  { name: 'KoPubWorld돋움체 Bold', file: 'native-fonts/kopub/KoPubWorld Dotum Bold.ttf', format: 'truetype' },
   // === 한컴 HY 폰트 → 오픈소스 대체 ===
   { name: 'HY헤드라인M', file: 'fonts/NotoSansKR-Bold.woff2' },
   { name: 'HYHeadLine M', file: 'fonts/NotoSansKR-Bold.woff2' },
@@ -81,7 +103,10 @@ const FONT_LIST: FontEntry[] = [
   { name: '새굴림', file: 'fonts/NotoSansKR-ExtraLight.woff2' },
   // Haansoft Dotum: HWP 문서가 직접 지정하는 한컴 돋움 영문명(예: 수능 모의고사 본문).
   // 기존 미등록 → 체인의 'Malgun Gothic'(Pretendard) 가 먼저 매칭되어 굵게 렌더됐다.
-  { name: 'Haansoft Dotum', file: 'fonts/NotoSansKR-ExtraLight.woff2' },
+  // Task #1224 당시엔 실물 파일이 없어 밀도로 근사한 NotoSansKR-ExtraLight를 썼으나,
+  // 이제 실물 HANDotum.ttf를 쓸 수 있어 바이트 단위로 정확한 렌더로 바뀐다 — 기존
+  // 밀도 근사와 결과가 달라지므로 수능 모의고사류 문서로 render-diff 확인이 필요하다.
+  { name: 'Haansoft Dotum', file: 'native-fonts/hcr/HANDotum.ttf', format: 'truetype' },
   { name: '바탕', file: 'fonts/NotoSerifKR-Regular.woff2' },
   { name: '바탕체', file: 'fonts/D2Coding-Regular.woff2' },
   { name: '궁서', file: 'fonts/GowunBatang-Regular.woff2' },
@@ -171,10 +196,29 @@ function normalizeFontFamily(value: string): string {
     .toLocaleLowerCase('en-US');
 }
 
-function canvasKitFontUrl(file: string, localFontBaseUrl?: string): string {
-  if (isExternalFontFile(file) || !localFontBaseUrl) return file;
-  const base = localFontBaseUrl.replace(/\/+$/, '');
-  return `${base}/${file.replace(/^fonts\//, '')}`;
+/** 경로 세그먼트 단위로 인코딩한다 — kopub 원본 파일명의 공백을 안전하게 URL화한다. */
+function encodeFontPath(path: string): string {
+  return path.split('/').map(encodeURIComponent).join('/');
+}
+
+/**
+ * `fonts/`·`native-fonts/` 상대 경로를 배포 환경에 맞는 base URL로 바꾸고 인코딩한다.
+ * base가 없으면(로컬 dev) 상대 경로 그대로 인코딩만 적용한다.
+ */
+function rebaseFontFile(
+  file: string,
+  options?: { localFontBaseUrl?: string; nativeFontBaseUrl?: string },
+): string {
+  if (isExternalFontFile(file)) return file;
+  if (file.startsWith('native-fonts/') && options?.nativeFontBaseUrl) {
+    const base = options.nativeFontBaseUrl.replace(/\/+$/, '');
+    return `${base}/${encodeFontPath(file.slice('native-fonts/'.length))}`;
+  }
+  if (file.startsWith('fonts/') && options?.localFontBaseUrl) {
+    const base = options.localFontBaseUrl.replace(/\/+$/, '');
+    return `${base}/${encodeFontPath(file.slice('fonts/'.length))}`;
+  }
+  return encodeFontPath(file);
 }
 
 /** CanvasKit이 첫 replay 전에 등록해야 하는 실제 font byte source를 계산한다. */
@@ -219,7 +263,7 @@ export function resolveCanvasKitFontPlan(
   }
 
   for (const { entry, requested } of requiredEntries) {
-    const url = canvasKitFontUrl(entry.file, options.localFontBaseUrl);
+    const url = rebaseFontFile(entry.file, options);
     const aliases = sourcesByUrl.get(url) ?? new Set<string>();
     aliases.add(requested);
     for (const candidate of FONT_LIST) {
@@ -253,43 +297,10 @@ function registerFontFaces(options?: WebFontLoadOptions): void {
   style.textContent = selectableFontList(options).map(f => {
     const fmt = f.format ?? 'woff2';
     const ur = f.unicodeRange ? ` unicode-range: ${f.unicodeRange};` : '';
-    return `@font-face { font-family: "${f.name}"; src: url("${f.file}") format("${fmt}"); font-display: swap;${ur} }`;
+    const url = rebaseFontFile(f.file, options);
+    return `@font-face { font-family: "${f.name}"; src: url("${url}") format("${fmt}"); font-display: swap;${ur} }`;
   }).join('\n');
   fontFaceRegistrationMode = mode;
-}
-
-/**
- * OS에 설치된 폰트인지 감지한다 (document.fonts.check 기반).
- * @font-face 등록 전에 호출해야 정확하다.
- */
-const OS_FONT_CANDIDATES = [
-  // Windows
-  '맑은 고딕', 'Malgun Gothic', '바탕', 'Batang', '돋움', 'Dotum',
-  '굴림', 'Gulim', '굴림체', 'GulimChe', '바탕체', 'BatangChe', '궁서', 'Gungsuh',
-  // macOS / iOS
-  'Apple SD Gothic Neo', 'AppleMyungjo', 'AppleGothic',
-  // Android
-  'Noto Sans KR', 'Noto Serif KR',
-];
-const detectedOSFonts = new Set<string>();
-
-/** OS 폰트 감지 실행 (@font-face 등록 전에 호출) */
-function detectOSFonts(): void {
-  for (const name of OS_FONT_CANDIDATES) {
-    try {
-      if (document.fonts.check(`16px "${name}"`)) {
-        detectedOSFonts.add(name);
-      }
-    } catch { /* 무시 */ }
-  }
-  if (detectedOSFonts.size > 0) {
-    console.log(`[FontLoader] OS 폰트 감지: ${Array.from(detectedOSFonts).join(', ')}`);
-  }
-}
-
-/** 감지된 OS 폰트 목록 (외부 참조용) */
-export function getDetectedOSFonts(): ReadonlySet<string> {
-  return detectedOSFonts;
 }
 
 /**
@@ -306,23 +317,13 @@ export async function loadWebFonts(
   onProgress?: (loaded: number, total: number) => void,
   options?: WebFontLoadOptions,
 ): Promise<void> {
-  // 0) OS 폰트 감지 (@font-face 등록 전에 실행해야 정확)
-  if (!fontFaceRegistrationMode) {
-    detectOSFonts();
-  }
-
   // 1) CSS @font-face 규칙 등록. 오프라인 옵션이면 외부 URL 폰트는 제외한다.
   registerFontFaces(options);
 
-  // 2) 로드 대상 결정: docFonts에 포함된 폰트 + CRITICAL만 로드
-  //    OS에 설치된 폰트는 웹폰트 로딩 건너뜀
+  // 2) 로드 대상 결정: docFonts에 포함된 폰트 + CRITICAL만 로드.
+  //    OS/시스템 폰트는 절대 신뢰하지 않는다 — 번들 파일만 로드한다.
   const targetSet = new Set([...(docFonts ?? []), ...CRITICAL_FONTS]);
-  const toLoad = selectableFontList(options).filter(f => {
-    if (!targetSet.has(f.name)) return false;
-    // OS에 동일 이름 폰트가 있으면 웹폰트 로딩 불필요
-    if (detectedOSFonts.has(f.name)) return false;
-    return true;
-  });
+  const toLoad = selectableFontList(options).filter(f => targetSet.has(f.name));
 
   // woff2 파일 기준으로 중복 제거 + 이미 로드된 파일 건너뜀
   const seenFiles = new Set<string>();
@@ -359,8 +360,9 @@ export async function loadWebFonts(
       try {
         const names = fileToNames.get(f.file) ?? [f.name];
         const fmt = f.format ?? 'woff2';
+        const url = rebaseFontFile(f.file, options);
         for (const name of names) {
-          const face = new FontFace(name, `url(${f.file}) format('${fmt}')`);
+          const face = new FontFace(name, `url(${url}) format('${fmt}')`);
           const result = await face.load();
           document.fonts.add(result);
         }

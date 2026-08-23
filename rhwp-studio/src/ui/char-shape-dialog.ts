@@ -29,7 +29,6 @@ import type { WasmBridge } from '@/core/wasm-bridge';
 import type { EventBus } from '@/core/event-bus';
 import type { CharProperties } from '@/core/types';
 import { REGISTERED_FONTS } from '@/core/font-loader';
-import { getLocalFonts } from '@/core/local-fonts';
 import { enableDialogDrag } from './dialog-drag';
 
 const LANG_NAMES = ['대표', '한글', '영문', '한자', '일어', '외국어', '기호', '사용자'];
@@ -321,20 +320,6 @@ export class CharShapeDialog {
       webGroup.appendChild(opt);
     });
     this.fontSelect.appendChild(webGroup);
-
-    // 로컬 글꼴 optgroup (감지된 경우에만)
-    const localFonts = getLocalFonts();
-    if (localFonts.length > 0) {
-      const localGroup = document.createElement('optgroup');
-      localGroup.label = '로컬 글꼴';
-      localFonts.forEach(f => {
-        const opt = document.createElement('option');
-        opt.value = f;
-        opt.textContent = f;
-        localGroup.appendChild(opt);
-      });
-      this.fontSelect.appendChild(localGroup);
-    }
     langFontRow.appendChild(this.fontSelect);
     langSection.appendChild(langFontRow);
 

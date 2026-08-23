@@ -29,13 +29,15 @@ test('CanvasKit font plan follows the existing Hanyang Jung Gothic substitution'
   assert.ok(plan.sources[0].aliases.includes('HY중고딕'));
 });
 
-test('CanvasKit font plan fails closed for unavailable surface fonts', () => {
+test('CanvasKit font plan resolves 함초롬바탕 from the bundled HCR TTF even offline, and fails closed for unregistered fonts', () => {
   const offline = resolveCanvasKitFontPlan(
     ['함초롬바탕', 'Times New Roman'],
     { disableExternalWebFonts: true },
   );
-  assert.deepEqual(offline.sources, []);
-  assert.deepEqual(offline.unavailableFonts, ['함초롬바탕', 'Times New Roman']);
+  assert.deepEqual(offline.unavailableFonts, ['Times New Roman']);
+  assert.equal(offline.sources.length, 1);
+  assert.match(offline.sources[0].url, /native-fonts\/hcr\/HANBatang\.ttf$/);
+  assert.ok(offline.sources[0].aliases.includes('함초롬바탕'));
 
   const extension = resolveCanvasKitFontPlan(
     ['한컴 윤고딕 230', 'Noto Sans KR'],

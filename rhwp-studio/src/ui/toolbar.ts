@@ -4,9 +4,8 @@ import type { CharProperties, ParaProperties } from '@/core/types';
 import type { CommandDispatcher } from '@/command/dispatcher';
 import { userSettings } from '@/core/user-settings';
 import type { FontSet } from '@/core/user-settings';
-import { getLocalFonts } from '@/core/local-fonts';
 
-type FontMenuCategory = 'all' | 'current' | 'document' | 'fontSets' | 'system';
+type FontMenuCategory = 'all' | 'current' | 'document' | 'fontSets';
 
 interface FontMenuEntry {
   value: string;
@@ -20,7 +19,6 @@ const FONT_MENU_CATEGORIES: ReadonlyArray<{ id: FontMenuCategory; label: string 
   { id: 'current', label: '현재 글꼴' },
   { id: 'document', label: '문서 글꼴' },
   { id: 'fontSets', label: '대표 글꼴' },
-  { id: 'system', label: '시스템 글꼴' },
 ];
 
 /** 서식 도구 모음 (style-bar) 컨트롤러 */
@@ -112,9 +110,6 @@ export class Toolbar {
       this.updateStyleState(info as { id: number; name: string });
     });
 
-    eventBus.on('local-fonts-changed', () => {
-      this.refreshFontDropdown();
-    });
   }
 
   /** B/I/U/S 토글 버튼 클릭 이벤트 → 커맨드 디스패치 */
@@ -537,15 +532,6 @@ export class Toolbar {
     this.populateFontSetOptions();
   }
 
-  private refreshFontDropdown(): void {
-    const previousValue = this.fontName.value;
-    // 재감지는 현재 캐럿의 7개 언어 글꼴이 아니라 문서 전체 글꼴 목록을 유지해야 한다.
-    this.initFontDropdown(this.fontMenuDocumentFonts);
-    if (previousValue && this.fontName.querySelector(`option[value="${CSS.escape(previousValue)}"]`)) {
-      this.fontName.value = previousValue;
-    }
-  }
-
   /** 문서 로드 시 스타일 목록으로 드롭다운을 채운다 */
   initStyleDropdown(): void {
     try {
@@ -856,15 +842,12 @@ export class Toolbar {
         return documentFonts;
       case 'fontSets':
         return fontSets;
-      case 'system':
-        return getLocalFonts().map(name => ({ value: name, label: name }));
       case 'all':
         return this.uniqueFontMenuEntries([
           ...current,
           ...documentFonts,
           ...baseFonts,
           ...fontSets,
-          ...getLocalFonts().map(name => ({ value: name, label: name })),
         ]);
     }
   }
