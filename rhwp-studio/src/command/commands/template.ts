@@ -78,14 +78,20 @@ export function buildTableRoleMarkerText(params: TagSelectionParams): string {
  * 정렬·배경·행 높이)을 물려받으면 눈에 잘 안 띄고, 표마다 제각각으로 보인다
  * — 이 표가 authoring 마커라는 걸 한눈에 알 수 있도록, 그리고 어떤 원본 행에
  * 붙였든 모든 마커 행이 서로 동일하게 보이도록 고정된 시각 스타일을 강제한다:
- * 돋움체 18pt 굵게(자간·장평 100% 고정), 왼쪽 정렬, 검정 글자, 옅은 회색
- * 배경, 22px 행 높이, 세로 가운데 정렬, 141 HWPUNIT(약 1.9px) 안 여백.
+ * 돋움체 18pt 굵게(자간·장평 100% 고정), 왼쪽 정렬, 검정 글자, 옅은 파란
+ * 배경 + 왼쪽 강조선, 36px 행 높이, 세로 가운데 정렬, 4~6px 안 여백.
  *
  * [자체 발견] 글꼴·자간·장평·안 여백을 강제하지 않았을 때는 원본 셀에 이미
  * 있던 값을 그대로 물려받았다 — 이 문서 안에서는 우연히 대부분 일치했지만,
  * 새로 삽입된 마커 행(`insertTableRow`)의 문단이 원본 문서의 다른 행과 다른
  * 기본 서식(예: 자간이 들어간 글자 모양)을 물려받으면 같은 문서 안에서도
  * 마커 행끼리 눈에 띄게 다르게 렌더링됐다.
+ *
+ * [자체 발견 #2] `cellHeightPx: 22`는 18pt 텍스트 한 줄 자체의 콘텐츠 높이
+ * (`table_layout.rs`가 셀의 마지막 줄은 line_spacing을 제외하므로, 필요한
+ * 높이는 사실상 글자 크기 그대로 — 18pt = 1800 HWPUNIT ÷ `HWPUNIT_PER_PX`
+ * = 24px)보다도 작았다 — 안 여백을 얼마로 주든 무조건 아래가 잘렸다. 22px는
+ * "회색 배경 22px" 관행값을 그대로 물려받은 것일 뿐, 실측 없이 정해진 값이었다.
  */
 const MARKER_ROW_STYLE = {
   charFontSizeHwpUnit: 1800, // HWPUNIT: 1pt = 100 → 18pt
@@ -96,12 +102,19 @@ const MARKER_ROW_STYLE = {
   charWidthRatioPercent: 100,
   charLetterSpacingPercent: 0,
   paraAlignment: 'left',
-  cellFillColor: '#D9D9D9',
-  cellHeightPx: 22,
+  /** Tailwind blue-100 — 문서 본문과 뚜렷이 구분되는 "authoring 주석" 톤. */
+  cellFillColor: '#DBEAFE',
+  /** Tailwind blue-600 — 왼쪽 강조선 색. */
+  accentBorderColor: '#2563EB',
+  /** BorderLine.width 는 0~15 인덱스(`BORDER_WIDTHS` mm 표, style.rs:12) —
+   * 10 = 1.0mm(~3.8px), 뚜렷하지만 과하지 않은 두께. */
+  accentBorderWidthIndex: 10,
+  /** 18pt 한 줄 콘텐츠 높이(24px, 아래 자체 발견 #2) + 안 여백 + 여유. */
+  cellHeightPx: 36,
   /** CellProperties.verticalAlign: 0=top, 1=center, 2=bottom */
   cellVerticalAlign: 1,
-  /** 좌우상하 공통 안 여백(HWPUNIT) — 이 문서군의 기존 표준값. */
-  cellPaddingHwp: 141,
+  /** 안 여백(px) — 왼쪽은 강조선과 텍스트가 붙어 보이지 않도록 더 준다. */
+  cellPaddingPx: { left: 6, right: 4, top: 4, bottom: 4 },
 } as const;
 
 /**
@@ -134,6 +147,12 @@ function applyMarkerRowStyle(
   wasm.applyParaFormatInCell(sec, ppi, ci, cellIdx, 0, JSON.stringify({
     alignment: MARKER_ROW_STYLE.paraAlignment,
   }));
+  // `setCellProperties`에 테두리 키를 하나라도 넣으면 네 변 전체가 다시
+  // 만들어진다 — 언급 안 한 변은 "그대로 유지"가 아니라 기본값(사실상 테두리
+  // 없음)으로 리셋된다(html_table_import.rs의 create_border_fill_from_json).
+  // 왼쪽에만 강조선을 추가하려면 나머지 세 변을 현재 값 그대로 같이 보내야
+  // 오른쪽/위/아래 테두리가 사라지지 않는다.
+  const current = wasm.getCellProperties(sec, ppi, ci, cellIdx);
   wasm.setCellProperties(sec, ppi, ci, cellIdx, {
     fillType: 'solid',
     fillColor: MARKER_ROW_STYLE.cellFillColor,
@@ -141,18 +160,26 @@ function applyMarkerRowStyle(
     // 표 기본 안 여백에 얹혀가지 않도록 셀 자체에 명시적으로 고정한다 —
     // 그래야 원본 표의 기본 안 여백이 뭐였든 마커 행은 항상 동일하다.
     applyInnerMargin: true,
-    paddingLeft: MARKER_ROW_STYLE.cellPaddingHwp,
-    paddingRight: MARKER_ROW_STYLE.cellPaddingHwp,
-    paddingTop: MARKER_ROW_STYLE.cellPaddingHwp,
-    paddingBottom: MARKER_ROW_STYLE.cellPaddingHwp,
+    paddingLeft: MARKER_ROW_STYLE.cellPaddingPx.left * HWPUNIT_PER_PX,
+    paddingRight: MARKER_ROW_STYLE.cellPaddingPx.right * HWPUNIT_PER_PX,
+    paddingTop: MARKER_ROW_STYLE.cellPaddingPx.top * HWPUNIT_PER_PX,
+    paddingBottom: MARKER_ROW_STYLE.cellPaddingPx.bottom * HWPUNIT_PER_PX,
+    borderLeft: {
+      type: 1, // SOLID
+      width: MARKER_ROW_STYLE.accentBorderWidthIndex,
+      color: MARKER_ROW_STYLE.accentBorderColor,
+    },
+    borderRight: current.borderRight,
+    borderTop: current.borderTop,
+    borderBottom: current.borderBottom,
   });
 
   // `resizeTableCells`는 delta 기반이라(TableCellResizeUpdate) 목표 높이가
-  // 아니라 "현재 대비 변화량"을 넘긴다 — getCellProperties()가 이미 HWPUNIT
-  // 원본값을 주므로 px 환산은 목표값 쪽에만 필요하다.
+  // 아니라 "현재 대비 변화량"을 넘긴다 — 위에서 이미 읽어둔 `current`의
+  // HWPUNIT 원본 높이를 재사용한다(그 사이 setCellProperties 는 높이를 건드리지
+  // 않으므로 다시 조회할 필요가 없다).
   const targetHeightHwp = Math.round(MARKER_ROW_STYLE.cellHeightPx * HWPUNIT_PER_PX);
-  const currentHeightHwp = wasm.getCellProperties(sec, ppi, ci, cellIdx).height;
-  const heightDelta = targetHeightHwp - currentHeightHwp;
+  const heightDelta = targetHeightHwp - current.height;
   if (heightDelta !== 0) {
     wasm.resizeTableCells(sec, ppi, ci, [{ cellIdx, heightDelta }]);
   }
