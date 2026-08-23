@@ -41,7 +41,10 @@ import {
   type TableOutlineEntry,
 } from '@/core/table-outline';
 import { buildTableRoleMarkerText, type TemplateTableRole } from '@/command/commands/template';
-import { suggestFieldNames, isRepeatTaggedTable, type FieldNameSuggestion } from '@/core/field-name-suggest';
+import { suggestFieldNames, isTemplateTableMarkerText, type FieldNameSuggestion } from '@/core/field-name-suggest';
+import { extractSelectedLabel } from '@/core/selection-text';
+import { resolveUniqueName } from '@/core/field-name-dedup';
+import { MAX_FIELD_NAME_LEN } from '@/ui/field-edit-dialog';
 
 interface GeneralRoleOption {
   value: 'HEADER' | 'FOOTER' | 'PAGENO';
@@ -107,6 +110,7 @@ export class TemplatePanel {
 
   // 누름틀 이름 제안 그룹
   private fieldSuggestGenerateBtn!: HTMLButtonElement;
+  private fieldSuggestSelectionBtn!: HTMLButtonElement;
   private fieldSuggestListEl!: HTMLElement;
   private fieldSuggestApplyBtn!: HTMLButtonElement;
   private fieldSuggestMessageEl!: HTMLElement;
@@ -199,22 +203,41 @@ export class TemplatePanel {
     ih: InputHandler | null,
     pos: NonNullable<ReturnType<InputHandler['getCursorPosition']>>,
   ): string {
-    const range = ih?.isInCellSelectionMode() ? ih.getSelectedCellRange() : null;
-    let startRow = range?.startRow;
-    let endRow = range?.endRow;
-    if (startRow === undefined && pos.cellIndex !== undefined) {
-      try {
-        const info = this.wasm.getCellInfo(pos.sectionIndex, pos.parentParaIndex!, pos.controlIndex!, pos.cellIndex);
-        startRow = info.row;
-        endRow = info.row;
-      } catch {
-        // 무시 — 아래 fallback 문구를 쓴다
-      }
-    }
-    if (startRow === undefined || endRow === undefined) {
+    const rowRange = this.getSelectedRowRange(ih, pos);
+    if (!rowRange) {
       return '표 안에 커서를 두면 태깅할 수 있습니다.';
     }
-    return startRow === endRow ? `선택된 행: ${startRow + 1}` : `선택된 행: ${startRow + 1}~${endRow + 1}`;
+    return `선택된 행: ${this.formatRowRange(rowRange)}`;
+  }
+
+  /**
+   * "선택된 행"을 (0-based, 양 끝 포함)으로 돌려준다 — 셀 선택 모드면 그 범위,
+   * 아니면 커서가 있는 셀의 행 한 줄. `describeSelectedRows`(hint 표시)와
+   * `generateFieldSuggestions`(제안 검색 범위)가 같은 정의를 공유해야 "힌트에
+   * 보이는 행 = 제안이 검색하는 행"이 항상 성립한다.
+   */
+  private getSelectedRowRange(
+    ih: InputHandler | null,
+    pos: NonNullable<ReturnType<InputHandler['getCursorPosition']>>,
+  ): { startRow: number; endRow: number } | null {
+    const range = ih?.isInCellSelectionMode() ? ih.getSelectedCellRange() : null;
+    if (range) return { startRow: range.startRow, endRow: range.endRow };
+    if (pos.cellIndex !== undefined) {
+      try {
+        const info = this.wasm.getCellInfo(pos.sectionIndex, pos.parentParaIndex!, pos.controlIndex!, pos.cellIndex);
+        return { startRow: info.row, endRow: info.row };
+      } catch {
+        // 무시 — null 반환 (호출부의 fallback 처리)
+      }
+    }
+    return null;
+  }
+
+  /** 행 범위를 1-based 표기("3" 또는 "3~5")로 바꾼다 — hint 문구와 제안 메시지가 공유한다. */
+  private formatRowRange(range: { startRow: number; endRow: number }): string {
+    return range.startRow === range.endRow
+      ? `${range.startRow + 1}`
+      : `${range.startRow + 1}~${range.endRow + 1}`;
   }
 
   /**
@@ -386,8 +409,18 @@ export class TemplatePanel {
   /**
    * 현재 표에서 누름틀 이름 제안을 계산해 review list로 렌더링한다. 순수 조회라
    * `template:tag-selection`과 달리 dispatcher를 거치지 않고 wasm을 직접 읽는다
-   * (`suggestBlockNameFromCurrentCell`과 같은 전례). 반복 블록(`#REPEAT-*:`)으로
-   * 태깅된 표는 행마다 이름이 반복되는 게 의도된 설계이므로 제안 자체를 막는다.
+   * (`suggestBlockNameFromCurrentCell`과 같은 전례). 두 조건이 함께 게이트가
+   * 된다:
+   *
+   * 1. **마커 게이트** — 역할 마커(#HEADER/#FOOTER/#PAGENO/#REPEAT-*:)가 지정된
+   *    표에서만 제안을 만든다. 제안 생성은 마커 authoring("태그 지정")의 다음
+   *    단계다 — 이 패널의 워크플로(표에 역할을 선언 → 그 표의 누름틀을 채운다)와
+   *    같은 순서. 반복 블록(#REPEAT-*)도 예외가 아니다: 검색 범위가 "선택된 행"이므로
+   *    과거 반복 표를 막았던 "행마다 같은 라벨이 반복돼 충돌로 오인" 모호성이
+   *    발생하지 않는다.
+   * 2. **행 범위** — 표 전체가 아니라 선택된 행(셀 선택 모드) 또는 커서가 있는
+   *    행만 검색한다. hint(`describeSelectedRows`)에 보이는 행과 같은 정의
+   *    (`getSelectedRowRange`)를 쓴다.
    */
   private generateFieldSuggestions(): void {
     const ih = this.getInputHandler();
@@ -400,22 +433,80 @@ export class TemplatePanel {
     const ci = pos.controlIndex;
 
     const marker = readTableMarkerText(this.wasm, sec, ppi, ci);
-    if (isRepeatTaggedTable(marker)) {
+    if (!isTemplateTableMarkerText(marker)) {
       this.fieldSuggestTable = null;
       this.renderFieldSuggestRows([]);
-      this.fieldSuggestMessageEl.textContent = '이 표는 반복 블록으로 태깅되어 있어 제안을 생성하지 않습니다.';
+      this.fieldSuggestMessageEl.textContent =
+        '역할 마커(#HEADER/#FOOTER/#PAGENO/#REPEAT-*)가 지정된 표에서만 제안을 생성합니다. 위 "태그 지정"으로 먼저 역할을 지정하세요.';
+      return;
+    }
+
+    const rowRange = this.getSelectedRowRange(ih, pos);
+    if (!rowRange) {
+      this.fieldSuggestTable = null;
+      this.renderFieldSuggestRows([]);
+      this.fieldSuggestMessageEl.textContent = '제안을 생성할 행에 커서를 두거나 행을 선택하세요.';
       return;
     }
 
     let suggestions: FieldNameSuggestion[] = [];
     try {
-      suggestions = suggestFieldNames(this.wasm, sec, ppi, ci);
+      suggestions = suggestFieldNames(this.wasm, sec, ppi, ci, { rowRange });
     } catch (err) {
       console.warn('[template-panel] 누름틀 이름 제안 실패:', err);
     }
     this.fieldSuggestTable = { sec, ppi, ci };
-    this.fieldSuggestMessageEl.textContent = suggestions.length === 0 ? '제안할 빈 칸을 찾지 못했습니다.' : '';
+    this.fieldSuggestMessageEl.textContent =
+      suggestions.length === 0
+        ? `선택된 행(${this.formatRowRange(rowRange)})에서 제안할 빈 칸을 찾지 못했습니다.`
+        : '';
     this.renderFieldSuggestRows(suggestions);
+  }
+
+  /**
+   * 현재 텍스트 선택 영역을 review list 없이 그 자리에서 바로 누름틀로 삽입한다.
+   * 표 인접 셀 스캔(`generateFieldSuggestions`)과 달리 후보가 항상 하나뿐이라
+   * 배치 검토가 필요 없다 — 검증을 통과하면 즉시 `field-suggest:apply`를 단일
+   * 아이템으로 디스패치한다(undo 한 번, `field-suggest.ts` 참고).
+   */
+  private insertFieldFromSelection(): void {
+    const ih = this.getInputHandler();
+    const sel = ih?.getSelection();
+    if (!ih || !sel) {
+      this.fieldSuggestMessageEl.textContent = '먼저 텍스트를 선택하세요.';
+      return;
+    }
+
+    const extracted = extractSelectedLabel(this.wasm, sel.start, sel.end);
+    if (!extracted) {
+      this.fieldSuggestMessageEl.textContent =
+        '선택 영역이 비어있거나(공백만) 문단/셀 경계를 벗어났습니다(표 셀 경계나 문단 경계를 넘는 선택, 중첩 표, 글상자는 지원하지 않습니다).';
+      return;
+    }
+    if (extracted.text.length > MAX_FIELD_NAME_LEN) {
+      this.fieldSuggestMessageEl.textContent = `선택한 텍스트가 너무 깁니다(최대 ${MAX_FIELD_NAME_LEN}자).`;
+      return;
+    }
+    // 이미 필드(안내문 등) 안의 선택은 막는다.
+    try {
+      if (this.wasm.getFieldInfoAt(sel.start).inField || this.wasm.getFieldInfoAt(sel.end).inField) {
+        this.fieldSuggestMessageEl.textContent = '이미 필드 안의 텍스트는 선택할 수 없습니다.';
+        return;
+      }
+    } catch {
+      // 조회 실패는 무시하고 진행 — 최종 방어선은 wasm insert 실패 처리
+    }
+
+    // 배치 개념이 없으므로(항상 한 건씩 즉시 삽입) usedInBatch는 항상 빈 Set —
+    // 문서에 이미 있는 이름과만 충돌 검사한다. 조정된 이름은 메시지로 보여준다.
+    const existingNames = new Set(this.wasm.getFieldList().map((f) => f.name));
+    const name = resolveUniqueName(extracted.text, existingNames, new Set());
+
+    this.dispatcher.dispatch('field-suggest:apply', {
+      items: [{ kind: 'selection', insertPos: extracted.insertPos, name }],
+    });
+    this.fieldSuggestMessageEl.textContent = `누름틀 "${name}"을(를) 삽입했습니다.`;
+    this.refresh();
   }
 
   private renderFieldSuggestRows(suggestions: readonly FieldNameSuggestion[]): void {
@@ -471,9 +562,29 @@ export class TemplatePanel {
 
   private applyFieldSuggestions(): void {
     if (!this.fieldSuggestTable) return;
+    const { sec, ppi, ci } = this.fieldSuggestTable;
     const items = this.fieldSuggestRows
       .filter((r) => r.checkbox.checked && !r.suggestion.alreadyHasField)
-      .map((r) => ({ cellIdx: r.suggestion.cellIdx, name: r.nameInput.value.trim() }))
+      .map((r) => {
+        const name = r.nameInput.value.trim();
+        const insertAt = r.suggestion.insertAt;
+        if (insertAt) {
+          return {
+            kind: 'selection' as const,
+            insertPos: {
+              sectionIndex: sec,
+              paragraphIndex: 0,
+              charOffset: insertAt.charOffset,
+              parentParaIndex: ppi,
+              controlIndex: ci,
+              cellIndex: r.suggestion.cellIdx,
+              cellParaIndex: insertAt.cellParaIndex,
+            },
+            name,
+          };
+        }
+        return { kind: 'cell' as const, cellIdx: r.suggestion.cellIdx, name };
+      })
       .filter((item) => item.name !== '');
     if (items.length === 0) return;
 
@@ -686,12 +797,26 @@ export class TemplatePanel {
     this.fieldSuggestGenerateBtn = document.createElement('button');
     this.fieldSuggestGenerateBtn.type = 'button';
     this.fieldSuggestGenerateBtn.className = 'tp-btn tp-fieldsuggest-generate-btn';
-    this.fieldSuggestGenerateBtn.textContent = '현재 표에서 제안 생성';
+    this.fieldSuggestGenerateBtn.textContent = '선택된 행에서 제안 생성';
+    this.fieldSuggestGenerateBtn.title =
+      '역할 마커가 지정된 표에서, 선택된 행(셀 선택 모드) 또는 커서가 있는 행만 스캔해 누름틀 이름을 제안합니다.';
     this.fieldSuggestGenerateBtn.addEventListener('click', () => this.generateFieldSuggestions());
     fieldSuggestSection.appendChild(this.fieldSuggestGenerateBtn);
 
+    // 선택한 텍스트로 누름틀을 즉시 만든다(review list를 거치지 않음 — 후보가
+    // 항상 하나뿐이라 배치 검토가 필요 없다). mouseup(드래그-선택 종료)이
+    // command-state-changed를 발생시키지 않으므로 활성 상태를 캐시하지 않고,
+    // 문서가 열려 있으면 항상 활성으로 두고 실제 선택 유효성은 클릭 시점에
+    // 검증한다(insertFieldFromSelection).
+    this.fieldSuggestSelectionBtn = document.createElement('button');
+    this.fieldSuggestSelectionBtn.type = 'button';
+    this.fieldSuggestSelectionBtn.className = 'tp-btn tp-fieldsuggest-selection-btn';
+    this.fieldSuggestSelectionBtn.textContent = '선택한 텍스트로 누름틀 만들기';
+    this.fieldSuggestSelectionBtn.addEventListener('click', () => this.insertFieldFromSelection());
+    fieldSuggestSection.appendChild(this.fieldSuggestSelectionBtn);
+
     this.fieldSuggestMessageEl = document.createElement('div');
-    this.fieldSuggestMessageEl.className = 'tp-hint';
+    this.fieldSuggestMessageEl.className = 'tp-hint tp-fieldsuggest-message';
     fieldSuggestSection.appendChild(this.fieldSuggestMessageEl);
 
     this.fieldSuggestListEl = document.createElement('div');

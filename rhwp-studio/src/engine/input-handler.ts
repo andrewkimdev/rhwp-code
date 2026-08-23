@@ -3989,6 +3989,12 @@ export class InputHandler {
   /** 선택 영역이 있는가? */
   hasSelection(): boolean { return this.getNonEmptySelection() !== null; }
 
+  /** 선택 anchor만 지운다(캐럿 위치는 그대로) — snapshot 삽입 직후 stale 선택이
+   * 새로 삽입된 내용까지 걸치는 유령 범위를 만드는 것을 막는다. `executeOperation`의
+   * `cursor.moveTo(newPos)`는 anchor를 지우지 않으므로(cursor.ts의 `moveTo`) 자동으로
+   * 처리되지 않는다 — 호출부가 명시적으로 불러야 한다. */
+  clearSelectionAnchor(): void { this.cursor.clearSelection(); }
+
   /** 모양 복사 상태가 있는가? */
   hasCopiedFormat(): boolean { return this.formatCopyState !== null; }
 
