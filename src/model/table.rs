@@ -169,6 +169,26 @@ fn distribute_hwp_units(total: HwpUnit, count: u16) -> Vec<HwpUnit> {
         .collect()
 }
 
+/// 병합 셀(row_span>1)의 row_span을 1 줄이며 height도 비례 축소한다.
+///
+/// delete_row()가 병합 셀을 걸치거나 그 위에 앵커된 채로 지날 때 span만
+/// 줄이고 height를 그대로 두면, merge_cells()가 구운 값(정상 경로에서는
+/// fix A 이후 항상 양수)이 row_span==1에 도달할 때까지 stale하게 남는다.
+/// height==0인 경우(fix A 이전 문서 또는 손상/레거시 문서 등 fix A와
+/// 무관한 경로로 생긴 0)도 방어적으로 400 HWPUNIT 기준으로 되살려 나눈다.
+fn shrink_row_span_height(cell: &mut Cell) {
+    if cell.row_span > 1 {
+        let effective_height = if cell.height == 0 {
+            400u32.saturating_mul(cell.row_span as u32)
+        } else {
+            cell.height
+        };
+        let per_row_share = effective_height / cell.row_span as u32;
+        cell.height = effective_height.saturating_sub(per_row_share);
+    }
+    cell.row_span = cell.row_span.saturating_sub(1);
+}
+
 /// 손상된 표 메타데이터를 편집할 때 u16 좌표·span·개수가 넘지 않게 한다.
 fn checked_table_u16_add(value: u16, delta: u16, field: &str) -> Result<u16, String> {
     value
@@ -1326,7 +1346,7 @@ impl Table {
         // 더하면 오버플로 패닉한다(rebuild_grid()와 동일 원인).
         for cell in &mut self.cells {
             if cell.row < row_idx && cell.row.saturating_add(cell.row_span) > row_idx {
-                cell.row_span -= 1;
+                shrink_row_span_height(cell);
             }
         }
 
@@ -1337,7 +1357,7 @@ impl Table {
         // 삭제 행에 앵커가 있지만 row_span > 1인 병합 셀: 다음 행으로 이동, row_span 축소
         for cell in &mut self.cells {
             if cell.row == row_idx && cell.row_span > 1 {
-                cell.row_span -= 1;
+                shrink_row_span_height(cell);
             }
         }
 
@@ -1519,12 +1539,25 @@ impl Table {
 
         // 열폭/행높이 합산 (원본 값 보존: 0은 fallback 없이 그대로 유지)
         let col_widths = self.get_column_widths();
-        let raw_row_heights = self.get_raw_row_heights();
+        // 여러 행에 걸친 병합(row_span > 1)은 get_row_heights()의 0→400
+        // fallback으로 항상 양수 기준값을 굽는다. 자동맞춤(height==0) 행들만
+        // 병합하면 raw 합이 그대로 0이 되는데, delete_row()가 row_span을
+        // 줄이기만 하고 height는 건드리지 않아 이 0이 row_span==1로 돌아올
+        // 때까지 stale하게 남고, 그때 렌더러가 최소 높이(400 HWPUNIT)로 깎아
+        // 표 행이 "하이라인"으로 붕괴한다 — 한 번 여러 행에 구워진 0은
+        // delete_row()를 거쳐도 복구할 수 없으므로 병합 시점에 막는다.
+        // 열만 병합해 결과가 row_span==1로 남는 경우는 get_raw_row_heights()를
+        // 그대로 써서 기존 "height==0 == 자동 맞춤" 의미론을 보존한다.
+        let row_heights_for_merge = if end_row > start_row {
+            self.get_row_heights()
+        } else {
+            self.get_raw_row_heights()
+        };
         let new_width: HwpUnit = (start_col..=end_col)
             .map(|c| col_widths.get(c as usize).copied().unwrap_or(0))
             .sum();
         let new_height: HwpUnit = (start_row..=end_row)
-            .map(|r| raw_row_heights.get(r as usize).copied().unwrap_or(0))
+            .map(|r| row_heights_for_merge.get(r as usize).copied().unwrap_or(0))
             .sum();
 
         // 비주 셀의 비어있지 않은 문단 수집 (모든 메타데이터 보존)

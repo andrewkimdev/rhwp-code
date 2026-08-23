@@ -27095,6 +27095,107 @@ fn tagging_a_fully_merged_row_preserves_table_width() {
     );
 }
 
+/// 회귀 재현: 병합 이력이 있는 표에서 delete_row()를 두 번 연속 호출하면
+/// (3-row-span 병합 → 2 → 1) 살아남은 행의 height가 하이라인(~5px)으로
+/// 붕괴할 수 있다. merge_cells()가 자동맞춤(height==0) 행들을 여러 행에
+/// 걸쳐 병합할 때 get_raw_row_heights()의 fallback-없는 합을 그대로 구워
+/// 병합 셀 height가 0이 되고, delete_row()의 두 row_span 축소 루프가 이를
+/// 비례 조정하지 않아 이 stale 0이 row_span==1에 도달할 때까지(3-row-span
+/// 병합이면 delete_row 2회 후) 그대로 남기 때문이다.
+#[test]
+fn double_delete_row_after_vertical_merge_preserves_height() {
+    let mut doc = HwpDocument::create_empty();
+    // 단일 열: "다른 열이 max()로 가려주는" 탈출구를 제거해 버그를 노출시킨다.
+    let created = doc.create_table_native(0, 0, 0, 3, 1).expect("표 생성");
+    let para_idx = issue_1481_json_usize(&created, "paraIdx");
+
+    // HWPX에서 가져온 "자동 맞춤" 표를 재현: 모든 셀 height를 0으로 강제
+    // (create_table_native는 항상 0이 아닌 height를 채우므로 직접 주입해야 한다).
+    match &mut doc.document.sections[0].paragraphs[para_idx].controls[0] {
+        Control::Table(table) => {
+            for cell in &mut table.cells {
+                cell.height = 0;
+            }
+        }
+        _ => panic!("target table"),
+    }
+
+    // 3행을 모두 하나의 셀로 세로 병합.
+    doc.merge_table_cells_native(0, para_idx, 0, 0, 0, 2, 0)
+        .expect("세로 병합");
+    match &doc.document.sections[0].paragraphs[para_idx].controls[0] {
+        Control::Table(table) => {
+            assert_eq!(table.cells.len(), 1, "병합 후 셀은 1개");
+            assert_eq!(table.cells[0].row_span, 3, "사전 조건: row_span==3");
+        }
+        _ => panic!("target table"),
+    }
+
+    // 행 삭제를 두 번 연속 수행 (row_span: 3 -> 2 -> 1).
+    doc.delete_table_row_native(0, para_idx, 0, 0)
+        .expect("첫 번째 행 삭제");
+    doc.delete_table_row_native(0, para_idx, 0, 0)
+        .expect("두 번째 행 삭제");
+
+    match &doc.document.sections[0].paragraphs[para_idx].controls[0] {
+        Control::Table(table) => {
+            assert_eq!(table.row_count, 1, "행 1개만 남아야 한다");
+            assert_eq!(table.cells.len(), 1);
+            assert_eq!(table.cells[0].row_span, 1, "row_span이 1로 축소되어야 한다");
+            assert!(
+                table.cells[0].height >= 400,
+                "살아남은 셀 height가 하이라인으로 붕괴하면 안 된다: {}",
+                table.cells[0].height
+            );
+            assert!(
+                table.get_row_heights()[0] >= 400,
+                "get_row_heights()도 하이라인이면 안 된다: {:?}",
+                table.get_row_heights()
+            );
+        }
+        _ => panic!("target table"),
+    }
+}
+
+/// 비회귀 가드: 열만 병합해 결과가 row_span==1로 남는 경우, fix A의
+/// `end_row > start_row` 조건이 새지 않아 기존 "height==0 == 자동맞춤" 보존
+/// 의미론이 그대로 유지되어야 한다 (병합 자체는 원래부터 표 폭/높이를
+/// 바꾸지 않는 게 맞다 — 이 테스트는 회귀 재현이 아니라 가드다).
+#[test]
+fn merge_cells_across_columns_only_preserves_auto_fit_zero_height() {
+    let mut doc = HwpDocument::create_empty();
+    let created = doc.create_table_native(0, 0, 0, 1, 3).expect("표 생성");
+    let para_idx = issue_1481_json_usize(&created, "paraIdx");
+
+    match &mut doc.document.sections[0].paragraphs[para_idx].controls[0] {
+        Control::Table(table) => {
+            for cell in &mut table.cells {
+                cell.height = 0;
+            }
+        }
+        _ => panic!("target table"),
+    }
+
+    // 가로(열)만 병합 — 결과는 row_span==1로 남는다.
+    doc.merge_table_cells_native(0, para_idx, 0, 0, 0, 0, 2)
+        .expect("가로 병합");
+
+    match &doc.document.sections[0].paragraphs[para_idx].controls[0] {
+        Control::Table(table) => {
+            assert_eq!(table.cells.len(), 1);
+            assert_eq!(
+                table.cells[0].row_span, 1,
+                "사전 조건: 열만 병합, row_span==1"
+            );
+            assert_eq!(
+                table.cells[0].height, 0,
+                "열만 병합한 경우 자동맞춤(height==0)이 그대로 보존되어야 한다"
+            );
+        }
+        _ => panic!("target table"),
+    }
+}
+
 #[test]
 fn split_table_at_first_row_is_rejected() {
     let mut doc = HwpDocument::create_empty();
