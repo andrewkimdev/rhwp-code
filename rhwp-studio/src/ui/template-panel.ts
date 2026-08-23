@@ -158,9 +158,6 @@ export class TemplatePanel {
     this.hintEl.textContent = hintText;
     this.hintEl.classList.toggle('tp-hint--warning', hintWarning);
 
-    this.applyBtn.disabled = !canTag;
-    this.clearBtn.disabled = !canTag;
-
     this.updatePreview();
   }
 
@@ -316,12 +313,30 @@ export class TemplatePanel {
     };
   }
 
+  /**
+   * 마커 미리보기 텍스트를 갱신하고, 그 성공/실패를 그대로 '태그 지정' 버튼
+   * 활성화 판정에도 쓴다 — `buildTableRoleMarkerText`가 던지는 예외
+   * (`requireBlockName`/`requireNestedPair`, template.ts)가 곧 실제 커맨드
+   * 실행 시 필요한 조건과 동일하므로, 이중으로 검증 로직을 만들지 않는다.
+   * 블록명/부모블록/역할/커서 위치 중 하나라도 바뀔 수 있는 모든 지점
+   * (refresh, onRoleChanged, 블록명 input, 부모블록 select)이 이미
+   * updatePreview()를 호출하므로 버튼 상태도 그 지점들에서 자동으로 갱신된다.
+   */
   private updatePreview(): void {
+    let markerValid = true;
     try {
       this.previewEl.textContent = buildTableRoleMarkerText(this.buildParamsFromForm());
     } catch {
       this.previewEl.textContent = '(블록명을 입력하세요)';
+      markerValid = false;
     }
+    const ih = this.getInputHandler();
+    const pos = ih?.getCursorPosition();
+    const inTable = pos?.parentParaIndex !== undefined && pos?.controlIndex !== undefined;
+    const isNested = (pos?.cellPath?.length ?? 0) > 1;
+    const canTag = Boolean(inTable) && !isNested;
+    this.clearBtn.disabled = !canTag;
+    this.applyBtn.disabled = !canTag || !markerValid;
   }
 
   private applyTag(): void {
@@ -468,6 +483,7 @@ export class TemplatePanel {
     this.blockNameInput.addEventListener('keydown', (e) => {
       if (e.key !== 'Enter' || e.isComposing) return;
       e.preventDefault();
+      if (this.applyBtn.disabled) return;
       this.applyTag();
     });
     this.blockNameField.appendChild(blockNameLabel);
