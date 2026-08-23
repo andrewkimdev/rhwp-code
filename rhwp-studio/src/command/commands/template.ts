@@ -22,7 +22,8 @@
  */
 import type { CommandDef } from '../types';
 import type { WasmBridge } from '../../core/wasm-bridge';
-import { findCellIndexForRowCol, readTableMarkerText } from '../../core/table-outline.ts';
+import { expandRowRangeForMerges, findCellIndexForRowCol, readTableMarkerText } from '../../core/table-outline.ts';
+import { showToast } from '../../ui/toast.ts';
 
 export type TemplateTableRole =
   | 'HEADER' | 'FOOTER' | 'PAGENO'
@@ -313,8 +314,14 @@ export const templateCommands: CommandDef[] = [
       const cellInfo = pos.cellIndex !== undefined
         ? services.wasm.getCellInfo(sec, ppi, ci, pos.cellIndex)
         : null;
-      const startRow = range?.startRow ?? cellInfo?.row ?? 0;
-      const endRow = range?.endRow ?? cellInfo?.row ?? 0;
+      const rawStartRow = range?.startRow ?? cellInfo?.row ?? 0;
+      const rawEndRow = range?.endRow ?? cellInfo?.row ?? 0;
+      // 드래그 선택은 anchor/focus 셀의 min/max일 뿐 rowSpan을 모른다 — 헤더
+      // 블록의 일부 컬럼만 두 행에 걸쳐 병합돼 있으면(예: 5446216.hwpx의
+      // "번호"~"수령인") 병합 셀이 실제로 덮는 행 전체로 넓혀야 splitTable이
+      // 그 병합 셀을 가로지르며 거부되는 일이 없다.
+      const bboxes = services.wasm.getTableCellBboxes(sec, ppi, ci);
+      const { startRow, endRow } = expandRowRangeForMerges(bboxes, { startRow: rawStartRow, endRow: rawEndRow });
 
       try {
         ih.executeOperation({
@@ -335,6 +342,8 @@ export const templateCommands: CommandDef[] = [
         });
       } catch (err) {
         console.error('[template:tag-selection] 실패:', err);
+        const msg = err instanceof Error ? err.message : String(err);
+        showToast({ message: `태그를 지정하지 못했습니다: ${msg}`, durationMs: 4000 });
       }
     },
   },

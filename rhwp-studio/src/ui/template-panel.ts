@@ -36,6 +36,7 @@ import type { InputHandler } from '@/engine/input-handler';
 import {
   listTopLevelTables,
   availableNestedParentBlockNames,
+  expandRowRangeForMerges,
   findCellIndexForRowCol,
   readTableMarkerText,
   type TableOutlineEntry,
@@ -229,16 +230,27 @@ export class TemplatePanel {
     pos: NonNullable<ReturnType<InputHandler['getCursorPosition']>>,
   ): { startRow: number; endRow: number } | null {
     const range = ih?.isInCellSelectionMode() ? ih.getSelectedCellRange() : null;
-    if (range) return { startRow: range.startRow, endRow: range.endRow };
-    if (pos.cellIndex !== undefined) {
+    let raw: { startRow: number; endRow: number } | null = range
+      ? { startRow: range.startRow, endRow: range.endRow }
+      : null;
+    if (!raw && pos.cellIndex !== undefined) {
       try {
         const info = this.wasm.getCellInfo(pos.sectionIndex, pos.parentParaIndex!, pos.controlIndex!, pos.cellIndex);
-        return { startRow: info.row, endRow: info.row };
+        raw = { startRow: info.row, endRow: info.row };
       } catch {
         // 무시 — null 반환 (호출부의 fallback 처리)
       }
     }
-    return null;
+    if (!raw || pos.parentParaIndex === undefined || pos.controlIndex === undefined) return raw;
+    // 드래그가 rowSpan을 몰라서 병합 셀 일부만 잡을 수 있다 — 태깅 시 실제로
+    // 적용될 범위와 힌트/제안이 항상 일치하도록 여기서 한 번만 넓힌다
+    // (template.ts의 template:tag-selection 실행부도 같은 헬퍼를 쓴다).
+    try {
+      const bboxes = this.wasm.getTableCellBboxes(pos.sectionIndex, pos.parentParaIndex, pos.controlIndex);
+      return expandRowRangeForMerges(bboxes, raw);
+    } catch {
+      return raw;
+    }
   }
 
   /** 행 범위를 1-based 표기("3" 또는 "3~5")로 바꾼다 — hint 문구와 제안 메시지가 공유한다. */

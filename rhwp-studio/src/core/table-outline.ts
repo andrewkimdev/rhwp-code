@@ -9,6 +9,7 @@
  * 있다(그쪽은 뮤테이션 표면 원장이 스캔하는 `src/command/` 아래에 있어야 한다).
  */
 import type { WasmBridge } from './wasm-bridge';
+import type { CellBbox } from './types';
 
 export interface TableOutlineEntry {
   sec: number;
@@ -103,6 +104,45 @@ export function listTopLevelTables(wasm: WasmBridge, sec: number): TableOutlineE
     searchCharOffset = 0;
   }
   return entries;
+}
+
+/**
+ * 드래그로 잡은 원시 행 범위를, 그 범위와 겹치는 세로 병합 셀(rowSpan)을 전부
+ * 온전히 포함하도록 바깥쪽으로 확장한다.
+ *
+ * `getSelectedCellRange`(cursor.ts)는 anchor/focus 셀의 min/max일 뿐 rowSpan을
+ * 모른다 — 헤더 블록의 일부 컬럼만 두 행에 걸쳐 병합되어 있으면(예:
+ * 5446216.hwpx의 "번호"~"수령인"은 rowSpan:2인데 "사업장 소재지"만 별개 행인
+ * 경우), 드래그가 병합된 컬럼의 anchor 행만 잡아도 실제로는 그 옆 병합 셀이
+ * 덮는 모든 행을 포함해야 한다. 이 파일의 다른 함수와 달리 `wasm`을 직접 호출하지
+ * 않고 이미 가져온 `CellBbox[]`를 받는다 — 순수 함수이므로 여전히 "조회 전용"
+ * 불변조건은 지킨다.
+ *
+ * 확장된 범위가 다시 다른 병합 셀과 겹칠 수 있으므로(연쇄 확장) 고정점까지 반복한다.
+ */
+export function expandRowRangeForMerges(
+  cells: readonly CellBbox[],
+  range: { startRow: number; endRow: number },
+): { startRow: number; endRow: number } {
+  let { startRow, endRow } = range;
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const cell of cells) {
+      const cellEndRow = cell.row + cell.rowSpan - 1;
+      const overlaps = cell.row <= endRow && cellEndRow >= startRow;
+      if (!overlaps) continue;
+      if (cell.row < startRow) {
+        startRow = cell.row;
+        changed = true;
+      }
+      if (cellEndRow > endRow) {
+        endRow = cellEndRow;
+        changed = true;
+      }
+    }
+  }
+  return { startRow, endRow };
 }
 
 const REPEAT_BODY_PATTERN = /^#REPEAT-BODY:(.+)$/;
