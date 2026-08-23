@@ -259,3 +259,39 @@
   border-color: var(--color-border-lighter);
   color: var(--color-text-disabled);
 }
+
+/* 누름틀 이름 제안 review list */
+.tp-fieldsuggest-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin: var(--space-2) 0;
+}
+
+.tp-fieldsuggest-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2);
+  border: 1px solid var(--color-border-lighter);
+  border-radius: var(--radius-sm);
+}
+
+.tp-fieldsuggest-row-loc {
+  flex: none;
+  min-width: 2.5em;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-hint);
+}
+
+.tp-fieldsuggest-row-input {
+  flex: 1;
+  min-width: 0;
+}
+
+.tp-fieldsuggest-row-badge {
+  flex: none;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-hint);
+}

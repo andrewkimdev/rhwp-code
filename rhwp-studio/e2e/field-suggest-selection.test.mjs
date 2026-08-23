@@ -1,14 +1,13 @@
-// E2E: #template-panel의 "누름틀 만들기" — 텍스트 선택 시 그 텍스트로 즉시 삽입
+// E2E: #template-panel의 "선택한 텍스트로 누름틀 만들기" — 선택 텍스트 기반 즉시 삽입
 //
 // "신청인" 텍스트 뒤에 긴 공백, 그 뒤에 "(인)"이 오는 패턴(5555817.hwp 모양)은
 // 표의 두 셀로 나뉘지 않고 본문 문단 또는 표 셀 하나 안에 통짜 텍스트로 들어있어
 // field-name-suggest.ts의 "라벨 셀 + 인접 빈 셀" 자동 스캔이 잡아내지 못한다.
-// 이 테스트는 "신청인"을 직접 드래그 선택 → "누름틀 만들기" 버튼 1클릭 →
-// review list를 거치지 않고 그 자리에서 즉시 누름틀이 생기는지, 라벨은
+// 이 테스트는 "신청인"을 직접 드래그 선택 → "선택한 텍스트로 누름틀 만들기" 버튼
+// 1클릭 → review list를 거치지 않고 그 자리에서 즉시 누름틀이 생기는지, 라벨은
 // 그대로 두고 그 뒤에 삽입되는지를 본문 텍스트와 표 셀 내부 텍스트 양쪽에서 검증한다
-// (field-suggest-panel.test.mjs의 셀-인접 스캔 경로는 후보가 여러 개일 수 있지만,
-// 그쪽도 이제 review list 없이 한 클릭으로 즉시 전부 생성한다 — 같은 버튼, 같은
-// 즉시-생성 모델. 이 테스트는 그중 "텍스트 선택" 트리거 경로만 검증한다).
+// (field-suggest-panel.test.mjs의 셀-인접 스캔 경로는 후보가 여러 개라 review list +
+// "적용"이 그대로 필요하다 — 이 테스트는 후보가 항상 하나뿐인 별개 트리거 경로).
 //
 // 실행: CHROME_PATH=... node e2e/field-suggest-selection.test.mjs --mode=headless
 
@@ -16,7 +15,7 @@ import { runTest, createNewDocument, setTestCase, screenshot, assert } from './h
 
 const sleep = (page, ms) => page.evaluate((t) => new Promise((r) => setTimeout(r, t)), ms);
 
-runTest('누름틀 만들기 — 텍스트 선택 시 즉시 삽입', async ({ page }) => {
+runTest('선택한 텍스트로 누름틀 만들기 — 즉시 삽입', async ({ page }) => {
   // ── TC-1: 본문에 "신청인" + 공백 + "(인)" 패턴 입력 후 "신청인" 선택 → 1클릭 삽입 ──
   setTestCase('TC-1: 본문 텍스트 선택 → 즉시 삽입');
   await createNewDocument(page);
@@ -35,12 +34,12 @@ runTest('누름틀 만들기 — 텍스트 선택 시 즉시 삽입', async ({ p
   await screenshot(page, 'field-suggest-selection-01-selected');
 
   const btnFound = await page.evaluate(() => {
-    const btn = document.querySelector('#template-panel .tp-fieldsuggest-btn');
+    const btn = document.querySelector('#template-panel .tp-fieldsuggest-selection-btn');
     if (!btn || btn.disabled) return false;
     btn.click();
     return true;
   });
-  assert(btnFound, '"누름틀 만들기" 버튼이 활성 상태로 존재한다');
+  assert(btnFound, '"선택한 텍스트로 누름틀 만들기" 버튼이 활성 상태로 존재한다');
   await sleep(page, 300);
   await screenshot(page, 'field-suggest-selection-02-inserted');
 
@@ -48,6 +47,7 @@ runTest('누름틀 만들기 — 텍스트 선택 시 즉시 삽입', async ({ p
     fields: window.__wasm.getFieldList().map((f) => ({ name: f.name, guide: f.guide, startCharIdx: f.startCharIdx })),
     paraText: window.__wasm.getTextRange(0, 0, 0, 3),
     message: document.querySelector('#template-panel .tp-fieldsuggest-message')?.textContent ?? '',
+    rowCount: document.querySelectorAll('#template-panel .tp-fieldsuggest-row').length,
   }));
   console.log('삽입 후:', JSON.stringify(result));
   assert(result.fields.length === 1, `필드 1개 즉시 생성(review list/적용 클릭 없이): ${result.fields.length}개`);
@@ -58,6 +58,7 @@ runTest('누름틀 만들기 — 텍스트 선택 시 즉시 삽입', async ({ p
     result.fields[0]?.startCharIdx === 3,
     `필드가 선택 바로 뒤(charOffset 3)에 삽입된다(선택 텍스트 치환 아님): ${result.fields[0]?.startCharIdx}`,
   );
+  assert(result.rowCount === 0, `review list에는 아무 행도 생기지 않는다(즉시 삽입이므로): ${result.rowCount}행`);
 
   // ── TC-2: 같은 이름이 이미 필드로 존재하면 조용히 _2로 조정된다 ──
   setTestCase('TC-2: 이름 충돌 시 자동 접미어');
@@ -74,7 +75,7 @@ runTest('누름틀 만들기 — 텍스트 선택 시 즉시 삽입', async ({ p
   });
   await sleep(page, 200);
   await page.evaluate(() => {
-    document.querySelector('#template-panel .tp-fieldsuggest-btn').click();
+    document.querySelector('#template-panel .tp-fieldsuggest-selection-btn').click();
   });
   await sleep(page, 300);
 
@@ -129,7 +130,7 @@ runTest('누름틀 만들기 — 텍스트 선택 시 즉시 삽입', async ({ p
   await sleep(page, 200);
 
   await page.evaluate(() => {
-    document.querySelector('#template-panel .tp-fieldsuggest-btn').click();
+    document.querySelector('#template-panel .tp-fieldsuggest-selection-btn').click();
   });
   await sleep(page, 300);
   await screenshot(page, 'field-suggest-selection-03-cell-inserted');
