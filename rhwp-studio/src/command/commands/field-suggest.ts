@@ -10,12 +10,69 @@
  */
 import type { CommandDef } from '../types';
 import type { DocumentPosition } from '@/core/types';
+import type { WasmBridge } from '@/core/wasm-bridge';
 import { CursorState } from '@/engine/cursor';
 
 /** review list에서 체크된 한 행 — 최종(사용자가 손댔을 수 있는) 이름. */
 export type FieldSuggestApplyItem =
   | { kind: 'cell'; cellIdx: number; name: string }
   | { kind: 'selection'; insertPos: DocumentPosition; name: string };
+
+/**
+ * `insertPos` 바로 앞 글자 1개를 읽는다(셀/본문 공통) — 없으면(문단 맨 앞이거나
+ * 조회 실패) `null`. `selection-text.ts`의 `readSelectionText`와 같은 셀/본문
+ * 분기를 쓴다.
+ */
+function readCharBefore(wasm: WasmBridge, pos: DocumentPosition): string | null {
+  if (pos.charOffset <= 0) return null;
+  try {
+    if (pos.parentParaIndex !== undefined && pos.controlIndex !== undefined) {
+      return wasm.getTextInCell(
+        pos.sectionIndex,
+        pos.parentParaIndex,
+        pos.controlIndex,
+        pos.cellIndex ?? 0,
+        pos.cellParaIndex ?? 0,
+        pos.charOffset - 1,
+        1,
+      );
+    }
+    return wasm.getTextRange(pos.sectionIndex, pos.paragraphIndex, pos.charOffset - 1, 1);
+  } catch {
+    return null;
+  }
+}
+
+/** `pos` 위치에 스페이스 1글자를 삽입한다(셀/본문 공통, fire-and-forget). */
+function insertSpaceAt(wasm: WasmBridge, pos: DocumentPosition): void {
+  if (pos.parentParaIndex !== undefined && pos.controlIndex !== undefined) {
+    wasm.insertTextInCell(
+      pos.sectionIndex,
+      pos.parentParaIndex,
+      pos.controlIndex,
+      pos.cellIndex ?? 0,
+      pos.cellParaIndex ?? 0,
+      pos.charOffset,
+      ' ',
+    );
+  } else {
+    wasm.insertText(pos.sectionIndex, pos.paragraphIndex, pos.charOffset, ' ');
+  }
+}
+
+/**
+ * 인라인 삽입(`kind:'selection'` — 규칙 4의 라벨 뒤 삽입, 텍스트 선택 삽입)은
+ * 항상 이미 내용이 있는 위치에 필드를 붙인다. 그 직전 글자가 공백이 아니면
+ * 스페이스 1글자를 구분자로 먼저 넣고, 필드 삽입 위치를 그만큼 밀어 돌려준다.
+ * 이미 공백으로 끝나 있으면(트레일링 스페이스) 중복으로 넣지 않는다.
+ * `kind:'cell'`(규칙 2/3/5)은 대상이 항상 빈 셀이라 호출하지 않는다.
+ */
+function withSpaceDelimiter(wasm: WasmBridge, pos: DocumentPosition): DocumentPosition {
+  const before = readCharBefore(wasm, pos);
+  if (before === null || /\s/.test(before)) return pos;
+  insertSpaceAt(wasm, pos);
+  return { ...pos, charOffset: pos.charOffset + 1 };
+}
 
 export const fieldSuggestCommands: CommandDef[] = [
   {
@@ -72,13 +129,17 @@ export const fieldSuggestCommands: CommandDef[] = [
 
             let lastPos: DocumentPosition = resolved[0]?.insertPos ?? pos;
             for (const { item, insertPos } of resolved) {
+              // 'selection'(인라인 삽입/텍스트 선택)은 항상 이미 내용이 있는 위치에
+              // 붙는다 — 직전 글자가 공백이 아니면 스페이스 구분자를 먼저 넣는다.
+              // 'cell'(규칙 2/3/5)은 대상이 항상 빈 셀이라 그대로 둔다.
+              const targetPos = item.kind === 'selection' ? withSpaceDelimiter(wasm, insertPos) : insertPos;
               // 안내문(guide)을 이름과 동기화한다 — review list에서 편집한 이름이
               // 그대로 셀/본문에 표시돼야, 채워 넣기 전에도 어떤 값이 들어갈 자리인지
               // 한눈에 보인다("입력하세요" 같은 범용 문구는 여러 필드가 전부 같은
               // 문구로 보여 구분이 안 된다).
-              const result = wasm.insertClickHereField(insertPos, item.name, '', item.name, true);
+              const result = wasm.insertClickHereField(targetPos, item.name, '', item.name, true);
               if (!result.ok) throw new Error(`[field-suggest:apply] 삽입 실패: ${item.name}`);
-              lastPos = insertPos;
+              lastPos = targetPos;
             }
             return lastPos;
           },

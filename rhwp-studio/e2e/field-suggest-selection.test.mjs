@@ -46,17 +46,20 @@ runTest('누름틀 만들기 — 텍스트 선택 시 즉시 삽입', async ({ p
 
   const result = await page.evaluate(() => ({
     fields: window.__wasm.getFieldList().map((f) => ({ name: f.name, guide: f.guide, startCharIdx: f.startCharIdx })),
-    paraText: window.__wasm.getTextRange(0, 0, 0, 3),
+    paraText: window.__wasm.getTextRange(0, 0, 0, 4),
     message: document.querySelector('#template-panel .tp-fieldsuggest-message')?.textContent ?? '',
   }));
   console.log('삽입 후:', JSON.stringify(result));
   assert(result.fields.length === 1, `필드 1개 즉시 생성(review list/적용 클릭 없이): ${result.fields.length}개`);
   assert(result.fields[0]?.name === '신청인', `필드 이름=신청인: ${result.fields[0]?.name}`);
   assert(result.fields[0]?.guide === '신청인', `안내문(guide)이 이름과 동기화된다: ${result.fields[0]?.guide}`);
-  assert(result.paraText === '신청인', `라벨 텍스트 "신청인"이 삭제되지 않고 그대로 남아 있다: ${result.paraText}`);
   assert(
-    result.fields[0]?.startCharIdx === 3,
-    `필드가 선택 바로 뒤(charOffset 3)에 삽입된다(선택 텍스트 치환 아님): ${result.fields[0]?.startCharIdx}`,
+    result.paraText === '신청인 ',
+    `라벨 텍스트 "신청인"이 삭제되지 않고 그대로 남고, 필드 앞에 구분자 스페이스가 들어간다: ${JSON.stringify(result.paraText)}`,
+  );
+  assert(
+    result.fields[0]?.startCharIdx === 4,
+    `필드가 라벨+구분자 스페이스 뒤(charOffset 4)에 삽입된다(선택 텍스트 치환 아님): ${result.fields[0]?.startCharIdx}`,
   );
 
   // ── TC-2: 같은 이름이 이미 필드로 존재하면 조용히 _2로 조정된다 ──
@@ -134,9 +137,20 @@ runTest('누름틀 만들기 — 텍스트 선택 시 즉시 삽입', async ({ p
   await sleep(page, 300);
   await screenshot(page, 'field-suggest-selection-03-cell-inserted');
 
-  const cellFields = await page.evaluate(() => window.__wasm.getFieldList().map((f) => ({ name: f.name, guide: f.guide })));
+  const cellResult = await page.evaluate(({ ppi, ci }) => ({
+    fields: window.__wasm.getFieldList().map((f) => ({ name: f.name, guide: f.guide, startCharIdx: f.startCharIdx })),
+    cellText: window.__wasm.getTextInCell(0, ppi, ci, 0, 0, 0, 4),
+  }), { ppi: tbl.ppi, ci: tbl.ci });
   assert(
-    cellFields.length === 1 && cellFields[0]?.name === '신청인' && cellFields[0]?.guide === '신청인',
-    `표 셀 내부 선택도 1클릭으로 즉시 필드 생성: ${JSON.stringify(cellFields)}`,
+    cellResult.fields.length === 1 && cellResult.fields[0]?.name === '신청인' && cellResult.fields[0]?.guide === '신청인',
+    `표 셀 내부 선택도 1클릭으로 즉시 필드 생성: ${JSON.stringify(cellResult.fields)}`,
+  );
+  assert(
+    cellResult.cellText === '신청인 ',
+    `셀 안에서도 라벨이 보존되고 필드 앞에 구분자 스페이스가 들어간다: ${JSON.stringify(cellResult.cellText)}`,
+  );
+  assert(
+    cellResult.fields[0]?.startCharIdx === 4,
+    `셀 안 필드도 라벨+구분자 스페이스 뒤(charOffset 4)에 삽입된다: ${cellResult.fields[0]?.startCharIdx}`,
   );
 });

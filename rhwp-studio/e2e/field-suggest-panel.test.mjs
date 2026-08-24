@@ -368,16 +368,16 @@ runTest('누름틀 만들기 — 행 선택 시 즉시 생성/skip', async ({ pa
     `클릭 한 번으로 필드 3개(인라인 삽입 포함)가 즉시 생성된다: ${JSON.stringify(fieldNames2)}`,
   );
   assert(result.message.includes('3개'), `메시지가 생성 개수(3개)를 보고한다: ${result.message}`);
-  // 인라인 삽입(성명/병적지청)은 라벨 텍스트를 지우지 않고 그 뒤에 필드를 붙인다 —
-  // 셀 텍스트가 라벨 문자열로 "시작"해야 한다(필드 자체는 getTextInCell 평문에
-  // 나타나지 않을 수 있으므로 완전 일치가 아니라 startsWith로 확인한다).
+  // 인라인 삽입(성명/병적지청)은 라벨 텍스트를 지우지 않고 그 뒤에 구분자 스페이스 +
+  // 필드를 붙인다 — 필드 자체는 getTextInCell 평문에 나타나지 않으므로, 셀 텍스트가
+  // 정확히 "라벨 + 스페이스"여야 한다(구분자가 빠지면 이 assert가 잡아낸다).
   assert(
-    result.cellTexts.some((t) => t.startsWith('성명')),
-    `"성명" 셀 텍스트가 라벨로 시작한다(라벨 보존): ${JSON.stringify(result.cellTexts)}`,
+    result.cellTexts.some((t) => t === '성명 '),
+    `"성명" 셀 텍스트가 라벨+구분자 스페이스다(라벨 보존 + 구분자 삽입): ${JSON.stringify(result.cellTexts)}`,
   );
   assert(
-    result.cellTexts.some((t) => t.startsWith('병적지청')),
-    `"병적지청" 셀 텍스트가 라벨로 시작한다(라벨 보존): ${JSON.stringify(result.cellTexts)}`,
+    result.cellTexts.some((t) => t === '병적지청 '),
+    `"병적지청" 셀 텍스트가 라벨+구분자 스페이스다(라벨 보존 + 구분자 삽입): ${JSON.stringify(result.cellTexts)}`,
   );
   // label-above-blank(그 밖의 특이사항)는 빈 셀 채우기이므로 그 라벨 자신의 셀
   // 텍스트는 그대로, "빈 행"이었던 셀에 필드가 들어간다 — 라벨 셀 텍스트는 안 바뀐다.
