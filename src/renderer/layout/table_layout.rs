@@ -6247,10 +6247,7 @@ impl LayoutEngine {
             // trust_stored_cell_flow 경로로 재현). 재래핑되지 않은 문단(정상 저장 다중 줄,
             // 또는 재래핑 임계 미달로 그대로인 1줄)은 종전대로 저장 지오메트리를 신뢰한다.
             let para_overflow_recomposed = |idx: usize, p: &Paragraph| {
-                p.line_segs.len() == 1
-                    && composed_paras
-                        .get(idx)
-                        .is_some_and(|c| c.lines.len() > 1)
+                p.line_segs.len() == 1 && composed_paras.get(idx).is_some_and(|c| c.lines.len() > 1)
             };
             let first_para_overflow_recomposed = cell
                 .paragraphs

@@ -1004,8 +1004,9 @@ pub fn svgs_to_pdf_with_options(
     // 공유하는 문서(요청) 스코프 캐시. `embed_text=false`면 svg2pdf가 fill_fonts를
     // 아예 안 타므로 채워지지 않지만, 빈 HashMap 할당 자체는 무시할 수준이라
     // 조건 분기 없이 항상 만든다.
-    let font_data_cache: Option<svg2pdf::FontDataCache> =
-        Some(std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())));
+    let font_data_cache: Option<svg2pdf::FontDataCache> = Some(std::sync::Arc::new(
+        std::sync::Mutex::new(std::collections::HashMap::new()),
+    ));
 
     let mut alloc = Ref::new(1);
     let catalog_ref = alloc.bump();
