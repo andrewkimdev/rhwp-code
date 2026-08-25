@@ -1,14 +1,11 @@
 name: Build vendored binaries (all platforms)
 
-# Builds native rhwp release binaries for all 4 platforms hwpx-template-engine
-# vendors (vendor/rhwp/<platform>/). linux-x86_64, windows-x86_64, and
-# macos-aarch64 build natively on their own runner architecture.
-# macos-x86_64 is cross-compiled *from* the macos-14 (Apple Silicon) runner
-# instead of running on a native macos-13 (Intel) runner — GitHub's Intel
-# macOS runner pool has very limited/no capacity (a real run of this workflow
-# saw the macos-13 job queue for 28+ minutes with zero runner assigned while
-# every other job started within seconds), so relying on it is not viable.
-# Cross-compiling avoids that entirely; see PATCHES.md in the consuming repo
+# Builds native rhwp release binaries for the 3 platforms hwpx-template-engine
+# vendors (vendor/rhwp/<platform>/): linux-x86_64, windows-x86_64, and
+# macos-aarch64, all built natively on their own runner architecture.
+# macos-x86_64 (Intel) is no longer built (작업지시자 decision, 2026-08-25) —
+# see hwpx-template-engine/TODO.md for the vendor/rhwp/macos-x86_64/ cleanup
+# this implies. See PATCHES.md in the consuming repo
 # (hwpx-template-engine/vendor/rhwp/PATCHES.md) for the toolchain-vs-PATH
 # gotcha this ran into when done locally with a non-rustup rustc on PATH
 # (not applicable here since GitHub's macOS runners only have the
@@ -38,11 +35,6 @@ jobs:
             artifact_name: macos-aarch64
             binary_name: rhwp
             native: true
-          - os: macos-14
-            target: x86_64-apple-darwin
-            artifact_name: macos-x86_64
-            binary_name: rhwp
-            native: false
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             artifact_name: linux-x86_64

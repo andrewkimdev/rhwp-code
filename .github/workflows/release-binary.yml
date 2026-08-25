@@ -1,7 +1,9 @@
 name: Release Binary
 
 # Issue #612 — CLI 바이너리 릴리즈 파이프라인
-# 4 플랫폼 (Linux x86_64 / macOS x86_64 + aarch64 / Windows x86_64) matrix 빌드
+# 3 플랫폼 (Linux x86_64 / macOS aarch64 / Windows x86_64) matrix 빌드 — macOS x86_64(Intel)는
+# 더 이상 빌드하지 않는다 (작업지시자 결정, 2026-08-25). 기존 vendor/rhwp/macos-x86_64/
+# 산출물 정리는 hwpx-template-engine/TODO.md 참고.
 # release tag (v*) push 시 자동 트리거 + workflow_dispatch 수동 실행 (테스트용)
 
 on:
@@ -30,14 +32,6 @@ jobs:
             runner: ubuntu-latest
             archive: tar.gz
             archive_suffix: linux-x86_64
-            binary_name: rhwp
-          - target: x86_64-apple-darwin
-            # macos-13 (Intel) runner 큐 적체 영역 회피 — Apple Silicon (macos-14)
-            # 에서 x86_64-apple-darwin 으로 cross-compile (Rust 표준 cross-compile).
-            # Intel binary 산출물 보존 + 큐 가용성 영역 정합.
-            runner: macos-14
-            archive: tar.gz
-            archive_suffix: macos-x86_64
             binary_name: rhwp
           - target: aarch64-apple-darwin
             runner: macos-14
