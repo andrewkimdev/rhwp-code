@@ -5986,6 +5986,26 @@ impl LayoutEngine {
                         inner_width,
                         styles,
                     );
+                    // [cell-cold-load-overflow-recompose] #2291의 "부실 저장(ls==1인데
+                    // 실폭 초과) 문단 재분할" 안전장치가 cell_units_uncached(측정)와
+                    // layout_partial_table_cells(분할 연속 페이지)에는 이미 있었지만,
+                    // 이 함수(단일 페이지·비분할 표의 최초 렌더 경로)에는 빠져 있었다 —
+                    // 그래서 authoring 시점엔 짧았던 값이 값 교체로 훨씬 길어져도(예:
+                    // 템플릿 필드 채움) 여기서는 절대 재래핑되지 않고 그대로 잘려
+                    // 렌더됐다. 다른 두 경로와 동일한 호출(×1.8 임계, 메모 공유)로
+                    // 통일한다 — ×1.8보다 낮은 전용 임계를 이 호출부에만 쓰는 실험은
+                    // `tests/overflow_cell_baseline.rs`(샘플 전수 래칫)로 기각됐다:
+                    // `issue2559/1341000_research_report_footnotes.hwp`에서 87줄이
+                    // 새로 쪽 밖으로 밀려났다(#3236 계열, 실측 확인). ×1.8은 "임의로
+                    // 보수적"이 아니라 이 저장소의 실제 문서 코퍼스로 검증된 값이다.
+                    if cell.text_direction == 0 {
+                        crate::renderer::composer::recompose_stored_single_line_if_overflowing(
+                            comp,
+                            para,
+                            inner_width,
+                            styles,
+                        );
+                    }
                 }
             }
 
