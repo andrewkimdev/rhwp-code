@@ -2101,7 +2101,20 @@ pub fn recompose_for_cell_width(
 /// `HeightMeasurer`)이 원 패딩 폭(더 좁음)으로 래핑하면 같은 문단이
 /// 렌더 4줄/측정 5줄로 갈라져 행높이가 과대해진다 (86712 pi=172 산식 셀
 /// 106.5px vs 한글 86.3px, #2237 axis B). 규칙 본체를 단일 출처로 공유한다.
-/// 의미는 종전 `LayoutEngine::shrink_cell_padding_for_overflow` 와 동일.
+///
+/// [TODO.md "cell padding silently stripped" follow-up, 2026-08-25] 바닥값을
+/// 절대 1px에서 원 패딩의 [`PADDING_SHRINK_FLOOR_FRACTION`] 비율로 바꿨다.
+/// 완전 제거(항상 원 패딩 반환)를 먼저 시도했으나, 실 문서
+/// (`samples/76076_regulatory_analysis.hwp`, 82쪽)에서 이 축소가 흔한 짧은
+/// 한글 표 헤더/라벨 셀에서도 광범위하게 발동하고(진단 계측: 한 문서에서
+/// 30회 이상, 예 "산업안전보건기준에 관한 규칙") 1px 바닥까지 깎이는 폭
+/// 여유(~10px)가 줄바꿈 경계에 영향을 줘, 제거 시
+/// `issue_3820_rowbreak_rowspan_band_keeps_pdf_page_35_36_boundary`(한컴 PDF
+/// 페이지 경계 기준 테스트)가 실패했다 — 앞쪽 여러 행이 한 줄씩 더 늘어나며
+/// 누적 페이지 채움 상태가 밀려 35/36쪽 경계가 어긋남. 완전 제거는
+/// `overflow_cell_baseline.rs` 급 문서 전수 회귀 없이는 안전하지 않다고
+/// 판단, 대신 바닥을 원 패딩 비율로 올려 저작 여백을 대부분 보존하면서도
+/// 실 문서가 의존하는 폭 여유를 대부분 유지한다.
 pub(crate) fn shrunk_cell_horizontal_padding(
     pad_left: f64,
     pad_right: f64,
@@ -2161,9 +2174,12 @@ pub(crate) fn shrunk_cell_horizontal_padding(
     if max_line_w <= overflow_threshold || cell_w <= 2.0 {
         return (pad_left, pad_right);
     }
-    let min_pad = 1.0;
+    // 바닥값 = 원 패딩의 PADDING_SHRINK_FLOOR_FRACTION — 절대 1px이 아니라
+    // 원 여백에 비례. 저작 여백이 시각적으로 완전히 사라지지 않게 하면서도
+    // 여전히 일부 폭 여유는 확보한다.
     let total_pad = pad_left + pad_right;
-    let max_reducible = (total_pad - 2.0 * min_pad).max(0.0);
+    let floor_total_pad = total_pad * PADDING_SHRINK_FLOOR_FRACTION;
+    let max_reducible = (total_pad - floor_total_pad).max(0.0);
     if max_reducible <= 0.0 {
         return (pad_left, pad_right);
     }
@@ -2178,6 +2194,10 @@ pub(crate) fn shrunk_cell_horizontal_padding(
     let new_right = new_total - new_left;
     (new_left, new_right)
 }
+
+/// 좌우 패딩 축소의 바닥값 — 원 패딩의 이 비율 밑으로는 축소하지 않는다.
+/// `shrunk_cell_horizontal_padding` 문서 주석의 2026-08-25 후속 참고.
+const PADDING_SHRINK_FLOOR_FRACTION: f64 = 0.35;
 
 fn is_hwp3_hwp5_missing_lineseg_legacy_bullet(
     para: &Paragraph,

@@ -3843,7 +3843,8 @@ impl LayoutEngine {
 
     /// 셀 텍스트가 오버플로우할 때 좌우 패딩을 축소하여 공간을 확보한다.
     /// composed 문단의 각 줄 텍스트 폭을 측정하여 최대값이 가용 폭을 초과하면
-    /// 패딩을 비례 축소한다 (최소 1px 보장).
+    /// 패딩을 비례 축소한다 (바닥값은 절대 1px이 아니라 원 패딩의 비율 —
+    /// `composer::PADDING_SHRINK_FLOOR_FRACTION`, 2026-08-25 후속 참고).
     ///
     /// [Task #617] 다중 줄(2 줄 이상) 단락이 있는 셀은 HWP 가 가용 폭에 자간을
     /// 분배·줄바꿈을 확정한 상태이므로 padding 을 보존한다 (자연 폭 추정으로
@@ -3860,9 +3861,6 @@ impl LayoutEngine {
         styles: &ResolvedStyleSet,
         preserve_cell_padding: bool,
     ) -> (f64, f64) {
-        // [#2279 axis B] 규칙 본체는 composer::shrunk_cell_horizontal_padding 로 이동 —
-        // cut(cell_units)/mt(HeightMeasurer) 측정과 단일 출처 공유 (규칙이 갈리면
-        // 측정 줄수와 실제 렌더 줄수가 어긋난다).
         crate::renderer::composer::shrunk_cell_horizontal_padding(
             pad_left,
             pad_right,
@@ -12843,7 +12841,11 @@ mod row_cut_tests {
     }
 
     #[test]
-    fn test_shrink_cell_padding_preserves_explicit_cell_margin() {
+    fn test_shrink_cell_padding_floor_is_proportional_not_1px() {
+        // grossly overflowing (20x cell width) 케이스라도 바닥값은 원 패딩의
+        // PADDING_SHRINK_FLOOR_FRACTION(35%) — 절대 1px까지 깎이지 않는다.
+        // 2026-08-25 후속: 완전 제거는 실 문서(76076_regulatory_analysis.hwp)
+        // 페이지 경계 회귀를 일으켜 폐기, 대신 바닥을 비례값으로 올렸다.
         let eng = LayoutEngine::new(96.0);
         let styles = ResolvedStyleSet::default();
         let composed = vec![composed_text("12345678901234567890")];
@@ -12859,8 +12861,12 @@ mod row_cut_tests {
             false,
         );
         assert!(
-            shrunk.0 < 20.0 || shrunk.1 < 20.0,
-            "일반 셀의 기존 오버플로우 방어는 유지되어야 함: {shrunk:?}"
+            shrunk.0 < 20.0 && shrunk.1 < 20.0,
+            "일반 셀의 오버플로우 방어는 여전히 유지되어야 함: {shrunk:?}"
+        );
+        assert!(
+            shrunk.0 >= 20.0 * 0.35 - 0.01 && shrunk.1 >= 20.0 * 0.35 - 0.01,
+            "패딩은 원값의 35% 밑으로 축소되면 안 됨 (더 이상 1px 바닥이 아님): {shrunk:?}"
         );
 
         let preserved = eng.shrink_cell_padding_for_overflow(
@@ -12876,6 +12882,37 @@ mod row_cut_tests {
             preserved,
             (20.0, 20.0),
             "안 여백 지정 셀은 한컴처럼 입력한 좌우 여백을 렌더링에서도 보존해야 함"
+        );
+    }
+
+    #[test]
+    fn test_shrink_cell_padding_moderate_gray_zone_overflow_still_shrinks() {
+        // 이전 1px 바닥 로직이 발동하던 회색지대 (available*1.15 초과, ×1.8
+        // rewrap 임계 미만) 케이스에서도, 완전 제거가 아니라 여전히 (비례
+        // 바닥까지) 축소가 일어남을 확인한다 — 실 문서가 의존하는 폭 여유를
+        // 대부분 보존하기 위한 의도적 선택. TODO.md "cell padding silently
+        // stripped" 재현 케이스.
+        let eng = LayoutEngine::new(96.0);
+        let styles = ResolvedStyleSet::default();
+        let composed = vec![composed_text("123456789012345")];
+        let paragraphs = vec![Paragraph::default()];
+
+        let result = eng.shrink_cell_padding_for_overflow(
+            4.0,
+            4.0,
+            60.0,
+            &composed,
+            &paragraphs,
+            &styles,
+            false,
+        );
+        assert!(
+            result.0 < 4.0 && result.1 < 4.0,
+            "회색지대 오버플로우에서는 여전히 패딩이 일부 축소되어야 함: {result:?}"
+        );
+        assert!(
+            result.0 >= 4.0 * 0.35 - 0.01 && result.1 >= 4.0 * 0.35 - 0.01,
+            "축소되더라도 원 패딩의 35% 밑으로는 내려가지 않아야 함: {result:?}"
         );
     }
 
