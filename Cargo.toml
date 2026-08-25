@@ -226,4 +226,10 @@ svg2pdf = { git = "https://github.com/andrewkimdev/svg2pdf", branch = "patch/0.1
 # disk cache. Forked from linebender/resvg @ v0.45.1 (crates/usvg/src/text/flatten.rs
 # only). Patches every usvg 0.45.x dependency in the graph, including svg2pdf's own
 # transitive one above, so both resolve to the same patched crate instance.
+#
+# Also includes the text-flatten-skip patch (hwpx-template-engine's
+# docs/design/RHWP_TEXT_FLATTEN_SKIP_SPIKE_PLAN.md) -- graduated and
+# fast-forward-merged into this same branch after Phase 3 validation
+# (PR andrewkimdev/resvg#1); the branch this used to point at
+# (patch/v0.45.1-text-flatten-skip) was deleted after that merge.
 usvg = { git = "https://github.com/andrewkimdev/resvg.git", branch = "patch/v0.45.1-glyph-outline-cache" }

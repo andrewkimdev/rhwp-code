@@ -1315,6 +1315,19 @@ impl HeightMeasurer {
                                 cell_inner_width,
                                 styles,
                             );
+                            // [cell-cold-load-overflow-recompose] layout_table_cells에 추가한
+                            // 동일 안전장치(#2291) — 이 측정 경로가 실제 렌더 경로보다 먼저(또는
+                            // 별도로) 셀 높이를 추정하므로, 여기서도 부실 저장 1-lineseg 재래핑을
+                            // 반영하지 않으면 페이지네이션이 (재래핑으로 실제로는 더 커질) 셀
+                            // 높이를 과소 추정해 표 캐시 보정과 어긋난다. 기존 hot path와 동일한
+                            // ×1.8 임계/메모를 그대로 쓴다 — 전용 낮은 임계 실험은 실제 문서
+                            // 회귀로 기각됐다(layout_table_cells 호출부의 주석 참고).
+                            crate::renderer::composer::recompose_stored_single_line_if_overflowing(
+                                &mut comp,
+                                p,
+                                cell_inner_width,
+                                styles,
+                            );
                             let para_style = styles.para_styles.get(p.para_shape_id as usize);
                             let is_last_para = pidx + 1 == cell_para_count;
                             let spacing_before = if pidx > 0 {

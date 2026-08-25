@@ -1350,6 +1350,82 @@ mod tests {
         );
     }
 
+    /// [cell-cold-load-overflow-recompose] Issue #1838의 "별도 개선 축"(초과분을
+    /// 잘라 보여주는 대신 한컴처럼 재줄바꿈)을 실제로 검증한다 — #1838과 같은
+    /// (basic-table-01, 값 교체로 stale 1-lineseg 부정합) 시나리오지만, 이번엔 값이
+    /// 셀 폭을 크게(×1.8 임계 이상) 초과하는 경우 실제로 여러 줄로 재분할되는지
+    /// 확인한다. `layout_table_cells`(냉로드 렌더 경로)에 `recompose_for_cell_width`
+    /// 바로 뒤 `recompose_stored_single_line_if_overflowing` 호출을 추가하기 전에는
+    /// `cell_units_uncached`/`layout_partial_table_cells` 에만 있던 이 안전장치가
+    /// 적용되지 않아 텍스트가 한 줄로 남아 클립됐다(hwpx-template-engine의
+    /// scslic.hwpx '제품명' 필드 실측 리포트로 발견).
+    #[test]
+    fn issue_cell_cold_load_overflow_recompose_wraps_grossly_overlong_single_line_value() {
+        use crate::model::control::Control;
+
+        let Some(mut core) = load_document("samples/hwpx/basic-table-01.hwpx") else {
+            return;
+        };
+        // 공백 포함 54자 — 짧은 원본 placeholder 기준 캐시된 1-lineseg 폭을 크게
+        // (×1.8 임계 이상) 초과하도록 반복.
+        let value = "0123456789 0123456789 0123456789 0123456789 0123456789";
+        {
+            let para = &mut core.document.sections[0].paragraphs[0];
+            let Some(Control::Table(table)) = para.controls.get_mut(2) else {
+                panic!("전제(#1838과 동일): basic-table-01 문단 0 ctrl[2] 가 표가 아님");
+            };
+            let cell_para = &mut table.cells[0].paragraphs[0];
+            assert_eq!(cell_para.line_segs.len(), 1, "전제: 단일 lineseg");
+            cell_para.text = value.to_string();
+            let n = cell_para.text.chars().count() as u32;
+            cell_para.char_offsets = (0..n).collect();
+            cell_para.char_count = n + 1;
+        }
+        let svg = core.render_page_svg_native(0).unwrap_or_default();
+        assert!(!svg.is_empty(), "SVG 비어있음");
+
+        // 값에 등장하는 '0' 문자의 <text x="X" y="Y" ...>0</text> y 좌표를 모두 모아,
+        // 서로 다른 y 값이 2개 이상이면 여러 줄로 갈라졌다는 뜻이다(한 줄이면 모든
+        // '0'이 같은 baseline y를 공유).
+        let re = regex_lite_find_text_y_for_char(&svg, '0');
+        let distinct_ys: std::collections::BTreeSet<i64> =
+            re.iter().map(|y| (y * 10.0).round() as i64).collect();
+        assert!(
+            distinct_ys.len() > 1,
+            "긴 값이 여러 줄로 줄바꿈되지 않고 한 줄에 머묾(y좌표 종류={}, 값들={:?})",
+            distinct_ys.len(),
+            re
+        );
+    }
+
+    /// `<text x="X" y="Y" ...>{ch}</text>` 패턴에서 주어진 단일 문자 {ch}에 대한
+    /// 모든 y 값을 순서대로 뽑아낸다. 외부 정규식 크레이트에 의존하지 않는 최소
+    /// 수동 파서 — draw_text/svg.rs의 per-cluster emission 형식(`<text x="{}"
+    /// y="{}" ...>` )에 맞춘 문자열 스캔.
+    fn regex_lite_find_text_y_for_char(svg: &str, ch: char) -> Vec<f64> {
+        let mut out = Vec::new();
+        let needle_close = format!(">{ch}</text>");
+        let mut search_from = 0usize;
+        while let Some(close_rel) = svg[search_from..].find(&needle_close) {
+            let close_idx = search_from + close_rel;
+            let tag_start = svg[..close_idx].rfind("<text").unwrap_or(close_idx);
+            let tag = &svg[tag_start..close_idx];
+            if let Some(y) = extract_attr(tag, "y") {
+                out.push(y);
+            }
+            search_from = close_idx + needle_close.len();
+        }
+        out
+    }
+
+    fn extract_attr(tag: &str, attr: &str) -> Option<f64> {
+        let needle = format!("{attr}=\"");
+        let start = tag.find(&needle)? + needle.len();
+        let rest = &tag[start..];
+        let end = rest.find('"')?;
+        rest[..end].parse::<f64>().ok()
+    }
+
     #[test]
     fn test_layer_svg_matches_legacy_for_basic_text_sample() {
         let Some(core) = load_document("samples/lseg-01-basic.hwp") else {

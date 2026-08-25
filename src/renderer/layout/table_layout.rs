@@ -3843,7 +3843,8 @@ impl LayoutEngine {
 
     /// 셀 텍스트가 오버플로우할 때 좌우 패딩을 축소하여 공간을 확보한다.
     /// composed 문단의 각 줄 텍스트 폭을 측정하여 최대값이 가용 폭을 초과하면
-    /// 패딩을 비례 축소한다 (최소 1px 보장).
+    /// 패딩을 비례 축소한다 (바닥값은 절대 1px이 아니라 원 패딩의 비율 —
+    /// `composer::PADDING_SHRINK_FLOOR_FRACTION`, 2026-08-25 후속 참고).
     ///
     /// [Task #617] 다중 줄(2 줄 이상) 단락이 있는 셀은 HWP 가 가용 폭에 자간을
     /// 분배·줄바꿈을 확정한 상태이므로 padding 을 보존한다 (자연 폭 추정으로
@@ -3860,9 +3861,6 @@ impl LayoutEngine {
         styles: &ResolvedStyleSet,
         preserve_cell_padding: bool,
     ) -> (f64, f64) {
-        // [#2279 axis B] 규칙 본체는 composer::shrunk_cell_horizontal_padding 로 이동 —
-        // cut(cell_units)/mt(HeightMeasurer) 측정과 단일 출처 공유 (규칙이 갈리면
-        // 측정 줄수와 실제 렌더 줄수가 어긋난다).
         crate::renderer::composer::shrunk_cell_horizontal_padding(
             pad_left,
             pad_right,
@@ -5998,6 +5996,26 @@ impl LayoutEngine {
                         inner_width,
                         styles,
                     );
+                    // [cell-cold-load-overflow-recompose] #2291의 "부실 저장(ls==1인데
+                    // 실폭 초과) 문단 재분할" 안전장치가 cell_units_uncached(측정)와
+                    // layout_partial_table_cells(분할 연속 페이지)에는 이미 있었지만,
+                    // 이 함수(단일 페이지·비분할 표의 최초 렌더 경로)에는 빠져 있었다 —
+                    // 그래서 authoring 시점엔 짧았던 값이 값 교체로 훨씬 길어져도(예:
+                    // 템플릿 필드 채움) 여기서는 절대 재래핑되지 않고 그대로 잘려
+                    // 렌더됐다. 다른 두 경로와 동일한 호출(×1.8 임계, 메모 공유)로
+                    // 통일한다 — ×1.8보다 낮은 전용 임계를 이 호출부에만 쓰는 실험은
+                    // `tests/overflow_cell_baseline.rs`(샘플 전수 래칫)로 기각됐다:
+                    // `issue2559/1341000_research_report_footnotes.hwp`에서 87줄이
+                    // 새로 쪽 밖으로 밀려났다(#3236 계열, 실측 확인). ×1.8은 "임의로
+                    // 보수적"이 아니라 이 저장소의 실제 문서 코퍼스로 검증된 값이다.
+                    if cell.text_direction == 0 {
+                        crate::renderer::composer::recompose_stored_single_line_if_overflowing(
+                            comp,
+                            para,
+                            inner_width,
+                            styles,
+                        );
+                    }
                 }
             }
 
@@ -6228,11 +6246,38 @@ impl LayoutEngine {
                 && !table.common.flow_with_text
                 && matches!(table.page_break, TablePageBreak::None)
                 && has_nested_table;
-            let first_line_vpos = cell
+            // [cell-cold-load-overflow-recompose 후속] 어떤 문단이든 부실 저장 1-lineseg
+            // (overflow-recompose 대상, composer::recompose_stored_single_line_if_overflowing
+            // 참고)이었고 실제로 재래핑돼 composed 줄 수가 1보다 커졌다면, 그 문단의 저장
+            // LINE_SEG(vertical_pos/line_height)는 authoring 시점 "1줄" 가정의 잔재라 더 이상
+            // 신뢰할 수 없다 — composed 는 여러 줄인데 저장 seg 는 하나뿐이라 vpos/line_height
+            // 둘 다 실제 배치와 무관해진다. 이 값을 그대로 쓰면(첫 줄 top 앵커든, 아래
+            // stored_flow_extent 기반 정렬 오프셋이든) 텍스트 시작 y 가 실제보다 아래로
+            // 밀리는데, 셀 clip rect 는 (정상적으로 커진) 행높이 그대로 셀 진짜 상단에
+            // 고정돼 있어 마지막 줄이 clip 밖으로 밀려나 소실된다(scslic.hwpx 제품명 필드
+            // 3줄 중 3번째 미출력 — 2026-08-25 실측, Center 정렬 셀에서
+            // trust_stored_cell_flow 경로로 재현). 재래핑되지 않은 문단(정상 저장 다중 줄,
+            // 또는 재래핑 임계 미달로 그대로인 1줄)은 종전대로 저장 지오메트리를 신뢰한다.
+            let para_overflow_recomposed = |idx: usize, p: &Paragraph| {
+                p.line_segs.len() == 1 && composed_paras.get(idx).is_some_and(|c| c.lines.len() > 1)
+            };
+            let first_para_overflow_recomposed = cell
                 .paragraphs
                 .first()
-                .and_then(|p| p.line_segs.first())
-                .map(|ls| hwpunit_to_px(ls.vertical_pos, self.dpi));
+                .is_some_and(|p| para_overflow_recomposed(0, p));
+            let any_para_overflow_recomposed = cell
+                .paragraphs
+                .iter()
+                .enumerate()
+                .any(|(idx, p)| para_overflow_recomposed(idx, p));
+            let first_line_vpos = if first_para_overflow_recomposed {
+                None
+            } else {
+                cell.paragraphs
+                    .first()
+                    .and_then(|p| p.line_segs.first())
+                    .map(|ls| hwpunit_to_px(ls.vertical_pos, self.dpi))
+            };
             // [Task #2211] 저장 LINE_SEG 흐름 extent(각 seg 의 vpos+lh 최댓값)가
             // 자체 스택 합(total_content_height)보다 작으면 — 예: 악보 셀처럼
             // 빈 앵커 줄이 TopAndBottom 그림 높이에 흡수된 문서 — 한컴 저장
@@ -6241,6 +6286,7 @@ impl LayoutEngine {
             // 가사 top = 셀 top + pad + 센터 오프셋(저장 extent 기준) + vpos).
             let (stored_flow_extent, stored_flow_line_sum) = if (!has_nested_table
                 || hwpx_noninline_tac_nested_stored_flow)
+                && !any_para_overflow_recomposed
                 && !cell.paragraphs.is_empty()
                 && cell.paragraphs.iter().all(|p| !p.line_segs.is_empty())
             {
@@ -12804,7 +12850,11 @@ mod row_cut_tests {
     }
 
     #[test]
-    fn test_shrink_cell_padding_preserves_explicit_cell_margin() {
+    fn test_shrink_cell_padding_floor_is_proportional_not_1px() {
+        // grossly overflowing (20x cell width) 케이스라도 바닥값은 원 패딩의
+        // PADDING_SHRINK_FLOOR_FRACTION(35%) — 절대 1px까지 깎이지 않는다.
+        // 2026-08-25 후속: 완전 제거는 실 문서(76076_regulatory_analysis.hwp)
+        // 페이지 경계 회귀를 일으켜 폐기, 대신 바닥을 비례값으로 올렸다.
         let eng = LayoutEngine::new(96.0);
         let styles = ResolvedStyleSet::default();
         let composed = vec![composed_text("12345678901234567890")];
@@ -12820,8 +12870,12 @@ mod row_cut_tests {
             false,
         );
         assert!(
-            shrunk.0 < 20.0 || shrunk.1 < 20.0,
-            "일반 셀의 기존 오버플로우 방어는 유지되어야 함: {shrunk:?}"
+            shrunk.0 < 20.0 && shrunk.1 < 20.0,
+            "일반 셀의 오버플로우 방어는 여전히 유지되어야 함: {shrunk:?}"
+        );
+        assert!(
+            shrunk.0 >= 20.0 * 0.35 - 0.01 && shrunk.1 >= 20.0 * 0.35 - 0.01,
+            "패딩은 원값의 35% 밑으로 축소되면 안 됨 (더 이상 1px 바닥이 아님): {shrunk:?}"
         );
 
         let preserved = eng.shrink_cell_padding_for_overflow(
@@ -12837,6 +12891,37 @@ mod row_cut_tests {
             preserved,
             (20.0, 20.0),
             "안 여백 지정 셀은 한컴처럼 입력한 좌우 여백을 렌더링에서도 보존해야 함"
+        );
+    }
+
+    #[test]
+    fn test_shrink_cell_padding_moderate_gray_zone_overflow_still_shrinks() {
+        // 이전 1px 바닥 로직이 발동하던 회색지대 (available*1.15 초과, ×1.8
+        // rewrap 임계 미만) 케이스에서도, 완전 제거가 아니라 여전히 (비례
+        // 바닥까지) 축소가 일어남을 확인한다 — 실 문서가 의존하는 폭 여유를
+        // 대부분 보존하기 위한 의도적 선택. TODO.md "cell padding silently
+        // stripped" 재현 케이스.
+        let eng = LayoutEngine::new(96.0);
+        let styles = ResolvedStyleSet::default();
+        let composed = vec![composed_text("123456789012345")];
+        let paragraphs = vec![Paragraph::default()];
+
+        let result = eng.shrink_cell_padding_for_overflow(
+            4.0,
+            4.0,
+            60.0,
+            &composed,
+            &paragraphs,
+            &styles,
+            false,
+        );
+        assert!(
+            result.0 < 4.0 && result.1 < 4.0,
+            "회색지대 오버플로우에서는 여전히 패딩이 일부 축소되어야 함: {result:?}"
+        );
+        assert!(
+            result.0 >= 4.0 * 0.35 - 0.01 && result.1 >= 4.0 * 0.35 - 0.01,
+            "축소되더라도 원 패딩의 35% 밑으로는 내려가지 않아야 함: {result:?}"
         );
     }
 
