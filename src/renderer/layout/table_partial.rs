@@ -197,8 +197,7 @@ pub(crate) struct PartialTableCellProbe {
     /// 앞 문단의 y 에도 영향이 없다).
     pub(crate) stop_after_para: usize,
     /// true 면 컷 창 문단(`window_paras`)만 순회·compose 한다. 사전 게이트가
-    /// (a) 컷 존재, (b) shrink 조기탈출(다중줄 문단 존재), (c) effective Top 정렬을
-    /// 증명한 경우에만 true 가 된다.
+    /// (a) 컷 존재, (b) effective Top 정렬을 증명한 경우에만 true 가 된다.
     pub(crate) windowed: bool,
     /// `windowed` 일 때 컷 창에 유닛이 있는 문단 범위 [lo, hi] (inclusive).
     /// 범위 밖 문단은 컷 창에 유닛이 없어 전량 레이아웃에서도 skip 됨이 증명된다.
@@ -209,8 +208,8 @@ pub(crate) struct PartialTableCellProbe {
 ///
 /// Lazy 슬롯의 compose 결과는 Eager 경로와 동일한 변환 순서
 /// (compose → recompose_for_cell_width → recompose_stored_single_line_if_overflowing)를
-/// 문단 단위로 적용한다. windowed 프로브 게이트가 shrink 를 조기탈출로 증명하므로
-/// Lazy 에서 inner_width 는 Eager 와 동일하다.
+/// 문단 단위로 적용한다. 셀 패딩은 콘텐츠와 무관하게 고정이므로(2026-08-26,
+/// 오버플로 패딩 축소 제거) Lazy 에서 inner_width 는 Eager 와 항상 동일하다.
 enum CellComposedStore {
     Eager(Vec<ComposedParagraph>),
     Lazy(Vec<Option<ComposedParagraph>>),
@@ -898,17 +897,13 @@ impl LayoutEngine {
             );
 
             // 셀 패딩
-            let (mut pad_left, mut pad_right, pad_top, pad_bottom) =
-                self.resolve_cell_padding(cell, table);
+            let (pad_left, pad_right, pad_top, pad_bottom) = self.resolve_cell_padding(cell, table);
 
             // [#4149] windowed 프로브면 창 문단만 lazy compose. 그 외에는 종전과
-            // 동일한 순서로 전량 compose → shrink → recompose.
+            // 동일한 순서로 전량 compose → recompose.
             let probe_windowed = probe.is_some_and(|p| p.windowed);
             let mut composed_store: CellComposedStore;
             if probe_windowed {
-                // shrink 생략 근거: 프로브 사전 게이트가 line_segs>=2 문단 존재를
-                // 증명했고, shrunk_cell_horizontal_padding 은 그 경우 composed 를
-                // 읽지 않고 패딩을 그대로 반환한다 (조기 탈출과 동일 결과).
                 composed_store = CellComposedStore::Lazy(vec![None; cell.paragraphs.len()]);
             } else {
                 // 셀 내 문단 구성
@@ -917,19 +912,6 @@ impl LayoutEngine {
                     .iter()
                     .map(|p| compose_paragraph(p))
                     .collect();
-
-                // 텍스트 오버플로우 시 좌우 패딩 축소
-                let (new_pl, new_pr) = self.shrink_cell_padding_for_overflow(
-                    pad_left,
-                    pad_right,
-                    cell_w,
-                    &composed_paras,
-                    &cell.paragraphs,
-                    styles,
-                    cell.apply_inner_margin,
-                );
-                pad_left = new_pl;
-                pad_right = new_pr;
 
                 let inner_width_for_recompose = (cell_w - pad_left - pad_right).max(0.0);
                 // [Task #671] line_segs 비어 있는 셀 paragraph 의 단일 ComposedLine 압축

@@ -1050,13 +1050,21 @@ fn haansoft_latin_override(primary_name: &str, c: char) -> Option<f64> {
 
 /// #3820 `76076_regulatory_analysis` 한컴 PDF p35의 한양중고딕 공백 advance.
 ///
-/// HWP의 일반적인 U+0020 반각 규약(`em/2`)과 달리, 원명 `한양중고딕`으로
-/// 작성된 표 본문은 한컴 PDF의 p35 line decision에 맞춘 550/1024em advance가 필요하다. p35의
-/// 107자 무-`LINE_SEG` 셀에서 한글 advance와 cell 폭은 RHWP와 일치하지만, 이
-/// 공백 차이(약 2.17px/space)가 누적되어 `…반죽된` 뒤 `용` 한 글자가 잘못
-/// 앞줄에 남는다. 자동 생성 TTF hmtx 테이블은 바꾸지 않고 PDF의 line-decision
-/// 보정만 이 원명에 국한한다. `HY중고딕`은 별 face이므로 반각 규약을 유지한다.
-const HANYANG_JUNGGOTHIC_PDF_SPACE_UNITS: u16 = 550;
+/// HWP의 일반적인 U+0020 반각 규약(`em/2`, 512/1024em)과 달리, 원명 `한양중고딕`으로
+/// 작성된 표 본문은 한컴 PDF의 p35 line decision에 맞춘 advance가 필요하다. p35의
+/// 107자 무-`LINE_SEG` 셀에서 한글 advance와 cell 폭은 RHWP와 일치하지만, 공백 폭이
+/// 어긋나면 두 군데서 줄 경계가 밀린다: (a) `…반죽된` 뒤에서 끊겨야 할 줄이 `용`
+/// 한 글자를 더 물고, (b) `…인근에`까지 담겨야 할 다음 줄이 `에`를 놓치고 `인근`에서
+/// 끊긴다. 550/1024em은 (a)만 만족했고, (b)는 셀 좌우 패딩을 임시로 조금 깎는
+/// 별도 휴리스틱(`composer::shrunk_cell_horizontal_padding`, 2026-08-26 제거됨)에
+/// 기대고 있었다. 그 패딩 축소를 걷어내며 두 경계를 동시에 만족하는 값을
+/// PDF 오라클(`pdftotext -bbox-layout`으로 뽑은 두 줄의 word bbox)로 다시 잡았다 —
+/// 530/1024em은 (a)/(b) 모두 만족하며, 495/1024em 밑으로는 이 문서의 다른 곳(별개
+/// 문단)에서 캐스케이드가 발생해 안전 구간이 아니다(직접 이분 탐색으로 확인,
+/// 안전 구간은 대략 500~549/1024em). 자동 생성 TTF hmtx 테이블은 바꾸지 않고
+/// PDF의 line-decision 보정만 이 원명에 국한한다. `HY중고딕`은 별 face이므로
+/// 반각 규약을 유지한다.
+const HANYANG_JUNGGOTHIC_PDF_SPACE_UNITS: u16 = 530;
 
 fn hanyang_junggothic_pdf_space_width(primary_name: &str) -> Option<u16> {
     (primary_name == "한양중고딕").then_some(HANYANG_JUNGGOTHIC_PDF_SPACE_UNITS)
@@ -1864,7 +1872,7 @@ mod tests {
             .expect("한양견고딕 space metric");
 
         assert!(
-            (hanyang - quantize_hwp_px(fs * 550.0 / 1024.0)).abs() < f64::EPSILON,
+            (hanyang - quantize_hwp_px(fs * 530.0 / 1024.0)).abs() < f64::EPSILON,
             "한양중고딕 PDF space advance={hanyang:.3}"
         );
         assert!(
