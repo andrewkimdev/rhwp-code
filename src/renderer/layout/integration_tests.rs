@@ -3179,4 +3179,80 @@ mod tests {
              수 있음, 재검토할 것"
         );
     }
+
+    /// [tcrlic 신청인_상호 clip] `tcrlic.hwpx`(양허관세추천서)를 `hwpx-template-engine`의 실제
+    /// 필드채움 파이프라인(`POST /render`, 기본 표본 데이터)으로 채운 산출물을 그대로 픽스처로
+    /// 고정한 것 — `신청인_상호` = `㈜한국기계전기전자시험연구원`(14자). 실측 한/글(Hancom
+    /// Office) 편집기 오라클(`samples/tcrlic-applicant-name-overflow/tcrlic_sangho_expected_hancom_*.png`
+    /// — before/after-linebreaking/complete 3장) 확인 결과, 이 정확한 셀 폭·여백에 이 값을 입력하면 2줄로 줄바꿈되고 행이
+    /// 자라난다 — `scslic.hwpx`의 `제품명` 필드가 이미 올바르게 처리하는 것과 동일한 동작.
+    ///
+    /// 현재 rhwp는 이 셀을 클립한다: 채움 이전 placeholder("상호" 2자) 기준의 저장 단일
+    /// lineseg를 `recompose_stored_single_line_if_overflowing`(`composer.rs:1592`)의 ×1.8 임계
+    /// 가드가 신뢰해버리기 때문 — 실측 초과율은 ~1.165×로 임계 미달(`export-render-tree`로 직접
+    /// 측정: 셀 내폭 151.1px, 실제 TextRun 폭 176.0px). 두 차례의 전역 수정 시도(임계값 완화,
+    /// 저장 lineseg 무조건 폐기)가 모두 실제 문서 회귀로 되돌려진 전례가 있어(자세한 내용은
+    /// `~/dev/chosun-form/hwpx-template-engine/docs/claude/render-pipeline-constraints.md:635-956`
+    /// 참고), 이 테스트는 수정을 시도하지 않고 실측 오라클을 정밀 고정한다 — 향후 측정-정확도
+    /// 수정(§측정/렌더 폭 발산, `#2237`/axis B)의 통과 기준으로 쓴다.
+    ///
+    /// 손으로 문단 텍스트만 치환하는 방식(다른 cold-load 테스트들의 관례)은 이 필드에는 쓰지
+    /// 않는다 — placeholder 단락이 `fieldBegin`(charPrIDRef=5, 빈 런) + 실제 텍스트
+    /// (charPrIDRef=7) + `fieldEnd`(charPrIDRef=5, 빈 런) 세 런으로 나뉘어 있어, 손 치환은 새
+    /// 문자들의 char-style 경계를 실제 채움 파이프라인과 다르게 재현해 폭 측정치가 갈린다(직접
+    /// 확인: 손 치환 시 이 테스트가 거짓으로 통과함). 그래서 실제 파이프라인이 만든 채움 산출물
+    /// 바이트를 그대로 픽스처로 고정했다.
+    #[test]
+    #[ignore = "known gap — measured overflow ratio ~1.165x sits under the ×1.8 rewrap threshold; \
+                see doc comment for prior reverted fix attempts. Un-ignore once the width-\
+                measurement accuracy work lands."]
+    fn issue_tcrlic_shincheongin_sangho_wraps_and_grows_instead_of_clipping() {
+        use crate::renderer::render_tree::{RenderNode, RenderNodeType};
+
+        let Some(core) = load_document("samples/hwpx/tcrlic-applicant-name-overflow.hwpx") else {
+            return;
+        };
+        let tree = core
+            .build_page_render_tree(0)
+            .expect("render tree 생성 실패");
+
+        // `신청인_상호` 필드 셀(정규화된 채움 산출물 기준 row=5, col=2 — CLI
+        // `export-render-tree`로 실측 확인, 원본 저작 시점 XML의 rowAddr=6 과는 다르다;
+        // hwpx-template-engine의 표 정규화 단계가 행 번호를 재부여한다) 노드를 트리에서 찾는다.
+        fn find_cell<'a>(node: &'a RenderNode, row: u16, col: u16) -> Option<&'a RenderNode> {
+            if let RenderNodeType::TableCell(cell) = &node.node_type {
+                if cell.row == row && cell.col == col {
+                    return Some(node);
+                }
+            }
+            node.children.iter().find_map(|c| find_cell(c, row, col))
+        }
+        let cell = find_cell(&tree.root, 5, 2).expect("전제: 신청인_상호 필드 셀을 찾지 못함");
+
+        fn collect_text_runs<'a>(node: &'a RenderNode, out: &mut Vec<&'a str>) {
+            if let RenderNodeType::TextRun(run) = &node.node_type {
+                out.push(run.text.as_str());
+            }
+            for child in &node.children {
+                collect_text_runs(child, out);
+            }
+        }
+        let mut runs = Vec::new();
+        collect_text_runs(cell, &mut runs);
+        let full_text: String = runs.concat();
+        assert!(
+            full_text.contains("한국기계전기전자시험연구원"),
+            "전제: 셀 텍스트가 채워진 표본값과 다름 — {full_text:?}"
+        );
+
+        // 오늘의 알려진 결함: 클립되어 살아남은 단일 TextRun 이 wrap 없이 전체 텍스트를
+        // 통째로 담는다(`export-render-tree`로 실측: bbox.w=176.0px, 셀 내폭 151.1px). 실제
+        // 한/글 오라클(`samples/tcrlic-applicant-name-overflow/tcrlic_sangho_expected_hancom_complete.png`)은
+        // 이 값을 2줄로 감싸 행을 키운다 — 즉 이 셀은
+        // 최종적으로 서로 다른 TextRun 이 2개 이상이어야 한다(줄마다 최소 1개).
+        assert!(
+            runs.len() >= 2,
+            "긴 값이 여러 줄로 줄바꿈되지 않고 단일 TextRun 에 머묾(runs={runs:?})"
+        );
+    }
 }
