@@ -38,6 +38,7 @@ last_verified: 2026-08-23
 | CLI 로 실물 서식 채우기(누름틀·표 좌표·치환) | [서식 자동화 심화 가이드](form_filling_guide.md) | [CLI 명령어 매뉴얼](cli_commands.md), [에이전트 실무 대체 예제집](agent_task_playbook.md) |
 | 편집 command와 단축키 | [Command/Undo 검토 체크리스트](edit_command_review_checklist.md) | [키보드 단축키 추가](keyboard_shortcut_guide.md) |
 | 품질 지표와 리팩터링 검토 | [코드 품질 대시보드](dashboard.md) | [SOLID 채점 기준](solid_scoring_guide.md) |
+| 긴 Rust 파일을 지금 분할해도 되는지 판단 | [Rust 소스 파일 분할 판단 가이드](rust_file_splitting_guide.md) | [2026 리팩터링 계획](../plans/refactoring_plan_2026.md), [로컬 패치 스택 upstream 재적용 절차](patch_stack_upstream_sync.md) |
 | release 준비와 배포 | [배포 가이드](publish_guide.md) | [개발 환경 가이드](dev_environment_guide.md) |
 | rhwp-studio UI 명칭·CSS 접두어 | [rhwp-studio UI 명칭과 CSS 접두어](rhwp_studio_ui_conventions.md) | [개발 환경 가이드](dev_environment_guide.md) |
 | rhwp-studio에서 누름틀(ClickHere 필드) 삽입·수정·자동 제안 구현 | [rhwp-studio 누름틀 편집 가이드](rhwp_studio_clickhere_field_guide.md) | [누름틀 이름 자동 제안 감지 규칙](field_naming_heuristics.md) |

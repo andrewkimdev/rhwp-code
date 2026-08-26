@@ -29,6 +29,7 @@ rhwp는 Rust로 HWP/HWPX/HWP3 문서를 읽고 편집·렌더링하며, WebAssem
 - 문서·Git 작업: [`docs_and_git_workflow.md`](mydocs/manual/codex/docs_and_git_workflow.md)
 - PR 리뷰·merge·후속 처리: [`pr_review_workflow.md`](mydocs/manual/pr_review_workflow.md)와
   그 [조건별 자식 가이드 선택표](mydocs/manual/pr_review/README.md)
+- 긴 Rust 파일 분할 여부: [`rust_file_splitting_guide.md`](mydocs/manual/rust_file_splitting_guide.md)
 - 로컬 빌드·테스트·WASM: [`dev_environment_guide.md`](mydocs/manual/dev_environment_guide.md)
 - 변경 범위별 로컬 검증 게이트: [`local_validation.md`의 4.3](mydocs/manual/pr_review/local_validation.md#43-변경-범위별-기본-검증)
   — 범위(문서/parser/renderer/studio)에 따라 필요한 게이트가 다르다
