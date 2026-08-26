@@ -131,6 +131,8 @@ hwp5rb	exam_social.hwp	sections[].paragraphs[].controls[].cells[].list_header_wi
 hwp5rb	exam_social.hwp	sections[].paragraphs[].controls[].cells[].paragraphs[].controls[].cells[].list_header_width_ref	35
 hwp5rb	float-stack-defer.hwp	sections[].paragraphs[].controls[].cells[].list_header_width_ref	48
 hwp5rb	footnote-01.hwp	sections[].paragraphs[].controls[].cells[].list_header_width_ref	2
+hwp5rb	gov-form/gov-form-simple-sample-backup.hwp	sections[].paragraphs[].controls[].cells[].list_header_width_ref	63
+hwp5rb	gov-form/gov-form-simple-sample.hwp	sections[].paragraphs[].controls[].cells[].list_header_width_ref	63
 hwp5rb	hcar-001.hwp	sections[].paragraphs[].controls[].cells[].list_header_width_ref	89
 hwp5rb	hcar-001.hwp	sections[].paragraphs[].controls[].cells[].paragraphs[].controls[].cells[].list_header_width_ref	20
 hwp5rb	honbo-save.hwp	doc_info.bullet_count	1
@@ -608,4 +610,10 @@ hwpx	tb-org-02.hwpx	sections[].paragraphs[].controls[].cells[].paragraphs[].raw_
 hwpx	tb-org-02.hwpx	sections[].paragraphs[].raw_header_extra[]	4
 hwpx	tbox-v-flow-01.hwpx	sections[].paragraphs[].controls[].text_box.paragraphs[].raw_header_extra[]	18
 hwpx	tbox-v-flow-01.hwpx	sections[].paragraphs[].raw_header_extra[]	4
+hwpx	tcrlic-applicant-name-overflow.hwpx	doc_info.border_fills[].fill.fill_type	1
+hwpx	tcrlic-applicant-name-overflow.hwpx	sections[].paragraphs[].controls[].cells[].paragraphs[].raw_header_extra[]	201
+hwpx	tcrlic-applicant-name-overflow.hwpx	sections[].paragraphs[].controls[].list_attr	1
+hwpx	tcrlic-applicant-name-overflow.hwpx	sections[].paragraphs[].controls[].paragraphs[].controls[].cells[].paragraphs[].raw_header_extra[]	1
+hwpx	tcrlic-applicant-name-overflow.hwpx	sections[].paragraphs[].controls[].paragraphs[].raw_header_extra[]	1
+hwpx	tcrlic-applicant-name-overflow.hwpx	sections[].paragraphs[].raw_header_extra[]	10
 hwpx	water-mark.hwpx	sections[].paragraphs[].raw_header_extra[]	1
