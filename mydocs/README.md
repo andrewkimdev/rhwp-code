@@ -83,6 +83,7 @@ front matter는 `mydocs/manual`, `mydocs/tech`, `mydocs/troubleshootings`의 모
 | [rhwp-studio UI 명칭과 CSS 접두어](manual/rhwp_studio_ui_conventions.md) | reference | active | `manual/rhwp_studio_ui_conventions.md` | 2026-07-17 |
 | [포크 수확 규약](manual/fork_harvest_convention.md) | guide | active | `manual/fork_harvest_convention.md` | 2026-08-08 |
 | [로컬 패치 스택 upstream 재적용 절차](manual/patch_stack_upstream_sync.md) | guide | active | `manual/patch_stack_upstream_sync.md` | 2026-08-22 |
+| [Rust 소스 파일 분할 판단 가이드](manual/rust_file_splitting_guide.md) | guide | active | `manual/rust_file_splitting_guide.md` | 2026-08-26 |
 
 ## Reference 자산
 

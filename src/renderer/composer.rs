@@ -4,7 +4,7 @@
 //! CharShapeRef 경계에 따라 다중 TextRun으로 분할한다.
 //! 인라인 컨트롤(표/도형) 삽입 위치를 식별한다.
 
-use super::layout::{estimate_text_width, resolved_to_text_style};
+use super::layout::{estimate_text_width, is_cjk_char, resolved_to_text_style};
 use super::style_resolver::{detect_lang_category, ResolvedStyleSet};
 use super::{hwpunit_to_px, px_to_hwpunit, TextStyle};
 use crate::model::control::Control;
@@ -1425,6 +1425,17 @@ pub fn estimate_composed_line_width(line: &ComposedLine, styles: &ResolvedStyleS
         .sum()
 }
 
+/// [PATCH v0.8.4-cjk-rewrap-threshold] `line`이 CJK 글자(한글 음절/자모, 한자, 가나 등)를
+/// 하나라도 포함하는지 — 거의 모든 글자 경계에서 줄바꿈 가능한 CJK 콘텐츠와, 공백/하이픈
+/// 없이는 줄바꿈 지점이 없는 순수 숫자·영문 토큰(예: 콤마 구분 금액)을 구분하는 데 쓴다.
+/// **알려진 한계**: 짧은 CJK 어절(예: 규제분석서 표 라벨 "무료 사용")도 이 임계로 걸려
+/// 과다분할을 일으킬 수 있다 — PATCHES.md의 이 패치 항목 참고.
+fn line_has_cjk_char(line: &ComposedLine) -> bool {
+    line.runs
+        .iter()
+        .any(|run| effective_text_for_metrics(run).chars().any(is_cjk_char))
+}
+
 /// [#2146] 저장 LINE_SEG 이 전혀 없고(NO_LS) 모든 문단이 1줄이며 각 줄이 셀
 /// 폭을 여유 있게 쓰는 코너-라벨 셀 중, 선언 셀높이를 신뢰할 수 있는 두 경우:
 ///
@@ -1622,10 +1633,15 @@ pub fn recompose_stored_single_line_if_overflowing(
     let over = match para.single_line_overflow_memo.get(width_key) {
         Some(memoized) => memoized,
         None => {
+            let has_cjk = composed
+                .lines
+                .first()
+                .is_some_and(|l| line_has_cjk_char(l));
+            let threshold = if has_cjk { 1.15 } else { 1.8 };
             let measured = composed
                 .lines
                 .first()
-                .map(|l| estimate_composed_line_width(l, styles) > cell_inner_width_px * 1.8)
+                .map(|l| estimate_composed_line_width(l, styles) > cell_inner_width_px * threshold)
                 .unwrap_or(false);
             para.single_line_overflow_memo.set(width_key, measured);
             measured
