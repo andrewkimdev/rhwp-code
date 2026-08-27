@@ -3203,9 +3203,11 @@ mod tests {
     /// 확인: 손 치환 시 이 테스트가 거짓으로 통과함). 그래서 실제 파이프라인이 만든 채움 산출물
     /// 바이트를 그대로 픽스처로 고정했다.
     #[test]
-    #[ignore = "known gap — measured overflow ratio ~1.165x sits under the ×1.8 rewrap threshold; \
-                see doc comment for prior reverted fix attempts. Un-ignore once the width-\
-                measurement accuracy work lands."]
+    // [PATCH v0.8.4-cjk-rewrap-threshold] Fixed on this patch branch by gating the ×1.8 rewrap
+    // threshold on CJK content (composer.rs:line_has_cjk_char) — NOT merged to table-debugging/
+    // main, since the same patch regresses a real, oracle-pinned document with short Hangul
+    // phrases at the same overflow ratio (see PATCHES.md's entry for this patch). `#[ignore]`
+    // removed only on this branch.
     fn issue_tcrlic_shincheongin_sangho_wraps_and_grows_instead_of_clipping() {
         use crate::renderer::render_tree::{RenderNode, RenderNodeType};
 
