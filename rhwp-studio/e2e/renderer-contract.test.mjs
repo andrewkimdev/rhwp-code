@@ -15,7 +15,8 @@ const repoRoot = path.resolve(studioRoot, '..');
 const canvaskitPath = path.join(studioRoot, 'src/view/canvaskit-renderer.ts');
 const canvaskitDirectory = path.join(studioRoot, 'src/view/canvaskit');
 const canvaskitDiagnosticsPath = path.join(canvaskitDirectory, 'diagnostics.ts');
-const layerTypesPath = path.join(studioRoot, 'src/core/types.ts');
+// Layer* 렌더 IR 선언은 types/layers.ts 로 분할 이동됨(재수출 심은 src/core/types.ts).
+const layerTypesPath = path.join(studioRoot, 'src/core/types/layers.ts');
 const textIrV2DocPath = path.join(repoRoot, 'docs/text-ir-v2.md');
 const canvaskitParityPlanDocPath = path.join(repoRoot, 'docs/canvaskit-parity-implementation.md');
 const rendererBaselinePath = path.join(studioRoot, 'e2e/renderer-baseline.mjs');
