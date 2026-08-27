@@ -19,21 +19,20 @@ import { fileURLToPath } from 'node:url';
 // 행위 증명(셀 안 Edit 왕복)은 브라우저 왕복(PR 검증).
 
 const rootDir = dirname(dirname(fileURLToPath(import.meta.url)));
-const src = readFileSync(join(rootDir, 'src/engine/input-handler.ts'), 'utf8');
+// 본문은 input-handler-form-overlay.ts 로 이관됨 — 가드는 이관된 구현 파일을 읽는다.
+const src = readFileSync(join(rootDir, 'src/engine/input-handler-form-overlay.ts'), 'utf8');
 
-/** 메서드 시작부터 다음 최상위 메서드 전까지 본문을 자른다. */
+/** 함수 시작부터 다음 최상위 함수 전까지 본문을 자른다. */
 function methodBlock(name: string): string {
-  const start = src.indexOf(`  private ${name}(`) >= 0
-    ? src.indexOf(`  private ${name}(`)
-    : src.indexOf(`  ${name}(`);
-  assert.notEqual(start, -1, `${name} 메서드 not found`);
+  const start = src.indexOf(`function ${name}(`);
+  assert.notEqual(start, -1, `${name} 함수 not found`);
   const rest = src.slice(start + 1);
-  const end = rest.search(/\n {2}(private |public )?[a-zA-Z_]\w*\s*\(/);
+  const end = rest.search(/\n(export )?function /);
   return end === -1 ? rest : rest.slice(0, end);
 }
 
 test('셀 내부 locator 계산이 단일 헬퍼로 공유된다', () => {
-  assert.match(src, /private formInCellLoc\s*\(/,
+  assert.match(src, /function formInCellLoc\s*\(/,
     'locator 조건이 여러 곳에 복제되면 한쪽만 고쳐지는 회귀가 재발한다');
 
   // 인라인 복제본이 남아 있으면 헬퍼가 무력화된다.
