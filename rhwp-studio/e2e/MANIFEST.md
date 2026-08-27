@@ -98,6 +98,7 @@ e2e 스크립트의 **단일 권위 목록**이다. 파일 추가/변경/폐기 
 | `tac-inline-create.test.mjs` | 상시 | active | 빈 문서에서 인라인 TAC 표 직접 생성 (Issue #32) | — | 수동 |  |
 | `tac-inline-table.test.mjs` | 상시 | active | 인라인 TAC 표 배치 검증 (Issue #31) | tac-case-001.hwp | 수동 |  |
 | `tac-verify.test.mjs` | 상시 | active | E2E 자동 검증: 인라인 TAC 표 조판 (Issue #33) | — | 수동 |  |
+| `compare-characterization.test.mjs` | 상시 | active | 비교 엔진(diff-engine) 출력 golden 특성화 — 모듈 분할 안전망 | samples/*.hwp | npm e2e:compare-characterization |  |
 | `task-871-clipboard-priority.test.mjs` | 상시 | active | 외부 클립보드가 rhwp-studio 내부 클립보드보다 우선되어야 함 (Task 871) | — | npm e2e:clipboard-priority |  |
 | `text-flow.test.mjs` | 상시 | active | 텍스트 플로우 (입력, 줄바꿈, 엔터, 페이지 넘김) | — | npm e2e |  |
 | `textbox-insert-floating-1280v2.test.mjs` | 상시 | active | E2E 테스트 (Issue #1280 v2): 삽입 글상자 = floating + 글앞으로(InFrontOfText) | — | 수동 |  |
