@@ -14,7 +14,7 @@ import { fileURLToPath } from 'node:url';
 // 기준 선례: cursor.ts:399 의 useCellPath 분기. 행위 증명은 브라우저 왕복(PR 검증).
 
 const rootDir = dirname(dirname(fileURLToPath(import.meta.url)));
-const commandSrc = readFileSync(join(rootDir, 'src/engine/command.ts'), 'utf8');
+const commandSrc = readFileSync(join(rootDir, 'src/engine/command/format-commands.ts'), 'utf8');
 
 function classBlock(name: string): string {
   const start = commandSrc.indexOf(`export class ${name}`);

@@ -31,11 +31,12 @@ test('isPageLocalTextEditCommand는 같은 셀 내부 insert/delete만 허용한
 });
 
 test('텍스트 command는 page-local 판정용 payload hint를 노출한다', () => {
-  const source = readFileSync(new URL('../src/engine/command.ts', import.meta.url), 'utf8');
+  const source = readFileSync(new URL('../src/engine/command/types.ts', import.meta.url), 'utf8');
+  const commandSource = readFileSync(new URL('../src/engine/command/text-commands.ts', import.meta.url), 'utf8');
 
   assert.match(source, /getPageLocalTextEditOptions\?\(\): \{ insertedText\?: string; deleteCount\?: number \}/);
-  assert.match(source, /getPageLocalTextEditOptions\(\): \{ insertedText: string \} \{\s*return \{ insertedText: this\.text \};\s*\}/);
-  assert.match(source, /getPageLocalTextEditOptions\(\): \{ deleteCount: number \} \{\s*return \{ deleteCount: this\.count \};\s*\}/);
+  assert.match(commandSource, /getPageLocalTextEditOptions\(\): \{ insertedText: string \} \{\s*return \{ insertedText: this\.text \};\s*\}/);
+  assert.match(commandSource, /getPageLocalTextEditOptions\(\): \{ deleteCount: number \} \{\s*return \{ deleteCount: this\.count \};\s*\}/);
 });
 
 test('raw IME/iOS 입력은 flow effect를 cursor lookup 전에 소비하고 refresh에 전달한다', () => {

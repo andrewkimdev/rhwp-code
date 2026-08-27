@@ -17,7 +17,7 @@ const rootDir = dirname(dirname(fileURLToPath(import.meta.url)));
 const src = (rel: string): string => readFileSync(join(rootDir, rel), 'utf8');
 const insertSrc = src('src/command/commands/insert.ts');
 const pageSrc = src('src/command/commands/page.ts');
-const cmdSrc = src('src/engine/command.ts');
+const cmdSrc = src('src/engine/command/snapshot-command.ts');
 const ihSrc = src('src/engine/input-handler.ts');
 
 function slice(s: string, from: string, to: string): string {

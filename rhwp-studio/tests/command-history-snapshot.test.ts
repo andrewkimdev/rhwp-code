@@ -26,7 +26,7 @@ function methodBlock(src: string, signature: string): string {
 }
 
 const history = source('src/engine/history.ts');
-const commandFull = source('src/engine/command.ts');
+const commandFull = source('src/engine/command/snapshot-command.ts');
 // execute/undo 시그니처가 커맨드 클래스마다 반복되므로 SnapshotCommand 클래스
 // 본문으로 범위를 좁힌다(다음 export class 경계까지 — 뒤 클래스로의 누출 방지).
 const snapClassStart = commandFull.indexOf('export class SnapshotCommand');

@@ -14,7 +14,7 @@ import { fileURLToPath } from 'node:url';
 
 const rootDir = dirname(dirname(fileURLToPath(import.meta.url)));
 const ih = readFileSync(join(rootDir, 'src/engine/input-handler.ts'), 'utf8');
-const cmd = readFileSync(join(rootDir, 'src/engine/command.ts'), 'utf8');
+const cmd = readFileSync(join(rootDir, 'src/engine/command/object-commands.ts'), 'utf8');
 
 /** 메서드/블록 소스를 from~to 사이에서 추출. */
 function slice(s: string, from: string, to: string): string {

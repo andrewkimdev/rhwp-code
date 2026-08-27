@@ -79,7 +79,7 @@ test('admission helper는 case Enter까지의 모든 조기 분기를 배제한�
 });
 
 test('성공한 셀 split이 effects로 pagination 완료를 선언하고 실패는 full flush로 복귀한다', () => {
-  const command = source('src/engine/command.ts');
+  const command = source('src/engine/command/cell-commands.ts');
   const splitClass = sliceBetween(
     command,
     'export class SplitParagraphInCellCommand',

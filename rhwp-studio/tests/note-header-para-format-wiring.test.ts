@@ -104,7 +104,9 @@ test('되돌리기 라우팅을 거친다 (executeOperation 경유)', () => {
 
 test('스냅샷 되돌리기 뒤에도 머리말/꼬리말·각주 편집 문맥을 복원한다', () => {
   const inputHandler = source('src/engine/input-handler.ts');
-  const command = source('src/engine/command.ts');
+  // command.ts 분할 후 같은 정규식이 건드리는 두 상징(editContext? 선언·SubmodeSnapshotCommand)이
+  // types 와 snapshot-command 두 모듈로 나뉘었다 — 의존 순서대로 이어 붙여 원문 스캔을 유지한다.
+  const command = source('src/engine/command/types.ts') + source('src/engine/command/snapshot-command.ts');
   const start = inputHandler.indexOf('private applyParaFormatInNoteOrHeader');
   const end = inputHandler.indexOf('\n  private ', start + 1);
   const block = inputHandler.slice(start, end === -1 ? undefined : end);

@@ -23,7 +23,8 @@ import { fileURLToPath } from 'node:url';
 // 관례) 소스 배선을 정적으로 검증한다. 행위 증명은 브라우저 왕복(PR 검증).
 
 const rootDir = dirname(dirname(fileURLToPath(import.meta.url)));
-const commandSrc = readFileSync(join(rootDir, 'src/engine/command.ts'), 'utf8');
+const commandSrc = readFileSync(join(rootDir, 'src/engine/command/text-commands.ts'), 'utf8');
+const snapshotSrc = readFileSync(join(rootDir, 'src/engine/command/snapshot-command.ts'), 'utf8');
 
 /** `export class NAME ...` 부터 다음 `export class` 전까지 클래스 본문을 추출. */
 function classBlock(src: string, name: string): string {
@@ -53,12 +54,12 @@ test('스냅샷 커서 인자는 (cursorBefore=end, cursorAfter=start) 순서다
   );
   // 계약 자체도 함께 핀한다(SnapshotCommand 쪽이 바뀌면 위 순서의 의미가 달라진다).
   assert.match(
-    commandSrc,
+    snapshotSrc,
     /private cursorBefore: DocumentPosition,\s*\n\s*private cursorAfter: DocumentPosition,/,
     'SnapshotCommand 생성자는 cursorBefore, cursorAfter 순서',
   );
   assert.match(
-    commandSrc,
+    snapshotSrc,
     /undo\(wasm: WasmBridge\): DocumentPosition \{[\s\S]{0,220}?return \{ \.\.\.this\.cursorBefore \};/,
     'SnapshotCommand.undo 는 cursorBefore 를 반환',
   );

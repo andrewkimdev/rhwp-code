@@ -15,7 +15,19 @@ import { fileURLToPath } from 'node:url';
 // 행위 증명(😀 입력 → Ctrl+Z 왕복)은 브라우저 왕복(PR 검증).
 
 const rootDir = dirname(dirname(fileURLToPath(import.meta.url)));
-const commandSrc = readFileSync(join(rootDir, 'src/engine/command.ts'), 'utf8');
+// command.ts 분할(index화) 후 임포트 간선만 생겼으므로, 옛 단일 파일 전수 스캔을
+// 유지하기 위해 아홉 모듈을 인덱스 순서로 이어 붙여 같은 표면을 검사한다.
+const commandSrc = [
+  'types',
+  'cell-path',
+  'text-mutation',
+  'text-commands',
+  'format-commands',
+  'submode-commands',
+  'cell-commands',
+  'object-commands',
+  'snapshot-command',
+].map((m) => readFileSync(join(rootDir, `src/engine/command/${m}.ts`), 'utf8')).join('\n');
 
 /** `export class NAME ...` 부터 다음 `export class` 전까지 클래스 본문을 추출. */
 function classBlock(src: string, name: string): string {
