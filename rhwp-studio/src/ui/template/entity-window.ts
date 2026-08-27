@@ -9,7 +9,7 @@
  * 기존 UX다 — 이 창은 그 자리를 대체하지 않고, 서버 없이도 초안을 볼 수 있는 별도 진입점이다.
  */
 import type { WasmBridge } from '@/core/wasm-bridge';
-import { highlightJava } from './java-highlight';
+import { highlightJava } from '../java-highlight';
 
 export interface TemplateEntityGenResult {
   code: string;

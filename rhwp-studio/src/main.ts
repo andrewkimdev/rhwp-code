@@ -35,7 +35,7 @@ import {
 } from '@/command/file-system-access';
 import { forgetConvertedHmlSaveHandle } from '@/command/save-target';
 import { ContextMenu } from '@/ui/context-menu';
-import { TemplatePanel } from '@/ui/template-panel';
+import { TemplatePanel } from '@/ui/template/panel';
 import { CommandPalette } from '@/ui/command-palette';
 import { showHmlImportWarning } from '@/ui/hml-import-warning';
 import { showLocalFontsModalIfNeeded } from '@/ui/local-fonts-modal';
