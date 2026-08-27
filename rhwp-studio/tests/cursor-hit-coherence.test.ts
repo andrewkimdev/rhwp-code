@@ -7,8 +7,8 @@ const mouseSource = readFileSync(
   new URL('../src/engine/input-handler-mouse.ts', import.meta.url),
   'utf8',
 );
-const inputSource = readFileSync(
-  new URL('../src/engine/input-handler.ts', import.meta.url),
+const dragScrollSource = readFileSync(
+  new URL('../src/engine/input-handler-drag-scroll.ts', import.meta.url),
   'utf8',
 );
 
@@ -36,5 +36,5 @@ test('#2400 pointer hit 좌표가 있으면 선행 경로 재조회를 수행하
 test('일반 클릭·셀 재진입·드래그 pointer 경로가 moveToHit을 사용한다', () => {
   assert.equal(mouseSource.match(/cursor\.moveTo\(hit\)/g), null);
   assert.ok((mouseSource.match(/cursor\.moveToHit\(hit\)/g)?.length ?? 0) >= 8);
-  assert.match(inputSource, /const hit = this\.hitTestFromClientPoint[\s\S]*cursor\.moveToHit\(hit\);/);
+  assert.match(dragScrollSource, /const hit = this\.hitTestFromClientPoint[\s\S]*cursor\.moveToHit\(hit\);/);
 });

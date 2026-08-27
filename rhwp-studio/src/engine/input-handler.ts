@@ -39,6 +39,8 @@ import * as _keyboard from './input-handler-keyboard';
 import * as _text from './input-handler-text';
 import * as _picture from './input-handler-picture';
 import * as _formOverlay from './input-handler-form-overlay';
+import * as _dragScroll from './input-handler-drag-scroll';
+import * as _contextMenu from './input-handler-context-menu';
 import { computeHangingIndentPx } from './hanging-indent';
 import { isPageLocalTextEditCommand, type PageLocalTextEditOptions } from './input-edit-invalidation';
 import type { NavigationKeyInput } from './navigation-keymap';
@@ -47,9 +49,6 @@ import { DeferredPaginationRunner } from './deferred-pagination-runner';
 import { tableObjectClipboardTarget } from './table-object-clipboard-target';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
-const DRAG_SCROLL_EDGE_PX = 48;
-const DRAG_SCROLL_MIN_STEP_PX = 2;
-const DRAG_SCROLL_MAX_STEP_PX = 20;
 const PX_TO_RAW_2X = 150;
 const PX_TO_HWPUNIT = 75;
 const DOCUMENT_PAGINATION_IDLE_FLUSH_DELAY_MS = 120;
@@ -1476,121 +1475,42 @@ export class InputHandler {
 
   /** 텍스트 선택 드래그를 시작한다 */
   private startTextSelectionDrag(e: MouseEvent): void {
-    this.isDragging = true;
-    this.dragLastClientX = e.clientX;
-    this.dragLastClientY = e.clientY;
-    document.addEventListener('mousemove', this.onMouseMoveBound);
+    _dragScroll.startTextSelectionDrag.call(this, e);
   }
 
   /** 텍스트 선택 드래그 포인터 좌표를 갱신한다 */
   private updateTextSelectionDragPointer(e: MouseEvent): void {
-    this.dragLastClientX = e.clientX;
-    this.dragLastClientY = e.clientY;
-    this.updateTextSelectionDragAutoScroll();
+    _dragScroll.updateTextSelectionDragPointer.call(this, e);
   }
 
   /** 마지막 포인터 좌표 기준으로 드래그 선택 focus를 갱신한다 */
   private updateTextSelectionDragFromPointer(): void {
-    if (!this.isDragging) return;
-
-    if (this.cursor.isInFootnote()) {
-      const fnHit = this.footnoteHitTestFromClientPoint(this.dragLastClientX, this.dragLastClientY);
-      if (
-        fnHit?.hit.hit &&
-        fnHit.hit.footnoteIndex === this.cursor.fnFootnoteIndex &&
-        fnHit.hit.fnParaIndex !== undefined &&
-        fnHit.hit.charOffset !== undefined
-      ) {
-        this.cursor.setFnCursorPosition(fnHit.hit.fnParaIndex, fnHit.hit.charOffset);
-        this.updateCaretDuringDrag();
-      }
-      return;
-    }
-
-    const hit = this.hitTestFromClientPoint(this.dragLastClientX, this.dragLastClientY);
-    if (hit && hit.paragraphIndex < 0xFFFFFF00) {
-      // [Issue #669] 셀 내부 드래그: anchor와 같은 셀 컨텍스트인 경우만 커서 이동.
-      // 셀↔본문 혼합은 선택 렌더링 불가이므로 무시 (셀 내 선택 유지).
-      const sel = this.cursor.getSelection();
-      if (sel) {
-        const anchorInCell = sel.anchor.parentParaIndex !== undefined;
-        const hitInSameCell = anchorInCell &&
-          hit.parentParaIndex === sel.anchor.parentParaIndex &&
-          hit.controlIndex === sel.anchor.controlIndex &&
-          hit.cellIndex === sel.anchor.cellIndex;
-        if (anchorInCell && !hitInSameCell) {
-          return;
-        }
-      }
-      this.cursor.moveToHit(hit);
-      this.updateCaretDuringDrag();
-    }
+    _dragScroll.updateTextSelectionDragFromPointer.call(this);
   }
 
   /** 텍스트 선택 드래그를 종료한다 */
   private stopTextSelectionDrag(): void {
-    this.isDragging = false;
-    this.cellSelectionDragCandidate = null;
-    document.removeEventListener('mousemove', this.onMouseMoveBound);
-    this.stopTextSelectionDragAutoScroll();
+    _dragScroll.stopTextSelectionDrag.call(this);
   }
 
   private getTextSelectionDragScrollDeltaY(): number {
-    const rect = this.container.getBoundingClientRect();
-    const topEdge = rect.top + DRAG_SCROLL_EDGE_PX;
-    const bottomEdge = rect.top + this.container.clientHeight - DRAG_SCROLL_EDGE_PX;
-    const clientY = this.dragLastClientY;
-
-    if (clientY < topEdge) {
-      return -this.scaleTextSelectionDragScrollStep(topEdge - clientY);
-    }
-    if (clientY > bottomEdge) {
-      return this.scaleTextSelectionDragScrollStep(clientY - bottomEdge);
-    }
-    return 0;
+    return _dragScroll.getTextSelectionDragScrollDeltaY.call(this);
   }
 
   private scaleTextSelectionDragScrollStep(distance: number): number {
-    const ratio = Math.min(1, Math.max(0, distance / DRAG_SCROLL_EDGE_PX));
-    return Math.round(DRAG_SCROLL_MIN_STEP_PX + (DRAG_SCROLL_MAX_STEP_PX - DRAG_SCROLL_MIN_STEP_PX) * ratio);
+    return _dragScroll.scaleTextSelectionDragScrollStep.call(this, distance);
   }
 
   private updateTextSelectionDragAutoScroll(): void {
-    if (!this.isDragging) {
-      this.stopTextSelectionDragAutoScroll();
-      return;
-    }
-    if (this.getTextSelectionDragScrollDeltaY() === 0) {
-      this.stopTextSelectionDragAutoScroll();
-      return;
-    }
-    if (!this.dragAutoScrollRafId) {
-      this.dragAutoScrollRafId = requestAnimationFrame(() => this.runTextSelectionDragAutoScroll());
-    }
+    _dragScroll.updateTextSelectionDragAutoScroll.call(this);
   }
 
   private runTextSelectionDragAutoScroll(): void {
-    this.dragAutoScrollRafId = 0;
-    if (!this.isDragging) return;
-
-    const deltaY = this.getTextSelectionDragScrollDeltaY();
-    if (deltaY === 0) return;
-
-    const before = this.container.scrollTop;
-    const maxScrollTop = Math.max(0, this.container.scrollHeight - this.container.clientHeight);
-    this.container.scrollTop = Math.max(0, Math.min(maxScrollTop, before + deltaY));
-
-    if (this.container.scrollTop === before) return;
-
-    this.updateTextSelectionDragFromPointer();
-    this.dragAutoScrollRafId = requestAnimationFrame(() => this.runTextSelectionDragAutoScroll());
+    _dragScroll.runTextSelectionDragAutoScroll.call(this);
   }
 
   private stopTextSelectionDragAutoScroll(): void {
-    if (this.dragAutoScrollRafId) {
-      cancelAnimationFrame(this.dragAutoScrollRafId);
-      this.dragAutoScrollRafId = 0;
-    }
+    _dragScroll.stopTextSelectionDragAutoScroll.call(this);
   }
 
   /** 클릭 좌표가 표 외곽 경계선 위인지 판별한다 (페이지 좌표 기준) */
@@ -1698,128 +1618,22 @@ export class InputHandler {
 
   /** 표 객체 선택 상태 컨텍스트 메뉴 항목 */
   private getTableObjectContextMenuItems(): ContextMenuItem[] {
-    return [
-      { type: 'command', commandId: 'edit:cut' },
-      { type: 'command', commandId: 'edit:copy' },
-      { type: 'command', commandId: 'edit:paste' },
-      { type: 'separator' },
-      { type: 'command', commandId: 'table:caption-toggle', label: '캡션 넣기(A)' },
-      { type: 'separator' },
-      { type: 'command', commandId: 'table:cell-props', label: '표 속성...' },
-      { type: 'separator' },
-      // 표 나누기는 커서 행이 분할 기준이라 셀 내부 메뉴에만 둔다 —
-      // 객체 선택 상태에는 기준 행이 없다.
-      { type: 'command', commandId: 'table:attach', label: '표 붙이기' },
-      { type: 'separator' },
-      { type: 'command', commandId: 'table:delete' },
-    ];
+    return _contextMenu.getTableObjectContextMenuItems.call(this);
   }
 
   /** 그림 객체 선택 컨텍스트 메뉴 항목 */
   private getPictureObjectContextMenuItems(): ContextMenuItem[] {
-    const ref = this.cursor.getSelectedPictureRef();
-
-    // 다중 선택: 개체 묶기 메뉴
-    if (this.cursor.isMultiPictureSelection()) {
-      return [
-        { type: 'command', commandId: 'insert:group-shapes', label: '개체 묶기(G)' },
-        { type: 'separator' },
-        { type: 'command', commandId: 'insert:picture-delete', label: '지우기(D)' },
-      ];
-    }
-
-    const items: ContextMenuItem[] = [
-      { type: 'command', commandId: 'edit:cut' },
-      { type: 'command', commandId: 'edit:copy' },
-      { type: 'command', commandId: 'edit:paste' },
-      { type: 'separator' },
-    ];
-    // 수식 객체: "수식 편집..." 항목 추가
-    if (ref?.type === 'equation') {
-      items.push(
-        { type: 'command', commandId: 'insert:equation-edit', label: '수식 편집...' },
-        { type: 'separator' },
-      );
-    }
-    items.push(
-      { type: 'command', commandId: 'insert:arrange-front', label: '맨 앞으로' },
-      { type: 'command', commandId: 'insert:arrange-forward', label: '앞으로' },
-      { type: 'command', commandId: 'insert:arrange-backward', label: '뒤로' },
-      { type: 'command', commandId: 'insert:arrange-back', label: '맨 뒤로' },
-      { type: 'separator' },
-    );
-    // 그룹 개체: 개체 풀기
-    if (ref?.type === 'group') {
-      items.push(
-        { type: 'command', commandId: 'insert:ungroup-shapes', label: '개체 풀기(U)' },
-        { type: 'separator' },
-      );
-    }
-    // 그림/도형 객체: 캡션 넣기
-    if (ref?.type === 'image' || ref?.type === 'shape') {
-      items.push(
-        { type: 'command', commandId: 'insert:caption-toggle', label: '캡션 넣기(A)' },
-      );
-    }
-    items.push(
-      { type: 'command', commandId: 'insert:picture-props', label: '개체 속성(P)...' },
-      { type: 'separator' },
-      { type: 'command', commandId: 'insert:picture-delete', label: '지우기(D)' },
-    );
-    return items;
+    return _contextMenu.getPictureObjectContextMenuItems.call(this);
   }
 
   /** 표 셀 내부 컨텍스트 메뉴 항목 */
   private getTableContextMenuItems(): ContextMenuItem[] {
-    return [
-      { type: 'command', commandId: 'edit:cut' },
-      { type: 'command', commandId: 'edit:copy' },
-      { type: 'command', commandId: 'edit:paste' },
-      { type: 'command', commandId: 'edit:format-copy' },
-      { type: 'command', commandId: 'edit:format-paste' },
-      { type: 'separator' },
-      { type: 'command', commandId: 'table:cell-props', label: '셀 속성...' },
-      { type: 'separator' },
-      { type: 'command', commandId: 'table:insert-row-col' },
-      { type: 'separator' },
-      { type: 'command', commandId: 'table:delete-row-col' },
-      { type: 'separator' },
-      { type: 'command', commandId: 'table:cell-height-equal' },
-      { type: 'command', commandId: 'table:cell-width-equal' },
-      { type: 'separator' },
-      { type: 'command', commandId: 'table:cell-merge' },
-      { type: 'command', commandId: 'table:cell-split' },
-      { type: 'command', commandId: 'table:transpose-copy' },
-      { type: 'command', commandId: 'table:transpose-paste' },
-      { type: 'separator' },
-      { type: 'command', commandId: 'table:border-each', label: '셀 테두리/배경 - 각 셀마다 적용(E)...' },
-      { type: 'command', commandId: 'table:border-one', label: '셀 테두리/배경 - 하나의 셀처럼 적용(Z)...' },
-      { type: 'separator' },
-      { type: 'command', commandId: 'table:caption-toggle', label: '캡션 넣기(A)' },
-      { type: 'separator' },
-      { type: 'command', commandId: 'table:formula', label: '계산식(F)...' },
-      { type: 'separator' },
-      { type: 'command', commandId: 'table:split', label: '표 나누기' },
-      { type: 'command', commandId: 'table:attach', label: '표 붙이기' },
-      { type: 'command', commandId: 'table:delete' },
-    ];
+    return _contextMenu.getTableContextMenuItems.call(this);
   }
 
   /** 일반 컨텍스트 메뉴 항목 */
   private getDefaultContextMenuItems(): ContextMenuItem[] {
-    return [
-      { type: 'command', commandId: 'edit:cut' },
-      { type: 'command', commandId: 'edit:copy' },
-      { type: 'command', commandId: 'edit:paste' },
-      { type: 'command', commandId: 'edit:format-copy' },
-      { type: 'command', commandId: 'edit:format-paste' },
-      { type: 'command', commandId: 'table:transpose-paste' },
-      { type: 'separator' },
-      { type: 'command', commandId: 'format:char-shape', label: '글자 모양' },
-      { type: 'command', commandId: 'format:para-shape', label: '문단 모양' },
-      { type: 'separator' },
-      { type: 'command', commandId: 'format:para-num-shape', label: '문단 번호 모양(N)...' },
-    ];
+    return _contextMenu.getDefaultContextMenuItems.call(this);
   }
 
   /** 특수 키 처리 (Backspace, Enter, 화살표, Ctrl+Z/Y) */
