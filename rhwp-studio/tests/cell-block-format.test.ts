@@ -64,10 +64,11 @@ test('모든 셀을 Ctrl+클릭으로 제외하면 빈 블록이 된다', () => 
 test('제외 셀 키 형식은 CursorState 가 조립하는 것과 같은 함수여야 한다', () => {
   // 조립하는 쪽과 조회하는 쪽이 형식을 따로 갖고 있으면 한쪽만 바뀌어도 조회가 조용히
   // 빗나가 제외 셀이 무시된다. 리터럴 재조립을 금지하고 단일 함수를 쓰는지 본다.
-  const cursor = source('src/engine/cursor.ts');
-  assert.match(cursor, /const key = excludedCellKey\(row, col\)/,
+  // ctrlToggleCell 본문은 cursor-selection-modes.ts 로 추출되었다(심 잔류).
+  const selectionModes = source('src/engine/cursor-selection-modes.ts');
+  assert.match(selectionModes, /const key = excludedCellKey\(row, col\)/,
     'CursorState.ctrlToggleCell 이 공유 키 함수를 쓰지 않는다');
-  assert.doesNotMatch(cursor, /const key = `\$\{row\},\$\{col\}`/,
+  assert.doesNotMatch(selectionModes, /const key = `\$\{row\},\$\{col\}`/,
     'CursorState 가 제외 셀 키를 리터럴로 재조립한다');
 });
 
