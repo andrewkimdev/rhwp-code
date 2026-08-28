@@ -223,17 +223,23 @@ test('CanvasKit contains malformed images and bounds both decode caches', () => 
 });
 
 test('CanvasKit distinguishes missing-picture editor and print replay', () => {
-  const source = readFileSync(new URL('../src/view/canvaskit-renderer.ts', import.meta.url), 'utf8');
-  assert.match(source, /op\.kind === 'missingPicture'/);
-  assert.match(source, /profile === 'print' \|\| profile === 'highQuality'/);
-  assert.match(source, /MAX_PLACEHOLDER_DASH_SEGMENTS_PER_AXIS = 2048/);
-  assert.match(source, /\.every\(Number\.isFinite\)/);
+  const formObjectsSource = readFileSync(
+    new URL('../src/view/canvaskit/form-objects.ts', import.meta.url),
+    'utf8',
+  );
+  assert.match(formObjectsSource, /op\.kind === 'missingPicture'/);
+  assert.match(formObjectsSource, /profile === 'print' \|\| profile === 'highQuality'/);
+  assert.match(formObjectsSource, /MAX_PLACEHOLDER_DASH_SEGMENTS_PER_AXIS = 2048/);
+  assert.match(formObjectsSource, /\.every\(Number\.isFinite\)/);
 });
 
 test('CanvasKit form replay accepts the canonical LayerTree form type names', () => {
-  const source = readFileSync(new URL('../src/view/canvaskit-renderer.ts', import.meta.url), 'utf8');
-  assert.match(source, /op\.formType === 'checkBox'/);
-  assert.match(source, /op\.formType === 'radioButton'/);
+  const formObjectsSource = readFileSync(
+    new URL('../src/view/canvaskit/form-objects.ts', import.meta.url),
+    'utf8',
+  );
+  assert.match(formObjectsSource, /op\.formType === 'checkBox'/);
+  assert.match(formObjectsSource, /op\.formType === 'radioButton'/);
 });
 
 test('PageLayerTree bridge verifies the returned profile instead of relabeling it', () => {

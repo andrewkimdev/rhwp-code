@@ -56,26 +56,16 @@ import {
   type CanvasKitSurfaceRequest,
 } from './render-backend';
 import { canvaskitClipRightPad } from './canvaskit/policy';
-import {
-  CanvasKitGlyphRunFontCache,
-  drawCanvasKitGlyphRun,
-} from './canvaskit/glyph-run-fonts';
-import {
-  selectLayerTextVariantsForLeaf,
-  staticSvgPathLayersAreReplayable,
-} from './canvaskit/text-variant-selection';
+import { CanvasKitGlyphRunFontCache } from './canvaskit/glyph-run-fonts';
+import { selectLayerTextVariantsForLeaf } from './canvaskit/text-variant-selection';
 import {
   CANVASKIT_REPLAY_PLANES,
   type CanvasKitReplayPlane,
   layerPaintOpReplayPlane,
 } from './canvaskit/replay-plane';
 import { isExpectedCanvasKitUnsupportedOp } from './canvaskit/diagnostics';
-import { layerResourceKeyMatches } from './canvaskit/resource-key';
-import {
-  glyphOutlinePayloadResourceKey,
-  glyphOutlinePayloadStatus,
-} from './glyph-outline-payload-status';
-import { parseStaticSvgPathLayers, type StaticSvgPathLayer } from './static-svg-path-layers';
+import { glyphOutlinePayloadStatus } from './glyph-outline-payload-status';
+import type { StaticSvgPathLayer } from './static-svg-path-layers';
 import { loadLocalFontBytesFor, localFontFaceKey, resolveLocalFont, type LocalFontRecord } from '@/core/local-fonts';
 import type { CanvasKitBundledFontSource } from '@/core/font-loader';
 import { readBoundedResponseArrayBuffer } from './canvaskit/bounded-response';
@@ -83,7 +73,6 @@ import * as _equation from './canvaskit/equation';
 import type { EquationRenderBudget } from './canvaskit/equation';
 import * as _imageCache from './canvaskit/image-cache';
 import {
-  base64ToBytes,
   MAX_IMAGE_CACHE_ENTRIES,
   MAX_IMAGE_CACHE_PIXELS,
 } from './canvaskit/image-cache';
@@ -96,6 +85,8 @@ import {
   OLD_HANGUL_FONT_FAMILY,
 } from './canvaskit/text-run';
 import * as _textDecorations from './canvaskit/text-decorations';
+import * as _glyphOutline from './canvaskit/glyph-outline';
+import * as _formObjects from './canvaskit/form-objects';
 
 type CanvasKitApi = CanvasKit;
 type SkCanvas = Canvas;
@@ -199,10 +190,6 @@ export type CanvasKitReadinessBlocker =
   | 'localFontsPending';
 
 export class CanvasKitLayerRenderer {
-  private static readonly MAX_SVG_GLYPH_CACHE_ENTRIES = 128;
-  private static readonly MAX_BITMAP_GLYPH_BASE64_LENGTH = Math.ceil(4 * 1024 * 1024 / 3) * 4;
-  private static readonly MAX_STATIC_SVG_GLYPH_BYTES = 1024 * 1024;
-  private static readonly MAX_PLACEHOLDER_DASH_SEGMENTS_PER_AXIS = 2048;
   private static readonly MAX_BUNDLED_FONT_BYTES = 32 * 1024 * 1024;
 
   private readonly imageCache = new Map<string, { image: SkImage; pixels: number }>();
@@ -843,113 +830,13 @@ export class CanvasKitLayerRenderer {
     id: number | string | undefined,
     keys: string[] | undefined,
     length: number,
-  ): number | null {
-    if (typeof id === 'number' && Number.isInteger(id) && id >= 0 && id < length) return id;
-    if (typeof id !== 'string') return null;
-    const index = keys?.indexOf(id) ?? -1;
-    return index >= 0 && index < length ? index : null;
-  }
+  ): number | null { return _glyphOutline.layerResourceIndex.call(this, id, keys, length); }
 
-  private bitmapGlyphImageOp(op: LayerGlyphOutlineOp): LayerImageOp | null {
-    const payload = op.bitmapGlyph;
-    const resources = this.currentResources;
-    const index = this.layerResourceIndex(
-      payload?.imageResourceId ?? payload?.imageRef,
-      resources?.imageKeys,
-      resources?.images?.length ?? 0,
-    );
-    if (!payload || index === null || !payload.placement) return null;
-    const base64 = resources?.images?.[index];
-    const resourceKey = resources?.imageKeys?.[index];
-    const payloadResourceKey = glyphOutlinePayloadResourceKey(op);
-    let bytes: Uint8Array;
-    try {
-      if (typeof base64 !== 'string'
-        || base64.length > CanvasKitLayerRenderer.MAX_BITMAP_GLYPH_BASE64_LENGTH) {
-        return null;
-      }
-      bytes = base64ToBytes(base64);
-    } catch {
-      return null;
-    }
-    if (
-      typeof resourceKey !== 'string'
-      || payloadResourceKey === null
-      || op.payloadResourceKey !== `${payloadResourceKey}:resource:${resourceKey}`
-      || !layerResourceKeyMatches('img', resourceKey, bytes)
-    ) {
-      return null;
-    }
-    return {
-      type: 'image',
-      bbox: payload.placement,
-      base64,
-      imageRef: `glyph:${resourceKey}`,
-      fillMode: 'fitToSize',
-    };
-  }
+  private bitmapGlyphImageOp(op: LayerGlyphOutlineOp): LayerImageOp | null { return _glyphOutline.bitmapGlyphImageOp.call(this, op); }
 
-  private staticSvgGlyphPathLayers(op: LayerGlyphOutlineOp): StaticSvgPathLayer[] | null {
-    const payload = op.svgGlyph;
-    const resources = this.currentResources;
-    const index = this.layerResourceIndex(
-      payload?.vectorResourceId ?? payload?.svgRef,
-      resources?.svgKeys,
-      resources?.svgFragments?.length ?? 0,
-    );
-    if (!payload || index === null) return null;
-    const fragment = resources?.svgFragments?.[index];
-    const resourceKey = resources?.svgKeys?.[index];
-    const payloadResourceKey = glyphOutlinePayloadResourceKey(op);
-    if (typeof fragment !== 'string'
-      || fragment.length > CanvasKitLayerRenderer.MAX_STATIC_SVG_GLYPH_BYTES) {
-      return null;
-    }
-    const fragmentBytes = new TextEncoder().encode(fragment);
-    if (
-      fragmentBytes.byteLength > CanvasKitLayerRenderer.MAX_STATIC_SVG_GLYPH_BYTES
-      || typeof resourceKey !== 'string'
-      || payloadResourceKey === null
-      || op.payloadResourceKey !== `${payloadResourceKey}:resource:${resourceKey}`
-      || !layerResourceKeyMatches('svg', resourceKey, fragmentBytes)
-    ) {
-      return null;
-    }
-    const cached = this.svgGlyphPathCache.get(resourceKey);
-    if (cached) {
-      this.svgGlyphPathCache.delete(resourceKey);
-      this.svgGlyphPathCache.set(resourceKey, cached);
-      return cached;
-    }
-    if (this.svgGlyphParseFailures.has(resourceKey)) return null;
+  private staticSvgGlyphPathLayers(op: LayerGlyphOutlineOp): StaticSvgPathLayer[] | null { return _glyphOutline.staticSvgGlyphPathLayers.call(this, op); }
 
-    const layers = parseStaticSvgPathLayers(fragment, op.paintStyle?.color ?? '#000000');
-    if (layers.length === 0) {
-      this.rememberSvgGlyphParseFailure(resourceKey);
-      return null;
-    }
-    if (!staticSvgPathLayersAreReplayable(
-      layers,
-      pathData => this.canvasKit.Path.MakeFromSVGString(pathData),
-    )) {
-      this.rememberSvgGlyphParseFailure(resourceKey);
-      return null;
-    }
-    if (this.svgGlyphPathCache.size >= CanvasKitLayerRenderer.MAX_SVG_GLYPH_CACHE_ENTRIES) {
-      const oldestKey = this.svgGlyphPathCache.keys().next().value as string | undefined;
-      if (oldestKey !== undefined) this.svgGlyphPathCache.delete(oldestKey);
-    }
-    this.svgGlyphPathCache.set(resourceKey, layers);
-    return layers;
-  }
-
-  private rememberSvgGlyphParseFailure(resourceKey: string): void {
-    if (this.svgGlyphParseFailures.size >= CanvasKitLayerRenderer.MAX_SVG_GLYPH_CACHE_ENTRIES) {
-      const oldestKey = this.svgGlyphParseFailures.values().next().value as string | undefined;
-      if (oldestKey !== undefined) this.svgGlyphParseFailures.delete(oldestKey);
-    }
-    this.svgGlyphParseFailures.add(resourceKey);
-  }
+  private rememberSvgGlyphParseFailure(resourceKey: string): void { _glyphOutline.rememberSvgGlyphParseFailure.call(this, resourceKey); }
 
   private renderNode(
     canvas: SkCanvas,
@@ -1117,267 +1004,24 @@ export class CanvasKitLayerRenderer {
     this.withImageTransform(canvas, op.bbox, op.transform, () => this.drawImageOp(canvas, image, op));
   }
 
-  private renderGlyphRun(canvas: SkCanvas, op: LayerGlyphRunOp): void {
-    const font = this.glyphRunFonts.font(op, this.currentFontResources);
-    if (!font) {
-      this.unsupportedOps.add('glyphRun:replayInvariant');
-      return;
-    }
-    const paint = this.makeFillPaint(op.paintStyle.color ?? '#000000');
-    try {
-      if (drawCanvasKitGlyphRun(canvas, op, font, paint)) {
-        this.currentReplayFeatureCounts.glyphRuns += 1;
-      } else {
-        this.unsupportedOps.add('glyphRun:replayFailed');
-      }
-    } finally {
-      paint.delete?.();
-    }
-  }
+  private renderGlyphRun(canvas: SkCanvas, op: LayerGlyphRunOp): void { _glyphOutline.renderGlyphRun.call(this, canvas, op); }
 
-  private renderGlyphOutline(canvas: SkCanvas, op: LayerGlyphOutlineOp): void {
-    if (op.payloadKind === 'bitmapGlyph') {
-      this.renderBitmapGlyphOutline(canvas, op);
-      return;
-    }
-    if (op.payloadKind === 'svgGlyph') {
-      this.renderSvgGlyphOutline(canvas, op);
-      return;
-    }
-    if (op.payloadKind === 'monochromeFill' || op.payloadKind === 'monochromeFillStroke') {
-      this.renderMonochromeGlyphOutline(canvas, op);
-      return;
-    }
-    const graph = op.colorLayers?.paintGraph;
-    const nodes = graph?.nodes ?? [];
-    if (!graph || nodes.length === 0 || graph.rootNodeId === undefined) {
-      this.unsupportedOps.add('glyphOutline:replayInvariant');
-      return;
-    }
-    const nodesById = new Map<number, LayerColorGraphNode>();
-    for (const node of nodes) {
-      if (node.nodeId !== undefined) {
-        nodesById.set(node.nodeId, node);
-      }
-    }
-    canvas.save();
-    const matrix = this.affineToCanvasKitMatrix(op.placement?.runToPage);
-    if (matrix) {
-      (canvas as unknown as { concat?: (matrix: number[]) => void }).concat?.(matrix);
-    }
-    try {
-      this.renderColorPaintGraphNode(canvas, nodesById, graph.rootNodeId, new Set());
-    } finally {
-      canvas.restore();
-    }
-  }
+  private renderGlyphOutline(canvas: SkCanvas, op: LayerGlyphOutlineOp): void { _glyphOutline.renderGlyphOutline.call(this, canvas, op); }
 
-  private renderBitmapGlyphOutline(canvas: SkCanvas, op: LayerGlyphOutlineOp): void {
-    const imageOp = this.bitmapGlyphImageOp(op);
-    const image = imageOp ? this.imageForOp(imageOp) : null;
-    if (!imageOp || !image) {
-      this.unsupportedOps.add('glyphOutline:bitmapReplayInvariant');
-      return;
-    }
-    canvas.save();
-    try {
-      const transform = op.bitmapGlyph?.transformToRun;
-      const matrix = this.affineToCanvasKitMatrix(transform);
-      if (matrix) (canvas as unknown as { concat: (matrix: number[]) => void }).concat(matrix);
-      this.drawImageOp(canvas, image, imageOp);
-    } finally {
-      canvas.restore();
-    }
-  }
+  private renderBitmapGlyphOutline(canvas: SkCanvas, op: LayerGlyphOutlineOp): void { _glyphOutline.renderBitmapGlyphOutline.call(this, canvas, op); }
 
-  private renderSvgGlyphOutline(canvas: SkCanvas, op: LayerGlyphOutlineOp): void {
-    const payload = op.svgGlyph;
-    const viewBox = payload?.viewBox;
-    const layers = this.staticSvgGlyphPathLayers(op);
-    if (!payload || !viewBox || !layers || !this.boundsAreDrawable(op.bbox) || !this.boundsAreDrawable(viewBox)) {
-      this.unsupportedOps.add('glyphOutline:svgReplayInvariant');
-      return;
-    }
-    canvas.save();
-    try {
-      const payloadMatrix = this.affineToCanvasKitMatrix(payload.transformToRun);
-      if (payloadMatrix) {
-        (canvas as unknown as { concat: (matrix: number[]) => void }).concat(payloadMatrix);
-      }
-      canvas.translate(op.bbox.x, op.bbox.y);
-      canvas.scale(op.bbox.width / viewBox.width, op.bbox.height / viewBox.height);
-      canvas.translate(-viewBox.x, -viewBox.y);
-      for (const layer of layers) {
-        canvas.save();
-        let path: Path | null = null;
-        try {
-          const layerMatrix = this.affineToCanvasKitMatrix(layer.transform);
-          if (layerMatrix) {
-            (canvas as unknown as { concat: (matrix: number[]) => void }).concat(layerMatrix);
-          }
-          path = this.canvasKit.Path.MakeFromSVGString(layer.pathData);
-          if (!path) continue;
-          this.applyGlyphPathFillRule(path, layer.fillRule);
-          if (layer.fill !== null) {
-            let paint: SkPaint | null = null;
-            try {
-              paint = this.makeFillPaint(layer.fill, layer.opacity);
-              canvas.drawPath(path, paint);
-            } finally {
-              paint?.delete?.();
-            }
-          }
-          if (layer.stroke) {
-            const stroke = layer.stroke;
-            let paint: SkPaint | null = null;
-            let effect: ReturnType<typeof this.canvasKit.PathEffect.MakeDash> | null = null;
-            try {
-              paint = this.makeStrokePaint(stroke.color, stroke.width, stroke.opacity);
-              paint.setStrokeJoin(this.canvasKit.StrokeJoin[
-                stroke.lineJoin === 'round' ? 'Round' : stroke.lineJoin === 'bevel' ? 'Bevel' : 'Miter'
-              ]);
-              paint.setStrokeCap(this.canvasKit.StrokeCap[
-                stroke.lineCap === 'round' ? 'Round' : stroke.lineCap === 'square' ? 'Square' : 'Butt'
-              ]);
-              paint.setStrokeMiter(stroke.miterLimit);
-              effect = stroke.dashArray
-                ? this.canvasKit.PathEffect.MakeDash(stroke.dashArray, stroke.dashOffset)
-                : null;
-              if (effect) paint.setPathEffect(effect);
-              canvas.drawPath(path, paint);
-            } finally {
-              effect?.delete?.();
-              paint?.delete?.();
-            }
-          }
-        } finally {
-          path?.delete?.();
-          canvas.restore();
-        }
-      }
-    } finally {
-      canvas.restore();
-    }
-  }
+  private renderSvgGlyphOutline(canvas: SkCanvas, op: LayerGlyphOutlineOp): void { _glyphOutline.renderSvgGlyphOutline.call(this, canvas, op); }
 
-  private renderMonochromeGlyphOutline(canvas: SkCanvas, op: LayerGlyphOutlineOp): void {
-    const matrix = this.affineToCanvasKitMatrix(op.placement?.runToPage);
-    if (!matrix || !op.paths?.length) {
-      this.unsupportedOps.add('glyphOutline:replayInvariant');
-      return;
-    }
-    const fill = this.makeFillPaint(op.paintStyle?.color ?? '#000000');
-    const stroke = op.payloadKind === 'monochromeFillStroke' && op.stroke
-      ? this.makeStrokePaint(op.stroke.color ?? op.paintStyle?.color ?? '#000000', op.stroke.width ?? 1)
-      : null;
-    canvas.save();
-    try {
-      (canvas as unknown as { concat: (matrix: number[]) => void }).concat(matrix);
-      for (const outline of op.paths) {
-        const path = new this.canvasKit.Path() as MutablePath;
-        let currentX = 0;
-        let currentY = 0;
-        try {
-          for (const command of outline.commands ?? []) {
-            [currentX, currentY] = this.applyPathCommand(path, command, currentX, currentY);
-          }
-          this.applyGlyphPathFillRule(path, outline.fillRule);
-          canvas.drawPath(path, fill);
-          if (stroke) canvas.drawPath(path, stroke);
-        } finally {
-          path.delete?.();
-        }
-      }
-    } finally {
-      canvas.restore();
-      stroke?.delete?.();
-      fill.delete?.();
-    }
-  }
+  private renderMonochromeGlyphOutline(canvas: SkCanvas, op: LayerGlyphOutlineOp): void { _glyphOutline.renderMonochromeGlyphOutline.call(this, canvas, op); }
 
-  private applyGlyphPathFillRule(path: Path, fillRule: string | undefined): void {
-    path.setFillType(fillRule === 'evenodd' ? this.canvasKit.FillType.EvenOdd : this.canvasKit.FillType.Winding);
-  }
+  private applyGlyphPathFillRule(path: Path, fillRule: string | undefined): void { _glyphOutline.applyGlyphPathFillRule.call(this, path, fillRule); }
 
   private renderColorPaintGraphNode(
     canvas: SkCanvas,
     nodesById: Map<number, LayerColorGraphNode>,
     nodeId: number,
     visited: Set<number>,
-  ): void {
-    if (visited.has(nodeId)) {
-      this.unsupportedOps.add('glyphOutline:replayInvariant');
-      return;
-    }
-    visited.add(nodeId);
-    const node = nodesById.get(nodeId);
-    if (!node) {
-      this.unsupportedOps.add('glyphOutline:replayInvariant');
-      return;
-    }
-    if (node.kind === 'transform') {
-      const transformNode = node.transform;
-      const matrix = this.affineToCanvasKitMatrix(transformNode?.transform);
-      if (!matrix || transformNode?.childNodeId === undefined) {
-        this.unsupportedOps.add('glyphOutline:replayInvariant');
-        return;
-      }
-      canvas.save();
-      (canvas as unknown as { concat?: (matrix: number[]) => void }).concat?.(matrix);
-      try {
-        this.renderColorPaintGraphNode(canvas, nodesById, transformNode.childNodeId, visited);
-      } finally {
-        canvas.restore();
-      }
-      return;
-    }
-    const pathNode = node.solidPath ?? node.linearGradientPath ?? node.radialGradientPath ?? node.sweepGradientPath;
-    if (!pathNode?.commands) {
-      this.unsupportedOps.add('glyphOutline:replayInvariant');
-      return;
-    }
-    const path = new this.canvasKit.Path() as MutablePath;
-    let currentX = 0;
-    let currentY = 0;
-    for (const command of pathNode.commands) {
-      [currentX, currentY] = this.applyPathCommand(path, command, currentX, currentY);
-    }
-    this.applyFillRule(path, pathNode.fillRule);
-    const paint = new this.canvasKit.Paint();
-    let shader: unknown | undefined;
-    try {
-      paint.setAntiAlias?.(true);
-      paint.setStyle(this.canvasKit.PaintStyle.Fill);
-      if (node.kind === 'solidPath' && node.solidPath?.fill) {
-        paint.setColor(this.resolvedColor(node.solidPath.fill));
-      } else if (node.kind === 'linearGradientPath' && node.linearGradientPath?.gradient) {
-        shader = this.makeLinearGradientShader(node.linearGradientPath.gradient);
-        if (!shader) {
-          return;
-        }
-        (paint as unknown as { setShader: (shader: unknown) => void }).setShader(shader);
-      } else if (node.kind === 'radialGradientPath' && node.radialGradientPath?.gradient) {
-        shader = this.makeRadialGradientShader(node.radialGradientPath.gradient);
-        if (!shader) {
-          return;
-        }
-        (paint as unknown as { setShader: (shader: unknown) => void }).setShader(shader);
-      } else if (node.kind === 'sweepGradientPath' && node.sweepGradientPath?.gradient) {
-        shader = this.makeSweepGradientShader(node.sweepGradientPath.gradient);
-        if (!shader) {
-          return;
-        }
-        (paint as unknown as { setShader: (shader: unknown) => void }).setShader(shader);
-      } else {
-        return;
-      }
-      canvas.drawPath(path, paint);
-    } finally {
-      (shader as { delete?: () => void } | undefined)?.delete?.();
-      paint.delete?.();
-      path.delete?.();
-    }
-  }
+  ): void { _glyphOutline.renderColorPaintGraphNode.call(this, canvas, nodesById, nodeId, visited); }
 
   private affineToCanvasKitMatrix(transform: LayerAffineTransform | undefined): number[] | null { return _colors.affineToCanvasKitMatrix.call(this, transform); }
 
@@ -1448,109 +1092,9 @@ export class CanvasKitLayerRenderer {
 
   private drawEquationDecoration(canvas: SkCanvas, decoration: string, centerX: number, y: number, width: number, color: string, fontSize: number): boolean { return _equation.drawEquationDecoration.call(this, canvas, decoration, centerX, y, width, color, fontSize); }
 
-  private renderFormObject(canvas: SkCanvas, op: LayerFormObjectOp): void {
-    const fill = op.backColor && op.backColor !== '#000000' ? op.backColor : '#f7f7f7';
-    this.drawStyledShape(canvas, op.bbox, {
-      fillColor: fill,
-      strokeColor: op.foreColor ?? '#555555',
-      strokeWidth: 1,
-      opacity: op.enabled === false ? 0.55 : 1,
-    }, (paint) => canvas.drawRect(this.rect(op.bbox), paint));
-    if (op.value && (
-      op.formType === 'checkBox'
-      || op.formType === 'radioButton'
-      || op.formType === 'checkbox'
-      || op.formType === 'radio'
-    )) {
-      const paint = this.makeStrokePaint(op.foreColor ?? '#111111', 1.5);
-      const b = op.bbox;
-      canvas.drawLine(b.x + b.width * 0.25, b.y + b.height * 0.55, b.x + b.width * 0.45, b.y + b.height * 0.75, paint);
-      canvas.drawLine(b.x + b.width * 0.45, b.y + b.height * 0.75, b.x + b.width * 0.78, b.y + b.height * 0.28, paint);
-      paint.delete?.();
-    }
-    const label = op.caption || op.text;
-    if (label) {
-      this.renderTextRun(canvas, {
-        type: 'textRun',
-        bbox: { ...op.bbox, x: op.bbox.x + 4, width: Math.max(0, op.bbox.width - 8) },
-        text: label,
-        baseline: Math.max(10, op.bbox.height * 0.68),
-        style: { fontSize: Math.max(9, Math.min(14, op.bbox.height * 0.55)), color: op.foreColor ?? '#111111' },
-      });
-    }
-  }
+  private renderFormObject(canvas: SkCanvas, op: LayerFormObjectOp): void { _formObjects.renderFormObject.call(this, canvas, op); }
 
-  private renderPlaceholder(canvas: SkCanvas, op: LayerPlaceholderOp, profile: LayerRenderProfile): void {
-    if (op.kind === 'missingPicture') {
-      if (profile === 'print' || profile === 'highQuality') return;
-      if (![op.bbox.x, op.bbox.y, op.bbox.width, op.bbox.height].every(Number.isFinite)
-        || op.bbox.width <= 0 || op.bbox.height <= 0) return;
-      const paint = this.makeStrokePaint(op.strokeColor ?? '#999999', 1);
-      const dash = 5;
-      const gap = 3;
-      const horizontalStep = Math.max(
-        dash + gap,
-        op.bbox.width / CanvasKitLayerRenderer.MAX_PLACEHOLDER_DASH_SEGMENTS_PER_AXIS,
-      );
-      const verticalStep = Math.max(
-        dash + gap,
-        op.bbox.height / CanvasKitLayerRenderer.MAX_PLACEHOLDER_DASH_SEGMENTS_PER_AXIS,
-      );
-      try {
-        for (let x = op.bbox.x; x < op.bbox.x + op.bbox.width; x += horizontalStep) {
-          const end = Math.min(x + horizontalStep * dash / (dash + gap), op.bbox.x + op.bbox.width);
-          canvas.drawLine(x, op.bbox.y, end, op.bbox.y, paint);
-          canvas.drawLine(x, op.bbox.y + op.bbox.height, end, op.bbox.y + op.bbox.height, paint);
-        }
-        for (let y = op.bbox.y; y < op.bbox.y + op.bbox.height; y += verticalStep) {
-          const end = Math.min(y + verticalStep * dash / (dash + gap), op.bbox.y + op.bbox.height);
-          canvas.drawLine(op.bbox.x, y, op.bbox.x, end, paint);
-          canvas.drawLine(op.bbox.x + op.bbox.width, y, op.bbox.x + op.bbox.width, end, paint);
-        }
-      } finally {
-        paint.delete?.();
-      }
-      const icon = Math.max(14, Math.min(36, Math.min(op.bbox.width, op.bbox.height) * 0.4));
-      const ix = op.bbox.x + (op.bbox.width - icon) / 2;
-      const iy = op.bbox.y + (op.bbox.height - icon * 0.75) / 2;
-      const iconBounds = this.canvasKit.XYWHRect(ix, iy, icon, icon * 0.75);
-      let iconFill: SkPaint | null = null;
-      let iconStroke: SkPaint | null = null;
-      let missingStroke: SkPaint | null = null;
-      try {
-        iconFill = this.makeFillPaint('#ffffff');
-        iconStroke = this.makeStrokePaint('#888888', 1);
-        missingStroke = this.makeStrokePaint('#cc4444', 1.5);
-        canvas.drawRect(iconBounds, iconFill);
-        canvas.drawRect(iconBounds, iconStroke);
-        canvas.drawLine(ix + icon * 0.08, iy + icon * 0.62, ix + icon * 0.32, iy + icon * 0.30, iconStroke);
-        canvas.drawLine(ix + icon * 0.32, iy + icon * 0.30, ix + icon * 0.52, iy + icon * 0.62, iconStroke);
-        canvas.drawLine(ix + icon * 0.52, iy + icon * 0.62, ix + icon * 0.68, iy + icon * 0.42, iconStroke);
-        canvas.drawLine(ix + icon * 0.68, iy + icon * 0.42, ix + icon * 0.92, iy + icon * 0.62, iconStroke);
-        canvas.drawCircle(ix + icon * 0.72, iy + icon * 0.20, icon * 0.07, iconStroke);
-        canvas.drawLine(ix, iy + icon * 0.75, ix + icon, iy, missingStroke);
-      } finally {
-        missingStroke?.delete?.();
-        iconStroke?.delete?.();
-        iconFill?.delete?.();
-      }
-      return;
-    }
-    this.drawStyledShape(canvas, op.bbox, {
-      fillColor: op.fillColor ?? '#f2f2f2',
-      strokeColor: op.strokeColor ?? '#999999',
-      strokeWidth: 1,
-    }, (paint) => canvas.drawRect(this.rect(op.bbox), paint));
-    if (op.label) {
-      this.renderTextRun(canvas, {
-        type: 'textRun',
-        bbox: { ...op.bbox, x: op.bbox.x + 4 },
-        text: op.label,
-        baseline: Math.max(10, op.bbox.height * 0.65),
-        style: { fontSize: Math.max(9, Math.min(14, op.bbox.height * 0.45)), color: '#555555' },
-      });
-    }
-  }
+  private renderPlaceholder(canvas: SkCanvas, op: LayerPlaceholderOp, profile: LayerRenderProfile): void { _formObjects.renderPlaceholder.call(this, canvas, op, profile); }
 
   private drawStyledShape(canvas: SkCanvas, bounds: LayerBounds, style: LayerShapeStyle | undefined, draw: (paint: SkPaint) => void): void { _shapes.drawStyledShape.call(this, canvas, bounds, style, draw); }
 
