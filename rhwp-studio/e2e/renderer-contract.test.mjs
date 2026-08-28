@@ -17,6 +17,7 @@ const canvaskitDirectory = path.join(studioRoot, 'src/view/canvaskit');
 const canvaskitDiagnosticsPath = path.join(canvaskitDirectory, 'diagnostics.ts');
 const equationPath = path.join(canvaskitDirectory, 'equation.ts');
 const shapesPath = path.join(canvaskitDirectory, 'shapes.ts');
+const textRunPath = path.join(canvaskitDirectory, 'text-run.ts');
 // Layer* 렌더 IR 선언은 types/layers.ts 로 분할 이동됨(재수출 심은 src/core/types.ts).
 const layerTypesPath = path.join(studioRoot, 'src/core/types/layers.ts');
 const textIrV2DocPath = path.join(repoRoot, 'docs/text-ir-v2.md');
@@ -47,6 +48,7 @@ const canvaskitSource = fs.readFileSync(canvaskitPath, 'utf8');
 const canvaskitDiagnosticsSource = fs.readFileSync(canvaskitDiagnosticsPath, 'utf8');
 const equationSource = fs.readFileSync(equationPath, 'utf8');
 const shapesSource = fs.readFileSync(shapesPath, 'utf8');
+const textRunSource = fs.readFileSync(textRunPath, 'utf8');
 const layerTypesSource = fs.readFileSync(layerTypesPath, 'utf8');
 const textIrV2DocSource = fs.readFileSync(textIrV2DocPath, 'utf8');
 const canvaskitParityPlanDocSource = fs.readFileSync(canvaskitParityPlanDocPath, 'utf8');
@@ -543,8 +545,8 @@ requireSnippet(
   'CanvasKit should bound bundled font parsing and reject unprepared explicit families',
 );
 requireSnippet(
-  canvaskitSource,
-  /private findPreparedTypeface\([\s\S]*?const local =[\s\S]*?const bundled =[\s\S]*?if \(local\) return local;[\s\S]*?if \(bundled\) return bundled;/,
+  textRunSource,
+  /function findPreparedTypeface\([\s\S]*?const local =[\s\S]*?const bundled =[\s\S]*?if \(local\) return local;[\s\S]*?if \(bundled\) return bundled;/,
   'CanvasKit should prefer an exact prepared local face over its bundled fallback alias',
 );
 requireSnippet(
@@ -676,12 +678,12 @@ assert.ok(
   'CanvasKit unknown op diagnostics should stay unexpected readiness diagnostics',
 );
 assert.ok(
-  canvaskitSource.includes('MAX_FONT_SUBSTITUTION_DIAGNOSTICS = 4096')
+  textRunSource.includes('MAX_FONT_SUBSTITUTION_DIAGNOSTICS = 4096')
     && canvaskitSource.includes('private readonly currentFontSubstitutions = new Map')
     && canvaskitSource.includes('unregisteredFontFallbacks: fontSubstitutions.filter(')
-    && canvaskitSource.includes("candidateFontSources.push('missingGlyphDefault')")
-    && canvaskitSource.includes("candidateFontSources.push('missingGlyphSymbol')")
-    && canvaskitSource.includes("source: 'oldHangul'")
+    && textRunSource.includes("candidateFontSources.push('missingGlyphDefault')")
+    && textRunSource.includes("candidateFontSources.push('missingGlyphSymbol')")
+    && textRunSource.includes("source: 'oldHangul'")
     && canvaskitSource.includes('this.currentFontSubstitutions.clear()'),
   'CanvasKit font substitutions should be bounded, structured, and reset with replay state',
 );
@@ -706,12 +708,12 @@ const renderLineBody = extractFunctionBody(shapesSource, 'renderLine');
 const drawStrokeWithDashBody = extractFunctionBody(shapesSource, 'drawStrokeWithDash');
 const renderFormObjectBody = extractMethodBody(canvaskitSource, 'renderFormObject');
 const renderPlaceholderBody = extractMethodBody(canvaskitSource, 'renderPlaceholder');
-const renderTextRunBody = extractMethodBody(canvaskitSource, 'renderTextRun');
-const renderShapedScriptTextBody = extractMethodBody(canvaskitSource, 'renderShapedScriptText');
+const renderTextRunBody = extractFunctionBody(textRunSource, 'renderTextRun');
+const renderShapedScriptTextBody = extractFunctionBody(textRunSource, 'renderShapedScriptText');
 const renderGlyphRunBody = extractMethodBody(canvaskitSource, 'renderGlyphRun');
 const renderGlyphOutlineBody = extractMethodBody(canvaskitSource, 'renderGlyphOutline');
 const renderColorPaintGraphNodeBody = extractMethodBody(canvaskitSource, 'renderColorPaintGraphNode');
-const recordTextRunCoverageGapsBody = extractMethodBody(canvaskitSource, 'recordTextRunCoverageGaps');
+const recordTextRunCoverageGapsBody = extractFunctionBody(textRunSource, 'recordTextRunCoverageGaps');
 
 const vite = await createServer({
   root: studioRoot,
@@ -1827,7 +1829,7 @@ requireSnippet(
 );
 requireSnippet(
   renderShapedScriptTextBody,
-  /new this\.canvasKit\.ParagraphStyle[\s\S]*?this\.canvasKit\.ParagraphBuilder\.Make[\s\S]*?builder\.addText\(text\)[\s\S]*?paragraph\.layout\(CanvasKitLayerRenderer\.MAX_SHAPED_TEXT_WIDTH\)[\s\S]*?canvas\.drawParagraph\(paragraph, originX, originY - fontSize \+ baselineShift\)[\s\S]*?paragraph\.delete\?\.\(\)[\s\S]*?builder\.delete\?\.\(\)/,
+  /new this\.canvasKit\.ParagraphStyle[\s\S]*?this\.canvasKit\.ParagraphBuilder\.Make[\s\S]*?builder\.addText\(text\)[\s\S]*?paragraph\.layout\(MAX_SHAPED_TEXT_WIDTH\)[\s\S]*?canvas\.drawParagraph\(paragraph, originX, originY - fontSize \+ baselineShift\)[\s\S]*?paragraph\.delete\?\.\(\)[\s\S]*?builder\.delete\?\.\(\)/,
   'old Hangul cluster replay should use CanvasKit paragraph shaping and release native objects',
 );
 requireSnippet(

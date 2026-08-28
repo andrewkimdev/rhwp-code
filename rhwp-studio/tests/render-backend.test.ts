@@ -167,14 +167,21 @@ test('CanvasKit renderer source does not introduce Canvas2D overlay replay', () 
 });
 
 test('CanvasKit text replay preserves LayerTree positions for regular runs', () => {
-  const source = readFileSync(new URL('../src/view/canvaskit-renderer.ts', import.meta.url), 'utf8');
-  assert.match(source, /if \(hasLayoutPositions\) \{[\s\S]*?canvas\.drawGlyphs\(/);
-  assert.doesNotMatch(source, /needsPreservedAdvances && hasLayoutPositions/);
+  const textRunSource = readFileSync(
+    new URL('../src/view/canvaskit/text-run.ts', import.meta.url),
+    'utf8',
+  );
+  assert.match(textRunSource, /if \(hasLayoutPositions\) \{[\s\S]*?canvas\.drawGlyphs\(/);
+  assert.doesNotMatch(textRunSource, /needsPreservedAdvances && hasLayoutPositions/);
 });
 
 test('CanvasKit text replay uses positioned fallback glyphs and external text visuals', () => {
   const source = readFileSync(new URL('../src/view/canvaskit-renderer.ts', import.meta.url), 'utf8');
-  assert.match(source, /const candidateFonts = \[font\][\s\S]*?selectedFontIndices[\s\S]*?canvas\.drawGlyphs/);
+  const textRunSource = readFileSync(
+    new URL('../src/view/canvaskit/text-run.ts', import.meta.url),
+    'utf8',
+  );
+  assert.match(textRunSource, /const candidateFonts = \[font\][\s\S]*?selectedFontIndices[\s\S]*?canvas\.drawGlyphs/);
   assert.match(source, /case 'charOverlap':\s+this\.renderCharOverlap/);
   assert.match(source, /case 'textControlMark':\s+this\.renderTextControlMark/);
   assert.match(source, /case 'tabLeader':\s+this\.renderTabLeader/);
