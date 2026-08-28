@@ -15,6 +15,7 @@ const repoRoot = path.resolve(studioRoot, '..');
 const canvaskitPath = path.join(studioRoot, 'src/view/canvaskit-renderer.ts');
 const canvaskitDirectory = path.join(studioRoot, 'src/view/canvaskit');
 const canvaskitDiagnosticsPath = path.join(canvaskitDirectory, 'diagnostics.ts');
+const equationPath = path.join(canvaskitDirectory, 'equation.ts');
 // Layer* 렌더 IR 선언은 types/layers.ts 로 분할 이동됨(재수출 심은 src/core/types.ts).
 const layerTypesPath = path.join(studioRoot, 'src/core/types/layers.ts');
 const textIrV2DocPath = path.join(repoRoot, 'docs/text-ir-v2.md');
@@ -43,6 +44,7 @@ const fullRendererSweepWorkflowPath = path.join(
 
 const canvaskitSource = fs.readFileSync(canvaskitPath, 'utf8');
 const canvaskitDiagnosticsSource = fs.readFileSync(canvaskitDiagnosticsPath, 'utf8');
+const equationSource = fs.readFileSync(equationPath, 'utf8');
 const layerTypesSource = fs.readFileSync(layerTypesPath, 'utf8');
 const textIrV2DocSource = fs.readFileSync(textIrV2DocPath, 'utf8');
 const canvaskitParityPlanDocSource = fs.readFileSync(canvaskitParityPlanDocPath, 'utf8');
@@ -97,6 +99,13 @@ function extractMethodBody(source, methodName) {
   assert.notEqual(signatureIndex, -1, `missing method ${methodName}`);
 
   return extractBlockBody(source, signatureIndex, methodName);
+}
+
+function extractFunctionBody(source, functionName) {
+  const signatureIndex = source.indexOf(`function ${functionName}(`);
+  assert.notEqual(signatureIndex, -1, `missing function ${functionName}`);
+
+  return extractBlockBody(source, signatureIndex, functionName);
 }
 
 function extractSwitchCaseClusterBody(methodBody, caseLabel) {
@@ -688,8 +697,8 @@ requireSnippet(
 
 const renderRectangleBody = extractMethodBody(canvaskitSource, 'renderRectangle');
 const renderEllipseBody = extractMethodBody(canvaskitSource, 'renderEllipse');
-const renderEquationBody = extractMethodBody(canvaskitSource, 'renderEquation');
-const renderEquationBoxBody = extractMethodBody(canvaskitSource, 'renderEquationBox');
+const renderEquationBody = extractFunctionBody(equationSource, 'renderEquation');
+const renderEquationBoxBody = extractFunctionBody(equationSource, 'renderEquationBox');
 const renderPathBody = extractMethodBody(canvaskitSource, 'renderPath');
 const renderLineBody = extractMethodBody(canvaskitSource, 'renderLine');
 const drawStrokeWithDashBody = extractMethodBody(canvaskitSource, 'drawStrokeWithDash');
