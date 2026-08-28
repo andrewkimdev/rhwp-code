@@ -126,11 +126,11 @@ test('배치모드 그림 삽입은 스냅샷으로 undo 기록된다', () => {
 });
 
 test('드래그드롭 그림 삽입은 스냅샷으로 undo 기록된다', () => {
-  const ih = source('src/engine/input-handler.ts');
+  const placement = source('src/engine/input-handler-placement.ts');
 
-  const start = ih.indexOf('insertDroppedImageAtClientPoint(');
+  const start = placement.indexOf('export function insertDroppedImageAtClientPoint');
   assert.notEqual(start, -1, 'insertDroppedImageAtClientPoint not found');
-  const block = ih.slice(start, ih.indexOf('\n  private ', start + 1));
+  const block = placement.slice(start, placement.indexOf('\nexport function ', start + 1));
 
   assert.match(
     block,

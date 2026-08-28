@@ -212,12 +212,13 @@ const BASELINE: Readonly<Record<string, number>> = {
   'src/ui/table-cell-props-dialog.ts': 2,
   'src/ui/toolbar.ts': 4,
   // engine/input-handler* — 드래그/nudge 등 직접-뮤테이션 최고밀도 영역.
-  'src/engine/input-handler.ts': 24, // +1: 누름틀 제거 이관 시 removeFieldAt 이 양식모드(직접 유지)/일반모드(snapshot) 두 분기로 분리 / +1: Edit 오버레이 커밋이 셀 내부는 setFormValueInCell 로 분기(CheckBox 와 동일 조건 — 기존 flat 호출은 표 컨트롤 슬롯을 가리켜 실패) / +1: 셀 블록 글자 서식이 applyCharFormatInCell 을 executeOperation snapshot 안에서 호출(여러 셀에 걸친 글자 서식 커맨드 부재) / +1: 중첩 셀 블록 글자 서식도 applyCharFormatInCellByPath 를 같은 snapshot 안에서 호출 / +2: 머리말·꼬리말(applyParaFormatInHf)과 각주(applyParaFormatInFootnote) 문단 서식 배선 — 둘 다 snapshot 라우팅 / -7: 양식 개체 오버레이 클러스터(클릭/라디오/콤보/편집)를 input-handler-form-overlay.ts 로 이관 — 호출부 변화 없음, 7곳 표면이 키로 이동
+  'src/engine/input-handler.ts': 19, // +1: 누름틀 제거 이관 시 removeFieldAt 이 양식모드(직접 유지)/일반모드(snapshot) 두 분기로 분리 / +1: Edit 오버레이 커밋이 셀 내부는 setFormValueInCell 로 분기(CheckBox 와 동일 조건 — 기존 flat 호출은 표 컨트롤 슬롯을 가리켜 실패) / +1: 셀 블록 글자 서식이 applyCharFormatInCell 을 executeOperation snapshot 안에서 호출(여러 셀에 걸친 글자 서식 커맨드 부재) / +1: 중첩 셀 블록 글자 서식도 applyCharFormatInCellByPath 를 같은 snapshot 안에서 호출 / +2: 머리말·꼬리말(applyParaFormatInHf)과 각주(applyParaFormatInFootnote) 문단 서식 배선 — 둘 다 snapshot 라우팅 / -7: 양식 개체 오버레이 클러스터(클릭/라디오/콤보/편집)를 input-handler-form-overlay.ts 로 이관 — 호출부 변화 없음, 7곳 표면이 키로 이동 / -5: 객체 배치·그리기 모드 클러스터(드롭 그림 삽입·다각형·글상자/도형 배치)를 input-handler-placement.ts 로 이관 — 호출부 변화 없음, 5곳 표면이 키로 이동
   'src/engine/input-handler-connector.ts': 1,
   'src/engine/input-handler-form-overlay.ts': 7, // input-handler.ts 양식 오버레이 클러스터 이관 분리 — setFormValue×5 + setFormValueInCell×2 (전부 kind:'record' 경로, 라우팅 변화 없음)
   'src/engine/input-handler-keyboard.ts': 21,
   'src/engine/input-handler-mouse.ts': 3,
   'src/engine/input-handler-picture.ts': 11,
+  'src/engine/input-handler-placement.ts': 5, // input-handler.ts 객체 배치·그리기 모드 클러스터 이관 분리 — insertPicture + setCellPicturePropertiesByPath + setPictureProperties (드롭 그림 snapshot 라우팅 유지) + createShapeControl×2 (다각형·글상자/도형, 라우팅 변화 없음)
   'src/engine/input-handler-table.ts': 7, // -2: 한컴 3모드 셀 크기 조절의 직접 WASM 호출을 executeOperation snapshot 경로로 이관 (undo 기록됨)
   'src/engine/input-handler-text.ts': 11, // #2424: raw IME delete를 command 공통 typed helper로 이관
   // ── hwpctl — 의도적 미라우팅 (#3648 정책 판정, 2026-07-31) ──
