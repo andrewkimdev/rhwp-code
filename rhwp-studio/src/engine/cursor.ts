@@ -4,6 +4,7 @@ import type { WasmBridge } from '@/core/wasm-bridge';
 import { cellAxisPath, type FocusedCellCursorGeometry } from './command';
 import { findWordBoundaryForward, findWordBoundaryBackward, findWordAt, findSentenceAt } from './cursor-word-utils';
 import * as _selectionModes from './cursor-selection-modes';
+import * as _noteModes from './cursor-note-modes';
 
 export type CellSelectionReason = 'manual' | 'protected';
 
@@ -1510,99 +1511,27 @@ export class CursorState {
 
   /** 머리말/꼬리말 편집 모드에 진입한다. */
   enterHeaderFooterMode(isHeader: boolean, sectionIdx: number, applyTo: number, preferredPage = -1): void {
-    // 현재 본문 커서 위치 저장
-    this._savedBodyPosition = { ...this.position };
-
-    this._headerFooterMode = isHeader ? 'header' : 'footer';
-    this._hfSectionIdx = sectionIdx;
-    this._hfApplyTo = applyTo;
-    this._hfParaIdx = 0;
-    this._hfCharOffset = 0;
-    this._hfPreferredPage = preferredPage;
-
-    // 선택 해제
-    this.clearSelection();
-
-    // 커서 좌표 갱신
-    this.updateRect();
+    _noteModes.enterHeaderFooterMode.call(this, isHeader, sectionIdx, applyTo, preferredPage);
   }
 
   /** 머리말/꼬리말 편집 모드에서 탈출한다. */
   exitHeaderFooterMode(): void {
-    if (this._headerFooterMode === 'none') return;
-
-    this._headerFooterMode = 'none';
-
-    // 본문 커서 위치 복원
-    if (this._savedBodyPosition) {
-      // 머리말/꼬리말 마커 para_index(usize::MAX 계열)가 저장된 경우 → 문서 시작으로 초기화
-      if (this._savedBodyPosition.paragraphIndex >= 0xFFFFFF00) {
-        this._savedBodyPosition.paragraphIndex = 0;
-        this._savedBodyPosition.charOffset = 0;
-      }
-      this.position = { ...this._savedBodyPosition };
-      this._savedBodyPosition = null;
-    }
-
-    this.clearSelection();
-    this.updateRect();
+    _noteModes.exitHeaderFooterMode.call(this);
   }
 
   /** 다른 머리말/꼬리말로 직접 전환한다 (exit→enter 사이의 updateRect 호출을 피함). */
   switchHeaderFooterTarget(isHeader: boolean, sectionIdx: number, applyTo: number, targetPage = -1): void {
-    if (this._headerFooterMode === 'none') return;
-    this._headerFooterMode = isHeader ? 'header' : 'footer';
-    this._hfSectionIdx = sectionIdx;
-    this._hfApplyTo = applyTo;
-    this._hfParaIdx = 0;
-    this._hfCharOffset = 0;
-    this._hfPreferredPage = targetPage >= 0 ? targetPage : (this.rect?.pageIndex ?? this._hfPreferredPage);
-    this.clearSelection();
-    this.updateRect();
+    _noteModes.switchHeaderFooterTarget.call(this, isHeader, sectionIdx, applyTo, targetPage);
   }
 
   /** 머리말/꼬리말 내 커서 위치를 설정한다. */
   setHfCursorPosition(paraIdx: number, charOffset: number): void {
-    this._hfParaIdx = paraIdx;
-    this._hfCharOffset = charOffset;
-    this.updateRect();
+    _noteModes.setHfCursorPosition.call(this, paraIdx, charOffset);
   }
 
   /** 머리말/꼬리말 내 수평 이동 */
   moveHorizontalInHf(delta: number): void {
-    if (this._headerFooterMode === 'none') return;
-    const isHeader = this._headerFooterMode === 'header';
-
-    try {
-      const info = JSON.parse(this.wasm.getHeaderFooterParaInfo(
-        this._hfSectionIdx, isHeader, this._hfApplyTo, this._hfParaIdx
-      ));
-      const paraCount = info.paraCount as number;
-      const charCount = info.charCount as number;
-
-      const newOffset = this._hfCharOffset + delta;
-
-      if (newOffset >= 0 && newOffset <= charCount) {
-        // 같은 문단 내 이동
-        this._hfCharOffset = newOffset;
-      } else if (delta > 0 && this._hfParaIdx + 1 < paraCount) {
-        // 다음 문단 시작으로
-        this._hfParaIdx++;
-        this._hfCharOffset = 0;
-      } else if (delta < 0 && this._hfParaIdx > 0) {
-        // 이전 문단 끝으로
-        this._hfParaIdx--;
-        const prevInfo = JSON.parse(this.wasm.getHeaderFooterParaInfo(
-          this._hfSectionIdx, isHeader, this._hfApplyTo, this._hfParaIdx
-        ));
-        this._hfCharOffset = prevInfo.charCount as number;
-      }
-      // else: 문서 경계 — 이동 불가
-    } catch {
-      // WASM 호출 실패 시 무시
-    }
-
-    this.updateRect();
+    _noteModes.moveHorizontalInHf.call(this, delta);
   }
 
   // ─── 각주 편집 모드 ──────────────────────────────────────
@@ -1629,70 +1558,22 @@ export class CursorState {
     sectionIdx: number, paraIdx: number, controlIdx: number,
     footnoteIndex: number, pageNum: number,
   ): void {
-    this._savedBodyPosition = { ...this.position };
-    this._footnoteMode = true;
-    this._fnSectionIdx = sectionIdx;
-    this._fnParaIdx = paraIdx;
-    this._fnControlIdx = controlIdx;
-    this._fnFootnoteIndex = footnoteIndex;
-    this._fnInnerParaIdx = 0;
-    this._fnCharOffset = 2;
-    this._fnPageNum = pageNum;
-    this.clearSelection();
-    this.updateRect();
+    _noteModes.enterFootnoteMode.call(this, sectionIdx, paraIdx, controlIdx, footnoteIndex, pageNum);
   }
 
   /** 각주 편집 모드에서 탈출한다. */
   exitFootnoteMode(): void {
-    if (!this._footnoteMode) return;
-    this._footnoteMode = false;
-    if (this._savedBodyPosition) {
-      if (this._savedBodyPosition.paragraphIndex >= 0xFFFFFF00) {
-        this._savedBodyPosition.paragraphIndex = 0;
-        this._savedBodyPosition.charOffset = 0;
-      }
-      this.position = { ...this._savedBodyPosition };
-      this._savedBodyPosition = null;
-    }
-    this.clearSelection();
-    this.updateRect();
+    _noteModes.exitFootnoteMode.call(this);
   }
 
   /** 각주 내 커서 위치를 설정한다. */
   setFnCursorPosition(fnParaIdx: number, charOffset: number): void {
-    this._fnInnerParaIdx = fnParaIdx;
-    this._fnCharOffset = charOffset;
-    this.updateRect();
+    _noteModes.setFnCursorPosition.call(this, fnParaIdx, charOffset);
   }
 
   /** 각주 내 수평 이동 */
   moveHorizontalInFn(delta: number): void {
-    if (!this._footnoteMode) return;
-
-    try {
-      const info = this.wasm.getFootnoteInfo(this._fnSectionIdx, this._fnParaIdx, this._fnControlIdx);
-      const paraCount = info.paraCount;
-      // 현재 문단의 텍스트 길이
-      const currentText = info.texts[this._fnInnerParaIdx] ?? '';
-      const charCount = currentText.length;
-
-      const newOffset = this._fnCharOffset + delta;
-
-      if (newOffset >= 0 && newOffset <= charCount) {
-        this._fnCharOffset = newOffset;
-      } else if (delta > 0 && this._fnInnerParaIdx + 1 < paraCount) {
-        this._fnInnerParaIdx++;
-        this._fnCharOffset = 0;
-      } else if (delta < 0 && this._fnInnerParaIdx > 0) {
-        this._fnInnerParaIdx--;
-        const prevText = info.texts[this._fnInnerParaIdx] ?? '';
-        this._fnCharOffset = prevText.length;
-      }
-    } catch {
-      // WASM 호출 실패 시 무시
-    }
-
-    this.updateRect();
+    _noteModes.moveHorizontalInFn.call(this, delta);
   }
 }
 
