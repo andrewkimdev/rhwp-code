@@ -40,12 +40,13 @@ test('텍스트 command는 page-local 판정용 payload hint를 노출한다', (
 });
 
 test('raw IME/iOS 입력은 flow effect를 cursor lookup 전에 소비하고 refresh에 전달한다', () => {
-  const inputHandlerSource = readFileSync(new URL('../src/engine/input-handler.ts', import.meta.url), 'utf8');
+  // 편집 후 처리 클러스터 본문은 input-handler-after-edit.ts 로 이관됨 — 가드는 이관된 구현 파일을 읽는다.
+  const afterEditSource = readFileSync(new URL('../src/engine/input-handler-after-edit.ts', import.meta.url), 'utf8');
   const textSource = readFileSync(new URL('../src/engine/input-handler-text.ts', import.meta.url), 'utf8');
 
   assert.match(
-    inputHandlerSource,
-    /private afterTextInputEdit\(\s*beforePos: DocumentPosition,\s*afterPos: DocumentPosition,\s*pageLocalOptions: PageLocalTextEditOptions = \{\},\s*boundaryHandled = false,\s*\): void \{\s*if \(boundaryHandled\) \{\s*this\.afterEdit\(false\);\s*return;\s*\}/,
+    afterEditSource,
+    /function afterTextInputEdit\(\s*this: any,\s*beforePos: DocumentPosition,\s*afterPos: DocumentPosition,\s*pageLocalOptions: PageLocalTextEditOptions = \{\},\s*boundaryHandled = false,\s*\): void \{\s*if \(boundaryHandled\) \{\s*this\.afterEdit\(false\);\s*return;\s*\}/,
   );
   assert.match(
     textSource,
@@ -174,11 +175,12 @@ test('depth-1 셀 IME replacement는 body fallback보다 먼저 atomic helper를
 });
 
 test('deferred pending이 실제로 있을 때만 page-local idle flush를 예약한다', () => {
-  const inputHandlerSource = readFileSync(new URL('../src/engine/input-handler.ts', import.meta.url), 'utf8');
+  // afterPageLocalEdit·prepareTextMutationBeforeCursor 등 본문은 input-handler-after-edit.ts 로 이관됨.
+  const afterEditSource = readFileSync(new URL('../src/engine/input-handler-after-edit.ts', import.meta.url), 'utf8');
   const bridgeSource = readFileSync(new URL('../src/core/wasm-bridge.ts', import.meta.url), 'utf8');
 
   assert.match(
-    inputHandlerSource,
+    afterEditSource,
     /if \(this\.deferredPaginationPending\) \{\s*this\.scheduleDeferredPaginationFlush\(\);\s*\}/,
   );
   assert.match(
@@ -186,23 +188,23 @@ test('deferred pending이 실제로 있을 때만 page-local idle flush를 예�
     /cellFlowChanged: paginationDeferred && parsed\.cellFlowChanged !== false/,
     '구형 deferred 결과의 누락 신호는 mutation 후 예외 대신 보수적 경계로 복구해야 한다',
   );
-  assert.match(inputHandlerSource, /if \(!this\.deferredPaginationPending\) return false;/);
+  assert.match(afterEditSource, /if \(!this\.deferredPaginationPending\) return false;/);
   assert.match(
-    inputHandlerSource,
+    afterEditSource,
     /if \(effects\.paginationCompleted\) \{\s*this\.cancelDeferredPaginationFlush\(\);\s*this\.deferredPaginationRunner\.cancel\(\);\s*this\.deferredPaginationPending = false;\s*\}/,
   );
-  assert.match(inputHandlerSource, /if \(effects\.flowChanged && effects\.paginationCompleted\) return true;/);
-  assert.match(inputHandlerSource, /if \(!effects\.documentPaginationPending\) return false;/);
+  assert.match(afterEditSource, /if \(effects\.flowChanged && effects\.paginationCompleted\) return true;/);
+  assert.match(afterEditSource, /if \(!effects\.documentPaginationPending\) return false;/);
   assert.match(
-    inputHandlerSource,
+    afterEditSource,
     /const replacesPendingJob = this\.deferredPaginationRunner\.hasPendingWork\(\);/,
   );
   assert.match(
-    inputHandlerSource,
+    afterEditSource,
     /if \(!effects\.flowChanged && !replacesPendingJob\) return false;/,
   );
   assert.match(
-    inputHandlerSource,
+    afterEditSource,
     /this\.deferredPaginationRunner\.requestStart\(\s*DOCUMENT_PAGINATION_RESTART_COALESCE_DELAY_MS,\s*DOCUMENT_PAGINATION_INITIAL_START_DELAY_MS,\s*DOCUMENT_PAGINATION_POST_FIRST_STEP_DELAY_MS,\s*\);/,
     'cell-flow 경계는 input stack 밖에서 latest-only resumable begin을 요청해야 한다',
   );
@@ -210,12 +212,14 @@ test('deferred pending이 실제로 있을 때만 page-local idle flush를 예�
 
 test('document pagination은 작은 문서의 120ms idle과 명시 boundary에서 flush된다', () => {
   const inputHandlerSource = readFileSync(new URL('../src/engine/input-handler.ts', import.meta.url), 'utf8');
+  // flush 예약·상수 본문은 input-handler-after-edit.ts 로 이관됨 — 가드는 이관된 구현 파일을 읽는다.
+  const afterEditSource = readFileSync(new URL('../src/engine/input-handler-after-edit.ts', import.meta.url), 'utf8');
   const keyboardSource = readFileSync(new URL('../src/engine/input-handler-keyboard.ts', import.meta.url), 'utf8');
   const textSource = readFileSync(new URL('../src/engine/input-handler-text.ts', import.meta.url), 'utf8');
   const fileSource = readFileSync(new URL('../src/command/commands/file.ts', import.meta.url), 'utf8');
 
   assert.match(
-    inputHandlerSource,
+    afterEditSource,
     /const DOCUMENT_PAGINATION_IDLE_FLUSH_DELAY_MS = 120;/,
   );
   // [#3412] #3248 은 idle 병합을 도입하며 문서 크기 게이트를 지우고 그 부재를 여기서
@@ -224,34 +228,34 @@ test('document pagination은 작은 문서의 120ms idle과 명시 boundary에�
   // #2214 의 재개형 러너를 취소해 페이지-로컬 리페인트 계약(flush 0)을 깬다.
   // 그래서 idle 병합은 유지하되 대상은 작은 문서로 되돌린다. 큰 문서는 재개형 러너와
   // 명시 boundary flush(undo/redo/navigation/blur/저장·인쇄)로 마감한다.
-  assert.match(inputHandlerSource, /const DOCUMENT_PAGINATION_IDLE_FLUSH_PAGE_LIMIT = 30;/);
+  assert.match(afterEditSource, /const DOCUMENT_PAGINATION_IDLE_FLUSH_PAGE_LIMIT = 30;/);
   assert.match(
-    inputHandlerSource,
+    afterEditSource,
     /if \(!this\.shouldAutoFlushDeferredPagination\(\)\) return;/,
     'idle flush 예약은 대상 판정을 통과한 문서에만 걸려야 한다',
   );
   assert.match(
-    inputHandlerSource,
+    afterEditSource,
     /const DOCUMENT_PAGINATION_INITIAL_START_DELAY_MS = 100;/,
     '최초 begin은 입력 paint를 위한 고정 100ms timer target을 둔다',
   );
   assert.match(
-    inputHandlerSource,
+    afterEditSource,
     /const DOCUMENT_PAGINATION_RESTART_COALESCE_DELAY_MS = 200;/,
     'active restart만 마지막 입력 뒤 200ms까지 합친다',
   );
   assert.match(
-    inputHandlerSource,
+    afterEditSource,
     /const DOCUMENT_PAGINATION_POST_FIRST_STEP_DELAY_MS = 25;/,
     '첫 fragment 뒤 후속 step은 25ms settle gap 뒤 실행한다',
   );
   assert.match(
-    inputHandlerSource,
-    /private shouldAutoFlushDeferredPagination\(\): boolean \{\s*if \(this\.deferredPaginationRunner\.hasPendingWork\(\)\) return false;\s*return this\.wasm\.pageCount <= DOCUMENT_PAGINATION_IDLE_FLUSH_PAGE_LIMIT;\s*\}/,
+    afterEditSource,
+    /function shouldAutoFlushDeferredPagination\(this: any\): boolean \{\s*if \(this\.deferredPaginationRunner\.hasPendingWork\(\)\) return false;\s*return this\.wasm\.pageCount <= DOCUMENT_PAGINATION_IDLE_FLUSH_PAGE_LIMIT;\s*\}/,
     '예약 begin 또는 전진 중 job이 있으면 idle flush가 같은 일을 동기로 되풀이하면 안 된다',
   );
   assert.match(
-    inputHandlerSource,
+    afterEditSource,
     /const shouldFlush = this\.deferredPaginationPending\s*\|\| this\.deferredPaginationFlushTimer !== null\s*\|\| this\.deferredPaginationRunner\.hasPendingWork\(\);/,
     '명시 barrier는 queued begin도 pending work로 취급해야 한다',
   );

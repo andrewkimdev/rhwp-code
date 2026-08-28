@@ -112,11 +112,12 @@ test('성공한 셀 split이 effects로 pagination 완료를 선언하고 실패
 });
 
 test('effects의 paginationCompleted가 pending 해소·runner 취소·geometry invalidation을 소유한다', () => {
-  const handler = source('src/engine/input-handler.ts');
+  // prepareTextMutationBeforeCursor·completeResumablePagination 본문은 input-handler-after-edit.ts 로 이관됨.
+  const afterEdit = source('src/engine/input-handler-after-edit.ts');
   const prepare = sliceBetween(
-    handler,
-    'private prepareTextMutationBeforeCursor(',
-    'private completeResumablePagination(',
+    afterEdit,
+    'function prepareTextMutationBeforeCursor(',
+    'function completeResumablePagination(',
   );
   const completedBlock = sliceBetween(
     prepare,
@@ -138,10 +139,10 @@ test('effects의 paginationCompleted가 pending 해소·runner 취소·geometry 
 });
 
 test('소유 취소는 pending을 유지한다 (fail-closed)', () => {
-  const handler = source('src/engine/input-handler.ts');
+  const afterEdit = source('src/engine/input-handler-after-edit.ts');
   const cancel = sliceBetween(
-    handler,
-    'cancelDeferredPaginationForOwnedMutation(): void {',
+    afterEdit,
+    'function cancelDeferredPaginationForOwnedMutation(this: any): void {',
     '/** raw IME/iOS 텍스트 입력처럼',
   );
   assert.ok(
