@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
 const mainSource = readFileSync(new URL('../src/main.ts', import.meta.url), 'utf8');
+// P9a: 드롭 핸들러 본문은 src/app/setup-ui.ts 로 이동(재지정).
+const setupUiSource = readFileSync(new URL('../src/app/setup-ui.ts', import.meta.url), 'utf8');
 const bridgeSource = readFileSync(new URL('../src/core/wasm-bridge.ts', import.meta.url), 'utf8');
 const dialogSource = readFileSync(new URL('../src/ui/hwp-password-dialog.ts', import.meta.url), 'utf8');
 
@@ -22,7 +24,7 @@ test('암호 문서는 명시적인 암호 필요 오류에서만 입력 UI로 �
 });
 
 test('드롭 문서도 파일 메뉴와 같은 암호 열기 경로를 쓰며 File System Access handle을 capture하지 않는다', () => {
-  const dropPath = between(mainSource, "container.addEventListener('drop', async (e) => {", 'function setupZoomControls');
+  const dropPath = between(setupUiSource, "container.addEventListener('drop', async (e) => {", 'export function setupZoomControls');
   assert.match(dropPath, /const confirmed = await showDropConfirmDialog\(file\.name\)/, '드롭 열기 확인을 유지해야 합니다');
   assert.match(dropPath, /await loadFile\(file\);/, '드롭 문서는 파일 메뉴와 같은 loadFile 경로를 사용해야 합니다');
   assert.doesNotMatch(dropPath, /captureDroppedFileHandle|getAsFileSystemHandle|fileHandle:/,
