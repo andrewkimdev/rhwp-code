@@ -18,6 +18,7 @@ const canvaskitDiagnosticsPath = path.join(canvaskitDirectory, 'diagnostics.ts')
 const equationPath = path.join(canvaskitDirectory, 'equation.ts');
 const shapesPath = path.join(canvaskitDirectory, 'shapes.ts');
 const textRunPath = path.join(canvaskitDirectory, 'text-run.ts');
+const textDecorationsPath = path.join(canvaskitDirectory, 'text-decorations.ts');
 // Layer* 렌더 IR 선언은 types/layers.ts 로 분할 이동됨(재수출 심은 src/core/types.ts).
 const layerTypesPath = path.join(studioRoot, 'src/core/types/layers.ts');
 const textIrV2DocPath = path.join(repoRoot, 'docs/text-ir-v2.md');
@@ -49,6 +50,7 @@ const canvaskitDiagnosticsSource = fs.readFileSync(canvaskitDiagnosticsPath, 'ut
 const equationSource = fs.readFileSync(equationPath, 'utf8');
 const shapesSource = fs.readFileSync(shapesPath, 'utf8');
 const textRunSource = fs.readFileSync(textRunPath, 'utf8');
+const textDecorationsSource = fs.readFileSync(textDecorationsPath, 'utf8');
 const layerTypesSource = fs.readFileSync(layerTypesPath, 'utf8');
 const textIrV2DocSource = fs.readFileSync(textIrV2DocPath, 'utf8');
 const canvaskitParityPlanDocSource = fs.readFileSync(canvaskitParityPlanDocPath, 'utf8');
@@ -541,8 +543,13 @@ requireSnippet(
 );
 requireSnippet(
   canvaskitSource,
-  /prepareBundledFonts\([\s\S]*?MAX_BUNDLED_FONT_BYTES[\s\S]*?bundledTypefaceAliases\.set[\s\S]*?CanvasKit font family가 준비되지 않았습니다/,
-  'CanvasKit should bound bundled font parsing and reject unprepared explicit families',
+  /prepareBundledFonts\([\s\S]*?MAX_BUNDLED_FONT_BYTES[\s\S]*?bundledTypefaceAliases\.set/,
+  'CanvasKit should bound bundled font parsing while preparing alias families',
+);
+requireSnippet(
+  textDecorationsSource,
+  /renderCharOverlap\([\s\S]*?requirePreparedFontFamilies[\s\S]*?CanvasKit font family가 준비되지 않았습니다/,
+  'CanvasKit should reject unprepared explicit families during special text visual replay',
 );
 requireSnippet(
   textRunSource,
