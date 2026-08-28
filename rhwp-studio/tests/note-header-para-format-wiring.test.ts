@@ -61,10 +61,11 @@ for (const method of ['applyParaFormatInHf', 'applyParaFormatInFootnote']) {
 }
 
 test('문단 서식 진입점이 머리말/꼬리말과 각주를 모두 분기한다', () => {
-  const src = source('src/engine/input-handler.ts');
-  const start = src.indexOf('private applyParaFormatInNoteOrHeader');
+  // 문단 서식 본문은 input-handler-format.ts 로 이관됨 — 가드는 이관된 구현 파일을 읽는다.
+  const src = source('src/engine/input-handler-format.ts');
+  const start = src.indexOf('function applyParaFormatInNoteOrHeader(this: any');
   assert.notEqual(start, -1, 'applyParaFormatInNoteOrHeader 를 찾지 못함');
-  const end = src.indexOf('\n  private ', start + 1);
+  const end = src.indexOf('\nexport function ', start + 1);
   const block = src.slice(start, end === -1 ? undefined : end);
 
   // 한쪽만 배선하면(이 결함의 부분 수정 형태) 실패한다.
@@ -77,10 +78,10 @@ test('문단 서식 진입점이 머리말/꼬리말과 각주를 모두 분기�
 test('문단 서식 진입점이 그 분기를 실제로 호출한다', () => {
   // 분기 메서드가 있어도 진입점에서 부르지 않으면 결함은 그대로다.
   // (이 단언 없이는 진입점 호출을 지워도 테스트가 통과했다.)
-  const src = source('src/engine/input-handler.ts');
-  const start = src.indexOf('private applyParaFormat(props: Record<string, unknown>): void {');
+  const src = source('src/engine/input-handler-format.ts');
+  const start = src.indexOf('function applyParaFormat(this: any');
   assert.notEqual(start, -1, 'applyParaFormat 진입점을 찾지 못함');
-  const end = src.indexOf('\n  private ', start + 1);
+  const end = src.indexOf('\nexport function ', start + 1);
   const entry = src.slice(start, end === -1 ? undefined : end);
 
   assert.match(
@@ -92,9 +93,9 @@ test('문단 서식 진입점이 그 분기를 실제로 호출한다', () => {
 });
 
 test('되돌리기 라우팅을 거친다 (executeOperation 경유)', () => {
-  const src = source('src/engine/input-handler.ts');
-  const start = src.indexOf('private applyParaFormatInNoteOrHeader');
-  const end = src.indexOf('\n  private ', start + 1);
+  const src = source('src/engine/input-handler-format.ts');
+  const start = src.indexOf('function applyParaFormatInNoteOrHeader(this: any');
+  const end = src.indexOf('\nexport function ', start + 1);
   const block = src.slice(start, end === -1 ? undefined : end);
 
   // 직접 wasm 을 부르면 undo 에 안 남고 redo 스택도 무효화되지 않는다 (#2327).
@@ -104,12 +105,14 @@ test('되돌리기 라우팅을 거친다 (executeOperation 경유)', () => {
 
 test('스냅샷 되돌리기 뒤에도 머리말/꼬리말·각주 편집 문맥을 복원한다', () => {
   const inputHandler = source('src/engine/input-handler.ts');
+  // 문단 서식 본문은 input-handler-format.ts 로 이관됨 — 분기 본문은 이관된 구현 파일을 읽는다.
+  const format = source('src/engine/input-handler-format.ts');
   // command.ts 분할 후 같은 정규식이 건드리는 두 상징(editContext? 선언·SubmodeSnapshotCommand)이
   // types 와 snapshot-command 두 모듈로 나뉘었다 — 의존 순서대로 이어 붙여 원문 스캔을 유지한다.
   const command = source('src/engine/command/types.ts') + source('src/engine/command/snapshot-command.ts');
-  const start = inputHandler.indexOf('private applyParaFormatInNoteOrHeader');
-  const end = inputHandler.indexOf('\n  private ', start + 1);
-  const block = inputHandler.slice(start, end === -1 ? undefined : end);
+  const start = format.indexOf('function applyParaFormatInNoteOrHeader(this: any');
+  const end = format.indexOf('\nexport function ', start + 1);
+  const block = format.slice(start, end === -1 ? undefined : end);
 
   // SnapshotCommand 는 컨텍스트가 없으면 undo/redo에서 본문 명령으로 취급해 HF/FN 모드를
   // 빠져나간다. 두 갈래 모두 현재 커서 문맥을 descriptor에 넘겨야 한다.

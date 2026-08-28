@@ -57,29 +57,31 @@ test('굵게/색/캐럿 대기 서식이 실제 문서에 반영된다 (자식 �
 // "선택이 없으면 예약한다 / 토글 방향을 선택 첫 글자로 정한다" 는 분기 자체를 소스로 고정한다.
 
 const inputHandlerSrc = readFileSync(join(studioDir, 'src/engine/input-handler.ts'), 'utf8');
+// 글자 서식 본문은 input-handler-format.ts 로 이관됨 — 이관된 구현 파일을 함께 읽는다.
+const formatSrc = readFileSync(join(studioDir, 'src/engine/input-handler-format.ts'), 'utf8');
 
 /** `NAME(` 시그니처부터 매칭 중괄호가 닫힐 때까지 메서드 본문을 추출. */
-function methodBody(name: string): string {
+function methodBody(name: string, srcText: string = inputHandlerSrc): string {
   const sig = new RegExp(`\\b${name}\\s*\\([^)]*\\)\\s*:[^\\{]*\\{`);
-  const m = sig.exec(inputHandlerSrc);
+  const m = sig.exec(srcText);
   assert.ok(m, `${name} 메서드 not found`);
-  const open = inputHandlerSrc.indexOf('{', m.index + m[0].length - 1);
+  const open = srcText.indexOf('{', m.index + m[0].length - 1);
   let depth = 0;
-  for (let i = open; i < inputHandlerSrc.length; i++) {
-    if (inputHandlerSrc[i] === '{') depth++;
-    else if (inputHandlerSrc[i] === '}') {
+  for (let i = open; i < srcText.length; i++) {
+    if (srcText[i] === '{') depth++;
+    else if (srcText[i] === '}') {
       depth--;
-      if (depth === 0) return inputHandlerSrc.slice(open, i + 1);
+      if (depth === 0) return srcText.slice(open, i + 1);
     }
   }
   throw new Error(`${name} 본문의 닫는 괄호를 찾지 못함`);
 }
 
 test('선택 없는 서식 지정은 무언 종료하지 않고 pending 으로 예약된다', () => {
-  const applyCharFormat = methodBody('applyCharFormat');
+  const applyCharFormat = methodBody('applyCharFormat', formatSrc);
   assert.match(applyCharFormat, /stagePendingCharShape\(props\)/, '선택이 없으면 예약해야 한다');
 
-  const toggle = methodBody('applyToggleFormat');
+  const toggle = methodBody('applyToggleFormat', formatSrc);
   assert.doesNotMatch(toggle, /if \(!this\.cursor\.hasSelection\(\)\) return;/,
     '캐럿만 있을 때 무언 종료하던 가드가 남아 있으면 Ctrl+B 가 다시 죽는다');
 
@@ -99,7 +101,7 @@ test('선택 없는 서식 지정은 무언 종료하지 않고 pending 으로 �
 });
 
 test('토글 방향은 선택 첫 글자에서 읽는다 (역방향 드래그에서 거꾸로 동작 방지)', () => {
-  const body = methodBody('getCharPropertiesAtCursor');
+  const body = methodBody('getCharPropertiesAtCursor', formatSrc);
   assert.match(body, /const sel = this\.getNonEmptySelection\(\);/,
     '선택이 있으면 focus 가 아니라 선택 범위를 기준으로 삼아야 한다');
   assert.match(body, /const pos = sel \? sel\.start : this\.cursor\.getPosition\(\);/,
@@ -110,9 +112,9 @@ test('토글 방향은 선택 첫 글자에서 읽는다 (역방향 드래그에
 
 test('빈 선택(anchor 만 있는 클릭)은 선택으로 치지 않는다', () => {
   // (반환 타입이 객체 리터럴이라 methodBody 의 중괄호 스캔이 타입을 먼저 문다 — 직접 슬라이스)
-  const start = inputHandlerSrc.indexOf('private getNonEmptySelection(');
+  const start = formatSrc.indexOf('function getNonEmptySelection(this: any');
   assert.ok(start > 0, 'getNonEmptySelection 이 있어야 한다');
-  const body = inputHandlerSrc.slice(start, start + 500);
+  const body = formatSrc.slice(start, start + 500);
   assert.match(body, /CursorState\.comparePositions\(sel\.start, sel\.end\) === 0/,
     'start==end 인 빈 범위는 null 로 접어야 한다 (applyCharFormat 이 조용히 no-op 되는 경로)');
 
