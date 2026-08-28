@@ -87,6 +87,8 @@ import {
   MAX_IMAGE_CACHE_ENTRIES,
   MAX_IMAGE_CACHE_PIXELS,
 } from './canvaskit/image-cache';
+import * as _shapes from './canvaskit/shapes';
+import * as _colors from './canvaskit/colors';
 
 type CanvasKitApi = CanvasKit;
 type SkCanvas = Canvas;
@@ -1167,118 +1169,17 @@ export class CanvasKitLayerRenderer {
     }
   }
 
-  private renderPageBackground(canvas: SkCanvas, op: LayerPageBackgroundOp): void {
-    if (op.backgroundColor) {
-      const paint = this.makeFillPaint(op.backgroundColor);
-      canvas.drawRect(this.rect(op.bbox), paint);
-      paint.delete?.();
-    }
-    if (op.borderColor && (op.borderWidth ?? 0) > 0) {
-      const paint = this.makeStrokePaint(op.borderColor, op.borderWidth ?? 1);
-      canvas.drawRect(this.rect(op.bbox), paint);
-      paint.delete?.();
-    }
-  }
+  private renderPageBackground(canvas: SkCanvas, op: LayerPageBackgroundOp): void { _shapes.renderPageBackground.call(this, canvas, op); }
 
-  private renderRectangle(canvas: SkCanvas, op: LayerRectangleOp): void {
-    this.drawStyledShape(canvas, op.bbox, op.style, (paint) => {
-      const cornerRadius = op.cornerRadius ?? 0;
-      if (cornerRadius > 0) {
-        canvas.drawRRect(this.canvasKit.RRectXY(this.rect(op.bbox), cornerRadius, cornerRadius), paint);
-      } else {
-        canvas.drawRect(this.rect(op.bbox), paint);
-      }
-    });
-  }
+  private renderRectangle(canvas: SkCanvas, op: LayerRectangleOp): void { _shapes.renderRectangle.call(this, canvas, op); }
 
-  private renderEllipse(canvas: SkCanvas, op: LayerEllipseOp): void {
-    this.drawStyledShape(canvas, op.bbox, op.style, (paint) => {
-      canvas.drawOval(this.rect(op.bbox), paint);
-    });
-  }
+  private renderEllipse(canvas: SkCanvas, op: LayerEllipseOp): void { _shapes.renderEllipse.call(this, canvas, op); }
 
-  private renderLine(canvas: SkCanvas, op: LayerLineOp): void {
-    const paint = this.makeStrokePaint(op.style?.color ?? '#000000', op.style?.width ?? 1);
-    try {
-      this.drawStrokeWithDash(op.style?.dash, paint, () => {
-        canvas.drawLine(op.x1, op.y1, op.x2, op.y2, paint);
-      });
-    } finally {
-      paint.delete?.();
-    }
-  }
+  private renderLine(canvas: SkCanvas, op: LayerLineOp): void { _shapes.renderLine.call(this, canvas, op); }
 
-  private renderPath(canvas: SkCanvas, op: LayerPathOp): void {
-    const path = new this.canvasKit.Path() as MutablePath;
-    let currentX = op.bbox.x;
-    let currentY = op.bbox.y;
-    for (const command of op.commands ?? []) {
-      [currentX, currentY] = this.applyPathCommand(path, command, currentX, currentY);
-    }
-    const style: LayerShapeStyle = op.style ?? (op.lineStyle ? {} : {
-      strokeColor: '#000000',
-      strokeWidth: 1,
-      fillColor: null,
-    });
-    const replayStyle: LayerShapeStyle = {
-      ...style,
-      strokeColor: style.strokeColor ?? op.lineStyle?.color,
-      strokeWidth: op.lineStyle?.width ?? style.strokeWidth,
-      strokeDash: op.lineStyle?.dash ?? style.strokeDash,
-    };
+  private renderPath(canvas: SkCanvas, op: LayerPathOp): void { _shapes.renderPath.call(this, canvas, op); }
 
-    // [Task #1067] HWPX/HWP 도형의 회전 + flip 변환 적용.
-    // Rust paint pipeline (src/paint/json.rs::write_transform) 이 emit 하는
-    // {"rotation": <degrees>, "horzFlip": <bool>, "vertFlip": <bool>} 매핑.
-    // renderTextRun (line 410-416) 패턴 정합.
-    const tr = op.transform;
-    const rotation = tr?.rotation ?? 0;
-    const horzFlip = tr?.horzFlip ?? false;
-    const vertFlip = tr?.vertFlip ?? false;
-    const needsTransform = rotation !== 0 || horzFlip || vertFlip;
-    if (needsTransform) {
-      const cx = op.bbox.x + (op.bbox.width ?? 0) / 2;
-      const cy = op.bbox.y + (op.bbox.height ?? 0) / 2;
-      canvas.save();
-      if (horzFlip || vertFlip) {
-        canvas.translate(cx, cy);
-        canvas.scale(horzFlip ? -1 : 1, vertFlip ? -1 : 1);
-        canvas.translate(-cx, -cy);
-      }
-      if (rotation !== 0) {
-        canvas.rotate(rotation, cx, cy);
-      }
-    }
-    this.drawStyledPath(canvas, path, replayStyle);
-    if (needsTransform) {
-      canvas.restore();
-    }
-    path.delete?.();
-  }
-
-  private applyPathCommand(path: MutablePath, command: LayerPathCommand, currentX: number, currentY: number): [number, number] {
-    switch (command.type) {
-      case 'moveTo':
-        path.moveTo(command.x, command.y);
-        return [command.x, command.y];
-      case 'lineTo':
-        path.lineTo(command.x, command.y);
-        return [command.x, command.y];
-      case 'curveTo':
-        path.cubicTo(command.x1, command.y1, command.x2, command.y2, command.x3, command.y3);
-        return [command.x3, command.y3];
-      case 'arcTo':
-        if (typeof path.arcToRotated === 'function') {
-          path.arcToRotated(command.rx, command.ry, command.rotation, command.largeArc, command.sweep, command.x, command.y);
-        } else {
-          path.lineTo(command.x, command.y);
-        }
-        return [command.x, command.y];
-      case 'closePath':
-        path.close();
-        return [currentX, currentY];
-    }
-  }
+  private applyPathCommand(path: MutablePath, command: LayerPathCommand, currentX: number, currentY: number): [number, number] { return _shapes.applyPathCommand.call(this, path, command, currentX, currentY); }
 
   private renderImage(canvas: SkCanvas, op: LayerImageOp): void {
     if (!op.base64) {
@@ -1557,73 +1458,17 @@ export class CanvasKitLayerRenderer {
     }
   }
 
-  private affineToCanvasKitMatrix(transform: LayerAffineTransform | undefined): number[] | null {
-    if (!transform) return null;
-    return [
-      transform.a,
-      transform.c,
-      transform.e,
-      transform.b,
-      transform.d,
-      transform.f,
-      0,
-      0,
-      1,
-    ];
-  }
+  private affineToCanvasKitMatrix(transform: LayerAffineTransform | undefined): number[] | null { return _colors.affineToCanvasKitMatrix.call(this, transform); }
 
-  private applyFillRule(path: MutablePath, fillRule: string | undefined): void {
-    if (fillRule === 'evenodd') {
-      (path as unknown as { setFillType?: (fillType: unknown) => void }).setFillType?.(this.canvasKit.FillType.EvenOdd);
-    }
-  }
+  private applyFillRule(path: MutablePath, fillRule: string | undefined): void { _colors.applyFillRule.call(this, path, fillRule); }
 
-  private resolvedColor(color: { rgba?: number[] }): Color {
-    const rgba = color.rgba ?? [0, 0, 0, 1];
-    return this.canvasKit.Color(
-      clampUnit(rgba[0]),
-      clampUnit(rgba[1]),
-      clampUnit(rgba[2]),
-      clampUnit(rgba[3]),
-    );
-  }
+  private resolvedColor(color: { rgba?: number[] }): Color { return _colors.resolvedColor.call(this, color); }
 
-  private makeLinearGradientShader(gradient: NonNullable<LayerColorGraphNode['linearGradientPath']>['gradient']): unknown {
-    const shaderApi = this.canvasKit.Shader as unknown as { MakeLinearGradient?: (...args: unknown[]) => unknown };
-    return shaderApi.MakeLinearGradient?.(
-      [gradient?.x0 ?? 0, gradient?.y0 ?? 0],
-      [gradient?.x1 ?? 0, gradient?.y1 ?? 0],
-      gradientColors(gradient?.stops),
-      gradientPositions(gradient?.stops),
-      this.canvasKit.TileMode.Clamp,
-    );
-  }
+  private makeLinearGradientShader(gradient: NonNullable<LayerColorGraphNode['linearGradientPath']>['gradient']): unknown { return _colors.makeLinearGradientShader.call(this, gradient); }
 
-  private makeRadialGradientShader(gradient: NonNullable<LayerColorGraphNode['radialGradientPath']>['gradient']): unknown {
-    const shaderApi = this.canvasKit.Shader as unknown as { MakeRadialGradient?: (...args: unknown[]) => unknown };
-    return shaderApi.MakeRadialGradient?.(
-      [gradient?.cx ?? 0, gradient?.cy ?? 0],
-      gradient?.radius ?? 1,
-      gradientColors(gradient?.stops),
-      gradientPositions(gradient?.stops),
-      this.canvasKit.TileMode.Clamp,
-    );
-  }
+  private makeRadialGradientShader(gradient: NonNullable<LayerColorGraphNode['radialGradientPath']>['gradient']): unknown { return _colors.makeRadialGradientShader.call(this, gradient); }
 
-  private makeSweepGradientShader(gradient: NonNullable<LayerColorGraphNode['sweepGradientPath']>['gradient']): unknown {
-    const shaderApi = this.canvasKit.Shader as unknown as { MakeSweepGradient?: (...args: unknown[]) => unknown };
-    return shaderApi.MakeSweepGradient?.(
-      gradient?.cx ?? 0,
-      gradient?.cy ?? 0,
-      gradientColors(gradient?.stops),
-      gradientPositions(gradient?.stops),
-      this.canvasKit.TileMode.Clamp,
-      null,
-      0,
-      gradient?.startAngleDegrees ?? 0,
-      gradient?.endAngleDegrees ?? 360,
-    );
-  }
+  private makeSweepGradientShader(gradient: NonNullable<LayerColorGraphNode['sweepGradientPath']>['gradient']): unknown { return _colors.makeSweepGradientShader.call(this, gradient); }
 
   private drawImageOp(canvas: SkCanvas, image: SkImage, op: LayerImageOp): void { _imageCache.drawImageOp.call(this, canvas, image, op); }
 
@@ -2898,196 +2743,21 @@ export class CanvasKitLayerRenderer {
     }
   }
 
-  private drawStyledShape(
-    canvas: SkCanvas,
-    bounds: LayerBounds,
-    style: LayerShapeStyle | undefined,
-    draw: (paint: SkPaint) => void,
-  ): void {
-    if (style?.fillColor) {
-      const paint = this.makeFillPaint(style.fillColor, style.opacity);
-      draw(paint);
-      paint.delete?.();
-    }
-    if (style?.strokeColor && (style.strokeWidth ?? 0) > 0) {
-      const paint = this.makeStrokePaint(style.strokeColor, style.strokeWidth ?? 1, style.opacity);
-      try {
-        this.drawStrokeWithDash(style.strokeDash, paint, () => draw(paint));
-      } finally {
-        paint.delete?.();
-      }
-    }
-    if (!style?.fillColor && !style?.strokeColor) {
-      const paint = this.makeStrokePaint('#000000', 1);
-      draw(paint);
-      paint.delete?.();
-    }
-  }
+  private drawStyledShape(canvas: SkCanvas, bounds: LayerBounds, style: LayerShapeStyle | undefined, draw: (paint: SkPaint) => void): void { _shapes.drawStyledShape.call(this, canvas, bounds, style, draw); }
 
-  private drawStyledPath(canvas: SkCanvas, path: Path, style: LayerShapeStyle): void {
-    let drawn = false;
-    if (style.fillColor) {
-      const paint = this.makeFillPaint(style.fillColor, style.opacity);
-      canvas.drawPath(path, paint);
-      paint.delete?.();
-      drawn = true;
-    }
-    if (style.strokeColor && (style.strokeWidth ?? 0) > 0) {
-      const paint = this.makeStrokePaint(style.strokeColor, style.strokeWidth ?? 1, style.opacity);
-      try {
-        this.drawStrokeWithDash(style.strokeDash, paint, () => canvas.drawPath(path, paint));
-      } finally {
-        paint.delete?.();
-      }
-      drawn = true;
-    }
-    if (!drawn) {
-      const paint = this.makeStrokePaint('#000000', 1);
-      canvas.drawPath(path, paint);
-      paint.delete?.();
-    }
-  }
+  private drawStyledPath(canvas: SkCanvas, path: Path, style: LayerShapeStyle): void { _shapes.drawStyledPath.call(this, canvas, path, style); }
 
-  private drawStrokeWithDash(
-    dash: LayerStrokeDash | undefined,
-    paint: SkPaint,
-    draw: () => void,
-  ): void {
-    const intervals = dash === undefined || dash === 'solid'
-      ? null
-      : dash === 'dash'
-        ? [6, 3]
-        : dash === 'dot'
-          ? [2, 2]
-          : dash === 'dashDot'
-            ? [6, 3, 2, 3]
-            : dash === 'dashDotDot'
-              ? [6, 3, 2, 3, 2, 3]
-              : undefined;
-    if (intervals === undefined) {
-      this.unsupportedOps.add(`strokeDash:${String(dash)}`);
-      return;
-    }
-    if (intervals === null) {
-      draw();
-      return;
-    }
-
-    const effect = this.canvasKit.PathEffect.MakeDash(intervals, 0);
-    if (!effect) {
-      this.unsupportedOps.add('strokeDash:pathEffectUnavailable');
-      return;
-    }
-    try {
-      paint.setPathEffect(effect);
-      draw();
-      this.currentReplayFeatureCounts.dashedStrokes += 1;
-    } finally {
-      effect.delete?.();
-    }
-  }
+  private drawStrokeWithDash(dash: LayerStrokeDash | undefined, paint: SkPaint, draw: () => void): void { _shapes.drawStrokeWithDash.call(this, dash, paint, draw); }
 
   private imageForOp(op: LayerImageOp): SkImage | null { return _imageCache.imageForOp.call(this, op); }
 
   private recordImageFailure(op: LayerImageOp, reason: CanvasKitImageFailureReason, key: string | null): void { _imageCache.recordImageFailure.call(this, op, reason, key); }
 
-  private makeFillPaint(color: string, opacity = 1): SkPaint {
-    const paint = new this.canvasKit.Paint();
-    paint.setAntiAlias?.(true);
-    paint.setStyle(this.canvasKit.PaintStyle.Fill);
-    paint.setColor(this.color(color, opacity));
-    return paint;
-  }
+  private makeFillPaint(color: string, opacity = 1): SkPaint { return _shapes.makeFillPaint.call(this, color, opacity); }
 
-  private makeStrokePaint(color: string, width: number, opacity = 1): SkPaint {
-    const paint = new this.canvasKit.Paint();
-    paint.setAntiAlias?.(true);
-    paint.setStyle(this.canvasKit.PaintStyle.Stroke);
-    paint.setStrokeWidth(Math.max(0.1, width));
-    paint.setColor(this.color(color, opacity));
-    return paint;
-  }
+  private makeStrokePaint(color: string, width: number, opacity = 1): SkPaint { return _shapes.makeStrokePaint.call(this, color, width, opacity); }
 
-  private rect(bounds: LayerBounds): Rect {
-    return this.canvasKit.XYWHRect(bounds.x, bounds.y, bounds.width, bounds.height);
-  }
+  private rect(bounds: LayerBounds): Rect { return _shapes.rect.call(this, bounds); }
 
-  private color(cssColor: string, opacity = 1): Color {
-    const { r, g, b, a } = parseCssColor(cssColor);
-    const alpha = Math.max(0, Math.min(1, a * opacity));
-    return this.canvasKit.Color(r, g, b, alpha);
-  }
-}
-
-function parseCssColor(value: string): { r: number; g: number; b: number; a: number } {
-  const trimmed = value.trim();
-  if (trimmed === 'transparent') {
-    return { r: 0, g: 0, b: 0, a: 0 };
-  }
-  if (trimmed === 'black') {
-    return { r: 0, g: 0, b: 0, a: 1 };
-  }
-  if (trimmed === 'white') {
-    return { r: 255, g: 255, b: 255, a: 1 };
-  }
-  const shortHex = /^#?([0-9a-f]{3,4})$/i.exec(trimmed);
-  if (shortHex) {
-    const value = shortHex[1];
-    return {
-      r: Number.parseInt(value[0] + value[0], 16),
-      g: Number.parseInt(value[1] + value[1], 16),
-      b: Number.parseInt(value[2] + value[2], 16),
-      a: value.length === 4 ? Number.parseInt(value[3] + value[3], 16) / 255 : 1,
-    };
-  }
-  const hexWithAlpha = /^#?([0-9a-f]{8})$/i.exec(trimmed);
-  if (hexWithAlpha) {
-    const n = Number.parseInt(hexWithAlpha[1], 16);
-    return {
-      r: (n >> 24) & 0xff,
-      g: (n >> 16) & 0xff,
-      b: (n >> 8) & 0xff,
-      a: (n & 0xff) / 255,
-    };
-  }
-  const hex = /^#?([0-9a-f]{6})$/i.exec(trimmed);
-  if (hex) {
-    const n = Number.parseInt(hex[1], 16);
-    return {
-      r: (n >> 16) & 0xff,
-      g: (n >> 8) & 0xff,
-      b: n & 0xff,
-      a: 1,
-    };
-  }
-  const rgb = /^rgba?\((\d+),\s*(\d+),\s*(\d+)(?:,\s*([0-9.]+))?\)$/i.exec(trimmed);
-  if (rgb) {
-    return {
-      r: Number(rgb[1]),
-      g: Number(rgb[2]),
-      b: Number(rgb[3]),
-      a: rgb[4] === undefined ? 1 : Number(rgb[4]),
-    };
-  }
-  return { r: 0, g: 0, b: 0, a: 1 };
-}
-
-function clampUnit(value: number | undefined): number {
-  return Math.max(0, Math.min(1, Number.isFinite(value) ? value ?? 0 : 0));
-}
-
-function gradientColors(stops: Array<{ color?: { rgba?: number[] } }> | undefined): number[][] {
-  return (stops ?? []).map((stop) => {
-    const rgba = stop.color?.rgba ?? [0, 0, 0, 1];
-    return [
-      clampUnit(rgba[0]),
-      clampUnit(rgba[1]),
-      clampUnit(rgba[2]),
-      clampUnit(rgba[3]),
-    ];
-  });
-}
-
-function gradientPositions(stops: Array<{ offset?: number }> | undefined): number[] {
-  return (stops ?? []).map((stop) => Math.max(0, Math.min(1, stop.offset ?? 0)));
+  private color(cssColor: string, opacity = 1): Color { return _shapes.color.call(this, cssColor, opacity); }
 }

@@ -16,6 +16,7 @@ const canvaskitPath = path.join(studioRoot, 'src/view/canvaskit-renderer.ts');
 const canvaskitDirectory = path.join(studioRoot, 'src/view/canvaskit');
 const canvaskitDiagnosticsPath = path.join(canvaskitDirectory, 'diagnostics.ts');
 const equationPath = path.join(canvaskitDirectory, 'equation.ts');
+const shapesPath = path.join(canvaskitDirectory, 'shapes.ts');
 // Layer* 렌더 IR 선언은 types/layers.ts 로 분할 이동됨(재수출 심은 src/core/types.ts).
 const layerTypesPath = path.join(studioRoot, 'src/core/types/layers.ts');
 const textIrV2DocPath = path.join(repoRoot, 'docs/text-ir-v2.md');
@@ -45,6 +46,7 @@ const fullRendererSweepWorkflowPath = path.join(
 const canvaskitSource = fs.readFileSync(canvaskitPath, 'utf8');
 const canvaskitDiagnosticsSource = fs.readFileSync(canvaskitDiagnosticsPath, 'utf8');
 const equationSource = fs.readFileSync(equationPath, 'utf8');
+const shapesSource = fs.readFileSync(shapesPath, 'utf8');
 const layerTypesSource = fs.readFileSync(layerTypesPath, 'utf8');
 const textIrV2DocSource = fs.readFileSync(textIrV2DocPath, 'utf8');
 const canvaskitParityPlanDocSource = fs.readFileSync(canvaskitParityPlanDocPath, 'utf8');
@@ -695,13 +697,13 @@ requireSnippet(
   'glyphOutline should stay guarded by payload status before direct replay',
 );
 
-const renderRectangleBody = extractMethodBody(canvaskitSource, 'renderRectangle');
-const renderEllipseBody = extractMethodBody(canvaskitSource, 'renderEllipse');
+const renderRectangleBody = extractFunctionBody(shapesSource, 'renderRectangle');
+const renderEllipseBody = extractFunctionBody(shapesSource, 'renderEllipse');
 const renderEquationBody = extractFunctionBody(equationSource, 'renderEquation');
 const renderEquationBoxBody = extractFunctionBody(equationSource, 'renderEquationBox');
-const renderPathBody = extractMethodBody(canvaskitSource, 'renderPath');
-const renderLineBody = extractMethodBody(canvaskitSource, 'renderLine');
-const drawStrokeWithDashBody = extractMethodBody(canvaskitSource, 'drawStrokeWithDash');
+const renderPathBody = extractFunctionBody(shapesSource, 'renderPath');
+const renderLineBody = extractFunctionBody(shapesSource, 'renderLine');
+const drawStrokeWithDashBody = extractFunctionBody(shapesSource, 'drawStrokeWithDash');
 const renderFormObjectBody = extractMethodBody(canvaskitSource, 'renderFormObject');
 const renderPlaceholderBody = extractMethodBody(canvaskitSource, 'renderPlaceholder');
 const renderTextRunBody = extractMethodBody(canvaskitSource, 'renderTextRun');
