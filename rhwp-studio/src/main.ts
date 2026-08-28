@@ -1,7 +1,6 @@
 import { WasmBridge } from '@/core/wasm-bridge';
 import type { DocumentInfo } from '@/core/types';
 import { EventBus } from '@/core/event-bus';
-import { assertRemoteDocumentBytes } from '@/core/document-signature';
 import { CanvasView } from '@/view/canvas-view';
 import { InputHandler } from '@/engine/input-handler';
 import { Toolbar } from '@/ui/toolbar';
@@ -32,16 +31,23 @@ import { installPwaFileHandling, type FileHandlingWindowLike } from '@/command/p
 import {
   type FileSystemFileHandleLike,
 } from '@/command/file-system-access';
-import { forgetConvertedHmlSaveHandle } from '@/command/save-target';
 import { ContextMenu } from '@/ui/context-menu';
 import { TemplatePanel } from '@/ui/template/panel';
 import { CommandPalette } from '@/ui/command-palette';
 import { showHmlImportWarning } from '@/ui/hml-import-warning';
-import { showLocalFontsModalIfNeeded } from '@/ui/local-fonts-modal';
 import { showToast } from '@/ui/toast';
-import { addRecentDoc, listRecentDocs } from '@/recent/recent-store';
+import { listRecentDocs } from '@/recent/recent-store';
 import { setupGlobalShortcuts, setupFileInput, setupZoomControls, setupEventListeners } from '@/app/setup-ui';
-import { showHwpPasswordDialog } from '@/ui/hwp-password-dialog';
+import {
+  type OpenDocumentDeps,
+  isDocumentOpenCancelled,
+  loadBytes,
+  loadFile as loadDocumentFile,
+  loadFromUrlParam,
+  promptLocalFontsIfNeeded,
+  showLoadError,
+  showLoadErrorUnlessCancelled,
+} from '@/app/open-document';
 import {
   EMBED_HIDDEN_EDIT_COMMAND_IDS,
   EMBED_HIDDEN_FILE_COMMAND_IDS,
@@ -51,8 +57,7 @@ import {
 import { initRhwpDev } from '@/core/rhwp-dev';
 import { DocumentDirtyState } from '@/core/document-dirty-state';
 import { initThemeSync, setThemeMode, getThemeMode, getEffectiveTheme } from '@/core/theme';
-import { analyzeDocumentFonts } from '@/core/document-font-status';
-import { detectLocalFonts, getLocalFontState, loadStoredLocalFonts } from '@/core/local-fonts';
+import { loadStoredLocalFonts } from '@/core/local-fonts';
 import { userSettings } from '@/core/user-settings';
 import { AutosaveManager, type AutosaveScheduleSettings, type AutosaveStatus } from '@/recovery/autosave-manager';
 import { clearAutosaveDrafts, deleteAutosaveDraft, listAutosaveDrafts, type AutosaveDraft } from '@/recovery/autosave-store';
@@ -237,7 +242,7 @@ const plugins = new PluginHostRegistry({
   automation,
   eventBus,
   getInputHandler: () => inputHandler,
-  loadDocument: (bytes, fileName) => loadBytes(bytes, fileName ?? 'document.hwp', null),
+  loadDocument: (bytes, fileName) => loadBytes(bytes, fileName ?? 'document.hwp', null, undefined, undefined, openDocumentDeps()),
   createBlankDocument: () => { void createNewDocument(); },
   resolve: resolvePlugin,
 });
@@ -638,7 +643,7 @@ async function initialize(): Promise<void> {
       });
     }
 
-    setupFileInput(chromeMode, wasm, inputHandler, loadFile);
+    setupFileInput(chromeMode, wasm, inputHandler, (file, options) => loadDocumentFile(file, options, openDocumentDeps()));
     setupZoomControls(canvasView, wasm);
     setupEventListeners(
       eventBus,
@@ -654,7 +659,7 @@ async function initialize(): Promise<void> {
       () => totalSections,
     );
     setupGlobalShortcuts(inputHandler, dispatcher);
-    void loadFromUrlParam();
+    void loadFromUrlParam(openDocumentDeps());
     // embed 프로파일: 자동저장 복구 다이얼로그의 드래프트 복원도 호스트가 감지할 수
     // 없는 문서 교체 경로이므로 띄우지 않는다 (드래프트 기록 자체는 유지).
     if (chromeMode !== 'embed') void offerAutosaveRecoveryIfIdle();
@@ -666,10 +671,10 @@ async function initialize(): Promise<void> {
           eventBus.emit('open-document-bytes', payload);
         },
         notifyUnsupportedFile(fileName) {
-          showLoadError(new Error(`지원하지 않는 파일 형식입니다: ${fileName}. HWP/HWPX/HML 파일만 지원합니다.`));
+          showLoadError(new Error(`지원하지 않는 파일 형식입니다: ${fileName}. HWP/HWPX/HML 파일만 지원합니다.`), openDocumentDeps());
         },
         notifyError(error) {
-          showLoadErrorUnlessCancelled(error);
+          showLoadErrorUnlessCancelled(error, openDocumentDeps());
         },
         notifyMultipleFiles(count) {
           console.warn(`[pwa-file-handling] 여러 파일(${count}개)이 전달되어 첫 번째 파일만 엽니다.`);
@@ -772,7 +777,7 @@ async function initializeDocument(
     }
 
     if (!options.suppressDialogs) {
-      await promptLocalFontsIfNeeded(docInfo, displayName);
+      await promptLocalFontsIfNeeded(docInfo, displayName, openDocumentDeps());
     }
 
     // 로컬 글꼴 감지 결과가 뷰를 갱신한 뒤에 캐럿을 연결해야 입력 포커스가 재설정과 경합하지 않는다.
@@ -794,196 +799,25 @@ async function initializeDocument(
   }
 }
 
-async function promptLocalFontsIfNeeded(docInfo: DocumentInfo, displayName: string): Promise<void> {
-  if (!docInfo.fontsUsed?.length) return;
-
-  const msg = sbMessage();
-  try {
-    await loadStoredLocalFonts();
-    const report = analyzeDocumentFonts(docInfo.fontsUsed);
-    if (!report.shouldPromptLocalAccess) return;
-
-    const choice = await showLocalFontsModalIfNeeded(report, {
-      disableExternalWebFonts: extensionViewerSettings.disableExternalWebFonts,
-    });
-    if (choice !== 'detect') return;
-
-    msg.textContent = '로컬 글꼴 감지 중...';
-    const fonts = await detectLocalFonts({
-      force: true,
-      includeRegistered: true,
-      candidateFamilies: docInfo.fontsUsed,
-    });
-    const nextReport = analyzeDocumentFonts(docInfo.fontsUsed);
-    eventBus.emit('local-fonts-changed', { fonts, report: nextReport });
-    prepareCanvasKitLocalFonts(docInfo.fontsUsed);
-    const state = getLocalFontState();
-    const resultLabel = state.source === 'font-presence-probe' ? '확인됨' : '감지됨';
-    msg.textContent = `${displayName} (로컬 글꼴 ${fonts.length}개 ${resultLabel})`;
-    showToast({
-      message: `로컬 글꼴 ${fonts.length}개를 ${resultLabel.replace('됨', '')}하고 저장했습니다.\n다음 문서 로드부터 감지 결과를 재사용합니다.`,
-      durationMs: 5000,
-    });
-  } catch (error) {
-    console.warn('[local-fonts] 감지 안내/실행 실패 (치명적이지 않음):', error);
-    msg.textContent = displayName;
-    showToast({
-      message: '로컬 글꼴 감지에 실패했습니다.\n웹 대체 글꼴로 계속 표시합니다.',
-      durationMs: 8000,
-    });
-  }
-}
-
-/**
- * 사용자가 암호 입력 대화상자에서 취소한 경우다. 일반 파싱 실패와 달리 오류 토스트나
- * 최근 문서·자동저장 변경을 만들지 않는다 (#3474).
- */
-class DocumentOpenCancelledError extends Error {
-  constructor() {
-    super('문서 열기가 취소되었습니다.');
-    this.name = 'DocumentOpenCancelledError';
-  }
-}
-
-const PASSWORD_REQUIRED_MESSAGE = '비밀번호가 필요한 암호 문서';
-const PASSWORD_REJECTED_MESSAGE = '비밀번호가 일치하지 않거나 암호화 데이터가 손상되었습니다';
-
-function isDocumentOpenCancelled(error: unknown): error is DocumentOpenCancelledError {
-  return error instanceof DocumentOpenCancelledError;
-}
-
-function isPasswordRequiredError(error: unknown): boolean {
-  return String(error).includes(PASSWORD_REQUIRED_MESSAGE);
-}
-
-function isPasswordRejectedError(error: unknown): boolean {
-  return String(error).includes(PASSWORD_REJECTED_MESSAGE);
-}
-
-function passwordOpenFailure(error: unknown): Error {
-  const message = String(error);
-  if (message.includes('지원하지 않는 암호화 방식')) {
-    return new Error('지원하지 않는 암호화 방식의 문서입니다. 지원되는 HWP3/HWP5 암호 문서만 열 수 있습니다.');
-  }
-  if (message.includes('DRM')) {
-    return new Error('DRM으로 보호된 문서는 지원하지 않습니다.');
-  }
-  // 입력값이 포함될 수 있는 원본 오류는 사용자 화면이나 콘솔에 전달하지 않는다. 현재
-  // 암호화 포맷은 오입력과 암호문 훼손을 암호학적으로 판별할 수 없으므로 안전한 일반
-  // 안내로 축약한다.
-  return new Error('암호화된 문서를 열 수 없습니다. 문서가 손상되었는지 확인하세요.');
-}
-
-/**
- * 일반 열기를 먼저 시도하고, 지원되는 HWP3/HWP5 암호 문서가 감지된 경우에만 암호
- * 입력 UI로 전환한다. 암호 문자열은 이 함수의 단일 시도 범위를 벗어나 보관하지 않는다.
- */
-async function loadPasswordProtectedDocument(data: Uint8Array, fileName: string): Promise<DocumentInfo> {
-  let retryMessage: string | undefined;
-
-  while (true) {
-    let password = await showHwpPasswordDialog(fileName, retryMessage);
-    if (password === null) throw new DocumentOpenCancelledError();
-
-    try {
-      return wasm.loadDocumentWithPassword(data, password, fileName);
-    } catch (error) {
-      // CFB 암호문은 인증 태그가 없으므로 오입력과 암호화 데이터 손상을 완전히 구분할 수
-      // 없다. 두 경우만 재입력 상태로 안내하고, 지원하지 않는 암호화/DRM 등은 원래의
-      // 명시적 거부 오류를 유지한다.
-      if (isPasswordRejectedError(error)) {
-        retryMessage = '암호가 일치하지 않거나 문서가 손상되었습니다. 다시 입력하세요.';
-        continue;
-      }
-      throw passwordOpenFailure(error);
-    } finally {
-      // JavaScript 문자열을 확실히 zeroize할 수는 없지만, 대화상자 DOM과 이 지역 참조는
-      // 시도 직후 해제한다. 최근 문서·URL·저장소·문서 메타데이터에는 전달하지 않는다.
-      password = '';
-    }
-  }
-}
-
-async function loadDocumentForOpen(data: Uint8Array, fileName: string): Promise<DocumentInfo> {
-  try {
-    return wasm.loadDocument(data, fileName);
-  } catch (error) {
-    if (!isPasswordRequiredError(error)) throw error;
-    return loadPasswordProtectedDocument(data, fileName);
-  }
-}
-
-function showLoadErrorUnlessCancelled(error: unknown): void {
-  if (isDocumentOpenCancelled(error)) {
-    sbMessage().textContent = '문서 열기를 취소했습니다.';
-    return;
-  }
-  showLoadError(error);
-}
-
-async function loadFile(
-  file: File,
-  options: { skipUnsavedGuard?: boolean; fileHandle?: FileSystemFileHandleLike | null } = {},
-): Promise<boolean> {
-  try {
-    if (!await canReplaceCurrentDocument(options.skipUnsavedGuard)) return false;
-    const startTime = performance.now();
-    await updateLoadProgress(0, '파일 읽는 중...');
-    const data = new Uint8Array(await file.arrayBuffer());
-    await updateLoadProgress(15, '파일 읽기 완료');
-    await loadBytes(data, file.name, options.fileHandle ?? null, startTime, { dataReadProgressShown: true });
-    return true;
-  } catch (error) {
-    showLoadErrorUnlessCancelled(error);
-    return false;
-  }
-}
-
 function prepareCanvasRendererDocument(): void {
   canvasView?.prepareDocumentLoad();
 }
 
-async function loadBytes(
-  data: Uint8Array,
-  fileName: string,
-  fileHandle: typeof wasm.currentFileHandle,
-  startTime = performance.now(),
-  options: { dataReadProgressShown?: boolean; skipRecent?: boolean; suppressDialogs?: boolean } = {},
-): Promise<void> {
-  if (!options.dataReadProgressShown) {
-    await updateLoadProgress(0, '문서 데이터 준비 중...');
-  }
-  await updateLoadProgress(25, '문서 파싱 및 쪽 계산 중...');
-  const docInfo = await loadDocumentForOpen(data, fileName);
-  prepareCanvasRendererDocument();
-  // 문서가 갈렸다 — 빌린 핸들을 쥔 플러그인에 새 lease 를 준다. 알리지 않으면 그쪽만 옛
-  // 문서를 계속 만진다(세대 검사가 잡아 DOCUMENT_RELEASED 로 끊긴다).
-  plugins.notifyDocumentSwap();
-  await updateLoadProgress(45, '자동 저장 준비 중...');
-  forgetConvertedHmlSaveHandle(fileHandle);
-  wasm.currentFileHandle = fileHandle;
-
-  // 최근 문서 기록 — 문서 로드 성공 직후, 폰트/모달 등 블로킹 UI 단계 이전에 기록한다.
-  // 핸들이 있으면 라이브 재열기용으로 함께 기록하고, 없으면(드롭/input/URL 로드)
-  // 메타-only 로 기록한다 — 목록에는 남기되 자동 재열기는 핸들 있는 항목만 가능하다.
-  // 자동저장 복구본은 options.skipRecent 로 제외.
-  if (!options.skipRecent) {
-    void addRecentDoc({
-      fileName: wasm.fileName,
-      sourceFormat: wasm.getSourceFormat(),
-      handle: fileHandle,
-    }).catch((err) => console.warn('[recent] 최근 문서 기록 실패:', err));
-  }
-
-  await autosaveManager.beginDocument(
-    { fileName: wasm.fileName, sourceFormat: wasm.getSourceFormat() },
-    { discardPreviousDraft: true },
-  );
-  await updateLoadProgress(50, '문서 초기화 중...');
-  const elapsed = performance.now() - startTime;
-  await initializeDocument(docInfo, `${fileName} — ${docInfo.pageCount}페이지 (${elapsed.toFixed(1)}ms)`, {
-    suppressDialogs: options.suppressDialogs,
-  });
+/** 문서 열기 파이프라인 deps — 매 호출 시점의 살아있는 값으로 조립한다. */
+function openDocumentDeps(): OpenDocumentDeps {
+  return {
+    wasm,
+    eventBus,
+    autosaveManager,
+    plugins,
+    extensionViewerSettings,
+    sbMessage,
+    prepareCanvasKitLocalFonts,
+    updateLoadProgress,
+    initializeDocument,
+    canReplaceCurrentDocument,
+    prepareCanvasRendererDocument,
+  };
 }
 
 /** 파일 메뉴 "최근 문서" 서브패널을 최신 목록으로 다시 렌더한다(메뉴 open 시 호출). */
@@ -1080,7 +914,7 @@ async function offerAutosaveRecoveryIfIdle(): Promise<void> {
     try {
       await restoreAutosaveDraft(draft);
     } catch (error) {
-      showLoadErrorUnlessCancelled(error);
+      showLoadErrorUnlessCancelled(error, openDocumentDeps());
     }
   } catch (error) {
     console.warn('[autosave] 복구 후보 확인 실패:', error);
@@ -1089,7 +923,7 @@ async function offerAutosaveRecoveryIfIdle(): Promise<void> {
 
 async function restoreAutosaveDraft(draft: AutosaveDraft): Promise<void> {
   const fileName = recoveryFileName(draft.fileName);
-  await loadBytes(new Uint8Array(draft.data), fileName, null, performance.now(), { skipRecent: true });
+  await loadBytes(new Uint8Array(draft.data), fileName, null, performance.now(), { skipRecent: true }, openDocumentDeps());
   await deleteAutosaveDraft(draft.id);
   documentState.markDirty('autosave-recovered');
   showToast({
@@ -1152,11 +986,11 @@ eventBus.on('open-document-bytes', async (payload) => {
       notifyDone(false, '문서 열기가 취소되었습니다.');
       return;
     }
-    await loadBytes(data.bytes, data.fileName, data.fileHandle);
+    await loadBytes(data.bytes, data.fileName, data.fileHandle, undefined, undefined, openDocumentDeps());
     notifyDone(true);
   } catch (error) {
     // #265: WASM 파서 에러 (예: HWP 3.0 미지원) 를 사용자에게 전파
-    showLoadErrorUnlessCancelled(error);
+    showLoadErrorUnlessCancelled(error, openDocumentDeps());
     const msg = isDocumentOpenCancelled(error)
       ? '문서 열기가 취소되었습니다.'
       : error instanceof Error ? error.message : String(error);
@@ -1168,131 +1002,6 @@ eventBus.on('open-document-bytes', async (payload) => {
 eventBus.on('equation-edit-request', () => {
   dispatcher.dispatch('insert:equation-edit');
 });
-
-/**
- * URL 파라미터(?url=)로 전달된 HWP 파일을 자동 로드한다.
- * Chrome 확장 프로그램에서 뷰어 탭을 열 때 사용.
- */
-async function loadFromUrlParam(): Promise<void> {
-  const params = new URLSearchParams(window.location.search);
-  const fileUrl = params.get('url');
-  if (!fileUrl) return;
-
-  const fileName = params.get('filename') || fileUrl.split('/').pop()?.split('?')[0] || 'document.hwp';
-  const msg = sbMessage();
-
-  try {
-    msg.textContent = '파일 로딩 중...';
-    console.log(`[loadFromUrlParam] ${fileUrl}`);
-
-    let response: Response;
-
-    // Chrome 확장 환경: Service Worker를 통한 CORS 우회 fetch
-    if (typeof chrome !== 'undefined' && chrome.runtime?.sendMessage) {
-      try {
-        response = await fetch(fileUrl);
-      } catch {
-        // 직접 fetch 실패 시 Service Worker 프록시
-        const result = await chrome.runtime.sendMessage({ type: 'fetch-file', url: fileUrl });
-        if (result.error) throw new Error(result.error);
-        const data = new Uint8Array(result.data);
-        assertRemoteDocumentBytes(data);
-        await loadBytes(data, fileName, null);
-        return;
-      }
-    } else {
-      response = await fetch(fileUrl);
-    }
-
-    if (!response.ok) throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-    const contentType = response.headers.get('content-type');
-    const buffer = await response.arrayBuffer();
-    const data = new Uint8Array(buffer);
-    assertRemoteDocumentBytes(data, contentType);
-    await loadBytes(data, fileName, null);
-  } catch (error) {
-    if (isDocumentOpenCancelled(error)) {
-      showLoadErrorUnlessCancelled(error);
-      return;
-    }
-    // 로컬 file:// 로드 실패 + "파일 URL 액세스 허용" 미허용 → 전용 안내 (#1131)
-    if (fileUrl.startsWith('file:') && typeof chrome !== 'undefined') {
-      const allowed = await isFileSchemeAccessAllowed();
-      if (allowed === false) {
-        showFileUrlAccessGuidance();
-        return;
-      }
-    }
-    showLoadErrorUnlessCancelled(error);
-  }
-}
-
-/**
- * 확장 프로그램의 "파일 URL에 대한 액세스 허용" 권한 상태를 조회한다 (#1131).
- *
- * 확장 페이지에서만 의미가 있다. API 부재(비-확장 환경 등) 시 판정 불가로
- * `null` 을 반환하여 호출부가 기존 동작(일반 에러)으로 폴백하도록 한다.
- *
- * @returns 허용=true, 미허용=false, 판정 불가=null
- */
-async function isFileSchemeAccessAllowed(): Promise<boolean | null> {
-  const ext = (typeof chrome !== 'undefined' ? chrome.extension : undefined) as
-    | { isAllowedFileSchemeAccess?: () => Promise<boolean> }
-    | undefined;
-  if (!ext?.isAllowedFileSchemeAccess) return null;
-  try {
-    return await ext.isAllowedFileSchemeAccess();
-  } catch {
-    return null;
-  }
-}
-
-/**
- * 로컬 file:// 문서를 열 때 "파일 URL 액세스 허용" 권한이 꺼져 있어 로드가
- * 실패한 경우, 일반 "Failed to fetch" 대신 원인과 해결 방법을 안내한다 (#1131).
- *
- * 설정 화면(chrome://extensions/?id=...)은 일반 링크로는 열리지 않으므로
- * 확장 컨텍스트의 chrome.tabs.create 로 연다.
- */
-function showFileUrlAccessGuidance(): void {
-  const errMsg = '로컬 파일을 열려면 확장 프로그램의 "파일 URL에 대한 액세스 허용"을 켜야 합니다.\n설정에서 권한을 허용한 뒤 파일을 다시 열어 주세요.';
-  const sb = sbMessage();
-  if (sb) sb.textContent = '파일 로드 실패: 파일 URL 액세스 권한이 필요합니다.';
-  console.error('[main] file:// 로드 실패 — 파일 URL 액세스 미허용 (#1131)');
-  showToast({
-    message: errMsg,
-    durationMs: 0, // 사용자가 읽고 직접 닫기
-    confirmLabel: '확인',
-    action: {
-      label: '설정 열기',
-      onClick: () => {
-        if (typeof chrome !== 'undefined' && chrome.tabs?.create && chrome.runtime?.id) {
-          chrome.tabs.create({ url: `chrome://extensions/?id=${chrome.runtime.id}` });
-        }
-      },
-    },
-  });
-}
-
-/**
- * 파일 로드 실패 시 사용자에게 에러를 명확히 알린다 (#265).
- *
- * 상태 표시줄은 22px 한 줄로 긴 에러 메시지가 ellipsis 로 잘리므로,
- * 우상단 토스트 (긴 메시지 줄바꿈 지원 · 사용자 닫기 · action 링크) 를
- * 병행 사용한다.
- */
-function showLoadError(error: unknown): void {
-  const raw = String(error).replace(/^Error:\s*/, '');
-  const errMsg = `파일 로드 실패: ${raw}`;
-  const sb = sbMessage();
-  if (sb) sb.textContent = errMsg;
-  console.error('[main] 파일 로드 실패:', error);
-  showToast({
-    message: errMsg,
-    durationMs: 0, // 에러는 자동 페이드 없음 — 사용자가 읽고 닫기
-    confirmLabel: '확인',
-  });
-}
 
 const initPromise = initialize();
 
@@ -1309,7 +1018,7 @@ installEmbedRuntime({
       if (!await canReplaceCurrentDocument(skipUnsavedGuard)) {
         throw new Error('문서 열기가 취소되었습니다.');
       }
-      await loadBytes(data, fileName, null, undefined, { suppressDialogs });
+      await loadBytes(data, fileName, null, undefined, { suppressDialogs }, openDocumentDeps());
       return { pageCount: wasm.pageCount };
     },
     async pageCount() {
