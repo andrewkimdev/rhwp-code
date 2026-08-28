@@ -212,8 +212,9 @@ const BASELINE: Readonly<Record<string, number>> = {
   'src/ui/table-cell-props-dialog.ts': 2,
   'src/ui/toolbar.ts': 4,
   // engine/input-handler* — 드래그/nudge 등 직접-뮤테이션 최고밀도 영역.
-  'src/engine/input-handler.ts': 19, // +1: 누름틀 제거 이관 시 removeFieldAt 이 양식모드(직접 유지)/일반모드(snapshot) 두 분기로 분리 / +1: Edit 오버레이 커밋이 셀 내부는 setFormValueInCell 로 분기(CheckBox 와 동일 조건 — 기존 flat 호출은 표 컨트롤 슬롯을 가리켜 실패) / +1: 셀 블록 글자 서식이 applyCharFormatInCell 을 executeOperation snapshot 안에서 호출(여러 셀에 걸친 글자 서식 커맨드 부재) / +1: 중첩 셀 블록 글자 서식도 applyCharFormatInCellByPath 를 같은 snapshot 안에서 호출 / +2: 머리말·꼬리말(applyParaFormatInHf)과 각주(applyParaFormatInFootnote) 문단 서식 배선 — 둘 다 snapshot 라우팅 / -7: 양식 개체 오버레이 클러스터(클릭/라디오/콤보/편집)를 input-handler-form-overlay.ts 로 이관 — 호출부 변화 없음, 7곳 표면이 키로 이동 / -5: 객체 배치·그리기 모드 클러스터(드롭 그림 삽입·다각형·글상자/도형 배치)를 input-handler-placement.ts 로 이관 — 호출부 변화 없음, 5곳 표면이 키로 이동
+  'src/engine/input-handler.ts': 17, // +1: 누름틀 제거 이관 시 removeFieldAt 이 양식모드(직접 유지)/일반모드(snapshot) 두 분기로 분리 / +1: Edit 오버레이 커밋이 셀 내부는 setFormValueInCell 로 분기(CheckBox 와 동일 조건 — 기존 flat 호출은 표 컨트롤 슬롯을 가리켜 실패) / +1: 셀 블록 글자 서식이 applyCharFormatInCell 을 executeOperation snapshot 안에서 호출(여러 셀에 걸친 글자 서식 커맨드 부재) / +1: 중첩 셀 블록 글자 서식도 applyCharFormatInCellByPath 를 같은 snapshot 안에서 호출 / +2: 머리말·꼬리말(applyParaFormatInHf)과 각주(applyParaFormatInFootnote) 문단 서식 배선 — 둘 다 snapshot 라우팅 / -7: 양식 개체 오버레이 클러스터(클릭/라디오/콤보/편집)를 input-handler-form-overlay.ts 로 이관 — 호출부 변화 없음, 7곳 표면이 키로 이동 / -5: 객체 배치·그리기 모드 클러스터(드롭 그림 삽입·다각형·글상자/도형 배치)를 input-handler-placement.ts 로 이관 — 호출부 변화 없음, 5곳 표면이 키로 이동 / -2: 누름틀·클릭히어 탐색 클러스터(커서 이동·누름틀 지우기·경계 진출입·마커 갱신)를 input-handler-field-nav.ts 로 이관 — 호출부 변화 없음, removeFieldAt 두 분기(양식 직접/일반 snapshot) 표면이 키로 이동
   'src/engine/input-handler-connector.ts': 1,
+  'src/engine/input-handler-field-nav.ts': 2, // input-handler.ts 누름틀·클릭히어 탐색 클러스터 이관 분리 — removeFieldAt×2 (양식 모드 방어적 직접 분기 + 일반 모드 snapshot 라우팅, 라우팅 변화 없음)
   'src/engine/input-handler-form-overlay.ts': 7, // input-handler.ts 양식 오버레이 클러스터 이관 분리 — setFormValue×5 + setFormValueInCell×2 (전부 kind:'record' 경로, 라우팅 변화 없음)
   'src/engine/input-handler-keyboard.ts': 21,
   'src/engine/input-handler-mouse.ts': 3,
