@@ -521,6 +521,98 @@ fn oversized_row_width_outlier_does_not_expand_base_columns() {
     assert!((widths[1] - expected).abs() < 0.01, "widths={widths:?}");
 }
 
+/// [열 폭 오버슈트] 서로 다른 행이 같은 9열 구간을 서로 다르게 병합해 나누는
+/// authoring(각 행 자신은 유효함, hwp 포맷에서 흔한 패턴) — 예: 한 행은
+/// `[cols 0-3][cols 4-6][cols 7-8]`로, 다른 행은
+/// `[col 0][cols 1-2][cols 3-4][cols 5-8]`로 같은 9열을 나눠 병합. 2단계의 병합
+/// 셀 제약 해석이 span 오름차순으로 하나씩만 풀다 보니(전체 연립방정식을 풀지
+/// 않음), 좁은 span 제약이 먼저 열들을 다 채워 넓은 span 제약이 무시되고
+/// `col_widths` 합이 표 선언 폭(48000)을 크게 초과했었다(실측 스캐너: 56400,
+/// ×1.175 — hwpx-template-engine 레포의 `scslic2.hwpx` `#HEADER` 표에서 그대로
+/// 재현된 실제 버그). 이제는 초과분을 모든 열에 비례 축소해 흡수해 합이 다시
+/// 선언 폭과 일치해야 한다.
+#[test]
+fn overlapping_row_colspan_partitions_do_not_overshoot_declared_table_width() {
+    let mut cells = Vec::new();
+    // row 0: [cols 0-3]=7500 | [cols 4-6]=33000 | [cols 7-8]=7500
+    cells.push(Cell {
+        row: 0,
+        col: 0,
+        row_span: 1,
+        col_span: 4,
+        width: 7500,
+        ..Default::default()
+    });
+    cells.push(Cell {
+        row: 0,
+        col: 4,
+        row_span: 1,
+        col_span: 3,
+        width: 33000,
+        ..Default::default()
+    });
+    cells.push(Cell {
+        row: 0,
+        col: 7,
+        row_span: 1,
+        col_span: 2,
+        width: 7500,
+        ..Default::default()
+    });
+    // row 1: [col 0]=2000 | [cols 1-2]=3800 | [cols 3-4]=20200 | [cols 5-8]=22000
+    cells.push(Cell {
+        row: 1,
+        col: 0,
+        row_span: 1,
+        col_span: 1,
+        width: 2000,
+        ..Default::default()
+    });
+    cells.push(Cell {
+        row: 1,
+        col: 1,
+        row_span: 1,
+        col_span: 2,
+        width: 3800,
+        ..Default::default()
+    });
+    cells.push(Cell {
+        row: 1,
+        col: 3,
+        row_span: 1,
+        col_span: 2,
+        width: 20200,
+        ..Default::default()
+    });
+    cells.push(Cell {
+        row: 1,
+        col: 5,
+        row_span: 1,
+        col_span: 4,
+        width: 22000,
+        ..Default::default()
+    });
+    let table = Table {
+        row_count: 2,
+        col_count: 9,
+        cells,
+        common: CommonObjAttr {
+            width: 48000,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let engine = LayoutEngine::with_default_dpi();
+    let widths = engine.resolve_column_widths(&table, 9);
+    let expected_total = hwpunit_to_px(48000, DEFAULT_DPI);
+    let actual_total: f64 = widths.iter().sum();
+
+    assert!(
+        (actual_total - expected_total).abs() < 0.5,
+        "widths={widths:?} actual_total={actual_total} expected_total={expected_total}"
+    );
+}
+
 #[test]
 fn compact_endnote_tail_log_tolerance_allows_line_box_bleed_only() {
     let col_bottom = 1092.3;

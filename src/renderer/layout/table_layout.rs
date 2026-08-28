@@ -1365,6 +1365,25 @@ impl LayoutEngine {
                 if let Some(last) = col_widths.last_mut() {
                     *last += residual;
                 }
+            } else if residual < -0.5 {
+                // [열 폭 오버슈트] 2단계의 병합 셀 제약 해석은 각 constraint를
+                // span 오름차순으로 하나씩, 그 constraint 자신의 범위 안에서만
+                // 미지수를 채운다(전체 연립방정식을 풀지 않는다) — 그래서 서로
+                // 다른 행이 같은 열 구간을 서로 다르게 병합해 나누는 authoring(각
+                // 행 자신은 유효함, hwp 포맷에서 흔한 패턴)에서는, 먼저 처리된
+                // 좁은 span 제약이 열들을 다 채워버려 나중에 처리되는 넓은 span
+                // 제약이 무시되고, 그 결과 col_widths 합이 표 선언 폭을 크게
+                // 초과할 수 있다(예: 47/33% 등 대폭 초과 — 마지막 열 하나에만
+                // residual을 몰아주는 것으론 부족·왜곡됨). 지금까지는 부족분만
+                // 마지막 열에 보정하고 초과분은 그대로 방치해, 표가 선언 폭보다
+                // 넓게 렌더됐다. 대칭적으로, 초과분은 모든 열에 비례 축소해
+                // 흡수한다 — 특정 열이 다른 열보다 부당하게 깎이지 않고, 이미
+                // 해석된 열들 사이의 상대적 비율(각 열이 실제로 담아야 하는
+                // 내용 폭 비율)도 그대로 유지된다.
+                let scale = target_width / current;
+                for w in col_widths.iter_mut() {
+                    *w *= scale;
+                }
             }
         }
         col_widths
