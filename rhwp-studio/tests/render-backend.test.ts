@@ -190,23 +190,27 @@ test('CanvasKit auto preflight permits text marks but blocks missing structural 
 
 test('CanvasKit contains malformed images and bounds both decode caches', () => {
   const source = readFileSync(new URL('../src/view/canvaskit-renderer.ts', import.meta.url), 'utf8');
+  const imageCacheSource = readFileSync(
+    new URL('../src/view/canvaskit/image-cache.ts', import.meta.url),
+    'utf8',
+  );
   const admissionSource = readFileSync(
     new URL('../src/view/canvaskit/image-header.ts', import.meta.url),
     'utf8',
   );
-  assert.match(source, /try \{\s*image = this\.canvasKit\.MakeImageFromEncoded/);
+  assert.match(imageCacheSource, /try \{\s*image = this\.canvasKit\.MakeImageFromEncoded/);
   assert.match(source, /image:decodeFailed/);
-  assert.match(source, /MAX_IMAGE_CACHE_ENTRIES = 128/);
-  assert.match(source, /MAX_IMAGE_FAILURE_CACHE_ENTRIES = 128/);
-  assert.match(source, /replayableEncodedImageHeader\(bytes\)/);
+  assert.match(imageCacheSource, /MAX_IMAGE_CACHE_ENTRIES = 128/);
+  assert.match(imageCacheSource, /MAX_IMAGE_FAILURE_CACHE_ENTRIES = 128/);
+  assert.match(imageCacheSource, /replayableEncodedImageHeader\(bytes\)/);
   assert.match(admissionSource, /CANVASKIT_MAX_IMAGE_DIMENSION = 8192/);
   assert.match(admissionSource, /CANVASKIT_MAX_DECODED_IMAGE_PIXELS = 32 \* 1024 \* 1024/);
-  assert.match(source, /MAX_IMAGE_CACHE_PIXELS = 64 \* 1024 \* 1024/);
-  assert.match(source, /oldest\?\.image\.delete\?\.\(\)/);
-  assert.match(source, /'base64DecodeFailed'/);
-  assert.match(source, /'encodedImageRejected'/);
-  assert.match(source, /'decodedDimensionsMismatch'/);
-  assert.match(source, /imageFailureCacheHits/);
+  assert.match(imageCacheSource, /MAX_IMAGE_CACHE_PIXELS = 64 \* 1024 \* 1024/);
+  assert.match(imageCacheSource, /oldest\?\.image\.delete\?\.\(\)/);
+  assert.match(imageCacheSource, /'base64DecodeFailed'/);
+  assert.match(imageCacheSource, /'encodedImageRejected'/);
+  assert.match(imageCacheSource, /'decodedDimensionsMismatch'/);
+  assert.match(imageCacheSource, /imageFailureCacheHits/);
   assert.match(source, /generation !== this\.documentGeneration/);
   assert.match(source, /resetDocumentResources\(\): void/);
 });
