@@ -597,6 +597,9 @@ hwpx	ref/ref_mixed.hwpx	sections[].paragraphs[].raw_header_extra[]	7
 hwpx	ref/ref_table.hwpx	sections[].paragraphs[].controls[].cells[].paragraphs[].raw_header_extra[]	5
 hwpx	ref/ref_table.hwpx	sections[].paragraphs[].raw_header_extra[]	5
 hwpx	ref/ref_text.hwpx	sections[].paragraphs[].raw_header_extra[]	4
+hwpx	scslic2-header-repeatbody-seam.hwpx	doc_info.border_fills[].fill.fill_type	1
+hwpx	scslic2-header-repeatbody-seam.hwpx	sections[].paragraphs[].controls[].cells[].paragraphs[].raw_header_extra[]	128
+hwpx	scslic2-header-repeatbody-seam.hwpx	sections[].paragraphs[].raw_header_extra[]	5
 hwpx	ta-pic-001-r.hwpx	sections[].paragraphs[].controls[].caption.paragraphs[].raw_header_extra[]	1
 hwpx	ta-pic-001-r.hwpx	sections[].paragraphs[].controls[].cells[].paragraphs[].controls[].shape_attr.offset_x	1
 hwpx	ta-pic-001-r.hwpx	sections[].paragraphs[].controls[].cells[].paragraphs[].controls[].shape_attr.offset_y	1

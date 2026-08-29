@@ -611,6 +611,107 @@ fn overlapping_row_colspan_partitions_do_not_overshoot_declared_table_width() {
         (actual_total - expected_total).abs() < 0.5,
         "widths={widths:?} actual_total={actual_total} expected_total={expected_total}"
     );
+
+    // 총합만이 아니라 개별 열 폭도 유일해와 정확히 일치해야 한다 — 이 제약
+    // 집합은 실제로 모호하지 않다(col0=2000, col1+col2=3800 이므로
+    // col3=7500-2000-3800=1700, col4=20200-1700=18500 이 유일해로 도출됨).
+    // col1/col2, col5/col6, col7/col8 은 개별 분할이 정말 미결정이므로 합만
+    // 검증한다.
+    let px = |hwpunit: i32| hwpunit_to_px(hwpunit, DEFAULT_DPI);
+    let close = |a: f64, b: f64| (a - b).abs() < 0.5;
+    assert!(
+        close(widths[0], px(2000)),
+        "col0 widths={widths:?} expected={}",
+        px(2000)
+    );
+    assert!(
+        close(widths[1] + widths[2], px(3800)),
+        "col1+col2 widths={widths:?} expected={}",
+        px(3800)
+    );
+    assert!(
+        close(widths[3], px(1700)),
+        "col3 widths={widths:?} expected={}",
+        px(1700)
+    );
+    assert!(
+        close(widths[4], px(18500)),
+        "col4 widths={widths:?} expected={}",
+        px(18500)
+    );
+    assert!(
+        close(widths[5] + widths[6], px(14500)),
+        "col5+col6 widths={widths:?} expected={}",
+        px(14500)
+    );
+    assert!(
+        close(widths[7] + widths[8], px(7500)),
+        "col7+col8 widths={widths:?} expected={}",
+        px(7500)
+    );
+}
+
+#[test]
+fn conflicting_row_colspan_partitions_do_not_panic() {
+    // 두 행이 같은 열 구간을 진짜로 상충되게 선언하는 malformed 입력(단순
+    // 분할 차이가 아니라 실제 불일치): row0 은 [cols 0-1]=1000, row1 은
+    // 같은 [cols 0-1]=4000 이라고 선언한다. 고정점 반복이 패닉하거나
+    // 무한루프에 빠지지 않고, 유한하며 표 선언 폭과 합이 맞는 결과를
+    // 내야 한다(개별 열 값의 "정답"은 malformed 입력이므로 존재하지 않음).
+    let mut cells = Vec::new();
+    cells.push(Cell {
+        row: 0,
+        col: 0,
+        row_span: 1,
+        col_span: 2,
+        width: 1000,
+        ..Default::default()
+    });
+    cells.push(Cell {
+        row: 0,
+        col: 2,
+        row_span: 1,
+        col_span: 1,
+        width: 2000,
+        ..Default::default()
+    });
+    cells.push(Cell {
+        row: 1,
+        col: 0,
+        row_span: 1,
+        col_span: 2,
+        width: 4000,
+        ..Default::default()
+    });
+    cells.push(Cell {
+        row: 1,
+        col: 2,
+        row_span: 1,
+        col_span: 1,
+        width: 2000,
+        ..Default::default()
+    });
+    let table = Table {
+        row_count: 2,
+        col_count: 3,
+        cells,
+        common: CommonObjAttr {
+            width: 3000,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let engine = LayoutEngine::with_default_dpi();
+    let widths = engine.resolve_column_widths(&table, 3);
+
+    assert_eq!(widths.len(), 3);
+    assert!(widths.iter().all(|w| w.is_finite() && *w >= 0.0));
+    let expected_total = hwpunit_to_px(3000, DEFAULT_DPI);
+    let actual_total: f64 = widths.iter().sum();
+    assert!(
+        (actual_total - expected_total).abs() < 0.5,
+        "widths={widths:?} actual_total={actual_total} expected_total={expected_total}"
+    );
 }
 
 #[test]
@@ -3163,5 +3264,121 @@ fn whitespace_tac_carrier_paint_y_rejects_missing_or_block_tac() {
             96.0,
         ),
         None
+    );
+}
+
+/// [표 간 세로선 이음매 회귀 — scslic2] 실제 관세 서식
+/// `samples/hwpx/scslic2-header-repeatbody-seam.hwpx`(전기용품 세관장확인물품
+/// 확인서)는 본문에 최상위 표 두 개가 위아래로 붙어 있다: `#HEADER`(17행×9열)와
+/// 바로 아래의 `#REPEAT-BODY:신청내용`(13행×6열). 원본 XML 기준으로
+/// `#HEADER` 의 맨 왼쪽 "신청인" 열(col0, 2000 HWPUNIT)과 그 오른쪽 "수입자/
+/// 수입화주" 열(col1-2 병합, 3800 HWPUNIT)의 합은 `#REPEAT-BODY` 맨 왼쪽
+/// "신청내용" 열(col0-1 병합, 5800 HWPUNIT)과 **정확히 같아야** 하며
+/// (2000+3800=5800), 그래야 두 표 사이로 세로 테두리가 끊김 없이 이어진다
+/// (한/글 실측 렌더와 동일).
+///
+/// 회귀의 정체: 두 표는 서로를 전혀 모른 채 각각 독립적으로 열 폭이 풀리므로,
+/// 한쪽만 틀려도 단일 표 단위 검증으로는 잡히지 않고 **이웃 표와 비교할 때만**
+/// 눈에 보인다. 과거 span 오름차순 해석은 `#HEADER` 의 col3/col4 제약을
+/// 잘못 풀어 합이 선언 폭 48000 을 넘겼고(실측 56400), 그 초과분을 모든 열에
+/// 일률 비례 축소(48000/56400)해 흡수하면서 이미 올바르던 col0+col1+col2 까지
+/// 5800 → 약 4936 HWPUNIT 으로 함께 줄여버렸다(약 11.5px 이음매 어긋남).
+/// `#REPEAT-BODY` 는 초과가 없어 5800 을 그대로 유지하므로 어긋남이 드러났다.
+///
+/// 합성 표 리터럴 테스트(`overlapping_row_colspan_partitions_do_not_overshoot_declared_table_width`)가
+/// `#HEADER` 의 제약 패턴만 따로 고정한다면, 이 테스트는 실제 파일을 파싱해
+/// **두 표 사이의 관계**를 고정한다.
+#[test]
+fn scslic2_header_and_repeat_body_share_left_column_seam_x() {
+    use crate::model::document::Document;
+
+    /// 표 식별용 마커 텍스트: 이 파이프라인의 `#HEADER` / `#REPEAT-BODY:...`
+    /// 규약대로 표의 (row 0, col 0) 셀 문단 텍스트에 마커가 들어 있다.
+    /// 하드코딩 인덱스 대신 이 텍스트로 찾아 표 순서가 바뀌어도 견디게 한다.
+    /// `Paragraph.text` 는 HWP 인라인 제어문자를 그대로 지니므로 완전일치가
+    /// 아니라 `contains` 로 본다(`#HEADER` 는 `#FOOTER` 와 겹치지 않는다).
+    fn table_marker_text(table: &Table) -> String {
+        table
+            .cells
+            .iter()
+            .filter(|cell| cell.row == 0 && cell.col == 0)
+            .flat_map(|cell| cell.paragraphs.iter())
+            .map(|para| para.text.as_str())
+            .collect::<String>()
+    }
+
+    fn find_top_level_table<'a>(doc: &'a Document, marker: &str) -> Option<&'a Table> {
+        doc.sections
+            .iter()
+            .flat_map(|section| section.paragraphs.iter())
+            .flat_map(|para| para.controls.iter())
+            .find_map(|control| match control {
+                Control::Table(table) if table_marker_text(table).contains(marker) => {
+                    Some(table.as_ref())
+                }
+                _ => None,
+            })
+    }
+
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("samples/hwpx/scslic2-header-repeatbody-seam.hwpx");
+    let bytes = std::fs::read(&path)
+        .unwrap_or_else(|err| panic!("픽스처 읽기 실패 {}: {err}", path.display()));
+    let doc = crate::parser::hwpx::parse_hwpx(&bytes).expect("scslic2 HWPX 파싱 실패");
+
+    let header = find_top_level_table(&doc, "#HEADER").expect("전제: `#HEADER` 표를 찾지 못함");
+    let repeat_body = find_top_level_table(&doc, "#REPEAT-BODY:신청내용")
+        .expect("전제: `#REPEAT-BODY:신청내용` 표를 찾지 못함");
+
+    assert_eq!(header.col_count, 9, "전제: `#HEADER` 는 9열 표다");
+    assert_eq!(
+        repeat_body.col_count, 6,
+        "전제: `#REPEAT-BODY:신청내용` 은 6열 표다"
+    );
+
+    let engine = LayoutEngine::with_default_dpi();
+    let header_widths = engine.resolve_column_widths(header, header.col_count as usize);
+    let body_widths = engine.resolve_column_widths(repeat_body, repeat_body.col_count as usize);
+
+    // `#HEADER`: col0("신청인") + col1+col2("수입자"/"수입화주")
+    let header_seam: f64 = header_widths[0] + header_widths[1] + header_widths[2];
+    // `#REPEAT-BODY`: col0+col1("신청내용")
+    let body_seam: f64 = body_widths[0] + body_widths[1];
+    let expected_seam = hwpunit_to_px(5800, DEFAULT_DPI);
+
+    // (1) 상대 검증 — 두 표의 이음매 x 좌표가 어긋나지 않는다.
+    assert!(
+        (header_seam - body_seam).abs() < 0.5,
+        "표 간 세로선 이음매 어긋남: header(col0+col1+col2)={header_seam} body(col0+col1)={body_seam} \
+         header_widths={header_widths:?} body_widths={body_widths:?}"
+    );
+
+    // (2) 절대 검증 — 둘 다 원본 XML 의 5800 HWPUNIT 과 일치한다. 두 표가
+    //     같은 값으로 함께 틀리는 경우(예: 공통 스케일 오류)도 잡는다.
+    assert!(
+        (header_seam - expected_seam).abs() < 0.5,
+        "`#HEADER` 이음매 폭이 5800 HWPUNIT 과 다름: actual={header_seam} expected={expected_seam} \
+         header_widths={header_widths:?}"
+    );
+    assert!(
+        (body_seam - expected_seam).abs() < 0.5,
+        "`#REPEAT-BODY` 이음매 폭이 5800 HWPUNIT 과 다름: actual={body_seam} expected={expected_seam} \
+         body_widths={body_widths:?}"
+    );
+
+    // (3) 근본 원인 가드 — 이음매 어긋남을 만든 것은 선언 폭 초과 뒤의 일률
+    //     비례 축소였다. 두 표 모두 합이 선언 폭 48000 HWPUNIT 과 맞아야 한다.
+    let declared_total = hwpunit_to_px(48000, DEFAULT_DPI);
+    let header_total: f64 = header_widths.iter().sum();
+    let body_total: f64 = body_widths.iter().sum();
+    assert!(
+        (header_total - declared_total).abs() < 0.5,
+        "`#HEADER` 총 열 폭이 선언 폭과 다름: actual={header_total} expected={declared_total} \
+         header_widths={header_widths:?}"
+    );
+    assert!(
+        (body_total - declared_total).abs() < 0.5,
+        "`#REPEAT-BODY` 총 열 폭이 선언 폭과 다름: actual={body_total} expected={declared_total} \
+         body_widths={body_widths:?}"
     );
 }

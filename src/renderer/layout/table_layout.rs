@@ -1300,41 +1300,73 @@ impl LayoutEngine {
                     }
                 }
             }
-            constraints.sort_by_key(|&(_, span, _)| span);
 
-            let max_iter = col_count + constraints.len();
-            for _ in 0..max_iter {
-                let mut progress = false;
-                for &(c, span, total_w) in &constraints {
-                    let known_sum: f64 = (c..c + span).map(|i| col_widths[i]).sum();
-                    let unknown_cols: Vec<usize> =
-                        (c..c + span).filter(|&i| col_widths[i] == 0.0).collect();
-                    if unknown_cols.len() == 1 {
+            // 고정점 반복: 서로 다른 행이 같은 열 구간을 다르게 묶어 선언해도
+            // (각 행 자신은 유효한, hwp authoring 에서 흔한 패턴) 유일해가
+            // 존재하면 그 값을 정확히 찾는다. 매 라운드마다 (1) "미지 열이
+            // 정확히 하나"인 제약을 고정점까지 모두 채우고 — 한 제약을 풀면
+            // 다른 제약의 미지 열이 하나로 줄어들 수 있으므로 반복한다 — (2)
+            // 더 이상 그런 제약이 없으면, 아직 남은 제약 중 *미지 열이 가장
+            // 적은* 것 하나만 균등분할로 확정한 뒤 다시 (1)로 돌아간다. span
+            // 크기 순으로 고정된 순서를 쓰지 않는 이유: span 이 좁다고 미지
+            // 열이 적은 것은 아니며(이미 다른 제약으로 일부가 풀렸을 수
+            // 있음), 미지 열 개수가 실제로 "이미 확보된 정보량"을 반영한다.
+            // 이렇게 하면 좁은 제약에서 확정된 값이 넓은 제약에 즉시
+            // 전파되어, 종전처럼 나중에 처리되는 넓은 span 제약이 이미
+            // 채워진 열들 때문에 무시되는 일이 없다.
+            let exact_phase_bound = col_count + constraints.len() + 1;
+            let round_bound = constraints.len() + 1;
+            for _ in 0..round_bound {
+                for _ in 0..exact_phase_bound {
+                    let mut progress = false;
+                    for &(c, span, total_w) in &constraints {
+                        let known_sum: f64 = (c..c + span).map(|i| col_widths[i]).sum();
+                        let unknown_cols: Vec<usize> =
+                            (c..c + span).filter(|&i| col_widths[i] == 0.0).collect();
+                        if unknown_cols.len() == 1 {
+                            let remaining = (total_w - known_sum).max(0.0);
+                            col_widths[unknown_cols[0]] = remaining;
+                            progress = true;
+                        }
+                    }
+                    if !progress {
+                        break;
+                    }
+                }
+
+                // 남은 제약 중 미지 열이 가장 적은 것 하나만 균등분할로 확정
+                // (동률이면 constraints 순서상 먼저 나오는 것 — 결정적 결과).
+                let next = constraints
+                    .iter()
+                    .filter_map(|&(c, span, total_w)| {
+                        let known_sum: f64 = (c..c + span).map(|i| col_widths[i]).sum();
+                        let unknown_cols: Vec<usize> =
+                            (c..c + span).filter(|&i| col_widths[i] == 0.0).collect();
+                        if unknown_cols.is_empty() {
+                            None
+                        } else {
+                            Some((unknown_cols.len(), total_w, known_sum, unknown_cols))
+                        }
+                    })
+                    .min_by_key(|&(unknown_count, ..)| unknown_count);
+
+                match next {
+                    Some((_, total_w, known_sum, unknown_cols)) => {
                         let remaining = (total_w - known_sum).max(0.0);
-                        col_widths[unknown_cols[0]] = remaining;
-                        progress = true;
+                        let per_col = remaining / unknown_cols.len() as f64;
+                        for i in unknown_cols {
+                            col_widths[i] = per_col;
+                        }
                     }
-                }
-                if !progress {
-                    break;
+                    None => break,
                 }
             }
 
-            for &(c, span, total_w) in &constraints {
-                let known_sum: f64 = (c..c + span).map(|i| col_widths[i]).sum();
-                let unknown_cols: Vec<usize> =
-                    (c..c + span).filter(|&i| col_widths[i] == 0.0).collect();
-                if !unknown_cols.is_empty() {
-                    let remaining = (total_w - known_sum).max(0.0);
-                    let per_col = remaining / unknown_cols.len() as f64;
-                    for i in unknown_cols {
-                        col_widths[i] = per_col;
-                    }
-                }
-            }
-
-            // 병합 셀 제약이 이미 값이 있는 열들로만 구성되어도 총합이 더 클 수 있다.
-            // 한컴은 이 경우 뒤쪽 열을 확장해 병합 셀 폭을 만족시킨다.
+            // 병합 셀 제약이 이미 값이 있는 열들로만 구성되어도 총합이 더 클 수 있다
+            // (예: 서로 다른 행이 같은 열 구간을 진짜로 상충되게 선언한 malformed
+            // 입력). 위 고정점 반복이 정상 authoring 에서는 이미 정확한 값을
+            // 찾아내므로 이 보정은 그런 malformed 케이스에 대한 안전망으로만
+            // 작동한다 — 한컴은 이 경우 뒤쪽 열을 확장해 병합 셀 폭을 만족시킨다.
             for &(c, span, total_w) in &constraints {
                 let known_sum: f64 = (c..c + span).map(|i| col_widths[i]).sum();
                 let deficit = total_w - known_sum;
