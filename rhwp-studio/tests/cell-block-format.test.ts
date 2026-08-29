@@ -64,10 +64,11 @@ test('모든 셀을 Ctrl+클릭으로 제외하면 빈 블록이 된다', () => 
 test('제외 셀 키 형식은 CursorState 가 조립하는 것과 같은 함수여야 한다', () => {
   // 조립하는 쪽과 조회하는 쪽이 형식을 따로 갖고 있으면 한쪽만 바뀌어도 조회가 조용히
   // 빗나가 제외 셀이 무시된다. 리터럴 재조립을 금지하고 단일 함수를 쓰는지 본다.
-  const cursor = source('src/engine/cursor.ts');
-  assert.match(cursor, /const key = excludedCellKey\(row, col\)/,
+  // ctrlToggleCell 본문은 cursor-selection-modes.ts 로 추출되었다(심 잔류).
+  const selectionModes = source('src/engine/cursor-selection-modes.ts');
+  assert.match(selectionModes, /const key = excludedCellKey\(row, col\)/,
     'CursorState.ctrlToggleCell 이 공유 키 함수를 쓰지 않는다');
-  assert.doesNotMatch(cursor, /const key = `\$\{row\},\$\{col\}`/,
+  assert.doesNotMatch(selectionModes, /const key = `\$\{row\},\$\{col\}`/,
     'CursorState 가 제외 셀 키를 리터럴로 재조립한다');
 });
 
@@ -110,10 +111,11 @@ test('선택된 셀이 없으면 대상도 없다', () => {
 test('문단 서식 대상 산출은 텍스트 선택보다 셀 블록을 먼저 본다', () => {
   // 셀 블록 선택은 getSelectionOrdered() 가 null 이므로, 분기가 뒤에 오면 도달하지 못하고
   // getParaFormatTargetsForRange(pos, pos) 로 떨어져 앵커 셀 하나만 대상이 된다.
-  const ih = source('src/engine/input-handler.ts');
-  const start = ih.indexOf('private getParaFormatTargetsAtCursor()');
+  // 문단 서식 대상 산출 본문은 input-handler-format.ts 로 이관됨 — 가드는 이관된 구현 파일을 읽는다.
+  const fmt = source('src/engine/input-handler-format.ts');
+  const start = fmt.indexOf('function getParaFormatTargetsAtCursor(this: any)');
   assert.notEqual(start, -1, 'getParaFormatTargetsAtCursor 를 찾지 못했다');
-  const body = ih.slice(start, ih.indexOf('\n  }', start));
+  const body = fmt.slice(start, fmt.indexOf('\n}', start));
 
   const blockAt = body.indexOf('this.getSelectedCellBlock()');
   const selAt = body.indexOf('this.cursor.getSelectionOrdered()');
@@ -125,17 +127,17 @@ test('문단 서식 대상 산출은 텍스트 선택보다 셀 블록을 먼저
 });
 
 test('빈 셀 블록 문단 서식은 앵커 셀로 fallback 하지 않는다', () => {
-  const ih = source('src/engine/input-handler.ts');
-  const blockStart = ih.indexOf('private getSelectedCellBlock()');
-  const blockEnd = ih.indexOf('\n  }', blockStart);
-  const blockBody = ih.slice(blockStart, blockEnd);
+  const fmt = source('src/engine/input-handler-format.ts');
+  const blockStart = fmt.indexOf('function getSelectedCellBlock(this: any)');
+  const blockEnd = fmt.indexOf('\n}', blockStart);
+  const blockBody = fmt.slice(blockStart, blockEnd);
   assert.notEqual(blockStart, -1, 'getSelectedCellBlock 을 찾지 못했다');
   assert.doesNotMatch(blockBody, /if \(cellIndices\.length === 0\) return null;/,
     '모든 셀 제외를 셀 블록 아님으로 바꿔 앵커 셀 fallback을 허용한다');
 
-  const paraStart = ih.indexOf('private getParaFormatTargetsAtCursor()');
-  const paraEnd = ih.indexOf('\n  }', paraStart);
-  const paraBody = ih.slice(paraStart, paraEnd);
+  const paraStart = fmt.indexOf('function getParaFormatTargetsAtCursor(this: any)');
+  const paraEnd = fmt.indexOf('\n}', paraStart);
+  const paraBody = fmt.slice(paraStart, paraEnd);
   assert.match(paraBody, /if \(block\) return this\.getParaFormatTargetsForCellBlock\(block\);/,
     '빈 셀 블록을 빈 문단 서식 대상으로 유지하지 않는다');
 });
@@ -144,14 +146,17 @@ test('글자 서식 진입점은 선택·셀 블록 유무로 조기 종료하�
   // [#4162] hasFormatTargetSelection() 게이트는 캐럿만 있을 때(선택도 셀 블록도 없음)
   // 이 네 진입점을 통째로 no-op 시켰다 — 한컴처럼 캐럿 대기 글자 모양으로 예약하려면
   // 게이트 자체를 없애고 판정을 applyCharFormat 내부(셀 블록 → 실제 선택 → 예약)로
-  // 옮겨야 한다. 셀 블록 인정은 이제 그 내부 분기가 보장한다(아래 테스트).
+  // 옮겨야 한다. 셀 블록 인정은 이제 그 내부 분기가 보증한다(아래 테스트).
+  // applyToggleFormat 본문은 input-handler-format.ts 로 이관됨 — 진입점별 소스를 골라 읽는다.
   const ih = source('src/engine/input-handler.ts');
+  const fmt = source('src/engine/input-handler-format.ts');
   assert.equal(ih.indexOf('hasFormatTargetSelection'), -1,
     '더 이상 쓰이지 않는 게이트가 남아 있으면 안 된다');
   for (const fn of ['applyToggleFormat', 'adjustFontSize', 'adjustCharRatio', 'adjustCharSpacing']) {
-    const start = ih.indexOf(fn + '(');
+    const src = fn === 'applyToggleFormat' ? fmt : ih;
+    const start = src.indexOf(fn + '(');
     assert.notEqual(start, -1, `${fn} 을 찾지 못했다`);
-    const body = ih.slice(start, ih.indexOf('\n  }', start));
+    const body = src.slice(start, src.indexOf(fn === 'applyToggleFormat' ? '\n}' : '\n  }', start));
     assert.doesNotMatch(body, /if \(!this\.(hasFormatTargetSelection|cursor\.hasSelection)\(\)\) return;/,
       `${fn} 이 선택 없음으로 조기 종료하면 캐럿 대기 서식 예약을 못 탄다`);
   }
@@ -160,10 +165,10 @@ test('글자 서식 진입점은 선택·셀 블록 유무로 조기 종료하�
 test('셀 블록 글자 서식은 되돌리기 라우팅(executeOperation)을 거친다', () => {
   // 뮤테이션 표면 원장(mutation-routing-guard)이 세는 사이트이므로 직접 wasm 호출이
   // executeOperation 밖으로 새면 Undo 가 비는 채로 문서만 바뀐다.
-  const ih = source('src/engine/input-handler.ts');
-  const start = ih.indexOf('private applyCharFormatToCellBlock');
+  const fmt = source('src/engine/input-handler-format.ts');
+  const start = fmt.indexOf('function applyCharFormatToCellBlock(this: any');
   assert.notEqual(start, -1, 'applyCharFormatToCellBlock 이 없다');
-  const body = ih.slice(start, ih.indexOf('\n  }\n', start));
+  const body = fmt.slice(start, fmt.indexOf('\n}\n', start));
   assert.match(body, /this\.executeOperation\(\{\s*\n?\s*kind: 'snapshot'/,
     '스냅샷 라우팅을 거치지 않는다');
   assert.match(body, /wasm\.applyCharFormatInCell\(/, '셀 글자 서식 적용 호출이 없다');
@@ -172,10 +177,10 @@ test('셀 블록 글자 서식은 되돌리기 라우팅(executeOperation)을 �
 
 test('글자 서식 적용 진입점이 셀 블록 분기를 먼저 호출한다', () => {
   // 분기가 없으면 getSelectionOrdered() 가 null 이라 그대로 반환된다.
-  const ih = source('src/engine/input-handler.ts');
-  const start = ih.indexOf('private applyCharFormat(props');
+  const fmt = source('src/engine/input-handler-format.ts');
+  const start = fmt.indexOf('function applyCharFormat(this: any, props');
   assert.notEqual(start, -1, 'applyCharFormat 을 찾지 못했다');
-  const body = ih.slice(start, ih.indexOf('\n  }', start));
+  const body = fmt.slice(start, fmt.indexOf('\n}', start));
   const blockAt = body.indexOf('this.getSelectedCellBlock()');
   const selAt = body.indexOf('this.getNonEmptySelection()');
   assert.notEqual(blockAt, -1, '셀 블록 분기가 없다');
@@ -186,10 +191,10 @@ test('글자 서식 적용 진입점이 셀 블록 분기를 먼저 호출한다
 });
 
 test('빈 셀 블록 글자 서식은 history 없이 no-op 이다', () => {
-  const ih = source('src/engine/input-handler.ts');
-  const start = ih.indexOf('private applyCharFormat(props');
+  const fmt = source('src/engine/input-handler-format.ts');
+  const start = fmt.indexOf('function applyCharFormat(this: any, props');
   assert.notEqual(start, -1, 'applyCharFormat 을 찾지 못했다');
-  const body = ih.slice(start, ih.indexOf('\n  }', start));
+  const body = fmt.slice(start, fmt.indexOf('\n}', start));
   assert.match(body, /if \(block\.cellIndices\.length === 0\) return;/,
     '모든 셀 제외 시 글자 서식이 no-op으로 끝나지 않는다');
 });
@@ -198,10 +203,10 @@ test('[#4151] 토글 방향은 셀 블록 모드에서 블록 앵커 셀의 서�
   // 커서 위치 조회(getCharPropertiesAtCursor)는 셀 블록 모드에서 블록 밖(호스트 문단 등)을
   // 읽어 방금 적용한 서식이 보이지 않는다 — current[prop] 이 이전 값에 머물러 !current[prop]
   // 이 항상 같은 방향이 되고, 두 번째 클릭이 해제가 아니라 재적용이 된다.
-  const ih = source('src/engine/input-handler.ts');
-  const start = ih.indexOf('private applyToggleFormat(');
+  const fmt = source('src/engine/input-handler-format.ts');
+  const start = fmt.indexOf('function applyToggleFormat(this: any');
   assert.notEqual(start, -1, 'applyToggleFormat 을 찾지 못했다');
-  const body = ih.slice(start, ih.indexOf('\n  }\n', start));
+  const body = fmt.slice(start, fmt.indexOf('\n}\n', start));
   assert.match(body, /this\.getSelectedCellBlock\(\)/,
     '토글 방향 산출에 셀 블록 분기가 없다');
   assert.match(body,
@@ -213,10 +218,10 @@ test('[#4151] 셀 블록 적용 직후 cursor-format-changed 를 앵커 셀 기�
   // 텍스트 선택 경로는 적용 후 emitCursorFormatState 로 툴바 눌림 상태를 재조회·방출하지만,
   // 셀 블록 경로는 이 후처리가 없으면 툴바가 이전 상태로 남는다. emitCursorFormatState 는
   // 커서 위치 기준이라 블록에는 오답 — 앵커 셀 서식을 직접 방출해야 한다.
-  const ih = source('src/engine/input-handler.ts');
-  const start = ih.indexOf('private applyCharFormatToCellBlock');
+  const fmt = source('src/engine/input-handler-format.ts');
+  const start = fmt.indexOf('function applyCharFormatToCellBlock(this: any');
   assert.notEqual(start, -1, 'applyCharFormatToCellBlock 이 없다');
-  const body = ih.slice(start, ih.indexOf('\n  }\n', start));
+  const body = fmt.slice(start, fmt.indexOf('\n}\n', start));
   const applyAt = body.indexOf('this.executeOperation(');
   const emitAt = body.indexOf("this.eventBus.emit('cursor-format-changed'");
   assert.notEqual(emitAt, -1, '적용 후 cursor-format-changed 방출이 없다');
@@ -229,10 +234,10 @@ test('[#4151] 셀 블록 적용 직후 cursor-format-changed 를 앵커 셀 기�
 test('[#4151] 앵커 셀 서식 기준은 블록 첫 셀의 첫 글자다', () => {
   // 토글 방향(applyToggleFormat)과 툴바 상태 방출이 같은 기준을 공유해야 두 번째 클릭의
   // 해제 방향과 버튼 표시가 일치한다. 기준 조회는 이 함수 한 곳에만 둔다.
-  const ih = source('src/engine/input-handler.ts');
-  const start = ih.indexOf('private getCharPropertiesAtCellBlockAnchor');
+  const fmt = source('src/engine/input-handler-format.ts');
+  const start = fmt.indexOf('function getCharPropertiesAtCellBlockAnchor(this: any');
   assert.notEqual(start, -1, 'getCharPropertiesAtCellBlockAnchor 가 없다');
-  const body = ih.slice(start, ih.indexOf('\n  }\n', start));
+  const body = fmt.slice(start, fmt.indexOf('\n}\n', start));
   assert.match(body,
     /getCellCharPropertiesAt\(block\.sec, block\.ppi, block\.ci, block\.cellIndices\[0\], 0, 0\)/,
     '앵커 기준이 블록 첫 셀의 첫 글자가 아니다');

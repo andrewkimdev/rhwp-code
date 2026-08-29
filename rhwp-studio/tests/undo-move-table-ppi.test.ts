@@ -12,7 +12,7 @@ import { fileURLToPath } from 'node:url';
 // 갱신하는지 확인한다(회귀 시 다시 return 문에서 미갱신 stale 값을 쓰게 되면 실패).
 
 const rootDir = dirname(dirname(fileURLToPath(import.meta.url)));
-const commandSrc = readFileSync(join(rootDir, 'src/engine/command.ts'), 'utf8');
+const commandSrc = readFileSync(join(rootDir, 'src/engine/command/object-commands.ts'), 'utf8');
 
 function classBlock(src: string, name: string): string {
   const start = src.indexOf(`export class ${name}`);

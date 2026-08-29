@@ -373,14 +373,15 @@ test('wheel zoom emits the pointer anchor and inverse deltas restore zoom', asyn
 });
 
 test('zoom in and out controls use the smooth zoom path', () => {
-  const mainSource = readFileSync(new URL('../src/main.ts', import.meta.url), 'utf8');
+  // P9a: 줌 버튼 배선은 src/app/setup-ui.ts 로 이동(재지정).
+  const setupUiSource = readFileSync(new URL('../src/app/setup-ui.ts', import.meta.url), 'utf8');
   const viewCommandSource = readFileSync(
     new URL('../src/command/commands/view.ts', import.meta.url),
     'utf8',
   );
 
-  assert.match(mainSource, /sb-zoom-in[\s\S]*?smoothZoomBy\(0\.1\)/);
-  assert.match(mainSource, /sb-zoom-out[\s\S]*?smoothZoomBy\(-0\.1\)/);
+  assert.match(setupUiSource, /sb-zoom-in[\s\S]*?smoothZoomBy\(0\.1\)/);
+  assert.match(setupUiSource, /sb-zoom-out[\s\S]*?smoothZoomBy\(-0\.1\)/);
   assert.match(viewCommandSource, /id: 'view:zoom-in'[\s\S]*?smoothZoomBy\(0\.1\)/);
   assert.match(viewCommandSource, /id: 'view:zoom-out'[\s\S]*?smoothZoomBy\(-0\.1\)/);
 });

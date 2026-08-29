@@ -14,7 +14,8 @@ import { fileURLToPath } from 'node:url';
 const rootDir = dirname(dirname(fileURLToPath(import.meta.url)));
 const source = (rel: string): string => readFileSync(join(rootDir, rel), 'utf8');
 
-const commandSrc = source('src/engine/command.ts');
+const commandSrc = source('src/engine/command/submode-commands.ts');
+const cellPathSrc = source('src/engine/command/cell-path.ts');
 const textSrc = source('src/engine/input-handler-text.ts');
 const keyboardSrc = source('src/engine/input-handler-keyboard.ts');
 const inputHandlerSrc = source('src/engine/input-handler.ts');
@@ -161,7 +162,7 @@ test('history 는 peekUndoTop/peekRedoTop 으로 방금 이동한 커맨드를 �
 test('HF/FN 삭제 count 는 char(코드포인트) 단위여야 한다 — astral 문자 over-delete 방지', () => {
   // Rust delete_text_at 은 char 단위인데 JS String.length(UTF-16)를 넘기면 '😀' 같은
   // astral 문자 undo/redo 때 인접 문자를 잃는다(P1). charCount([...s].length)로 계산해야 한다.
-  assert.match(commandSrc, /function charCount\(s: string\): number \{\s*return \[\.\.\.s\]\.length;/,
+  assert.match(cellPathSrc, /function charCount\(s: string\): number \{\s*return \[\.\.\.s\]\.length;/,
     'charCount(코드포인트 수) 헬퍼 필요');
   // HF/FN 삭제 WASM 호출의 count 인자가 .length 가 아니라 charCount 여야 한다.
   for (const cls of ['DeleteTextInHeaderFooterCommand', 'DeleteTextInFootnoteCommand',

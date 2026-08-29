@@ -23,7 +23,10 @@ import { fileURLToPath } from 'node:url';
 // 행위 증명(중첩 표 왕복)은 브라우저 왕복(PR 검증).
 
 const rootDir = dirname(dirname(fileURLToPath(import.meta.url)));
-const commandSrc = readFileSync(join(rootDir, 'src/engine/command.ts'), 'utf8');
+// command.ts 분할 후 이 가드가 보는 두 부분(cellParaIndexOf 헬퍼·셀 문단 커맨드)이
+// cell-path 와 cell-commands 로 나뉘었다 — 의존 순서대로 이어 붙여 스캔을 유지한다.
+const commandSrc = readFileSync(join(rootDir, 'src/engine/command/cell-path.ts'), 'utf8')
+  + readFileSync(join(rootDir, 'src/engine/command/cell-commands.ts'), 'utf8');
 
 /** `export class NAME ...` 부터 다음 `export class` 전까지 클래스 본문을 추출. */
 function classBlock(name: string): string {

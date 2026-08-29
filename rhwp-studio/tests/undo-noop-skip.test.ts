@@ -16,7 +16,7 @@ const rootDir = dirname(dirname(fileURLToPath(import.meta.url)));
 const src = (rel: string) => readFileSync(join(rootDir, rel), 'utf8');
 
 test('SnapshotCommand 는 operation 이 null 을 반환하면 스냅샷을 버리고 noOp 를 세운다', () => {
-  const commandSrc = src('src/engine/command.ts');
+  const commandSrc = src('src/engine/command/snapshot-command.ts');
   const start = commandSrc.indexOf('export class SnapshotCommand');
   assert.notEqual(start, -1, 'SnapshotCommand 가 존재해야 함');
   const block = commandSrc.slice(start);

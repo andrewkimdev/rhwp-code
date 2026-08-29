@@ -19,7 +19,9 @@ import { fileURLToPath } from 'node:url';
 
 const rootDir = dirname(dirname(fileURLToPath(import.meta.url)));
 const src = (rel: string): string => readFileSync(join(rootDir, rel), 'utf8');
-const commandSrc = src('src/engine/command.ts');
+const commandSrc = src('src/engine/command/text-commands.ts');
+const formatCommandSrc = src('src/engine/command/format-commands.ts');
+const submodeCommandSrc = src('src/engine/command/submode-commands.ts');
 const textSrc = src('src/engine/input-handler-text.ts');
 const keyboardSrc = src('src/engine/input-handler-keyboard.ts');
 
@@ -31,19 +33,22 @@ function classBody(s: string, className: string): string {
 }
 
 test('본문 병합 커맨드는 removedParaMeta 를 캡처해 undo 분할에 되돌린다', () => {
-  for (const className of ['MergeParagraphCommand', 'MergeNextParagraphCommand']) {
-    const body = classBody(commandSrc, className);
+  for (const [className, mod] of [
+    ['MergeParagraphCommand', commandSrc],
+    ['MergeNextParagraphCommand', formatCommandSrc],
+  ] as const) {
+    const body = classBody(mod, className);
     assert.match(body, /this\.removedParaMeta = JSON\.parse\(wasm\.mergeParagraph\(/, `${className} 캡처`);
     assert.match(body, /wasm\.splitParagraph\([^)]*this\.removedParaMeta\)/, `${className} 복원`);
   }
 });
 
 test('HF/FN 병합 커맨드는 인라인 결과의 removedParaMeta 를 받아 undo 분할에 되돌린다', () => {
-  const hf = classBody(commandSrc, 'MergeParagraphInHeaderFooterCommand');
+  const hf = classBody(submodeCommandSrc, 'MergeParagraphInHeaderFooterCommand');
   assert.match(hf, /private removedParaMeta\?: RemovedParaMeta/, 'HF 생성자 인자');
   assert.match(hf, /wasm\.splitParagraphInHeaderFooter\([^)]*this\.removedParaMeta\)/, 'HF 복원');
 
-  const fn = classBody(commandSrc, 'MergeParagraphInFootnoteCommand');
+  const fn = classBody(submodeCommandSrc, 'MergeParagraphInFootnoteCommand');
   assert.match(fn, /private removedParaMeta\?: RemovedParaMeta/, 'FN 생성자 인자');
   assert.match(fn, /wasm\.splitParagraphInFootnote\([^)]*this\.removedParaMeta\)/, 'FN 복원');
 });

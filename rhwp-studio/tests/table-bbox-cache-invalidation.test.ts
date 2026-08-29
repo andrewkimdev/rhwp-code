@@ -22,6 +22,8 @@ import { fileURLToPath } from 'node:url';
 
 const rootDir = dirname(dirname(fileURLToPath(import.meta.url)));
 const src = readFileSync(join(rootDir, 'src/engine/input-handler.ts'), 'utf8');
+// afterEdit 본문은 input-handler-after-edit.ts 로 이관됨 — 해당 가드는 이관된 구현 파일을 읽는다.
+const afterEditSrc = readFileSync(join(rootDir, 'src/engine/input-handler-after-edit.ts'), 'utf8');
 
 /** 메서드 본문을 다음 최상위 멤버 직전까지 잘라낸다. */
 function methodBody(name: string): string {
@@ -32,8 +34,17 @@ function methodBody(name: string): string {
   return end === -1 ? rest : rest.slice(0, end);
 }
 
+/** 이관된 함수 본문을 다음 최상위 함수 직전까지 잘라낸다. */
+function functionBody(name: string): string {
+  const start = afterEditSrc.indexOf(`function ${name}(`);
+  assert.notEqual(start, -1, `${name} 함수 not found`);
+  const rest = afterEditSrc.slice(start + 1);
+  const end = rest.search(/\n(export )?function /);
+  return end === -1 ? rest : rest.slice(0, end);
+}
+
 test('편집 후 처리에서 표 리사이즈 런타임 캐시를 무효화한다', () => {
-  const body = methodBody('afterEdit');
+  const body = functionBody('afterEdit');
 
   assert.match(body, /clearTableResizeRuntimeCache\s*\(/,
     'afterEdit 가 캐시를 지우지 않으면 구조 편집 뒤 옛 bbox 로 엉뚱한 행이 리사이즈된다');
@@ -54,4 +65,7 @@ test('undo/redo 도 같은 루틴을 계속 사용한다', () => {
   const calls = src.match(/this\.clearTableResizeRuntimeCache\(\)/g) ?? [];
   assert.ok(calls.length >= 3,
     `문서 로드·undo/redo·편집 후 처리에서 모두 호출돼야 함(현재 ${calls.length}곳)`);
+  // 편집 후 처리(afterEdit) 본문은 input-handler-after-edit.ts 로 이관됐다 — 그쪽 호출도 유지돼야 한다.
+  assert.match(afterEditSrc, /this\.clearTableResizeRuntimeCache\(\);/,
+    'afterEdit 의 캐시 무효화 호출이 이관 후에도 유지돼야 함');
 });

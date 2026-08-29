@@ -30,6 +30,7 @@
     "e2e:undo-object-selection": "node e2e/undo-object-selection.test.mjs",
     "e2e:hwp-password-open": "node e2e/hwp-password-open.test.mjs --mode=headless",
     "e2e:clipboard-priority": "node e2e/task-871-clipboard-priority.test.mjs",
+    "e2e:compare-characterization": "node e2e/compare-characterization.test.mjs --mode=headless",
     "e2e:drag-autoscroll": "node e2e/drag-selection-autoscroll.test.mjs",
     "e2e:renderer-contract": "node e2e/renderer-contract.test.mjs",
     "e2e:issue-4430-content-loss": "node e2e/content-loss-save-issue4430.test.mjs --mode=headless",

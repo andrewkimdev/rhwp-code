@@ -14,7 +14,7 @@ import { fileURLToPath } from 'node:url';
 
 const rootDir = dirname(dirname(fileURLToPath(import.meta.url)));
 const src = (rel: string): string => readFileSync(join(rootDir, rel), 'utf8');
-const cmdSrc = src('src/engine/command.ts');
+const cmdSrc = src('src/engine/command/submode-commands.ts');
 const pageSrc = src('src/command/commands/page.ts');
 
 function slice(s: string, from: string, to: string): string {

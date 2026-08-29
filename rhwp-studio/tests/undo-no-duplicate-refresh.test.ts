@@ -16,7 +16,8 @@ const rootDir = dirname(dirname(fileURLToPath(import.meta.url)));
 const src = (rel: string) => readFileSync(join(rootDir, rel), 'utf8');
 
 test('afterEdit 이 document-mutated·document-changed 를 모두 emit 한다(전제)', () => {
-  const ih = src('src/engine/input-handler.ts');
+  // afterEdit 본문은 input-handler-after-edit.ts 로 이관됨 — 가드는 이관된 구현 파일을 읽는다.
+  const ih = src('src/engine/input-handler-after-edit.ts');
   const idx = ih.indexOf("this.eventBus.emit('document-mutated', 'input-handler-edit');");
   assert.notEqual(idx, -1, 'afterEdit 의 document-mutated emit');
   assert.match(

@@ -19,12 +19,14 @@ const rootDir = dirname(dirname(fileURLToPath(import.meta.url)));
 const source = (path: string): string => readFileSync(join(rootDir, path), 'utf8');
 
 function paraChangedEmitBlock(): string {
-  const ih = source('src/engine/input-handler.ts');
-  const start = ih.indexOf('// 문단 속성 (눈금자 마커용) + 스타일');
+  // emitCursorFormatState 본문(문단 속성 발행 블록 포함)은 input-handler-format.ts 로
+  // 이관됨 — 가드는 이관된 구현 파일을 읽는다.
+  const fmt = source('src/engine/input-handler-format.ts');
+  const start = fmt.indexOf('// 문단 속성 (눈금자 마커용) + 스타일');
   assert.notEqual(start, -1, '문단 속성 발행 블록을 찾지 못했다');
-  const end = ih.indexOf("this.eventBus.emit('cursor-para-changed'", start);
+  const end = fmt.indexOf("this.eventBus.emit('cursor-para-changed'", start);
   assert.notEqual(end, -1, 'cursor-para-changed 발행을 찾지 못했다');
-  return ih.slice(start, end);
+  return fmt.slice(start, end);
 }
 
 test('cursor-para-changed 는 대화상자와 같은 리더를 쓴다', () => {

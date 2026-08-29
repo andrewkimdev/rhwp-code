@@ -21,7 +21,8 @@ import { fileURLToPath } from 'node:url';
 // comparePositions 쪽(selection-ordering-nested-cell.test.ts)에서 실경로로 확보한다.
 
 const rootDir = dirname(dirname(fileURLToPath(import.meta.url)));
-const src = readFileSync(join(rootDir, 'src/engine/input-handler.ts'), 'utf8');
+// getCharPropertiesAtCursor 본문은 input-handler-format.ts 로 이관됨 — 가드는 이관된 구현 파일을 읽는다.
+const src = readFileSync(join(rootDir, 'src/engine/input-handler-format.ts'), 'utf8');
 
 /** `NAME(` 시그니처부터 매칭 중괄호가 닫힐 때까지 메서드 본문을 추출. */
 function methodBody(name: string): string {

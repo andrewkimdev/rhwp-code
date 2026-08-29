@@ -18,14 +18,15 @@ test('fit width keeps twenty-pixel side gutters', () => {
 });
 
 test('status bar and view command share the fit helpers', () => {
-  const main = readFileSync(new URL('../src/main.ts', import.meta.url), 'utf8');
+  // P9a: 상태바 맞춤 줌 배선은 src/app/setup-ui.ts 로 이동(재지정).
+  const setupUi = readFileSync(new URL('../src/app/setup-ui.ts', import.meta.url), 'utf8');
   const commands = readFileSync(
     new URL('../src/command/commands/view.ts', import.meta.url),
     'utf8',
   );
 
-  assert.match(main, /calculateFitPageZoom/);
+  assert.match(setupUi, /calculateFitPageZoom/);
   assert.match(commands, /calculateFitPageZoom/);
-  assert.doesNotMatch(main, /containerHeight - 40/);
+  assert.doesNotMatch(setupUi, /containerHeight - 40/);
   assert.doesNotMatch(commands, /containerH - 40/);
 });

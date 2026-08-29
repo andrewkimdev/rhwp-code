@@ -13,14 +13,15 @@ function source(path: string): string {
 function initializeDocumentSource(): string {
   const main = source('src/main.ts');
   const start = main.indexOf('async function initializeDocument');
-  const end = main.indexOf('\nasync function promptLocalFontsIfNeeded', start);
+  // P9b: promptLocalFontsIfNeeded 는 app/open-document.ts 로 이동 — initializeDocument 뒤에 오는 다음 함수로 끝 표식 갱신.
+  const end = main.indexOf('\nfunction prepareCanvasRendererDocument', start);
   assert.ok(start >= 0 && end > start, 'initializeDocument 범위를 찾을 수 있어야 한다');
   return main.slice(start, end);
 }
 
 test('문서 초기화는 로컬 글꼴 확인 후에만 입력 핸들러를 활성화한다', () => {
   const initializeDocument = initializeDocumentSource();
-  const promptIndex = initializeDocument.indexOf('await promptLocalFontsIfNeeded(docInfo, displayName);');
+  const promptIndex = initializeDocument.indexOf('await promptLocalFontsIfNeeded(docInfo, displayName, openDocumentDeps());');
   const activateIndex = initializeDocument.indexOf('inputHandler?.activateWithCaretPosition();');
   const completeIndex = initializeDocument.indexOf("documentState.markClean('document-initialized');");
 

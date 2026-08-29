@@ -167,14 +167,21 @@ test('CanvasKit renderer source does not introduce Canvas2D overlay replay', () 
 });
 
 test('CanvasKit text replay preserves LayerTree positions for regular runs', () => {
-  const source = readFileSync(new URL('../src/view/canvaskit-renderer.ts', import.meta.url), 'utf8');
-  assert.match(source, /if \(hasLayoutPositions\) \{[\s\S]*?canvas\.drawGlyphs\(/);
-  assert.doesNotMatch(source, /needsPreservedAdvances && hasLayoutPositions/);
+  const textRunSource = readFileSync(
+    new URL('../src/view/canvaskit/text-run.ts', import.meta.url),
+    'utf8',
+  );
+  assert.match(textRunSource, /if \(hasLayoutPositions\) \{[\s\S]*?canvas\.drawGlyphs\(/);
+  assert.doesNotMatch(textRunSource, /needsPreservedAdvances && hasLayoutPositions/);
 });
 
 test('CanvasKit text replay uses positioned fallback glyphs and external text visuals', () => {
   const source = readFileSync(new URL('../src/view/canvaskit-renderer.ts', import.meta.url), 'utf8');
-  assert.match(source, /const candidateFonts = \[font\][\s\S]*?selectedFontIndices[\s\S]*?canvas\.drawGlyphs/);
+  const textRunSource = readFileSync(
+    new URL('../src/view/canvaskit/text-run.ts', import.meta.url),
+    'utf8',
+  );
+  assert.match(textRunSource, /const candidateFonts = \[font\][\s\S]*?selectedFontIndices[\s\S]*?canvas\.drawGlyphs/);
   assert.match(source, /case 'charOverlap':\s+this\.renderCharOverlap/);
   assert.match(source, /case 'textControlMark':\s+this\.renderTextControlMark/);
   assert.match(source, /case 'tabLeader':\s+this\.renderTabLeader/);
@@ -190,39 +197,49 @@ test('CanvasKit auto preflight permits text marks but blocks missing structural 
 
 test('CanvasKit contains malformed images and bounds both decode caches', () => {
   const source = readFileSync(new URL('../src/view/canvaskit-renderer.ts', import.meta.url), 'utf8');
+  const imageCacheSource = readFileSync(
+    new URL('../src/view/canvaskit/image-cache.ts', import.meta.url),
+    'utf8',
+  );
   const admissionSource = readFileSync(
     new URL('../src/view/canvaskit/image-header.ts', import.meta.url),
     'utf8',
   );
-  assert.match(source, /try \{\s*image = this\.canvasKit\.MakeImageFromEncoded/);
+  assert.match(imageCacheSource, /try \{\s*image = this\.canvasKit\.MakeImageFromEncoded/);
   assert.match(source, /image:decodeFailed/);
-  assert.match(source, /MAX_IMAGE_CACHE_ENTRIES = 128/);
-  assert.match(source, /MAX_IMAGE_FAILURE_CACHE_ENTRIES = 128/);
-  assert.match(source, /replayableEncodedImageHeader\(bytes\)/);
+  assert.match(imageCacheSource, /MAX_IMAGE_CACHE_ENTRIES = 128/);
+  assert.match(imageCacheSource, /MAX_IMAGE_FAILURE_CACHE_ENTRIES = 128/);
+  assert.match(imageCacheSource, /replayableEncodedImageHeader\(bytes\)/);
   assert.match(admissionSource, /CANVASKIT_MAX_IMAGE_DIMENSION = 8192/);
   assert.match(admissionSource, /CANVASKIT_MAX_DECODED_IMAGE_PIXELS = 32 \* 1024 \* 1024/);
-  assert.match(source, /MAX_IMAGE_CACHE_PIXELS = 64 \* 1024 \* 1024/);
-  assert.match(source, /oldest\?\.image\.delete\?\.\(\)/);
-  assert.match(source, /'base64DecodeFailed'/);
-  assert.match(source, /'encodedImageRejected'/);
-  assert.match(source, /'decodedDimensionsMismatch'/);
-  assert.match(source, /imageFailureCacheHits/);
+  assert.match(imageCacheSource, /MAX_IMAGE_CACHE_PIXELS = 64 \* 1024 \* 1024/);
+  assert.match(imageCacheSource, /oldest\?\.image\.delete\?\.\(\)/);
+  assert.match(imageCacheSource, /'base64DecodeFailed'/);
+  assert.match(imageCacheSource, /'encodedImageRejected'/);
+  assert.match(imageCacheSource, /'decodedDimensionsMismatch'/);
+  assert.match(imageCacheSource, /imageFailureCacheHits/);
   assert.match(source, /generation !== this\.documentGeneration/);
   assert.match(source, /resetDocumentResources\(\): void/);
 });
 
 test('CanvasKit distinguishes missing-picture editor and print replay', () => {
-  const source = readFileSync(new URL('../src/view/canvaskit-renderer.ts', import.meta.url), 'utf8');
-  assert.match(source, /op\.kind === 'missingPicture'/);
-  assert.match(source, /profile === 'print' \|\| profile === 'highQuality'/);
-  assert.match(source, /MAX_PLACEHOLDER_DASH_SEGMENTS_PER_AXIS = 2048/);
-  assert.match(source, /\.every\(Number\.isFinite\)/);
+  const formObjectsSource = readFileSync(
+    new URL('../src/view/canvaskit/form-objects.ts', import.meta.url),
+    'utf8',
+  );
+  assert.match(formObjectsSource, /op\.kind === 'missingPicture'/);
+  assert.match(formObjectsSource, /profile === 'print' \|\| profile === 'highQuality'/);
+  assert.match(formObjectsSource, /MAX_PLACEHOLDER_DASH_SEGMENTS_PER_AXIS = 2048/);
+  assert.match(formObjectsSource, /\.every\(Number\.isFinite\)/);
 });
 
 test('CanvasKit form replay accepts the canonical LayerTree form type names', () => {
-  const source = readFileSync(new URL('../src/view/canvaskit-renderer.ts', import.meta.url), 'utf8');
-  assert.match(source, /op\.formType === 'checkBox'/);
-  assert.match(source, /op\.formType === 'radioButton'/);
+  const formObjectsSource = readFileSync(
+    new URL('../src/view/canvaskit/form-objects.ts', import.meta.url),
+    'utf8',
+  );
+  assert.match(formObjectsSource, /op\.formType === 'checkBox'/);
+  assert.match(formObjectsSource, /op\.formType === 'radioButton'/);
 });
 
 test('PageLayerTree bridge verifies the returned profile instead of relabeling it', () => {

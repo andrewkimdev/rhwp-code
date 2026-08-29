@@ -190,7 +190,7 @@ test('상단 메뉴 하드코딩 단축키와 registry shortcutLabel의 누락 �
 test('표 줄/칸 추가·지우기 대표 메뉴에 한컴 단축키를 표시한다', () => {
   const table = source('src/command/commands/table.ts');
   const html = source('index.html');
-  const inputHandler = source('src/engine/input-handler.ts');
+  const contextMenuItems = source('src/engine/input-handler-context-menu.ts');
   const dialog = source('src/ui/dialog.ts');
 
   assertCommandShortcut(table, 'table:insert-row-col', 'Alt+Enter');
@@ -199,8 +199,8 @@ test('표 줄/칸 추가·지우기 대표 메뉴에 한컴 단축키를 표시�
   assert.match(table, /id: 'table:delete-row-col'[\s\S]*?label: '줄\/칸 지우기\(E\)\.\.\.'/);
   assert.match(html, /data-cmd="table:insert-row-col"[\s\S]*?<span class="md-label">줄\/칸 추가하기\(I\)\.\.\.<\/span>[\s\S]*?<span class="md-shortcut">Alt\+Enter<\/span>/);
   assert.match(html, /data-cmd="table:delete-row-col"[\s\S]*?<span class="md-label">줄\/칸 지우기\(E\)\.\.\.<\/span>[\s\S]*?<span class="md-shortcut">Alt\+Delete<\/span>/);
-  assert.match(inputHandler, /commandId: 'table:insert-row-col'/);
-  assert.match(inputHandler, /commandId: 'table:delete-row-col'/);
+  assert.match(contextMenuItems, /commandId: 'table:insert-row-col'/);
+  assert.match(contextMenuItems, /commandId: 'table:delete-row-col'/);
   assert.match(table, /id: 'table:transpose-copy'[\s\S]*?label: '행\/열 바꿈 복사'/);
   assert.match(table, /id: 'table:transpose-paste'[\s\S]*?label: '행\/열 바꿈 붙여넣기'/);
   assert.doesNotMatch(table, /id: 'table:transpose-copy'[\s\S]*?ih\.exitCellSelectionMode\(\)/);
@@ -209,9 +209,9 @@ test('표 줄/칸 추가·지우기 대표 메뉴에 한컴 단축키를 표시�
   assert.match(table, /id: 'table:transpose-paste'[\s\S]*?range\.startRow[\s\S]*?range\.startCol/);
   assert.match(html, /data-cmd="table:transpose-copy"[\s\S]*?<span class="md-label">행\/열 바꿈 복사<\/span>/);
   assert.match(html, /data-cmd="table:transpose-paste"[\s\S]*?<span class="md-label">행\/열 바꿈 붙여넣기<\/span>/);
-  assert.match(inputHandler, /commandId: 'table:transpose-copy'/);
-  assert.match(inputHandler, /commandId: 'table:transpose-paste'/);
-  assert.match(inputHandler, /getDefaultContextMenuItems[\s\S]*?commandId: 'table:transpose-paste'/);
+  assert.match(contextMenuItems, /commandId: 'table:transpose-copy'/);
+  assert.match(contextMenuItems, /commandId: 'table:transpose-paste'/);
+  assert.match(contextMenuItems, /function getDefaultContextMenuItems[\s\S]*?commandId: 'table:transpose-paste'/);
   assert.match(dialog, /afterClose\?\.\(\)/);
   assert.match(table, /id: 'table:insert-row-col'[\s\S]*?dialog\.afterClose = \(\) => restoreEditorFocus\(ih\)/);
   assert.match(table, /id: 'table:delete-row-col'[\s\S]*?dialog\.afterClose = \(\) => restoreEditorFocus\(ih\)/);
@@ -222,12 +222,12 @@ test('표 줄/칸 추가·지우기 대표 메뉴에 한컴 단축키를 표시�
   assert.doesNotMatch(html, /data-cmd="table:insert-col-right"/);
   assert.doesNotMatch(html, /data-cmd="table:delete-row"/);
   assert.doesNotMatch(html, /data-cmd="table:delete-col"/);
-  assert.doesNotMatch(inputHandler, /commandId: 'table:insert-row-above'/);
-  assert.doesNotMatch(inputHandler, /commandId: 'table:insert-row-below'/);
-  assert.doesNotMatch(inputHandler, /commandId: 'table:insert-col-left'/);
-  assert.doesNotMatch(inputHandler, /commandId: 'table:insert-col-right'/);
-  assert.doesNotMatch(inputHandler, /commandId: 'table:delete-row'/);
-  assert.doesNotMatch(inputHandler, /commandId: 'table:delete-col'/);
+  assert.doesNotMatch(contextMenuItems, /commandId: 'table:insert-row-above'/);
+  assert.doesNotMatch(contextMenuItems, /commandId: 'table:insert-row-below'/);
+  assert.doesNotMatch(contextMenuItems, /commandId: 'table:insert-col-left'/);
+  assert.doesNotMatch(contextMenuItems, /commandId: 'table:insert-col-right'/);
+  assert.doesNotMatch(contextMenuItems, /commandId: 'table:delete-row'/);
+  assert.doesNotMatch(contextMenuItems, /commandId: 'table:delete-col'/);
 });
 
 test('표 줄/칸 메뉴는 macOS에서 Option 기호로 표시한다', () => {

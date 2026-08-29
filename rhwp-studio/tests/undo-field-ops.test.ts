@@ -16,7 +16,8 @@ const rootDir = dirname(dirname(fileURLToPath(import.meta.url)));
 const src = (rel: string): string => readFileSync(join(rootDir, rel), 'utf8');
 const insertSrc = src('src/command/commands/insert.ts');
 const editSrc = src('src/command/commands/edit.ts');
-const ihSrc = src('src/engine/input-handler.ts');
+// 누름틀 지우기 본문은 input-handler-field-nav.ts 로 이관됨 — 가드는 이관된 구현 파일을 읽는다.
+const fieldNavSrc = src('src/engine/input-handler-field-nav.ts');
 
 function slice(s: string, from: string, to: string): string {
   const a = s.indexOf(from);
@@ -41,7 +42,7 @@ test('누름틀 고치기(field:edit)는 snapshot 으로 라우팅된다', () =>
 });
 
 test('누름틀 지우기(removeCurrentField)는 일반=snapshot / 양식=방어적 직접 분기다', () => {
-  const block = slice(ihSrc, 'removeCurrentField(posOverride', 'confirmRemoveCurrentField');
+  const block = slice(fieldNavSrc, 'removeCurrentField(this: any, posOverride', 'confirmRemoveCurrentField');
   // 양식 모드: 현재 도달 경로가 없는 방어적 직접 분기(미래 직접 호출의 무언 폐기 방지).
   assert.match(block, /this\.editMode === 'form'/, '양식 모드 분기 존재');
   assert.match(block, /방어적[\s\S]*현재 도달 경로가 없다/, '현재 도달 경로 없는 방어 분기임을 명시');

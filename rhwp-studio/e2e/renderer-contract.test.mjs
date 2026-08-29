@@ -15,7 +15,14 @@ const repoRoot = path.resolve(studioRoot, '..');
 const canvaskitPath = path.join(studioRoot, 'src/view/canvaskit-renderer.ts');
 const canvaskitDirectory = path.join(studioRoot, 'src/view/canvaskit');
 const canvaskitDiagnosticsPath = path.join(canvaskitDirectory, 'diagnostics.ts');
-const layerTypesPath = path.join(studioRoot, 'src/core/types.ts');
+const equationPath = path.join(canvaskitDirectory, 'equation.ts');
+const shapesPath = path.join(canvaskitDirectory, 'shapes.ts');
+const textRunPath = path.join(canvaskitDirectory, 'text-run.ts');
+const textDecorationsPath = path.join(canvaskitDirectory, 'text-decorations.ts');
+const glyphOutlinePath = path.join(canvaskitDirectory, 'glyph-outline.ts');
+const formObjectsPath = path.join(canvaskitDirectory, 'form-objects.ts');
+// Layer* 렌더 IR 선언은 types/layers.ts 로 분할 이동됨(재수출 심은 src/core/types.ts).
+const layerTypesPath = path.join(studioRoot, 'src/core/types/layers.ts');
 const textIrV2DocPath = path.join(repoRoot, 'docs/text-ir-v2.md');
 const canvaskitParityPlanDocPath = path.join(repoRoot, 'docs/canvaskit-parity-implementation.md');
 const rendererBaselinePath = path.join(studioRoot, 'e2e/renderer-baseline.mjs');
@@ -42,6 +49,12 @@ const fullRendererSweepWorkflowPath = path.join(
 
 const canvaskitSource = fs.readFileSync(canvaskitPath, 'utf8');
 const canvaskitDiagnosticsSource = fs.readFileSync(canvaskitDiagnosticsPath, 'utf8');
+const equationSource = fs.readFileSync(equationPath, 'utf8');
+const shapesSource = fs.readFileSync(shapesPath, 'utf8');
+const textRunSource = fs.readFileSync(textRunPath, 'utf8');
+const textDecorationsSource = fs.readFileSync(textDecorationsPath, 'utf8');
+const glyphOutlineSource = fs.readFileSync(glyphOutlinePath, 'utf8');
+const formObjectsSource = fs.readFileSync(formObjectsPath, 'utf8');
 const layerTypesSource = fs.readFileSync(layerTypesPath, 'utf8');
 const textIrV2DocSource = fs.readFileSync(textIrV2DocPath, 'utf8');
 const canvaskitParityPlanDocSource = fs.readFileSync(canvaskitParityPlanDocPath, 'utf8');
@@ -96,6 +109,13 @@ function extractMethodBody(source, methodName) {
   assert.notEqual(signatureIndex, -1, `missing method ${methodName}`);
 
   return extractBlockBody(source, signatureIndex, methodName);
+}
+
+function extractFunctionBody(source, functionName) {
+  const signatureIndex = source.indexOf(`function ${functionName}(`);
+  assert.notEqual(signatureIndex, -1, `missing function ${functionName}`);
+
+  return extractBlockBody(source, signatureIndex, functionName);
 }
 
 function extractSwitchCaseClusterBody(methodBody, caseLabel) {
@@ -527,12 +547,17 @@ requireSnippet(
 );
 requireSnippet(
   canvaskitSource,
-  /prepareBundledFonts\([\s\S]*?MAX_BUNDLED_FONT_BYTES[\s\S]*?bundledTypefaceAliases\.set[\s\S]*?CanvasKit font family가 준비되지 않았습니다/,
-  'CanvasKit should bound bundled font parsing and reject unprepared explicit families',
+  /prepareBundledFonts\([\s\S]*?MAX_BUNDLED_FONT_BYTES[\s\S]*?bundledTypefaceAliases\.set/,
+  'CanvasKit should bound bundled font parsing while preparing alias families',
 );
 requireSnippet(
-  canvaskitSource,
-  /private findPreparedTypeface\([\s\S]*?const local =[\s\S]*?const bundled =[\s\S]*?if \(local\) return local;[\s\S]*?if \(bundled\) return bundled;/,
+  textDecorationsSource,
+  /renderCharOverlap\([\s\S]*?requirePreparedFontFamilies[\s\S]*?CanvasKit font family가 준비되지 않았습니다/,
+  'CanvasKit should reject unprepared explicit families during special text visual replay',
+);
+requireSnippet(
+  textRunSource,
+  /function findPreparedTypeface\([\s\S]*?const local =[\s\S]*?const bundled =[\s\S]*?if \(local\) return local;[\s\S]*?if \(bundled\) return bundled;/,
   'CanvasKit should prefer an exact prepared local face over its bundled fallback alias',
 );
 requireSnippet(
@@ -664,12 +689,12 @@ assert.ok(
   'CanvasKit unknown op diagnostics should stay unexpected readiness diagnostics',
 );
 assert.ok(
-  canvaskitSource.includes('MAX_FONT_SUBSTITUTION_DIAGNOSTICS = 4096')
+  textRunSource.includes('MAX_FONT_SUBSTITUTION_DIAGNOSTICS = 4096')
     && canvaskitSource.includes('private readonly currentFontSubstitutions = new Map')
     && canvaskitSource.includes('unregisteredFontFallbacks: fontSubstitutions.filter(')
-    && canvaskitSource.includes("candidateFontSources.push('missingGlyphDefault')")
-    && canvaskitSource.includes("candidateFontSources.push('missingGlyphSymbol')")
-    && canvaskitSource.includes("source: 'oldHangul'")
+    && textRunSource.includes("candidateFontSources.push('missingGlyphDefault')")
+    && textRunSource.includes("candidateFontSources.push('missingGlyphSymbol')")
+    && textRunSource.includes("source: 'oldHangul'")
     && canvaskitSource.includes('this.currentFontSubstitutions.clear()'),
   'CanvasKit font substitutions should be bounded, structured, and reset with replay state',
 );
@@ -685,21 +710,21 @@ requireSnippet(
   'glyphOutline should stay guarded by payload status before direct replay',
 );
 
-const renderRectangleBody = extractMethodBody(canvaskitSource, 'renderRectangle');
-const renderEllipseBody = extractMethodBody(canvaskitSource, 'renderEllipse');
-const renderEquationBody = extractMethodBody(canvaskitSource, 'renderEquation');
-const renderEquationBoxBody = extractMethodBody(canvaskitSource, 'renderEquationBox');
-const renderPathBody = extractMethodBody(canvaskitSource, 'renderPath');
-const renderLineBody = extractMethodBody(canvaskitSource, 'renderLine');
-const drawStrokeWithDashBody = extractMethodBody(canvaskitSource, 'drawStrokeWithDash');
-const renderFormObjectBody = extractMethodBody(canvaskitSource, 'renderFormObject');
-const renderPlaceholderBody = extractMethodBody(canvaskitSource, 'renderPlaceholder');
-const renderTextRunBody = extractMethodBody(canvaskitSource, 'renderTextRun');
-const renderShapedScriptTextBody = extractMethodBody(canvaskitSource, 'renderShapedScriptText');
-const renderGlyphRunBody = extractMethodBody(canvaskitSource, 'renderGlyphRun');
-const renderGlyphOutlineBody = extractMethodBody(canvaskitSource, 'renderGlyphOutline');
-const renderColorPaintGraphNodeBody = extractMethodBody(canvaskitSource, 'renderColorPaintGraphNode');
-const recordTextRunCoverageGapsBody = extractMethodBody(canvaskitSource, 'recordTextRunCoverageGaps');
+const renderRectangleBody = extractFunctionBody(shapesSource, 'renderRectangle');
+const renderEllipseBody = extractFunctionBody(shapesSource, 'renderEllipse');
+const renderEquationBody = extractFunctionBody(equationSource, 'renderEquation');
+const renderEquationBoxBody = extractFunctionBody(equationSource, 'renderEquationBox');
+const renderPathBody = extractFunctionBody(shapesSource, 'renderPath');
+const renderLineBody = extractFunctionBody(shapesSource, 'renderLine');
+const drawStrokeWithDashBody = extractFunctionBody(shapesSource, 'drawStrokeWithDash');
+const renderFormObjectBody = extractFunctionBody(formObjectsSource, 'renderFormObject');
+const renderPlaceholderBody = extractFunctionBody(formObjectsSource, 'renderPlaceholder');
+const renderTextRunBody = extractFunctionBody(textRunSource, 'renderTextRun');
+const renderShapedScriptTextBody = extractFunctionBody(textRunSource, 'renderShapedScriptText');
+const renderGlyphRunBody = extractFunctionBody(glyphOutlineSource, 'renderGlyphRun');
+const renderGlyphOutlineBody = extractFunctionBody(glyphOutlineSource, 'renderGlyphOutline');
+const renderColorPaintGraphNodeBody = extractFunctionBody(glyphOutlineSource, 'renderColorPaintGraphNode');
+const recordTextRunCoverageGapsBody = extractFunctionBody(textRunSource, 'recordTextRunCoverageGaps');
 
 const vite = await createServer({
   root: studioRoot,
@@ -1815,7 +1840,7 @@ requireSnippet(
 );
 requireSnippet(
   renderShapedScriptTextBody,
-  /new this\.canvasKit\.ParagraphStyle[\s\S]*?this\.canvasKit\.ParagraphBuilder\.Make[\s\S]*?builder\.addText\(text\)[\s\S]*?paragraph\.layout\(CanvasKitLayerRenderer\.MAX_SHAPED_TEXT_WIDTH\)[\s\S]*?canvas\.drawParagraph\(paragraph, originX, originY - fontSize \+ baselineShift\)[\s\S]*?paragraph\.delete\?\.\(\)[\s\S]*?builder\.delete\?\.\(\)/,
+  /new this\.canvasKit\.ParagraphStyle[\s\S]*?this\.canvasKit\.ParagraphBuilder\.Make[\s\S]*?builder\.addText\(text\)[\s\S]*?paragraph\.layout\(MAX_SHAPED_TEXT_WIDTH\)[\s\S]*?canvas\.drawParagraph\(paragraph, originX, originY - fontSize \+ baselineShift\)[\s\S]*?paragraph\.delete\?\.\(\)[\s\S]*?builder\.delete\?\.\(\)/,
   'old Hangul cluster replay should use CanvasKit paragraph shaping and release native objects',
 );
 requireSnippet(

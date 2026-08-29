@@ -8,7 +8,7 @@ import {
   availableNestedParentBlockNames,
   type TableOutlineEntry,
 } from '../src/core/table-outline.ts';
-import { buildTableRoleMarkerText } from '../src/command/commands/template.ts';
+import { buildTableRoleMarkerText } from '../src/core/template-marker.ts';
 
 // ─── buildTableRoleMarkerText: hwpx-template-engine 이 실제로 읽는 문법과
 // 정확히 같은 문자열을 만드는지 확인한다(docs/TEMPLATE_MARKER_SYNTAX.md §3/§3e). ───

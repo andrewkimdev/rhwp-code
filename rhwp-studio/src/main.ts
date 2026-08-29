@@ -1,7 +1,6 @@
 import { WasmBridge } from '@/core/wasm-bridge';
 import type { DocumentInfo } from '@/core/types';
 import { EventBus } from '@/core/event-bus';
-import { assertRemoteDocumentBytes } from '@/core/document-signature';
 import { CanvasView } from '@/view/canvas-view';
 import { InputHandler } from '@/engine/input-handler';
 import { Toolbar } from '@/ui/toolbar';
@@ -30,19 +29,25 @@ import { toolCommands } from '@/command/commands/tool';
 import { templateValidatorCommands } from '@/command/commands/template-validator';
 import { installPwaFileHandling, type FileHandlingWindowLike } from '@/command/pwa-file-handling';
 import {
-  isSupportedDocumentFileName,
   type FileSystemFileHandleLike,
 } from '@/command/file-system-access';
-import { forgetConvertedHmlSaveHandle } from '@/command/save-target';
 import { ContextMenu } from '@/ui/context-menu';
-import { TemplatePanel } from '@/ui/template-panel';
+import { TemplatePanel } from '@/ui/template/panel';
 import { CommandPalette } from '@/ui/command-palette';
 import { showHmlImportWarning } from '@/ui/hml-import-warning';
-import { showLocalFontsModalIfNeeded } from '@/ui/local-fonts-modal';
 import { showToast } from '@/ui/toast';
-import { addRecentDoc, listRecentDocs } from '@/recent/recent-store';
-import { showDropConfirmDialog } from '@/ui/drop-confirm-dialog';
-import { showHwpPasswordDialog } from '@/ui/hwp-password-dialog';
+import { listRecentDocs } from '@/recent/recent-store';
+import { setupGlobalShortcuts, setupFileInput, setupZoomControls, setupEventListeners } from '@/app/setup-ui';
+import {
+  type OpenDocumentDeps,
+  isDocumentOpenCancelled,
+  loadBytes,
+  loadFile as loadDocumentFile,
+  loadFromUrlParam,
+  promptLocalFontsIfNeeded,
+  showLoadError,
+  showLoadErrorUnlessCancelled,
+} from '@/app/open-document';
 import {
   EMBED_HIDDEN_EDIT_COMMAND_IDS,
   EMBED_HIDDEN_FILE_COMMAND_IDS,
@@ -52,8 +57,7 @@ import {
 import { initRhwpDev } from '@/core/rhwp-dev';
 import { DocumentDirtyState } from '@/core/document-dirty-state';
 import { initThemeSync, setThemeMode, getThemeMode, getEffectiveTheme } from '@/core/theme';
-import { analyzeDocumentFonts } from '@/core/document-font-status';
-import { detectLocalFonts, getLocalFontState, loadStoredLocalFonts } from '@/core/local-fonts';
+import { loadStoredLocalFonts } from '@/core/local-fonts';
 import { userSettings } from '@/core/user-settings';
 import { AutosaveManager, type AutosaveScheduleSettings, type AutosaveStatus } from '@/recovery/autosave-manager';
 import { clearAutosaveDrafts, deleteAutosaveDraft, listAutosaveDrafts, type AutosaveDraft } from '@/recovery/autosave-store';
@@ -63,7 +67,7 @@ import { CellSelectionRenderer } from '@/engine/cell-selection-renderer';
 import { TableObjectRenderer } from '@/engine/table-object-renderer';
 import { TableResizeRenderer } from '@/engine/table-resize-renderer';
 import { Ruler } from '@/view/ruler';
-import { RendererSession, type RendererSessionDiagnostics } from '@/view/renderer-session';
+import { RendererSession } from '@/view/renderer-session';
 import {
   resolveCanvasKitRenderModeRequest,
   resolveCanvasKitSurfaceRequest,
@@ -71,7 +75,6 @@ import {
   resolveRenderProfile,
   type RenderBackendFallbackReason,
 } from '@/view/render-backend';
-import { calculateFitPageZoom, calculateFitWidthZoom } from '@/view/zoom-fit';
 import { installEmbedRuntime } from '@/embed/runtime';
 import type { EmbedRendererRuntimeRequestV1 } from '@/embed/rpc-router';
 
@@ -239,7 +242,7 @@ const plugins = new PluginHostRegistry({
   automation,
   eventBus,
   getInputHandler: () => inputHandler,
-  loadDocument: (bytes, fileName) => loadBytes(bytes, fileName ?? 'document.hwp', null),
+  loadDocument: (bytes, fileName) => loadBytes(bytes, fileName ?? 'document.hwp', null, undefined, undefined, openDocumentDeps()),
   createBlankDocument: () => { void createNewDocument(); },
   resolve: resolvePlugin,
 });
@@ -640,11 +643,23 @@ async function initialize(): Promise<void> {
       });
     }
 
-    setupFileInput();
-    setupZoomControls();
-    setupEventListeners();
-    setupGlobalShortcuts();
-    void loadFromUrlParam();
+    setupFileInput(chromeMode, wasm, inputHandler, (file, options) => loadDocumentFile(file, options, openDocumentDeps()));
+    setupZoomControls(canvasView, wasm);
+    setupEventListeners(
+      eventBus,
+      dispatcher,
+      wasm,
+      documentState,
+      autosaveManager,
+      sbPage,
+      sbSection,
+      sbZoomVal,
+      autosaveScheduleFromUserSettings,
+      (reason) => { renderBackendFallbackReason = reason; },
+      () => totalSections,
+    );
+    setupGlobalShortcuts(inputHandler, dispatcher);
+    void loadFromUrlParam(openDocumentDeps());
     // embed 프로파일: 자동저장 복구 다이얼로그의 드래프트 복원도 호스트가 감지할 수
     // 없는 문서 교체 경로이므로 띄우지 않는다 (드래프트 기록 자체는 유지).
     if (chromeMode !== 'embed') void offerAutosaveRecoveryIfIdle();
@@ -656,10 +671,10 @@ async function initialize(): Promise<void> {
           eventBus.emit('open-document-bytes', payload);
         },
         notifyUnsupportedFile(fileName) {
-          showLoadError(new Error(`지원하지 않는 파일 형식입니다: ${fileName}. HWP/HWPX/HML 파일만 지원합니다.`));
+          showLoadError(new Error(`지원하지 않는 파일 형식입니다: ${fileName}. HWP/HWPX/HML 파일만 지원합니다.`), openDocumentDeps());
         },
         notifyError(error) {
-          showLoadErrorUnlessCancelled(error);
+          showLoadErrorUnlessCancelled(error, openDocumentDeps());
         },
         notifyMultipleFiles(count) {
           console.warn(`[pwa-file-handling] 여러 파일(${count}개)이 전달되어 첫 번째 파일만 엽니다.`);
@@ -691,320 +706,10 @@ async function initialize(): Promise<void> {
  * 전역 단축키 핸들러 — InputHandler.active 여부와 무관하게 동작해야 하는 단축키.
  * 예: 문서 미로드 상태에서도 Alt+N(새 문서), Ctrl+O(열기) 등.
  */
-function setupGlobalShortcuts(): void {
-  document.addEventListener('keydown', (e) => {
-    // input/textarea 등 편집 가능 요소 내부에서는 무시
-    const target = e.target as HTMLElement;
-    if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) return;
-    // InputHandler가 활성 상태이면 자체 처리에 맡김
-    if (inputHandler?.isActive()) return;
 
-    const ctrlOrMeta = e.ctrlKey || e.metaKey;
 
-    // Alt+N / Alt+ㅜ → 새 문서 (문서 미로드 상태에서도 동작)
-    if (e.altKey && !ctrlOrMeta && !e.shiftKey) {
-      if (e.key === 'n' || e.key === 'N' || e.key === 'ㅜ') {
-        e.preventDefault();
-        dispatcher.dispatch('file:new-doc');
-        return;
-      }
-    }
-    // Ctrl/Cmd+O → 열기 (문서 미로드 상태에서도 동작)
-    if (ctrlOrMeta && !e.altKey && !e.shiftKey) {
-      if (e.key === 'o' || e.key === 'O' || e.key === 'ㅐ') {
-        e.preventDefault();
-        dispatcher.dispatch('file:open');
-        return;
-      }
-    }
-  }, false);
-}
-
-function setupFileInput(): void {
-  const fileInput = document.getElementById('file-input') as HTMLInputElement;
-
-  fileInput.addEventListener('change', async (e) => {
-    const input = e.target as HTMLInputElement;
-    const skipUnsavedGuard = input.dataset.skipUnsavedGuard === 'true';
-    delete input.dataset.skipUnsavedGuard;
-    const file = input.files?.[0];
-    if (!file) return;
-    if (!isSupportedDocumentFileName(file.name)) {
-      alert('HWP/HWPX/HML 파일만 지원합니다.');
-      fileInput.value = '';
-      return;
-    }
-    await loadFile(file, { skipUnsavedGuard });
-    fileInput.value = '';
-  });
-
-  // 문서 전체에서 브라우저 기본 드롭 동작 방지 (파일 열기/다운로드 방지)
-  document.addEventListener('dragover', (e) => e.preventDefault());
-  document.addEventListener('drop', (e) => e.preventDefault());
-
-  // 드래그 앤 드롭 지원 (scroll-container 영역)
-  const container = document.getElementById('scroll-container')!;
-  container.addEventListener('dragover', (e) => {
-    e.preventDefault();
-    container.classList.add('drag-over');
-  });
-  container.addEventListener('dragleave', () => {
-    container.classList.remove('drag-over');
-  });
-  container.addEventListener('drop', async (e) => {
-    e.preventDefault();
-    container.classList.remove('drag-over');
-    const file = e.dataTransfer?.files[0];
-    if (!file) return;
-    const dropName = file.name.toLowerCase();
-    const imageExts = ['.png', '.jpg', '.jpeg', '.gif', '.bmp', '.webp'];
-    const isImage = imageExts.some(ext => dropName.endsWith(ext));
-    const isDoc = isSupportedDocumentFileName(dropName);
-    // embed 프로파일: 문서 드롭은 호스트가 감지할 수 없는 문서 교체 경로이므로 무시한다.
-    // 이미지 드롭은 수명주기가 아니라 편집 기능이라 그대로 둔다.
-    if (chromeMode === 'embed' && isDoc) return;
-    if (!isImage && !isDoc) {
-      alert('HWP/HWPX/HML 파일 또는 이미지 파일만 지원합니다.');
-      return;
-    }
-
-    // [#1439] 보안: 드롭으로 로컬 파일을 읽는 동작은 기본에서 제외하고, 사용자가
-    // 명시적으로 [열기]를 눌러 동의한 경우에만 진행한다 (확장/웹 공통).
-    const confirmed = await showDropConfirmDialog(file.name);
-    if (!confirmed) return;
-
-    if (isImage) {
-      if (!inputHandler || wasm.pageCount === 0) return;
-      const data = new Uint8Array(await file.arrayBuffer());
-      const ext = file.name.split('.').pop()?.toLowerCase() || 'png';
-      const img = new Image();
-      const url = URL.createObjectURL(file);
-      try {
-        img.src = url;
-        await img.decode();
-        const result = inputHandler.insertDroppedImageAtClientPoint(
-          data,
-          ext,
-          img.naturalWidth,
-          img.naturalHeight,
-          file.name,
-          e.clientX,
-          e.clientY,
-        );
-        if (!result.ok) {
-          showToast({
-            message: `그림 삽입에 실패했습니다.\n${result.error ?? '삽입 위치 또는 이미지 정보를 확인할 수 없습니다.'}`,
-            durationMs: 6000,
-          });
-        }
-      } catch {
-        console.warn('[drop] 이미지 디코딩 실패:', file.name);
-        showToast({
-          message: '그림을 삽입할 수 없습니다.\n브라우저가 이 이미지 파일을 읽지 못했습니다.',
-          durationMs: 6000,
-        });
-      } finally {
-        URL.revokeObjectURL(url);
-      }
-      return;
-    }
-
-    // HWP/HWPX/HML — Finder/Explorer drop에서는 File System Access handle을 capture하지
-    // 않는다. macOS Chromium에서 encrypted HWPX drag/drop 시 해당 IPC가 renderer를 종료시키는
-    // 사례가 있어, 열기에 충분한 File bytes만 사용한다. 저장은 이후 save-as 경로로 진행한다.
-    await loadFile(file);
-  });
-}
-
-function setupZoomControls(): void {
-  if (!canvasView) return;
-  const vm = canvasView.getViewportManager();
-
-  document.getElementById('sb-zoom-in')!.addEventListener('click', () => {
-    vm.smoothZoomBy(0.1);
-  });
-  document.getElementById('sb-zoom-out')!.addEventListener('click', () => {
-    vm.smoothZoomBy(-0.1);
-  });
-
-  // 폭 맞춤: 용지 폭에 맞게 줌 조절
-  document.getElementById('sb-zoom-fit-width')!.addEventListener('click', () => {
-    if (wasm.pageCount === 0) return;
-    const container = document.getElementById('scroll-container')!;
-    const pageInfo = wasm.getPageInfo(0);
-    // pageInfo.width는 이미 px 단위 (96dpi 기준)
-    const zoom = calculateFitWidthZoom(container.clientWidth, pageInfo.width);
-    console.log(`[zoom-fit-width] container=${container.clientWidth} page=${pageInfo.width} zoom=${zoom.toFixed(3)}`);
-    vm.setZoom(zoom);
-  });
-
-  // 쪽 맞춤: 한 페이지 전체가 보이도록 줌 조절
-  document.getElementById('sb-zoom-fit')!.addEventListener('click', () => {
-    if (wasm.pageCount === 0) return;
-    const container = document.getElementById('scroll-container')!;
-    const pageInfo = wasm.getPageInfo(0);
-    // pageInfo.width/height는 이미 px 단위 (96dpi 기준)
-    const zoom = calculateFitPageZoom(
-      container.clientWidth,
-      container.clientHeight,
-      pageInfo.width,
-      pageInfo.height,
-    );
-    console.log(`[zoom-fit-page] containerW=${container.clientWidth} containerH=${container.clientHeight} pageW=${pageInfo.width} pageH=${pageInfo.height} zoom=${zoom.toFixed(3)}`);
-    vm.setZoom(zoom);
-  });
-
-  // 모바일: 줌 값 클릭 → 100% 토글
-  document.getElementById('sb-zoom-val')!.addEventListener('click', () => {
-    const currentZoom = vm.getZoom();
-    if (Math.abs(currentZoom - 1.0) < 0.05) {
-      // 현재 100% → 쪽 맞춤으로 전환
-      document.getElementById('sb-zoom-fit')!.click();
-    } else {
-      // 현재 쪽 맞춤/기타 → 100%로 전환
-      vm.setZoom(1.0);
-    }
-  });
-
-  document.addEventListener('keydown', (e) => {
-    if (!e.ctrlKey && !e.metaKey) return;
-    if (e.key === '=' || e.key === '+') {
-      e.preventDefault();
-      vm.smoothZoomBy(0.1);
-    } else if (e.key === '-') {
-      e.preventDefault();
-      vm.smoothZoomBy(-0.1);
-    } else if (e.key === '0') {
-      e.preventDefault();
-      vm.setZoom(1.0);
-    }
-  });
-}
 
 let totalSections = 1;
-
-function setupEventListeners(): void {
-  sbPage().addEventListener('click', () => {
-    dispatcher.dispatch('edit:goto');
-  });
-
-  eventBus.on('current-page-changed', (page, _total) => {
-    const pageIdx = page as number;
-    sbPage().textContent = `${pageIdx + 1} / ${_total} 쪽`;
-
-    // 구역 정보: 현재 페이지의 sectionIndex로 갱신
-    if (wasm.pageCount > 0) {
-      try {
-        const pageInfo = wasm.getPageInfo(pageIdx);
-        sbSection().textContent = `구역: ${pageInfo.sectionIndex + 1} / ${totalSections}`;
-      } catch { /* 무시 */ }
-    }
-  });
-
-  eventBus.on('zoom-level-display', (zoom) => {
-    sbZoomVal().textContent = `${Math.round((zoom as number) * 100)}%`;
-  });
-
-  // 삽입/수정 모드 토글
-  eventBus.on('insert-mode-changed', (insertMode) => {
-    document.getElementById('sb-mode')!.textContent = (insertMode as boolean) ? '삽입' : '수정';
-  });
-
-  eventBus.on('document-mutated', (reason) => {
-    documentState.markDirty(typeof reason === 'string' ? reason : 'document-mutated');
-  });
-
-  eventBus.on('document-changed', (reason) => {
-    documentState.markDirty(typeof reason === 'string' ? reason : 'document-changed');
-  });
-
-  eventBus.on('renderer-selection-changed', (payload) => {
-    const diagnostics = payload as RendererSessionDiagnostics;
-    renderBackendFallbackReason = diagnostics.fallbackReason;
-    if (import.meta.env.DEV) {
-      (window as any).__renderBackend = diagnostics.effectiveBackend;
-      (window as any).__renderBackendFallbackReason = diagnostics.fallbackReason;
-      (window as any).__rendererSelection = diagnostics;
-    }
-  });
-
-  eventBus.on('document-dirty-changed', () => {
-    eventBus.emit('command-state-changed');
-  });
-
-  eventBus.on('autosave-settings-changed', () => {
-    autosaveManager.updateSchedule(autosaveScheduleFromUserSettings());
-  });
-
-  // 필드 정보 표시
-  const sbField = document.getElementById('sb-field');
-  eventBus.on('field-info-changed', (info) => {
-    if (!sbField) return;
-    const fi = info as { fieldId: number; fieldType: string; guideName?: string } | null;
-    if (fi) {
-      const label = fi.guideName || `#${fi.fieldId}`;
-      sbField.textContent = `[누름틀] ${label}`;
-      sbField.style.display = '';
-    } else {
-      sbField.textContent = '';
-      sbField.style.display = 'none';
-    }
-  });
-
-  // 개체 선택 시 회전/대칭 버튼 그룹 표시/숨김
-  const rotateGroup = document.querySelector('.tb-rotate-group') as HTMLElement | null;
-  let noteToolbarActive = false;
-  if (rotateGroup) {
-    eventBus.on('picture-object-selection-changed', (selected) => {
-      rotateGroup.style.display = (selected as boolean) && !noteToolbarActive ? '' : 'none';
-    });
-  }
-
-  // 머리말/꼬리말 편집 모드 시 도구상자 전환 + 본문 dimming
-  const hfGroup = document.querySelector('.tb-headerfooter-group') as HTMLElement | null;
-  const hfLabel = hfGroup?.querySelector('.tb-hf-label') as HTMLElement | null;
-  const noteGroup = document.querySelector('.tb-note-group') as HTMLElement | null;
-  const defaultTbGroups = document.querySelectorAll('#icon-toolbar > .tb-group:not(.tb-headerfooter-group):not(.tb-note-group):not(.tb-rotate-group), #icon-toolbar > .tb-sep');
-  const scrollContainer = document.getElementById('scroll-container');
-  const styleBar = document.getElementById('style-bar');
-
-  eventBus.on('headerFooterModeChanged', (mode) => {
-    const isActive = (mode as string) !== 'none';
-    // 도구상자 전환
-    if (hfGroup) {
-      hfGroup.style.display = isActive ? '' : 'none';
-    }
-    if (hfLabel) {
-      hfLabel.textContent = (mode as string) === 'header' ? '머리말' : (mode as string) === 'footer' ? '꼬리말' : '';
-    }
-    defaultTbGroups.forEach((el) => {
-      (el as HTMLElement).style.display = isActive ? 'none' : '';
-    });
-    // 서식 도구 모음은 머리말/꼬리말 편집 시에도 유지 (문단/글자 모양 설정 필요)
-    // 본문 dimming
-    if (scrollContainer) {
-      if (isActive) {
-        scrollContainer.classList.add('hf-editing');
-      } else {
-        scrollContainer.classList.remove('hf-editing');
-      }
-    }
-  });
-
-  eventBus.on('footnoteModeChanged', (active) => {
-    const isActive = active as boolean;
-    noteToolbarActive = isActive;
-    if (noteGroup) {
-      noteGroup.style.display = isActive ? '' : 'none';
-    }
-    if (rotateGroup && isActive) {
-      rotateGroup.style.display = 'none';
-    }
-    defaultTbGroups.forEach((el) => {
-      (el as HTMLElement).style.display = isActive ? 'none' : '';
-    });
-  });
-}
 
 /** 문서 초기화 공통 시퀀스 (loadFile, createNewDocument 양쪽에서 사용) */
 function applySavedTextMarkSettings(): void {
@@ -1072,7 +777,7 @@ async function initializeDocument(
     }
 
     if (!options.suppressDialogs) {
-      await promptLocalFontsIfNeeded(docInfo, displayName);
+      await promptLocalFontsIfNeeded(docInfo, displayName, openDocumentDeps());
     }
 
     // 로컬 글꼴 감지 결과가 뷰를 갱신한 뒤에 캐럿을 연결해야 입력 포커스가 재설정과 경합하지 않는다.
@@ -1094,196 +799,25 @@ async function initializeDocument(
   }
 }
 
-async function promptLocalFontsIfNeeded(docInfo: DocumentInfo, displayName: string): Promise<void> {
-  if (!docInfo.fontsUsed?.length) return;
-
-  const msg = sbMessage();
-  try {
-    await loadStoredLocalFonts();
-    const report = analyzeDocumentFonts(docInfo.fontsUsed);
-    if (!report.shouldPromptLocalAccess) return;
-
-    const choice = await showLocalFontsModalIfNeeded(report, {
-      disableExternalWebFonts: extensionViewerSettings.disableExternalWebFonts,
-    });
-    if (choice !== 'detect') return;
-
-    msg.textContent = '로컬 글꼴 감지 중...';
-    const fonts = await detectLocalFonts({
-      force: true,
-      includeRegistered: true,
-      candidateFamilies: docInfo.fontsUsed,
-    });
-    const nextReport = analyzeDocumentFonts(docInfo.fontsUsed);
-    eventBus.emit('local-fonts-changed', { fonts, report: nextReport });
-    prepareCanvasKitLocalFonts(docInfo.fontsUsed);
-    const state = getLocalFontState();
-    const resultLabel = state.source === 'font-presence-probe' ? '확인됨' : '감지됨';
-    msg.textContent = `${displayName} (로컬 글꼴 ${fonts.length}개 ${resultLabel})`;
-    showToast({
-      message: `로컬 글꼴 ${fonts.length}개를 ${resultLabel.replace('됨', '')}하고 저장했습니다.\n다음 문서 로드부터 감지 결과를 재사용합니다.`,
-      durationMs: 5000,
-    });
-  } catch (error) {
-    console.warn('[local-fonts] 감지 안내/실행 실패 (치명적이지 않음):', error);
-    msg.textContent = displayName;
-    showToast({
-      message: '로컬 글꼴 감지에 실패했습니다.\n웹 대체 글꼴로 계속 표시합니다.',
-      durationMs: 8000,
-    });
-  }
-}
-
-/**
- * 사용자가 암호 입력 대화상자에서 취소한 경우다. 일반 파싱 실패와 달리 오류 토스트나
- * 최근 문서·자동저장 변경을 만들지 않는다 (#3474).
- */
-class DocumentOpenCancelledError extends Error {
-  constructor() {
-    super('문서 열기가 취소되었습니다.');
-    this.name = 'DocumentOpenCancelledError';
-  }
-}
-
-const PASSWORD_REQUIRED_MESSAGE = '비밀번호가 필요한 암호 문서';
-const PASSWORD_REJECTED_MESSAGE = '비밀번호가 일치하지 않거나 암호화 데이터가 손상되었습니다';
-
-function isDocumentOpenCancelled(error: unknown): error is DocumentOpenCancelledError {
-  return error instanceof DocumentOpenCancelledError;
-}
-
-function isPasswordRequiredError(error: unknown): boolean {
-  return String(error).includes(PASSWORD_REQUIRED_MESSAGE);
-}
-
-function isPasswordRejectedError(error: unknown): boolean {
-  return String(error).includes(PASSWORD_REJECTED_MESSAGE);
-}
-
-function passwordOpenFailure(error: unknown): Error {
-  const message = String(error);
-  if (message.includes('지원하지 않는 암호화 방식')) {
-    return new Error('지원하지 않는 암호화 방식의 문서입니다. 지원되는 HWP3/HWP5 암호 문서만 열 수 있습니다.');
-  }
-  if (message.includes('DRM')) {
-    return new Error('DRM으로 보호된 문서는 지원하지 않습니다.');
-  }
-  // 입력값이 포함될 수 있는 원본 오류는 사용자 화면이나 콘솔에 전달하지 않는다. 현재
-  // 암호화 포맷은 오입력과 암호문 훼손을 암호학적으로 판별할 수 없으므로 안전한 일반
-  // 안내로 축약한다.
-  return new Error('암호화된 문서를 열 수 없습니다. 문서가 손상되었는지 확인하세요.');
-}
-
-/**
- * 일반 열기를 먼저 시도하고, 지원되는 HWP3/HWP5 암호 문서가 감지된 경우에만 암호
- * 입력 UI로 전환한다. 암호 문자열은 이 함수의 단일 시도 범위를 벗어나 보관하지 않는다.
- */
-async function loadPasswordProtectedDocument(data: Uint8Array, fileName: string): Promise<DocumentInfo> {
-  let retryMessage: string | undefined;
-
-  while (true) {
-    let password = await showHwpPasswordDialog(fileName, retryMessage);
-    if (password === null) throw new DocumentOpenCancelledError();
-
-    try {
-      return wasm.loadDocumentWithPassword(data, password, fileName);
-    } catch (error) {
-      // CFB 암호문은 인증 태그가 없으므로 오입력과 암호화 데이터 손상을 완전히 구분할 수
-      // 없다. 두 경우만 재입력 상태로 안내하고, 지원하지 않는 암호화/DRM 등은 원래의
-      // 명시적 거부 오류를 유지한다.
-      if (isPasswordRejectedError(error)) {
-        retryMessage = '암호가 일치하지 않거나 문서가 손상되었습니다. 다시 입력하세요.';
-        continue;
-      }
-      throw passwordOpenFailure(error);
-    } finally {
-      // JavaScript 문자열을 확실히 zeroize할 수는 없지만, 대화상자 DOM과 이 지역 참조는
-      // 시도 직후 해제한다. 최근 문서·URL·저장소·문서 메타데이터에는 전달하지 않는다.
-      password = '';
-    }
-  }
-}
-
-async function loadDocumentForOpen(data: Uint8Array, fileName: string): Promise<DocumentInfo> {
-  try {
-    return wasm.loadDocument(data, fileName);
-  } catch (error) {
-    if (!isPasswordRequiredError(error)) throw error;
-    return loadPasswordProtectedDocument(data, fileName);
-  }
-}
-
-function showLoadErrorUnlessCancelled(error: unknown): void {
-  if (isDocumentOpenCancelled(error)) {
-    sbMessage().textContent = '문서 열기를 취소했습니다.';
-    return;
-  }
-  showLoadError(error);
-}
-
-async function loadFile(
-  file: File,
-  options: { skipUnsavedGuard?: boolean; fileHandle?: FileSystemFileHandleLike | null } = {},
-): Promise<boolean> {
-  try {
-    if (!await canReplaceCurrentDocument(options.skipUnsavedGuard)) return false;
-    const startTime = performance.now();
-    await updateLoadProgress(0, '파일 읽는 중...');
-    const data = new Uint8Array(await file.arrayBuffer());
-    await updateLoadProgress(15, '파일 읽기 완료');
-    await loadBytes(data, file.name, options.fileHandle ?? null, startTime, { dataReadProgressShown: true });
-    return true;
-  } catch (error) {
-    showLoadErrorUnlessCancelled(error);
-    return false;
-  }
-}
-
 function prepareCanvasRendererDocument(): void {
   canvasView?.prepareDocumentLoad();
 }
 
-async function loadBytes(
-  data: Uint8Array,
-  fileName: string,
-  fileHandle: typeof wasm.currentFileHandle,
-  startTime = performance.now(),
-  options: { dataReadProgressShown?: boolean; skipRecent?: boolean; suppressDialogs?: boolean } = {},
-): Promise<void> {
-  if (!options.dataReadProgressShown) {
-    await updateLoadProgress(0, '문서 데이터 준비 중...');
-  }
-  await updateLoadProgress(25, '문서 파싱 및 쪽 계산 중...');
-  const docInfo = await loadDocumentForOpen(data, fileName);
-  prepareCanvasRendererDocument();
-  // 문서가 갈렸다 — 빌린 핸들을 쥔 플러그인에 새 lease 를 준다. 알리지 않으면 그쪽만 옛
-  // 문서를 계속 만진다(세대 검사가 잡아 DOCUMENT_RELEASED 로 끊긴다).
-  plugins.notifyDocumentSwap();
-  await updateLoadProgress(45, '자동 저장 준비 중...');
-  forgetConvertedHmlSaveHandle(fileHandle);
-  wasm.currentFileHandle = fileHandle;
-
-  // 최근 문서 기록 — 문서 로드 성공 직후, 폰트/모달 등 블로킹 UI 단계 이전에 기록한다.
-  // 핸들이 있으면 라이브 재열기용으로 함께 기록하고, 없으면(드롭/input/URL 로드)
-  // 메타-only 로 기록한다 — 목록에는 남기되 자동 재열기는 핸들 있는 항목만 가능하다.
-  // 자동저장 복구본은 options.skipRecent 로 제외.
-  if (!options.skipRecent) {
-    void addRecentDoc({
-      fileName: wasm.fileName,
-      sourceFormat: wasm.getSourceFormat(),
-      handle: fileHandle,
-    }).catch((err) => console.warn('[recent] 최근 문서 기록 실패:', err));
-  }
-
-  await autosaveManager.beginDocument(
-    { fileName: wasm.fileName, sourceFormat: wasm.getSourceFormat() },
-    { discardPreviousDraft: true },
-  );
-  await updateLoadProgress(50, '문서 초기화 중...');
-  const elapsed = performance.now() - startTime;
-  await initializeDocument(docInfo, `${fileName} — ${docInfo.pageCount}페이지 (${elapsed.toFixed(1)}ms)`, {
-    suppressDialogs: options.suppressDialogs,
-  });
+/** 문서 열기 파이프라인 deps — 매 호출 시점의 살아있는 값으로 조립한다. */
+function openDocumentDeps(): OpenDocumentDeps {
+  return {
+    wasm,
+    eventBus,
+    autosaveManager,
+    plugins,
+    extensionViewerSettings,
+    sbMessage,
+    prepareCanvasKitLocalFonts,
+    updateLoadProgress,
+    initializeDocument,
+    canReplaceCurrentDocument,
+    prepareCanvasRendererDocument,
+  };
 }
 
 /** 파일 메뉴 "최근 문서" 서브패널을 최신 목록으로 다시 렌더한다(메뉴 open 시 호출). */
@@ -1380,7 +914,7 @@ async function offerAutosaveRecoveryIfIdle(): Promise<void> {
     try {
       await restoreAutosaveDraft(draft);
     } catch (error) {
-      showLoadErrorUnlessCancelled(error);
+      showLoadErrorUnlessCancelled(error, openDocumentDeps());
     }
   } catch (error) {
     console.warn('[autosave] 복구 후보 확인 실패:', error);
@@ -1389,7 +923,7 @@ async function offerAutosaveRecoveryIfIdle(): Promise<void> {
 
 async function restoreAutosaveDraft(draft: AutosaveDraft): Promise<void> {
   const fileName = recoveryFileName(draft.fileName);
-  await loadBytes(new Uint8Array(draft.data), fileName, null, performance.now(), { skipRecent: true });
+  await loadBytes(new Uint8Array(draft.data), fileName, null, performance.now(), { skipRecent: true }, openDocumentDeps());
   await deleteAutosaveDraft(draft.id);
   documentState.markDirty('autosave-recovered');
   showToast({
@@ -1452,11 +986,11 @@ eventBus.on('open-document-bytes', async (payload) => {
       notifyDone(false, '문서 열기가 취소되었습니다.');
       return;
     }
-    await loadBytes(data.bytes, data.fileName, data.fileHandle);
+    await loadBytes(data.bytes, data.fileName, data.fileHandle, undefined, undefined, openDocumentDeps());
     notifyDone(true);
   } catch (error) {
     // #265: WASM 파서 에러 (예: HWP 3.0 미지원) 를 사용자에게 전파
-    showLoadErrorUnlessCancelled(error);
+    showLoadErrorUnlessCancelled(error, openDocumentDeps());
     const msg = isDocumentOpenCancelled(error)
       ? '문서 열기가 취소되었습니다.'
       : error instanceof Error ? error.message : String(error);
@@ -1468,131 +1002,6 @@ eventBus.on('open-document-bytes', async (payload) => {
 eventBus.on('equation-edit-request', () => {
   dispatcher.dispatch('insert:equation-edit');
 });
-
-/**
- * URL 파라미터(?url=)로 전달된 HWP 파일을 자동 로드한다.
- * Chrome 확장 프로그램에서 뷰어 탭을 열 때 사용.
- */
-async function loadFromUrlParam(): Promise<void> {
-  const params = new URLSearchParams(window.location.search);
-  const fileUrl = params.get('url');
-  if (!fileUrl) return;
-
-  const fileName = params.get('filename') || fileUrl.split('/').pop()?.split('?')[0] || 'document.hwp';
-  const msg = sbMessage();
-
-  try {
-    msg.textContent = '파일 로딩 중...';
-    console.log(`[loadFromUrlParam] ${fileUrl}`);
-
-    let response: Response;
-
-    // Chrome 확장 환경: Service Worker를 통한 CORS 우회 fetch
-    if (typeof chrome !== 'undefined' && chrome.runtime?.sendMessage) {
-      try {
-        response = await fetch(fileUrl);
-      } catch {
-        // 직접 fetch 실패 시 Service Worker 프록시
-        const result = await chrome.runtime.sendMessage({ type: 'fetch-file', url: fileUrl });
-        if (result.error) throw new Error(result.error);
-        const data = new Uint8Array(result.data);
-        assertRemoteDocumentBytes(data);
-        await loadBytes(data, fileName, null);
-        return;
-      }
-    } else {
-      response = await fetch(fileUrl);
-    }
-
-    if (!response.ok) throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-    const contentType = response.headers.get('content-type');
-    const buffer = await response.arrayBuffer();
-    const data = new Uint8Array(buffer);
-    assertRemoteDocumentBytes(data, contentType);
-    await loadBytes(data, fileName, null);
-  } catch (error) {
-    if (isDocumentOpenCancelled(error)) {
-      showLoadErrorUnlessCancelled(error);
-      return;
-    }
-    // 로컬 file:// 로드 실패 + "파일 URL 액세스 허용" 미허용 → 전용 안내 (#1131)
-    if (fileUrl.startsWith('file:') && typeof chrome !== 'undefined') {
-      const allowed = await isFileSchemeAccessAllowed();
-      if (allowed === false) {
-        showFileUrlAccessGuidance();
-        return;
-      }
-    }
-    showLoadErrorUnlessCancelled(error);
-  }
-}
-
-/**
- * 확장 프로그램의 "파일 URL에 대한 액세스 허용" 권한 상태를 조회한다 (#1131).
- *
- * 확장 페이지에서만 의미가 있다. API 부재(비-확장 환경 등) 시 판정 불가로
- * `null` 을 반환하여 호출부가 기존 동작(일반 에러)으로 폴백하도록 한다.
- *
- * @returns 허용=true, 미허용=false, 판정 불가=null
- */
-async function isFileSchemeAccessAllowed(): Promise<boolean | null> {
-  const ext = (typeof chrome !== 'undefined' ? chrome.extension : undefined) as
-    | { isAllowedFileSchemeAccess?: () => Promise<boolean> }
-    | undefined;
-  if (!ext?.isAllowedFileSchemeAccess) return null;
-  try {
-    return await ext.isAllowedFileSchemeAccess();
-  } catch {
-    return null;
-  }
-}
-
-/**
- * 로컬 file:// 문서를 열 때 "파일 URL 액세스 허용" 권한이 꺼져 있어 로드가
- * 실패한 경우, 일반 "Failed to fetch" 대신 원인과 해결 방법을 안내한다 (#1131).
- *
- * 설정 화면(chrome://extensions/?id=...)은 일반 링크로는 열리지 않으므로
- * 확장 컨텍스트의 chrome.tabs.create 로 연다.
- */
-function showFileUrlAccessGuidance(): void {
-  const errMsg = '로컬 파일을 열려면 확장 프로그램의 "파일 URL에 대한 액세스 허용"을 켜야 합니다.\n설정에서 권한을 허용한 뒤 파일을 다시 열어 주세요.';
-  const sb = sbMessage();
-  if (sb) sb.textContent = '파일 로드 실패: 파일 URL 액세스 권한이 필요합니다.';
-  console.error('[main] file:// 로드 실패 — 파일 URL 액세스 미허용 (#1131)');
-  showToast({
-    message: errMsg,
-    durationMs: 0, // 사용자가 읽고 직접 닫기
-    confirmLabel: '확인',
-    action: {
-      label: '설정 열기',
-      onClick: () => {
-        if (typeof chrome !== 'undefined' && chrome.tabs?.create && chrome.runtime?.id) {
-          chrome.tabs.create({ url: `chrome://extensions/?id=${chrome.runtime.id}` });
-        }
-      },
-    },
-  });
-}
-
-/**
- * 파일 로드 실패 시 사용자에게 에러를 명확히 알린다 (#265).
- *
- * 상태 표시줄은 22px 한 줄로 긴 에러 메시지가 ellipsis 로 잘리므로,
- * 우상단 토스트 (긴 메시지 줄바꿈 지원 · 사용자 닫기 · action 링크) 를
- * 병행 사용한다.
- */
-function showLoadError(error: unknown): void {
-  const raw = String(error).replace(/^Error:\s*/, '');
-  const errMsg = `파일 로드 실패: ${raw}`;
-  const sb = sbMessage();
-  if (sb) sb.textContent = errMsg;
-  console.error('[main] 파일 로드 실패:', error);
-  showToast({
-    message: errMsg,
-    durationMs: 0, // 에러는 자동 페이드 없음 — 사용자가 읽고 닫기
-    confirmLabel: '확인',
-  });
-}
 
 const initPromise = initialize();
 
@@ -1609,7 +1018,7 @@ installEmbedRuntime({
       if (!await canReplaceCurrentDocument(skipUnsavedGuard)) {
         throw new Error('문서 열기가 취소되었습니다.');
       }
-      await loadBytes(data, fileName, null, undefined, { suppressDialogs });
+      await loadBytes(data, fileName, null, undefined, { suppressDialogs }, openDocumentDeps());
       return { pageCount: wasm.pageCount };
     },
     async pageCount() {
