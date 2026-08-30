@@ -487,6 +487,9 @@ export class InputHandler {
     this.onCompositionEndBound = this.onCompositionEnd.bind(this);
     this.onInputBlurBound = () => {
       this.flushDeferredPaginationIfNeeded('input-blur', false);
+      // 편집 표면(textarea) 밖으로 포커스가 나가면 활성 누름틀을 해제해
+      // 안내문을 다시 표시한다 (#클릭 후 클릭-away 시 안내문이 안 돌아오는 결함).
+      this.clearActiveFieldMarker();
     };
     this.onCopyBound = this.onCopy.bind(this);
     this.onCutBound = this.onCut.bind(this);
@@ -2714,6 +2717,11 @@ export class InputHandler {
   /** 커서 위치의 필드 상태에 따라 낫표 마커를 표시/숨김한다 */
   private updateFieldMarkers(): void {
     _fieldNav.updateFieldMarkers.call(this);
+  }
+
+  /** 활성 필드를 무조건 해제하고 마커를 숨긴다 (안내문 다시 표시). */
+  private clearActiveFieldMarker(): void {
+    _fieldNav.clearActiveFieldMarker.call(this);
   }
 
   /** 커서가 누름틀 필드 내부인가? */

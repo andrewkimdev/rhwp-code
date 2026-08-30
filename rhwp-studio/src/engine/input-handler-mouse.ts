@@ -944,6 +944,7 @@ export function onClick(this: any, e: MouseEvent): void {
 
   const earlyOleHit = this.findPictureAtClick(pageIdx, pageX, pageY);
   if (earlyOleHit?.type === 'ole') {
+    this.clearActiveFieldMarker?.();
     selectOleObjectFromHit.call(this, earlyOleHit);
     return;
   }
@@ -953,6 +954,7 @@ export function onClick(this: any, e: MouseEvent): void {
 
     // 머리말/꼬리말 마커 para_index(usize::MAX - hf_idx) 감지 → 무시
     if (hit.paragraphIndex >= 0xFFFFFF00) {
+      this.clearActiveFieldMarker?.();
       this.textarea.focus();
       return;
     }
@@ -960,6 +962,7 @@ export function onClick(this: any, e: MouseEvent): void {
     // 표 경계선 클릭 감지 → 표 객체 선택 (셀 내부에서 외곽 클릭)
     if (hit.parentParaIndex !== undefined && hit.controlIndex !== undefined && !hit.isTextBox) {
       if (this.isTableBorderClick(pageIdx, pageX, pageY, hit.sectionIndex, hit.parentParaIndex, hit.controlIndex)) {
+        this.clearActiveFieldMarker?.();
         this.cursor.clearSelection();
         this.cursor.moveToHit(hit); // 셀 위치로 이동 (유효한 렌더링 위치)
         this.cursor.enterTableObjectSelectionDirect(hit.sectionIndex, hit.parentParaIndex, hit.controlIndex);
@@ -979,6 +982,7 @@ export function onClick(this: any, e: MouseEvent): void {
     if (hit.parentParaIndex === undefined || hit.controlIndex === undefined) {
       const tableHit = this.findTableByOuterClick(pageIdx, pageX, pageY, hit.sectionIndex, hit.paragraphIndex);
       if (tableHit) {
+        this.clearActiveFieldMarker?.();
         this.cursor.clearSelection();
         this.cursor.enterTableObjectSelectionDirect(tableHit.sec, tableHit.ppi, tableHit.ci);
         this.active = true;
@@ -995,6 +999,7 @@ export function onClick(this: any, e: MouseEvent): void {
 
     // 보호 셀은 텍스트 커서를 넣지 않고 셀 선택 상태로 전환한다.
     if (isProtectedCellHit(this, hit)) {
+      this.clearActiveFieldMarker?.();
       selectProtectedCell.call(this, hit);
       if (e.button === 0) {
         const cellRC = this.hitTestCellRowCol(e);
@@ -1036,6 +1041,7 @@ export function onClick(this: any, e: MouseEvent): void {
     // 만 경계선 검사 — 한컴 UX 정합 (글상자 BBox 테두리만 객체 선택).
     if (hit.isTextBox && hit.parentParaIndex !== undefined && hit.controlIndex !== undefined) {
       if (this.isShapeBorderClickByRef(pageX, pageY, hit.sectionIndex, hit.parentParaIndex, hit.controlIndex)) {
+        this.clearActiveFieldMarker?.();
         this.cursor.clearSelection();
         this.exitPictureObjectSelectionIfNeeded();
         this.cursor.enterPictureObjectSelectionDirect(
@@ -1056,6 +1062,7 @@ export function onClick(this: any, e: MouseEvent): void {
     if (!hit.isTextBox) {
       const shapeHit = this.findShapeByOuterClick(pageX, pageY, hit.sectionIndex, hit.paragraphIndex);
       if (shapeHit) {
+        this.clearActiveFieldMarker?.();
         this.cursor.clearSelection();
         this.exitPictureObjectSelectionIfNeeded();
         this.cursor.enterPictureObjectSelectionDirect(
@@ -1079,6 +1086,7 @@ export function onClick(this: any, e: MouseEvent): void {
     if (hit.isTextBox) {
       const tbPic = this.findPictureAtClick(pageIdx, pageX, pageY);
       if (tbPic && (tbPic.type === 'image' || tbPic.type === 'equation') && (tbPic as any).cellPath) {
+        this.clearActiveFieldMarker?.();
         this.cursor.clearSelection();
         this.exitPictureObjectSelectionIfNeeded();
         this.cursor.enterPictureObjectSelectionDirect(
@@ -1136,6 +1144,7 @@ export function onClick(this: any, e: MouseEvent): void {
 
         if (picHit.type === 'line') {
           // 직선 → 맨 앞으로 이동 후 객체 선택
+          this.clearActiveFieldMarker?.();
           bringShapeToFront.call(this, picHit);
           this.cursor.clearSelection();
           this.exitPictureObjectSelectionIfNeeded();
@@ -1178,6 +1187,7 @@ export function onClick(this: any, e: MouseEvent): void {
           // 이미 처리됨. 본 분기는 hit_test_native 가 textbox_hit 매칭 못한 케이스
           // 또는 글상자 안 표/이미지 hit 등으로 textbox 처리가 안 된 케이스.)
           if (this.isShapeBorderClickByRef(pageX, pageY, picHit.sec, picHit.ppi, picHit.ci)) {
+            this.clearActiveFieldMarker?.();
             bringShapeToFront.call(this, picHit);
             this.cursor.clearSelection();
             this.exitPictureObjectSelectionIfNeeded();
@@ -1197,6 +1207,7 @@ export function onClick(this: any, e: MouseEvent): void {
           // → 일반 캐럿 배치로 fall-through (글상자 가로채기 제거)
         }
         // 이미지/방정식/OLE → 객체 선택 (z-order 미지원)
+        this.clearActiveFieldMarker?.();
         this.cursor.clearSelection();
         this.exitPictureObjectSelectionIfNeeded();
         this.cursor.enterPictureObjectSelectionDirect(
@@ -1221,6 +1232,7 @@ export function onClick(this: any, e: MouseEvent): void {
     {
       const formHit = this.wasm.getFormObjectAt(pageIdx, pageX, pageY);
       if (formHit.found) {
+        this.clearActiveFieldMarker?.();
         this.handleFormObjectClick(formHit, pageIdx, zoom);
         this.textarea.focus();
         return;

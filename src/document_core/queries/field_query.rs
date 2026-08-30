@@ -1205,11 +1205,14 @@ impl DocumentCore {
         false
     }
 
-    /// 활성 필드를 해제한다.
-    pub fn clear_active_field(&mut self) {
+    /// 활성 필드를 해제한다. 실제로 해제된 필드가 있었으면 true 반환.
+    pub fn clear_active_field(&mut self) -> bool {
         if self.active_field.is_some() {
             self.active_field = None;
             self.invalidate_page_tree_cache();
+            true
+        } else {
+            false
         }
     }
 

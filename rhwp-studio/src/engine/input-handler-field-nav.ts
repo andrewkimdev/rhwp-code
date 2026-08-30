@@ -444,13 +444,34 @@ export function getClickHereBoundaryRects(this: any, pos: DocumentPosition, star
   }
 }
 
+/**
+ * 활성 필드를 무조건 해제하고 마커를 숨긴다 (안내문 다시 표시).
+ *
+ * 텍스트 편집 자체를 완전히 벗어나는 지점(blur, 표/글상자/보호 셀 객체 선택
+ * 진입 등)에서 쓴다. `updateFieldMarkers` 처럼 커서 위치를 다시 조회해 같은
+ * 필드인지 판정하지 않고 무조건 해제하므로, 커서 위치가 갱신되지 않는(또는
+ * 의미 없는) 지점에서도 안전하다.
+ *
+ * [주의] `this.fieldMarker.isVisible` 는 실제 활성 필드 존재 여부의 신뢰할
+ * 수 있는 대리 지표가 아니다 — `updateFieldMarkers` 의 선택 분기처럼 마커만
+ * 숨기고 wasm 쪽 active_field 해제를 재렌더 없이 수행하는 경로가 있으면 두
+ * 상태가 어긋난다. 그래서 `wasm.clearActiveField()` 자체의 반환값(실제로
+ * 해제된 필드가 있었는지)으로 재렌더 필요 여부를 판정한다.
+ */
+export function clearActiveFieldMarker(this: any): void {
+  this.fieldStartExitKey = null;
+  this.fieldEndExitKey = null;
+  if (this.fieldMarker.isVisible) this.fieldMarker.hide();
+  const hadActiveField = this.wasm.clearActiveField();
+  if (hadActiveField) this.eventBus.emit('document-changed');
+  this.eventBus.emit('field-info-changed', null);
+}
+
 /** 커서 위치의 필드 상태에 따라 낫표 마커를 표시/숨김한다 */
 export function updateFieldMarkers(this: any): void {
   const wasVisible = this.fieldMarker.isVisible;
   if (this.cursor.hasSelection()) {
-    if (wasVisible) this.fieldMarker.hide();
-    this.wasm.clearActiveField();
-    this.eventBus.emit('field-info-changed', null);
+    clearActiveFieldMarker.call(this);
     return;
   }
   try {
@@ -458,9 +479,7 @@ export function updateFieldMarkers(this: any): void {
     const fi = this.wasm.getFieldInfoAt(pos);
     if (fi.inField && fi.startCharIdx !== undefined && fi.endCharIdx !== undefined) {
       if (this.isAtExitedFieldStart(pos, fi) || this.isAtExitedFieldEnd(pos, fi)) {
-        if (wasVisible) this.fieldMarker.hide();
-        this.wasm.clearActiveField();
-        this.eventBus.emit('field-info-changed', null);
+        clearActiveFieldMarker.call(this);
         return;
       }
       this.fieldStartExitKey = null;
@@ -487,12 +506,5 @@ export function updateFieldMarkers(this: any): void {
     }
   } catch (err) { console.warn('[updateFieldMarkers] 필드 마커 갱신 실패:', err); }
   // 필드 밖이면 마커 숨김 + 활성 필드 해제
-  this.fieldStartExitKey = null;
-  this.fieldEndExitKey = null;
-  if (wasVisible) {
-    this.fieldMarker.hide();
-    this.wasm.clearActiveField();
-    this.eventBus.emit('document-changed');
-    this.eventBus.emit('field-info-changed', null);
-  }
+  clearActiveFieldMarker.call(this);
 }

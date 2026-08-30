@@ -3018,10 +3018,10 @@ export class WasmBridge {
     }
   }
 
-  /** 활성 필드를 해제한다 (안내문 다시 표시). */
-  clearActiveField(): void {
-    if (!this.doc) return;
-    (this.doc as any).clearActiveField();
+  /** 활성 필드를 해제한다 (안내문 다시 표시). 변경 시 true 반환. */
+  clearActiveField(): boolean {
+    if (!this.doc) return false;
+    return (this.doc as any).clearActiveField();
   }
 
   /** 누름틀 필드 속성을 조회한다. */

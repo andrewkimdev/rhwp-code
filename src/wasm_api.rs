@@ -2135,10 +2135,10 @@ impl HwpDocument {
         }
     }
 
-    /// 활성 필드를 해제한다 (안내문 다시 표시).
+    /// 활성 필드를 해제한다 (안내문 다시 표시). 변경 시 true 반환.
     #[wasm_bindgen(js_name = clearActiveField)]
-    pub fn clear_active_field_api(&mut self) {
-        self.clear_active_field();
+    pub fn clear_active_field_api(&mut self) -> bool {
+        self.clear_active_field()
     }
 
     // ─── 누름틀 속성 조회/수정 API ──────────────────────────────
