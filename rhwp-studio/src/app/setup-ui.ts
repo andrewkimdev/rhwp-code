@@ -22,7 +22,6 @@ import type { RenderBackendFallbackReason } from '@/view/render-backend';
 import type { resolveChromeModeRequest } from '@/ui/chrome-mode';
 import { isSupportedDocumentFileName } from '@/command/file-system-access';
 import { showToast } from '@/ui/toast';
-import { showDropConfirmDialog } from '@/ui/drop-confirm-dialog';
 import { calculateFitPageZoom, calculateFitWidthZoom } from '@/view/zoom-fit';
 
 export function setupGlobalShortcuts(inputHandler: InputHandler | null, dispatcher: CommandDispatcher): void {
@@ -106,11 +105,6 @@ export function setupFileInput(
       alert('HWP/HWPX/HML 파일 또는 이미지 파일만 지원합니다.');
       return;
     }
-
-    // [#1439] 보안: 드롭으로 로컬 파일을 읽는 동작은 기본에서 제외하고, 사용자가
-    // 명시적으로 [열기]를 눌러 동의한 경우에만 진행한다 (확장/웹 공통).
-    const confirmed = await showDropConfirmDialog(file.name);
-    if (!confirmed) return;
 
     if (isImage) {
       if (!inputHandler || wasm.pageCount === 0) return;

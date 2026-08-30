@@ -27,7 +27,6 @@ test('암호 문서는 명시적인 암호 필요 오류에서만 입력 UI로 �
 
 test('드롭 문서도 파일 메뉴와 같은 암호 열기 경로를 쓰며 File System Access handle을 capture하지 않는다', () => {
   const dropPath = between(setupUiSource, "container.addEventListener('drop', async (e) => {", 'export function setupZoomControls');
-  assert.match(dropPath, /const confirmed = await showDropConfirmDialog\(file\.name\)/, '드롭 열기 확인을 유지해야 합니다');
   assert.match(dropPath, /await loadFile\(file\);/, '드롭 문서는 파일 메뉴와 같은 loadFile 경로를 사용해야 합니다');
   assert.doesNotMatch(dropPath, /captureDroppedFileHandle|getAsFileSystemHandle|fileHandle:/,
     '암호 문서 드롭에서 Chromium File System Access IPC를 시작하면 안 됩니다');
