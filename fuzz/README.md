@@ -14,7 +14,7 @@ WMF·OOXML 차트 2개). `cargo-fuzz`(libFuzzer) 기반으로 rhwp의 포맷 최
 | `parse_hwp3` | `rhwp::parser::hwp3::parse_hwp3(&[u8])` — HWP 3.x | `src/parser/hwp3/mod.rs` |
 | `parse_hwpx` | `rhwp::parser::hwpx::parse_hwpx(&[u8])` — HWPX (ZIP) | `src/parser/hwpx/mod.rs` |
 | `parse_hml` | `rhwp::parser::hml::parse_hml(&[u8])` — HML (XML) | `src/parser/hml/mod.rs` |
-| `parse_wmf` | `WMFConverter::new(data, SVGPlayer::new()).run()` — WMF (임베드 이미지) | `src/renderer/svg.rs:3308` |
+| `parse_wmf` | `WMFConverter::new(data, SVGPlayer::new()).run()` — WMF (임베드 이미지) | `src/wmf/converter/mod.rs` |
 | `parse_ooxml_chart` | `rhwp::ooxml_chart::parser::parse_chart_xml(&[u8])` — OOXML 차트 | `src/ooxml_chart/parser.rs` |
 
 각 하네스는 `let _ = parse_xxx(data);` 형태로 반환값을 무시합니다 —

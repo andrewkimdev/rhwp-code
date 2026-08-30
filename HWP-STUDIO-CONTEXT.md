@@ -1,3 +1,13 @@
+STALE NOTICE (doc audit, 2026-08-30): everything below predates 2026-08-23 and describes
+a session that ended with several files "staged for the user to review/commit" — that is
+no longer true. The field-name-suggest work described at the bottom as "NOT YET COMMITTED"
+was committed as fba80adc7, and has since moved on through further commits (bda5abb98,
+0ff0b5a5a, 9b17e0922) that changed the feature described here: notably bda5abb98
+("누름틀 생성 버튼 통합 — review list 제거") removed the checkbox/review-list UI this
+file describes in detail. Treat everything below as a historical record of a closed
+session, not the current state of rhwp-studio or an accurate list of uncommitted files —
+check `git log`/`git status` for the real current state.
+
 CONTEXT: Continuing work on chosun-form/rhwp-code (a fork of "rhwp", the Rust HWP/HWPX
 document engine + rhwp-studio TS frontend). chosun-form itself has NO .git — always cd
 into rhwp-code (or its rhwp-studio subdir) before any git command.

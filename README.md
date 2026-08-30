@@ -318,6 +318,8 @@ src/
 ├── emf/                       # EMF parser + SVG converter
 ├── ooxml_chart/               # OOXML chart parser + SVG renderer
 ├── serializer/                # HWP/HWPX/HML serializer (save)
+├── mcp_serve.rs               # MCP server (stdio JSON-RPC) — `rhwp mcp-serve`
+├── capsule_sign.rs, lineage_bundle.rs, provenance.rs, audit_standard.rs  # 작업 증빙: `rhwp replay`/`lineage`/`audit` capsule 체계
 └── wasm_api.rs                # WASM bindings
 
 rhwp-studio/                   # Web editor (TypeScript + Vite)

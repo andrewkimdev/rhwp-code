@@ -4,14 +4,18 @@
 //! 도구 **선언**을 냈다면, 본 모듈은 그 선언을 단일 출처(`crate::mcp_tool_definitions`)로
 //! 공유하면서 **실행**까지 잇는다:
 //!
-//! - 무상태 도구(`hwp_info` 등 13종): 선언의 `cli.args` 배선을 그대로 해석해 자기 자신을
-//!   서브프로세스로 실행한다 — 검증된 CLI 계약(#2707 종료 코드, stdout 순수성)을 문자
-//!   그대로 재사용하므로 서버와 CLI 가 어긋날 수 없다.
-//! - 세션 도구(`hwp_open`/`hwp_doc_text`/`hwp_close`): #3140 이 짚은 "상태 유지" 공백.
-//!   문서를 한 번 파싱해 핸들로 잡아두고, 재파싱 없이 반복 조회한다.
+//! - 무상태 도구(`hwp_info` 등 다수, 선언 전체는 `crate::mcp_tool_definitions`): 선언의
+//!   `cli.args` 배선을 그대로 해석해 자기 자신을 서브프로세스로 실행한다 — 검증된 CLI
+//!   계약(#2707 종료 코드, stdout 순수성)을 문자 그대로 재사용하므로 서버와 CLI 가
+//!   어긋날 수 없다.
+//! - 세션 도구(`hwp_open`/`hwp_doc_text`/`hwp_close` 등, 전체 목록은
+//!   `agent_profiles::ALL_SESSION_TOOLS`): #3140 이 짚은 "상태 유지" 공백. 문서를 한 번
+//!   파싱해 핸들로 잡아두고, 재파싱 없이 반복 조회한다.
 //! - 세션 편집(`hwp_doc_fill_fields`/`hwp_doc_save`, #3598): 열린 핸들의 IR 에 편집을
 //!   **누적**하고 save 에서 한 번만 기록한다 — 판정 어휘(filledCount/notFound/ambiguous)와
 //!   형식 보존(#3383)은 무상태 `edit` 경로와 같은 코어 함수를 재사용해 동형을 보장한다.
+//! - 세션 워크스페이스(`hwp_ws_list`/`hwp_ws_open`/`hwp_doc_tree`/`hwp_ws_journal`, #4357 W1):
+//!   코퍼스 인벤토리·id 로 문서 열기·안정 ID 트리·세션 변이 저널.
 //!
 //! 의존성은 추가하지 않는다 — 프로토콜 표면(initialize/ping/tools/list/tools/call)이
 //! 좁아 serde_json 만으로 충분하고, WASM 대상에는 아예 포함되지 않는다.
