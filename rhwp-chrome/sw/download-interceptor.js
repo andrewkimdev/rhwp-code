@@ -35,6 +35,43 @@ function isLocalFileDownload(item) {
 }
 
 /**
+ * 다운로드 항목이 blob: URL(페이지가 URL.createObjectURL 로 생성)인지 판별 (#issue).
+ *
+ * blob: URL은 그것을 생성한 페이지의 origin에만 등록되어 있어 확장 페이지/서비스
+ * 워커에서는 애초에 fetch가 불가능하다 — 재요청 전략이 통하지 않으므로 완료 후
+ * 디스크에 쓰인 실제 경로(file://)로 대체해야 한다.
+ */
+function isBlobDownload(item) {
+  return typeof item?.url === 'string' && item.url.startsWith('blob:');
+}
+
+/**
+ * 절대 로컬 경로를 file:// URI로 변환한다.
+ *
+ * chrome.downloads.DownloadItem.filename 은 OS 절대 경로 문자열이다(Windows는
+ * 백슬래시 + 드라이브 문자 포함). Node의 url.pathToFileURL 과 동일한 변환 규칙을
+ * 서비스 워커 환경(Node API 없음)에서 직접 구현한다.
+ */
+function buildFileUrlFromLocalPath(path) {
+  if (typeof path !== 'string' || path.length === 0) return null;
+
+  let normalized = path.replace(/\\/g, '/');
+  if (!normalized.startsWith('/')) normalized = `/${normalized}`;
+
+  const encoded = normalized
+    .split('/')
+    .map((segment) => (/^[a-zA-Z]:$/.test(segment) ? segment : encodeURIComponent(segment)))
+    .join('/');
+
+  return `file://${encoded}`;
+}
+
+/** 절대 경로에서 파일명만 추출 (표시용). */
+function basename(path) {
+  return path.split(/[\\/]/).pop() || path;
+}
+
+/**
  * 다운로드 관찰자를 설정한다.
  *
  * - 로컬 file:// HWP: 뷰어를 열고 다운로드는 cancel + erase 로 억제 (#1131)
@@ -109,6 +146,14 @@ async function processDownloadCandidateOnce(item, state) {
     const latestState = await getDownloadState(item.id);
     if (latestState?.handledAt) return latestState;
     const activeState = latestState || state;
+
+    // blob: 다운로드는 완료되어 디스크에 실제 파일이 쓰이기 전에는 뷰어가 열
+    // 방법이 없다(생성 시점 item.url 은 재요청 불가능한 페이지-origin blob).
+    // 완료되면 handleChanged 의 재검사 로직이 다시 이 함수를 호출해준다.
+    if (isBlobDownload(item) && item.state !== 'complete') {
+      return activeState;
+    }
+
     const settings = await loadSettingsForAutomaticActions(chrome);
     const reason = settings.autoOpen ? 'opened' : 'auto-open-disabled';
     const handledState = markDownloadHandled(activeState, Date.now(), reason);
@@ -152,10 +197,18 @@ function handleHwpDownload(item) {
     console.warn(`[rhwp] 대용량 파일: ${item.filename} (${(item.fileSize / 1024 / 1024).toFixed(1)}MB)`);
   }
 
-  openViewer({
-    url: item.url,
-    filename: item.filename,
-  });
+  // blob: 소스는 재요청이 불가능하므로, 완료된 다운로드가 디스크에 쓴 실제
+  // 경로(file://)를 대신 사용한다. isLocalFileDownload 의 중복 다운로드 억제와
+  // 달리, 이 파일은 사용자가 실제로 내려받은 유일한 사본이므로 지우지 않는다.
+  let url = item.url;
+  let filename = item.filename;
+
+  if (isBlobDownload(item) && item.filename) {
+    url = buildFileUrlFromLocalPath(item.filename);
+    filename = basename(item.filename); // item.filename 은 이 시점에 절대 경로
+  }
+
+  openViewer({ url, filename });
 }
 
 function stateKey(id) {

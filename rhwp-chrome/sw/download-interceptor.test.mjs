@@ -219,6 +219,54 @@ test('non-HWP blob PDF download is ignored', async () => {
   });
 });
 
+// blob: 다운로드(예: hwpx-template-engine 웹 UI가 URL.createObjectURL 로 생성한 URL)는
+// 생성 시점의 item.url 이 재요청 불가능하므로, 완료(state: 'complete')될 때까지 뷰어를
+// 열지 않고 기다렸다가 디스크에 쓰인 실제 경로를 file:// 로 변환해 사용해야 한다.
+test('blob HWP download defers until complete, then opens viewer with file:// URL', async () => {
+  const env = createChromeMock();
+  const blobUrl = 'blob:http://localhost:8080/22222222-2222-4222-8222-222222222222';
+
+  await withChromeMock(env, async ({ listeners, calls, searchItems }) => {
+    listeners.onCreated[0]({
+      id: 601,
+      url: blobUrl,
+      filename: 'sample.hwpx',
+      mime: 'application/hwp+zip',
+      state: 'in_progress',
+    });
+    await flushAsyncWork();
+
+    // 완료 전에는 blob: URL을 그대로 뷰어에 넘기지 않는다 (열람 불가능한 URL).
+    assert.deepEqual(calls.tabsCreate, []);
+
+    searchItems.set(601, {
+      id: 601,
+      url: blobUrl,
+      filename: '/Users/melee/Downloads/sample.hwpx',
+      mime: 'application/hwp+zip',
+      state: 'complete',
+      startTime: new Date().toISOString(),
+      endTime: new Date().toISOString(),
+    });
+    await listeners.onChanged[0]({
+      id: 601,
+      state: { current: 'complete' },
+    });
+    await flushAsyncWork();
+
+    assert.equal(calls.tabsCreate.length, 1);
+    const openedUrl = calls.tabsCreate[0].url;
+    assert.match(openedUrl, /^chrome-extension:\/\/rhwp\/viewer\.html\?/);
+    assert.match(openedUrl, /url=file%3A%2F%2F%2FUsers%2Fmelee%2FDownloads%2Fsample\.hwpx/);
+    assert.match(openedUrl, /filename=sample\.hwpx/);
+    assert.equal(openedUrl.includes('blob'), false);
+
+    // 실제로 내려받은 유일한 사본이므로 취소/삭제하지 않는다 (file:// 중복 억제와 다름).
+    assert.deepEqual(calls.cancel, []);
+    assert.deepEqual(calls.erase, []);
+  });
+});
+
 test('HWP download opens viewer once', async () => {
   const env = createChromeMock();
 
