@@ -175,6 +175,13 @@ export class TemplatePanel {
     this.refresh();
   }
 
+  /** 구분선(hr) — 같은 DOM 노드를 여러 자리에 재사용할 수 없으므로 호출마다 새로 만든다. */
+  private static divider(): HTMLHRElement {
+    const hr = document.createElement('hr');
+    hr.className = 'tp-divider';
+    return hr;
+  }
+
   private build(): void {
     const header = document.createElement('div');
     header.className = 'tp-header';
@@ -200,6 +207,14 @@ export class TemplatePanel {
     this.contentEl = document.createElement('div');
     this.contentEl.className = 'tp-content';
 
+    // 템플릿으로 저장 (맨 위)
+    const saveTemplateBtn = document.createElement('button');
+    saveTemplateBtn.type = 'button';
+    saveTemplateBtn.className = 'tp-btn tp-btn--primary';
+    saveTemplateBtn.textContent = '템플릿으로 저장';
+    saveTemplateBtn.title = '현재 문서를 "파일명_template.hwpx"로 즉시 저장합니다.';
+    saveTemplateBtn.addEventListener('click', () => this.dispatcher.dispatch('template:save-as-template'));
+
     // 표 개요
     const outlineSection = document.createElement('div');
     const outlineLabel = document.createElement('div');
@@ -215,6 +230,9 @@ export class TemplatePanel {
     this.hintEl.className = 'tp-hint';
 
     // 마커 미리보기
+    const previewLabel = document.createElement('div');
+    previewLabel.className = 'tp-section-label';
+    previewLabel.textContent = '마커 미리보기';
     this.previewEl = document.createElement('div');
     this.previewEl.className = 'tp-preview';
 
@@ -253,15 +271,25 @@ export class TemplatePanel {
     });
     this.entity = new EntitySection(this.wasm);
 
+    this.contentEl.appendChild(saveTemplateBtn);
+    this.contentEl.appendChild(TemplatePanel.divider());
+
     this.contentEl.appendChild(outlineSection);
+    this.contentEl.appendChild(TemplatePanel.divider());
+
     this.contentEl.appendChild(this.hintEl);
     this.contentEl.appendChild(this.roles.roleFieldEl);
     this.contentEl.appendChild(this.roles.blockNameFieldEl);
     this.contentEl.appendChild(this.roles.nestedToggleFieldEl);
     this.contentEl.appendChild(this.roles.nestedParentFieldEl);
+    this.contentEl.appendChild(previewLabel);
     this.contentEl.appendChild(this.previewEl);
     this.contentEl.appendChild(actions);
+    this.contentEl.appendChild(TemplatePanel.divider());
+
     this.contentEl.appendChild(this.fieldSuggest.fieldsetEl);
+    this.contentEl.appendChild(TemplatePanel.divider());
+
     this.contentEl.appendChild(this.entity.fieldsetEl);
 
     body.appendChild(this.emptyEl);

@@ -8,7 +8,8 @@
   "scripts": {
     "dev": "vite",
     "build": "node build.mjs",
-    "clean": "rm -rf dist"
+    "clean": "rm -rf dist",
+    "sync:hwpx-template-engine": "npm run build && node scripts/sync-to-hwpx-template-engine.mjs"
   },
   "devDependencies": {
     "typescript": "^7.0.2",

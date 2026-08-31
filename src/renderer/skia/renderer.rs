@@ -3,6 +3,7 @@ use skia_safe::{
     PathEffect, RRect, Rect, Typeface,
 };
 use std::borrow::Cow;
+use std::cell::RefCell;
 use std::collections::{BTreeSet, HashMap, HashSet};
 
 use crate::error::HwpError;
@@ -14,6 +15,7 @@ use crate::paint::{
     LayerGlyphRunPaint, LayerNode, LayerNodeKind, LayerOutputOptions, PageLayerTree, PaintOp,
     PaintReplayPlane, ResourceArena, TextVariantQuality,
 };
+use crate::renderer::font_resolution_report::FontResolutionReport;
 use crate::renderer::form_caption::display_form_caption;
 use crate::renderer::layer_renderer::{
     LayerRasterRenderer, LayerRenderResult, RasterOutputFormat, RasterRenderOptions,
@@ -301,6 +303,11 @@ pub struct SkiaLayerRenderer {
     /// headless macOS 에서 missing family 를 CoreText 에 넘기면 downloadable font
     /// lookup IPC가 영구 대기할 수 있어, match_family_style 호출 전 사전 필터로 사용한다.
     system_families: SystemFontFamilies,
+    /// [폰트 해석 보고] 이 인스턴스로 그린 모든 텍스트의 폰트 해석 결과 누적.
+    /// 렌더 메서드가 전부 `&self` 라 내부 가변성이 필요하다. 여러 페이지를
+    /// 같은 인스턴스로 그리면 계속 누적되며, 호출측이 `take_font_report`로
+    /// 필요한 시점(페이지마다 또는 문서 전체 끝)에 꺼내 간다.
+    font_report: RefCell<FontResolutionReport>,
 }
 
 impl SkiaLayerRenderer {
@@ -322,7 +329,16 @@ impl SkiaLayerRenderer {
             custom_typefaces: HashMap::new(),
             bundled_typefaces: HashMap::new(),
             system_families: system_families.clone(),
+            font_report: RefCell::new(FontResolutionReport::new()),
         })
+    }
+
+    /// 지금까지 누적된 폰트 해석 보고를 꺼내고 내부 상태를 비운다.
+    ///
+    /// 페이지마다 호출해 문서-레벨 리포트에 `merge` 하거나, 문서 전체 렌더가
+    /// 끝난 뒤 한 번만 호출해도 된다 — 어느 쪽이든 누락 없이 집계된다.
+    pub fn take_font_report(&self) -> FontResolutionReport {
+        std::mem::take(&mut *self.font_report.borrow_mut())
     }
 
     fn load_typefaces_from_dirs(
@@ -651,6 +667,7 @@ impl SkiaLayerRenderer {
             bundled_typefaces: &self.bundled_typefaces,
             system_families: &self.system_families,
             output_options,
+            font_report: &self.font_report,
         };
         let open_shape_transform =
             |transform: crate::renderer::render_tree::ShapeTransform,
@@ -2835,6 +2852,108 @@ mod tests {
         let image = decode_rgba(&output.bytes);
 
         assert!(count_ink(&image) > 0);
+    }
+
+    fn text_run_tree(text: &str, font_family: &str) -> PageLayerTree {
+        let run = TextRunNode {
+            text: text.to_string(),
+            style: TextStyle {
+                font_family: font_family.to_string(),
+                font_size: 18.0,
+                color: 0x00000000,
+                ..Default::default()
+            },
+            char_shape_id: None,
+            para_shape_id: None,
+            section_index: None,
+            para_index: None,
+            char_start: None,
+            cell_context: None,
+            is_para_end: false,
+            is_line_break_end: false,
+            rotation: 0.0,
+            is_vertical: false,
+            char_overlap: None,
+            border_fill_id: 0,
+            baseline: 20.0,
+            field_marker: Default::default(),
+            display_text: None,
+        };
+        PageLayerTree::new(
+            64.0,
+            32.0,
+            LayerNode::leaf(
+                BoundingBox::new(0.0, 0.0, 64.0, 32.0),
+                None,
+                vec![PaintOp::text_run(
+                    BoundingBox::new(4.0, 4.0, 24.0, 24.0),
+                    run,
+                )],
+            ),
+        )
+    }
+
+    #[test]
+    fn font_report_stays_empty_when_no_font_family_declared() {
+        let renderer = SkiaLayerRenderer::new();
+        let tree = text_run_tree("A", "");
+        renderer
+            .render_raster_with_options(&tree, RasterRenderOptions::default())
+            .expect("render text");
+
+        assert!(
+            renderer.take_font_report().is_empty(),
+            "선언된 폰트가 없으면(빈 문자열) 경고를 내지 않아야 한다"
+        );
+    }
+
+    #[test]
+    fn font_report_flags_unresolvable_declared_font() {
+        let renderer = SkiaLayerRenderer::new();
+        let tree = text_run_tree("A", "ThisFontDefinitelyDoesNotExist9999");
+        renderer
+            .render_raster_with_options(&tree, RasterRenderOptions::default())
+            .expect("render text");
+
+        let report = renderer.take_font_report();
+        let warnings = report.notable_warnings();
+        assert_eq!(warnings.len(), 1, "warnings={warnings:?}");
+        let w = warnings[0];
+        assert_eq!(w.requested_family, "ThisFontDefinitelyDoesNotExist9999");
+        assert_eq!(
+            w.metrics_tier,
+            crate::renderer::font_resolution_report::MetricsTier::Unknown
+        );
+        // 실제로 어떤 폴백 typeface 가 잡히는지(Arial 같은 curated 후보가 시스템에
+        // 있으면 DesignedSubstitute, 없으면 번들 NotoSansKR 을 통한
+        // GenericFallback)는 테스트 환경의 설치 폰트에 따라 달라진다 — 여기서
+        // 검증할 불변조건은 "요청한 이름 그대로는 아니다"(Exact 아님)와
+        // "어떤 typeface 로든 그리기는 했다"(Missing/두부 아님) 두 가지뿐이다.
+        use crate::renderer::font_resolution_report::GlyphTier;
+        assert!(
+            matches!(
+                w.glyph_tier,
+                GlyphTier::DesignedSubstitute | GlyphTier::GenericFallback
+            ),
+            "glyph_tier={:?}",
+            w.glyph_tier
+        );
+        assert_eq!(w.affected_chars, 1);
+    }
+
+    #[test]
+    fn font_report_take_drains_accumulated_state() {
+        let renderer = SkiaLayerRenderer::new();
+        let tree = text_run_tree("A", "ThisFontDefinitelyDoesNotExist9999");
+        renderer
+            .render_raster_with_options(&tree, RasterRenderOptions::default())
+            .expect("render text");
+
+        assert!(!renderer.take_font_report().is_empty());
+        assert!(
+            renderer.take_font_report().is_empty(),
+            "take 이후에는 내부 상태가 비어 있어야 한다(중복 보고 방지)"
+        );
     }
 
     #[test]

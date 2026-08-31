@@ -117,3 +117,4 @@ bindings/node/node_modules/
 /.zcode/
 # 루트 스크래치(테스트 비교 산출물·로그·핸드오버 메모) — tmp/ 와 같은 취급
 /temp/
+.vite/

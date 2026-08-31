@@ -11,8 +11,27 @@ import { expandRowRangeForMerges, readTableMarkerText } from '../../core/table-o
 import { showToast } from '../../ui/toast.ts';
 import { buildTableRoleMarkerText, type TemplateTableRole } from '../../core/template-marker.ts';
 import { tagSelectionOperation, clearTableRoleMarker } from './template-ops.ts';
+import {
+  createSavePayload,
+  downloadBlob,
+  flushDeferredPaginationBeforeExplicitOutput,
+  showExportContentLoss,
+  tryFileSystemSave,
+} from './file.ts';
+import { persistDownloadWithContentLoss, persistWithContentLoss } from '../../core/export-content-loss.ts';
+import type { FileSystemFileHandleLike } from '../file-system-access.ts';
+import { templateFileName } from '../template-save-name.ts';
 
 export type { TemplateTableRole, TagSelectionParams } from '../../core/template-marker.ts';
+export { templateFileName } from '../template-save-name.ts';
+
+/**
+ * "템플릿으로 저장" 클릭 사이에 저장 위치를 기억해 두 번째 클릭부터는 대화상자
+ * 없이 그 자리에 덮어쓴다(파일:저장의 currentFileHandle과 같은 아이디어). 문서가
+ * 바뀌면(`documentGeneration` 증가 — 새 문서 열기/새로 만들기) 무효화된다 — 다른
+ * 문서의 이전 저장 위치에 실수로 덮어쓰지 않기 위해서다.
+ */
+let templateSaveHandleCache: { generation: number; handle: FileSystemFileHandleLike } | null = null;
 
 export const templateCommands: CommandDef[] = [
   {
@@ -135,6 +154,64 @@ export const templateCommands: CommandDef[] = [
         });
       } catch (err) {
         console.error('[template:clear-marker] 실패:', err);
+      }
+    },
+  },
+  {
+    // 템플릿 패널 상단 "템플릿으로 저장" 버튼 — 원본 형식과 무관하게 항상 HWPX로,
+    // 원본 문서와 같은 폴더에 저장한다. 첫 클릭만 저장 위치를 고르는 대화상자를
+    // 띄우고(원본 파일과 같은 폴더에서 시작 — startIn), 그 뒤로는 같은 문서
+    // 세션 안에서 대화상자 없이 그 자리에 덮어쓴다(templateSaveHandleCache).
+    // File System Access API 미지원 브라우저에서는 대화상자/폴더 지정 없이
+    // 바로 다운로드하는 이전 동작으로 폴백한다.
+    id: 'template:save-as-template',
+    label: '템플릿으로 저장',
+    canExecute: (ctx) => ctx.hasDocument,
+    async execute(services) {
+      try {
+        flushDeferredPaginationBeforeExplicitOutput(services, 'save-as-template');
+        const payload = createSavePayload(services, 'hwpx');
+        const suggestedName = templateFileName(services.wasm.fileName);
+        const generation = services.wasm.documentGeneration;
+        const cachedHandle = templateSaveHandleCache?.generation === generation
+          ? templateSaveHandleCache.handle
+          : null;
+
+        const result = await persistWithContentLoss(
+          payload.contentLoss,
+          () => tryFileSystemSave(
+            services,
+            'hwpx',
+            payload.blob,
+            suggestedName,
+            !cachedHandle,
+            cachedHandle,
+            cachedHandle ? undefined : services.wasm.currentFileHandle,
+          ),
+          (saveResult) => saveResult !== 'cancelled' && saveResult.method !== 'fallback',
+          showExportContentLoss,
+        );
+        if (result === 'cancelled') return;
+
+        if (result.method === 'fallback') {
+          // 캐시된 위치에 더 이상 쓸 수 없었거나(권한 취소 등) API 미지원 —
+          // 다음 클릭은 새로 위치를 고르도록 캐시를 비운다.
+          if (cachedHandle) templateSaveHandleCache = null;
+          persistDownloadWithContentLoss(
+            payload.contentLoss,
+            () => downloadBlob(payload.blob, suggestedName),
+            showExportContentLoss,
+          );
+          showToast({ message: `${suggestedName} 로 저장했습니다.`, durationMs: 2200 });
+          return;
+        }
+
+        templateSaveHandleCache = { generation, handle: result.handle! };
+        showToast({ message: `${result.fileName} 로 저장했습니다.`, durationMs: 2200 });
+      } catch (err) {
+        console.error('[template:save-as-template] 저장 실패:', err);
+        const msg = err instanceof Error ? err.message : String(err);
+        showToast({ message: `템플릿 저장에 실패했습니다: ${msg}`, durationMs: 4000 });
       }
     },
   },

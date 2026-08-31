@@ -106,7 +106,7 @@ function saveBaseNameFor(fileName: string, format: SaveFormat): string {
   return fileNameForFormat(fileName, format).replace(/\.(hwp|hwpx|hml)$/i, '');
 }
 
-function flushDeferredPaginationBeforeExplicitOutput(
+export function flushDeferredPaginationBeforeExplicitOutput(
   services: CommandServices,
   reason: string,
 ): void {
@@ -133,7 +133,7 @@ interface SavePayload {
   contentLoss: ContentLossReport | null;
 }
 
-function createSavePayload(
+export function createSavePayload(
   services: CommandServices,
   format: SaveFormat,
   password?: string,
@@ -153,7 +153,7 @@ function createSavePayload(
   };
 }
 
-function showExportContentLoss(report: ContentLossReport): void {
+export function showExportContentLoss(report: ContentLossReport): void {
   const message = buildContentLossNotice(report);
   if (!message) return;
   showToast({ message, durationMs: 0, confirmLabel: '확인' });
@@ -181,13 +181,14 @@ function getHmlSaveContext(services: CommandServices) {
   );
 }
 
-async function tryFileSystemSave(
+export async function tryFileSystemSave(
   services: CommandServices,
   format: SaveFormat,
   blob: Blob,
   suggestedName: string,
   forceSaveAs: boolean,
   currentHandle: FileSystemFileHandleLike | null,
+  startIn?: FileSystemFileHandleLike | null,
 ): Promise<SaveDocumentResult | 'cancelled'> {
   try {
     return await saveDocumentToFileSystem({
@@ -197,6 +198,7 @@ async function tryFileSystemSave(
       windowLike: window as FileSystemWindowLike,
       forceSaveAs,
       saveFormat: format,
+      startIn,
     });
   } catch (error) {
     if (isUserCancelError(error)) return 'cancelled';
@@ -219,7 +221,7 @@ function completeHandleSave(
   services.documentState.markClean(reason);
 }
 
-function downloadBlob(blob: Blob, fileName: string): void {
+export function downloadBlob(blob: Blob, fileName: string): void {
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement('a');
   anchor.href = url;

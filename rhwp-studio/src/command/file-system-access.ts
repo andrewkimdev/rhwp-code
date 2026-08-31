@@ -32,6 +32,8 @@ export interface FileSystemWindowLike {
     excludeAcceptAllOption?: boolean;
     suggestedName?: string;
     types?: FilePickerType[];
+    /** 저장 대화상자가 처음 열리는 폴더 — 다른 핸들과 같은 폴더에서 시작하고 싶을 때 그 핸들을 전달한다. */
+    startIn?: FileSystemFileHandleLike | 'desktop' | 'documents' | 'downloads' | 'music' | 'pictures' | 'videos';
   }) => Promise<FileSystemFileHandleLike>;
 }
 
@@ -49,6 +51,8 @@ export interface SaveDocumentOptions {
   forceSaveAs: boolean;
   /** 저장 picker와 확장자 검증을 결정하는 단일 출력 포맷. */
   saveFormat: SaveFormat;
+  /** picker가 열릴 때 시작 폴더로 삼을 핸들(예: 원본 문서 핸들) — currentHandle 경로에서는 쓰이지 않는다. */
+  startIn?: FileSystemFileHandleLike | null;
 }
 
 export interface SaveDocumentResult {
@@ -138,7 +142,7 @@ export async function readFileFromHandle(handle: FileSystemFileHandleLike): Prom
 }
 
 export async function saveDocumentToFileSystem(options: SaveDocumentOptions): Promise<SaveDocumentResult> {
-  const { blob, suggestedName, currentHandle, windowLike, forceSaveAs, saveFormat } = options;
+  const { blob, suggestedName, currentHandle, windowLike, forceSaveAs, saveFormat, startIn } = options;
 
   // 저장 picker 형식을 출력 포맷에 맞춘다 (HML/HWP/HWPX).
   const pickerTypes = pickerTypesForFormat(saveFormat);
@@ -163,6 +167,7 @@ export async function saveDocumentToFileSystem(options: SaveDocumentOptions): Pr
       excludeAcceptAllOption: true,
       suggestedName,
       types: pickerTypes,
+      ...(startIn ? { startIn } : {}),
     });
     await assertValidSaveHandle(
       handle,

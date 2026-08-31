@@ -353,3 +353,50 @@ test('HML로 저장을 선택하면 HML 저장 picker 형식(.hml)을 사용한�
   assert.equal(result.handle, pickerHandle);
   assert.equal(pickerHandle.writable.writes.length, 1);
 });
+
+test('startIn을 넘기면 save picker가 같은 폴더에서 열리도록 그대로 전달한다', async () => {
+  const originalHandle = createHandle('opened.hwpx');
+  const pickerHandle = createHandle('opened_template.hwpx');
+  const blob = new Blob(['saved'], { type: 'application/hwp+zip' });
+  let receivedStartIn: unknown;
+
+  const result = await saveDocumentToFileSystem({
+    blob,
+    suggestedName: 'opened_template.hwpx',
+    currentHandle: null,
+    forceSaveAs: true,
+    saveFormat: 'hwpx',
+    startIn: originalHandle,
+    windowLike: {
+      showSaveFilePicker: async (options) => {
+        receivedStartIn = options?.startIn;
+        return pickerHandle;
+      },
+    },
+  });
+
+  assert.equal(receivedStartIn, originalHandle);
+  assert.equal(result.handle, pickerHandle);
+});
+
+test('startIn을 넘기지 않으면 save picker 옵션에 startIn이 없다', async () => {
+  const pickerHandle = createHandle('new-doc.hwp');
+  const blob = new Blob(['saved'], { type: 'application/x-hwp' });
+  let receivedOptions: Record<string, unknown> | undefined;
+
+  await saveDocumentToFileSystem({
+    blob,
+    suggestedName: 'new-doc.hwp',
+    currentHandle: null,
+    forceSaveAs: false,
+    saveFormat: 'hwp',
+    windowLike: {
+      showSaveFilePicker: async (options) => {
+        receivedOptions = options as Record<string, unknown>;
+        return pickerHandle;
+      },
+    },
+  });
+
+  assert.equal(Object.hasOwn(receivedOptions ?? {}, 'startIn'), false);
+});

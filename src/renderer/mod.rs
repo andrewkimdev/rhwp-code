@@ -17,6 +17,7 @@ pub mod float_placement;
 pub mod font_metrics_data;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod font_paths;
+pub mod font_resolution_report;
 pub(crate) mod form_caption;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod glyph_cache_file;
@@ -1284,6 +1285,35 @@ pub fn canvas_font_family_chain(font_family: &str) -> String {
     families.join(", ")
 }
 
+/// 폰트명이 (Windows) 고정폭 계열(굴림체/바탕체/*coding/*courier/*mono)인지 판정한다.
+///
+/// `generic_fallback`의 CSS 체인 선택과 native-skia `text_replay`의 typeface 후보
+/// 선택이 이 판정을 각자 다르게(혹은 아예 없이) 구현하면, 같은 문서가 빌드 feature
+/// (`native-skia` 유무)에 따라 다른 글꼴 계열로 렌더된다 — 이 함수가 두 경로의
+/// 단일 출처다. KoPub돋움체 Light/KoPub바탕체는 이름에 "체"가 들어가지만 실제로는
+/// 비례폭 출판용 서체이므로 제외한다(위 `generic_fallback`의 KoPub 분기와 동일 예외).
+pub(crate) fn is_monospace_font_family(font_family: &str) -> bool {
+    if font_family.is_empty() {
+        return false;
+    }
+    let lower = font_family.to_ascii_lowercase();
+    if (font_family.contains("KoPub돋움체") || lower.contains("kopub dotum"))
+        && (font_family.contains("Light") || lower.contains("light"))
+    {
+        return false;
+    }
+    if font_family.contains("KoPub바탕체") || lower.contains("kopub batang") {
+        return false;
+    }
+    font_family.contains("굴림체")
+        || font_family.contains("바탕체")
+        || lower.contains("gulimche")
+        || lower.contains("batangche")
+        || lower.contains("coding")
+        || lower.contains("courier")
+        || lower.contains("mono")
+}
+
 /// CSS generic fallback 반환 (serif 또는 sans-serif)
 ///
 /// 폰트 이름에 명조/바탕/궁서 등 세리프 계열 키워드가 포함되면 "serif",
@@ -1317,14 +1347,7 @@ pub fn generic_fallback(font_family: &str) -> &'static str {
     if font_family.contains("KoPub바탕체") || lower.contains("kopub batang") {
         return "'Batang','바탕','Nanum Myeongjo','AppleMyungjo','Noto Serif KR','Noto Serif CJK KR','HCR Batang Ext-B','함초롬바탕 확장B','HCR Batang Ext','함초롬바탕 확장','HCR Batang','함초롬바탕','Source Han Serif K Old Hangul',serif";
     }
-    if font_family.contains("굴림체")
-        || font_family.contains("바탕체")
-        || lower.contains("gulimche")
-        || lower.contains("batangche")
-        || lower.contains("coding")
-        || lower.contains("courier")
-        || lower.contains("mono")
-    {
+    if is_monospace_font_family(font_family) {
         // Monospace: Windows → 오픈소스 → generic
         return "'GulimChe','굴림체','D2Coding','Noto Sans Mono',monospace";
     }

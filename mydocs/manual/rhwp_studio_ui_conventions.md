@@ -2,7 +2,7 @@
 kind: reference
 status: active
 canonical: mydocs/manual/rhwp_studio_ui_conventions.md
-last_verified: 2026-08-23
+last_verified: 2026-08-30
 ---
 
 # rhwp-studio UI 명칭과 CSS 접두어
@@ -16,7 +16,7 @@ last_verified: 2026-08-23
 | 서식 도구 모음 | `#style-bar` | 스타일·글꼴·크기·정렬 등 서식 제어 |
 | 편집 영역 | `#scroll-container` | 문서 페이지 렌더링과 스크롤 영역 |
 | 상태 표시줄 | `#status-bar` | 쪽·구역·편집 모드·확대 배율 표시 |
-| 템플릿 패널 | `#template-panel` | hwpx-template-engine 마커 authoring 도킹 패널 (표 개요·역할 지정) + 누름틀 만들기 — 버튼 하나(`tp-fieldsuggest-btn`)가 표 인접 셀 자동 스캔(`field-name-suggest.ts`)과 선택 텍스트 기반 삽입(`selection-text.ts`) 두 소스를 모두 review list 없이 클릭 1회로 즉시 생성한다(셀 선택 모드 → 행 스캔, 텍스트 선택 → 그 텍스트로 단건 생성, 둘 다 없으면 커서 행 스캔) + Java 엔티티 생성(`template-entity-window.ts` 오버레이 창을 여는 코드/패키지 입력 + 버튼, `template_entity.rs`의 `TemplateEntityGenerator` 클라이언트 포트를 서버 왕복 없이 호출) 두 소스가 별도 fieldset으로 공존 |
+| 템플릿 패널 | `#template-panel` | hwpx-template-engine 마커 authoring 도킹 패널. 패널 맨 위 "템플릿으로 저장" 버튼(`template:save-as-template`)이 현재 문서를 원본 형식과 무관하게 `<파일명>_template.hwpx`로 저장한다 — 이미 `_template`로 끝나는 파일명에는 접미사를 다시 붙이지 않는다(`template-save-name.ts`). File System Access 지원 브라우저에서는 원본 파일과 같은 폴더에서 저장 위치를 고르고(최초 1회, `startIn`) 이후 같은 문서 세션 안에서는 대화상자 없이 그 자리에 덮어쓰며, 미지원 브라우저에서는 바로 다운로드로 폴백한다(`command/commands/template.ts`) + 표 개요·역할 지정 + 누름틀 만들기 — 버튼 하나(`tp-fieldsuggest-btn`)가 표 인접 셀 자동 스캔(`field-name-suggest.ts`)과 선택 텍스트 기반 삽입(`selection-text.ts`) 두 소스를 모두 review list 없이 클릭 1회로 즉시 생성한다(셀 선택 모드 → 행 스캔, 텍스트 선택 → 그 텍스트로 단건 생성, 둘 다 없으면 커서 행 스캔) + Java 엔티티 생성(`template-entity-window.ts` 오버레이 창을 여는 코드/패키지 입력 + 버튼, `template_entity.rs`의 `TemplateEntityGenerator` 클라이언트 포트를 서버 왕복 없이 호출) 두 소스가 별도 fieldset으로 공존. 상위 섹션들은 `.tp-divider`(hr)로 시각적으로 구분된다 |
 
 ## CSS 접두어
 

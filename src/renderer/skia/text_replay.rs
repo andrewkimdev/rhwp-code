@@ -1,3 +1,4 @@
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 
 use skia_safe::{
@@ -9,6 +10,9 @@ use crate::paint::LayerOutputOptions;
 use crate::renderer::composer::{
     char_overlap_size_ratio, decode_pua_overlap_number, expand_pua_render_text,
     pua_to_display_text, CharOverlapInfo,
+};
+use crate::renderer::font_resolution_report::{
+    classify_glyph_source, FontResolutionReport, GlyphMatchSource,
 };
 use crate::renderer::layout::{
     compute_char_positions, is_halfwidth_cjk_quote, split_into_clusters,
@@ -28,6 +32,10 @@ pub(super) struct SkiaTextReplay<'a> {
     pub(super) bundled_typefaces: &'a HashMap<String, Typeface>,
     pub(super) system_families: &'a SystemFontFamilies,
     pub(super) output_options: &'a LayerOutputOptions,
+    /// [폰트 해석 보고] 이 페이지에서 실제로 어떤 typeface 로 그렸는지 누적한다.
+    /// 여러 텍스트 런이 같은 `&self` 를 공유하므로 `RefCell` — 소유자는
+    /// `SkiaLayerRenderer::font_report`.
+    pub(super) font_report: &'a RefCell<FontResolutionReport>,
 }
 
 impl SkiaTextReplay<'_> {
@@ -74,20 +82,44 @@ impl SkiaTextReplay<'_> {
                     (false, true) => FontStyle::italic(),
                     (false, false) => FontStyle::normal(),
                 };
-                let mut families = Vec::new();
+                // [폰트 해석 보고] 요청 이름(문서 선언 그대로)과 이 코드가 미리
+                // 정해 둔 대체 후보를 별도 목록으로 나눈다 — 실제 탐색 순서(아래
+                // 3단계 루프)는 예전과 동일하게 유지하되, 어느 typeface 가 "요청한
+                // 이름 자체"로 찾혔는지 "우리가 고른 대체"로 찾혔는지를
+                // `GlyphMatchSource` 로 구분해 `classify_glyph_source` 판정의
+                // 입력으로 쓴다.
+                let mut requested_families = Vec::new();
                 // [#3314] 접미사 face("Noto Serif KR Black") 미설치 시 base
                 // family 가 아래 generic 폴백보다 먼저 구제 — SVG 체인과 정합.
                 let base_family =
                     crate::renderer::base_family_without_weight_suffix(&style.font_family);
                 if !style.font_family.trim().is_empty() {
-                    families.push(style.font_family.as_str());
+                    requested_families.push(style.font_family.as_str());
                 }
                 if let Some(base) = base_family.as_deref() {
-                    families.push(base);
+                    requested_families.push(base);
+                }
+                let mut fallback_families = Vec::new();
+                // [고정폭 계열] SVG/PDF 경로(`generic_fallback`)는 굴림체·바탕체
+                // 등 고정폭 계열 폰트명에 D2Coding/Noto Sans Mono/CSS `monospace`
+                // 로 이어지는 별도 체인을 쓴다. 이 판정이 없으면 native-skia 는
+                // 곧장 아래의 비례폭 한글 고딕/명조 목록으로 떨어져, 같은 문서가
+                // `--features native-skia` 유무에 따라 고정폭 vs 비례폭으로
+                // 다르게 렌더된다 — 판정은 `crate::renderer::is_monospace_font_family`
+                // (SVG 경로와 공유하는 단일 출처)를 그대로 쓴다.
+                if crate::renderer::is_monospace_font_family(&style.font_family) {
+                    fallback_families.extend([
+                        "D2Coding",
+                        "Noto Sans Mono",
+                        "Menlo",
+                        "Consolas",
+                        "Courier New",
+                        "DejaVu Sans Mono",
+                    ]);
                 }
                 // 한글 fallback (CJK glyph 미보유 폰트로 fallback 시 사각형 방지).
                 // SVG 경로의 CSS font chain 과 동일한 한글 폴백 폰트 순서.
-                families.extend([
+                fallback_families.extend([
                     "Noto Sans KR",
                     "Noto Serif KR",
                     "Noto Sans CJK KR",
@@ -104,34 +136,44 @@ impl SkiaTextReplay<'_> {
                     "Arial",
                     "sans-serif",
                 ]);
+                let name_tiers = [
+                    (&requested_families, GlyphMatchSource::Requested),
+                    (&fallback_families, GlyphMatchSource::CuratedFallback),
+                ];
                 // 1) 사용자 지정 폰트 (--font-path) 우선 검색
                 // 2) 시스템 FontMgr 검색 (한글 fallback chain 포함)
                 // 3) 마지막 fallback (legacy_make_typeface)
                 //
                 // 모든 후보를 chain 으로 보존 — char 단위 fallback 에 사용.
-                let typeface_chain: Vec<Typeface> = {
-                    let mut chain: Vec<Typeface> = Vec::new();
+                let typeface_chain: Vec<(Typeface, GlyphMatchSource)> = {
+                    let mut chain: Vec<(Typeface, GlyphMatchSource)> = Vec::new();
                     let mut seen: HashSet<String> = HashSet::new();
-                    let mut push =
-                        |chain: &mut Vec<Typeface>, seen: &mut HashSet<String>, tf: Typeface| {
-                            let key = tf.family_name();
-                            if seen.insert(key) {
-                                chain.push(tf);
+                    let mut push = |chain: &mut Vec<(Typeface, GlyphMatchSource)>,
+                                    seen: &mut HashSet<String>,
+                                    tf: Typeface,
+                                    source: GlyphMatchSource| {
+                        let key = tf.family_name();
+                        if seen.insert(key) {
+                            chain.push((tf, source));
+                        }
+                    };
+                    for (families, source) in name_tiers {
+                        for family in families {
+                            if let Some(tf) = self.custom_typefaces.get(*family).cloned() {
+                                push(&mut chain, &mut seen, tf, source);
                             }
-                        };
-                    for family in &families {
-                        if let Some(tf) = self.custom_typefaces.get(*family).cloned() {
-                            push(&mut chain, &mut seen, tf);
                         }
                     }
-                    for family in &families {
-                        if let Some(tf) = match_system_family_style(
-                            self.font_mgr,
-                            self.system_families,
-                            family,
-                            font_style,
-                        ) {
-                            push(&mut chain, &mut seen, tf);
+                    for (families, source) in name_tiers {
+                        for family in families {
+                            if let Some(tf) = match_system_family_style(
+                                self.font_mgr,
+                                self.system_families,
+                                family,
+                                font_style,
+                            ) {
+                                push(&mut chain, &mut seen, tf, source);
+                            }
                         }
                     }
                     // [#3300] 번들 최후-폴백(ttfs/opensource)은 custom·시스템
@@ -139,17 +181,19 @@ impl SkiaTextReplay<'_> {
                     // (Noto Sans KR)이 시스템 1순위를 제치고 본문 전체를 폴백
                     // 서체로 렌더했다(r23 발산 −6.9pp). 폰트 미설치 환경(#2293)
                     // 에서는 앞 단계가 비므로 종전대로 번들이 한국어를 구제한다.
-                    for family in &families {
-                        if let Some(tf) = self.bundled_typefaces.get(*family).cloned() {
-                            push(&mut chain, &mut seen, tf);
+                    for (families, source) in name_tiers {
+                        for family in families {
+                            if let Some(tf) = self.bundled_typefaces.get(*family).cloned() {
+                                push(&mut chain, &mut seen, tf, source);
+                            }
                         }
                     }
                     if let Some(tf) = legacy_typeface_for_style(self.font_mgr, font_style) {
-                        push(&mut chain, &mut seen, tf);
+                        push(&mut chain, &mut seen, tf, GlyphMatchSource::Legacy);
                     }
                     chain
                 };
-                let primary_typeface = typeface_chain.first().cloned();
+                let primary_typeface = typeface_chain.first().map(|(tf, _)| tf.clone());
                 // 한글은 bold face 가 없는 폰트(휴먼명조 등 단일 400 페이스)에
                 // 동일 정규 페이스 + stroke 로 합성 굵게를 적용한다 (오라클
                 // PDF 실측: 굵은 헤더가 정규 휴먼명조 임베드로 방출). custom
@@ -170,13 +214,35 @@ impl SkiaTextReplay<'_> {
                     let visible_char = sample.chars().find(|ch| !ch.is_whitespace());
                     if let Some(ch) = visible_char {
                         let codepoint = ch as i32;
-                        if let Some(tf) = typeface_chain
+                        let char_count = sample.chars().count();
+                        if let Some((tf, source)) = typeface_chain
                             .iter()
-                            .find(|tf| tf.unichar_to_glyph(codepoint) != 0)
+                            .find(|(tf, _)| tf.unichar_to_glyph(codepoint) != 0)
                             .cloned()
                         {
+                            let resolved_family = tf.family_name();
+                            self.font_report.borrow_mut().record(
+                                &style.font_family,
+                                style.bold,
+                                style.italic,
+                                classify_glyph_source(&style.font_family, &resolved_family, source),
+                                Some(&resolved_family),
+                                sample,
+                                char_count,
+                            );
                             return Some(finish_font(tf, size));
                         }
+                        // 어떤 typeface 에도 glyph 가 없음 — 두부/공백으로 그려질
+                        // 것이다(실질적 내용 손실). `resolved_family: None`.
+                        self.font_report.borrow_mut().record(
+                            &style.font_family,
+                            style.bold,
+                            style.italic,
+                            crate::renderer::font_resolution_report::GlyphTier::Missing,
+                            None,
+                            sample,
+                            char_count,
+                        );
                         return None;
                     }
                     if let Some(tf) = primary_typeface.clone() {
