@@ -116,8 +116,9 @@ STATUS FOR NEXT SESSION (read this first):
 - Visual reference for the cosmetics fix: `temp/bad-marker-rows.png` at the
   chosun-form root (sibling to rhwp-code) -- shows the "before" state (clipped
   text, no margin, flat gray fill) the fix addresses.
-- Test fixture used for all live verification: `kr-gov-form-harvester/
-  data/files/5446234/5446234-step2-header.hwpx` (sibling repo). Don't edit it
+- Test fixture used for all live verification: `../data/files/5446234/
+  5446234-step2-header.hwpx` (chosun-form root, shared across the pipeline).
+  Don't edit it
   in place -- copy it to a scratch dir first, upload the copy into rhwp-studio
   via its file-open flow. The original stays untouched (already has a
   hand-tagged `#HEADER` row, useful as a stable comparison point).
@@ -129,7 +130,7 @@ consistency (`#HEADER` vs `#REPEAT-TITLE:*` etc. not looking identical) --
 fillColor/cellHeightPx/verticalAlign onto a newly-tagged marker row, silently
 inheriting typeface, per-run letter-spacing/ratio, and cell padding from whatever
 the row had before tagging. LIVE REPRO CONFIRMED at localhost:7700 on
-`kr-gov-form-harvester/data/files/5446234/5446234-step2-header.hwpx`: tagging the
+`../data/files/5446234/5446234-step2-header.hwpx`: tagging the
 `변경 사항` row as `#REPEAT-TITLE:변경사항` rendered with visibly spread-out
 ("변 경 사 항") character spacing vs. the tight `#HEADER` row, even though both
 get the same nominal style -- row height itself was already correct in both cases
@@ -264,7 +265,7 @@ both implemented and live-verified this session, **NOT YET COMMITTED**
    clicks -- see the `DocumentPosition` shape with
    `parentParaIndex`/`controlIndex`/`cellIndex`/`cellParaIndex` in
    `formFieldPosition()`, `input-handler.ts`, for the field names): against
-   `kr-gov-form-harvester/data/files/5446234/5446234.hwpx` (row 8, "변경
+   `../data/files/5446234/5446234.hwpx` (row 8, "변경
    사항" cell, full-width) -- 블록명 auto-fills to "변경사항" on selecting
    REPEAT_TITLE with `applyBtn.disabled === false` immediately after
    (asserted directly this time, not just inferred from Enter working);
@@ -290,7 +291,7 @@ implemented per a pre-written plan (~/.claude/plans/we-will-talk-about-jaunty-
 toucan.md), all steps done and verified except the manual open-in-browser
 check and the e2e test (deferred -- see below).
 
-Motivating case: `kr-gov-form-harvester/data/files/5555817/5555817.hwpx`
+Motivating case: `../data/files/5555817/5555817.hwpx`
 (법인설립허가신청서) has `fieldCount: 0` and a label column with two
 vertically-merged parent cells ("신\n청\n인", "법\n인\n명") whose child rows
 each have a leaf label immediately followed by a blank cell -- naively naming
@@ -398,7 +399,7 @@ Manual real-fixture verification (plan's last step) was also completed, but
 NOT via the browser extension (Claude-in-Chrome was not connected this
 session) -- instead via a temporary ad-hoc puppeteer script (written, run,
 then deleted per the established convention, not committed): loaded the
-actual `kr-gov-form-harvester/data/files/5555817/5555817.hwpx` bytes
+actual `../data/files/5555817/5555817.hwpx` bytes
 directly into `window.__wasm.loadDocument()` (bypassing the e2e harness's
 `/samples`-relative-path restriction), found its one top-level table via
 `findNearestControlForward`, placed the cursor in it, clicked "현재 표에서
