@@ -2208,6 +2208,24 @@ fn insert_click_here_field_in_para(
         }
     }
 
+    // [#3545 확장] 새로 넣는 누름틀도 안내문 잔재를 즉시 기록한다 — 한컴 정준형은
+    // 미기입 누름틀의 안내문을 begin~end 사이 본문 run 으로 파일에 남긴다
+    // (form-01.hwpx). 잔재 없이 저장하면 HWPX 에 fieldBegin/fieldEnd 만 붙어
+    // 나가는데, 그런 필드는 채울 텍스트 run 이 없어 소비자가 값을 넣을 수 없다.
+    // 서식은 삽입 지점의 글자모양을 물려준다(적재 경로의 잔재 기록과 동일 규칙).
+    let residue_shape_id = para
+        .char_offsets
+        .get(start)
+        .copied()
+        .and_then(|u_start| {
+            para.char_shapes
+                .iter()
+                .rev()
+                .find(|cs| cs.start_pos <= u_start)
+                .map(|cs| cs.char_shape_id)
+        })
+        .unwrap_or(0);
+
     let field = Field {
         field_type: FieldType::ClickHere,
         // [#1434] 이름은 ctrl_data_name(CTRL_DATA 0x57)으로 별도 저장하므로 command 에
@@ -2228,7 +2246,14 @@ fn insert_click_here_field_in_para(
         memo_text_direction: None,
         raw_parameters_xml: None,
         parameters: Default::default(),
-        guide_residue: None,
+        guide_residue: if guide.is_empty() {
+            None
+        } else {
+            Some(crate::model::control::GuideResidue {
+                text: guide.to_string(),
+                char_shape_id: residue_shape_id,
+            })
+        },
     };
 
     para.controls.insert(insert_idx, Control::Field(field));

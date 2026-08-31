@@ -523,21 +523,10 @@ impl DocumentCore {
         raw_ctrl_data[common_obj_offsets::MARGIN_TOP].copy_from_slice(&outer_margin.to_le_bytes());
         raw_ctrl_data[common_obj_offsets::MARGIN_BOTTOM]
             .copy_from_slice(&outer_margin.to_le_bytes());
-        // [32..36] instance_id (DIFF-7 수정: 해시 기반 유니크 값 생성)
-        // 정상 HWP 파일에서는 instance_id가 고유한 비-0 값을 가짐
-        let instance_id: u32 = {
-            // 행/열 수, 셀 수, 총 폭/높이를 조합한 간단한 해시
-            let mut h: u32 = 0x7c150000;
-            h = h.wrapping_add(row_count as u32 * 0x1000);
-            h = h.wrapping_add(col_count as u32 * 0x100);
-            h = h.wrapping_add(total_width);
-            h = h.wrapping_add(total_height.wrapping_mul(0x1b));
-            h ^= cells.len() as u32 * 0x4b69;
-            if h == 0 {
-                h = 0x7c154b69;
-            } // 절대 0이 되지 않도록
-            h
-        };
+        // [32..36] instance_id: 문서(및 같은 붙여넣기에서 이미 만든 표) 내
+        // 고유 비-0 — raw_ctrl_data 와 common.instance_id 둘 다 채운다.
+        // HWPX 직렬화는 common 쪽을 읽는다.
+        let instance_id = self.next_table_instance_id(paragraphs);
         raw_ctrl_data[common_obj_offsets::INSTANCE_ID].copy_from_slice(&instance_id.to_le_bytes());
         // [36..38] desc_len = 0
 
@@ -606,7 +595,10 @@ impl DocumentCore {
             page_break: TablePageBreak::None,
             repeat_header: has_header_row,
             caption: None,
-            common: Default::default(),
+            common: crate::model::shape::CommonObjAttr {
+                instance_id,
+                ..Default::default()
+            },
             outer_margin_left: outer_margin,
             outer_margin_right: outer_margin,
             outer_margin_top: outer_margin,

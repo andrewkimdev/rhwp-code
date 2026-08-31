@@ -354,6 +354,53 @@ impl DocumentCore {
 
         Err(HwpError::RenderError("경로가 비어있습니다".to_string()))
     }
+
+    /// 표의 저장된 instance_id — raw_ctrl_data(원시 HWP5 레코드)가 우선,
+    /// 짧으면 common.instance_id. 어느 한쪽에만 있을 수 있어 둘 다 본다.
+    pub(crate) fn stored_table_instance_id(t: &crate::model::table::Table) -> u32 {
+        if t.raw_ctrl_data.len() >= common_obj_offsets::INSTANCE_ID.end {
+            u32::from_le_bytes(
+                t.raw_ctrl_data[common_obj_offsets::INSTANCE_ID]
+                    .try_into()
+                    .unwrap(),
+            )
+        } else {
+            t.common.instance_id
+        }
+    }
+
+    /// 새 표에 내릴 고유 비-0 instance_id. 문서 전체(셀 속 중첩 표 포함)와
+    /// 아직 삽입 전인 `pending` 문단들에 저장된 instance_id 의 최댓값 위에서
+    /// 증가한다 — 차원 해시 기반으론 같은 모양 표끼리 충돌해, HWPX 직렬화가
+    /// common.instance_id 만 읽는 탓에 "모든 표 id=0"인 파일이 나왔다.
+    /// 기저(0x7c150000)는 기존 생성 해시의 시드 근방 — 문서에 표가 없어도
+    /// 새 id 가 1 같은 저숫자가 되지 않게 한다.
+    pub(crate) fn next_table_instance_id(&self, pending: &[Paragraph]) -> u32 {
+        fn fold_paras(paras: &[Paragraph], max: &mut u32) {
+            for para in paras {
+                for ctrl in &para.controls {
+                    if let Control::Table(t) = ctrl {
+                        *max = (*max).max(DocumentCore::stored_table_instance_id(t));
+                        for cell in &t.cells {
+                            fold_paras(&cell.paragraphs, max);
+                        }
+                    }
+                }
+            }
+        }
+        let mut max: u32 = 0;
+        for section in &self.document.sections {
+            fold_paras(&section.paragraphs, &mut max);
+        }
+        fold_paras(pending, &mut max);
+        let next = max.max(0x7c14_ffff).wrapping_add(1);
+        if next == 0 {
+            1
+        } else {
+            next
+        }
+    }
+
     /// 커서 위치에 새 표를 삽입한다 (네이티브).
     ///
     /// 1. PageDef에서 편집 영역 폭 계산
@@ -525,18 +572,9 @@ impl DocumentCore {
         raw_ctrl_data[common_obj_offsets::MARGIN_TOP].copy_from_slice(&outer_margin.to_le_bytes());
         raw_ctrl_data[common_obj_offsets::MARGIN_BOTTOM]
             .copy_from_slice(&outer_margin.to_le_bytes());
-        // instance_id (해시 기반, 비-0 필수)
-        let instance_id: u32 = {
-            let mut h: u32 = 0x7c150000;
-            h = h.wrapping_add(row_count as u32 * 0x1000);
-            h = h.wrapping_add(col_count as u32 * 0x100);
-            h = h.wrapping_add(total_width);
-            h = h.wrapping_add(total_height.wrapping_mul(0x1b));
-            if h == 0 {
-                h = 0x7c154b69;
-            }
-            h
-        };
+        // instance_id: 문서 내 고유 비-0 (저장소 계약). raw_ctrl_data 와
+        // common.instance_id 둘 다 채운다 — HWPX 직렬화는 common 쪽을 읽는다.
+        let instance_id = self.next_table_instance_id(&[]);
         raw_ctrl_data[common_obj_offsets::INSTANCE_ID].copy_from_slice(&instance_id.to_le_bytes());
 
         let mut table = Table {
@@ -567,6 +605,7 @@ impl DocumentCore {
                 horz_align: crate::model::shape::HorzAlign::Left,
                 width: total_width,
                 height: total_height,
+                instance_id,
                 ..Default::default()
             },
             outer_margin_left: 283,
@@ -960,16 +999,9 @@ impl DocumentCore {
         raw_ctrl_data[common_obj_offsets::MARGIN_TOP].copy_from_slice(&outer_margin.to_le_bytes());
         raw_ctrl_data[common_obj_offsets::MARGIN_BOTTOM]
             .copy_from_slice(&outer_margin.to_le_bytes());
-        let instance_id: u32 = {
-            let mut h: u32 = 0x7c160000;
-            h = h.wrapping_add(row_count as u32 * 0x1000);
-            h = h.wrapping_add(col_count as u32 * 0x100);
-            h = h.wrapping_add(total_width);
-            if h == 0 {
-                h = 0x7c164b69;
-            }
-            h
-        };
+        // instance_id: 문서 내 고유 비-0. raw_ctrl_data 와 common 둘 다 —
+        // HWPX 직렬화는 common 쪽을 읽는다 (create_table_native 와 동일 계약).
+        let instance_id = self.next_table_instance_id(&[]);
         raw_ctrl_data[common_obj_offsets::INSTANCE_ID].copy_from_slice(&instance_id.to_le_bytes());
 
         let mut table = Table {
@@ -995,6 +1027,7 @@ impl DocumentCore {
                 horz_align: crate::model::shape::HorzAlign::Left,
                 width: total_width,
                 height: total_height,
+                instance_id,
                 ..Default::default()
             },
             outer_margin_left: outer_margin,
