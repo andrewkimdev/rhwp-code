@@ -324,6 +324,68 @@ pub fn ctrl_name(ctrl_id: u32) -> &'static str {
     }
 }
 
+/// [#5140] 한컴 사용자 정의 기호의 **두 포맷 간 사상**.
+///
+/// 같은 글자를 HWP5 는 BMP 단일 유닛 `0xA000 | X` 로, HWPX 는 평면 15 보충 PUA
+/// `U+F0000 | X` 로 싣는다. 한글은 두 표기를 서로 사상하지만 rhwp 는 값을 그대로 옮겨
+/// h2x 산출에서 글자가 Yi 음절(U+A8xx 등)로 깨졌다.
+///
+/// **IR 정본은 HWP5 쪽 사영(`0xA000 | X`)이다.** 그래야 HWP5 파서·직렬화기가 무변경이고
+/// (코퍼스 다수) HWPX 파서·직렬화기만 대칭으로 사상하면 h2x·x2h 가 함께 닫힌다.
+///
+/// **범위가 아니라 실측 값 집합인 이유**: `0xA000..=0xABFF` 는 유니코드에서 Yi·Lisu·
+/// Syloti Nagri 가 쓰는 실제 블록이고, 한글도 이 구간을 무조건 사상하지 않는다.
+/// 반례 실측 — `08103` 의 `0xA813` 은 영어 단어 중간(`spectro?scopy`)에 있고 글자모양의
+/// 글꼴이 `맑은 고딕`(한컴 사설 영역이 없는 글꼴)인데, 한글은 이 글자를 평면 15 로 옮기지
+/// 않고 `U+A813` 그대로 낸다. 범위로 밀면 그 글자가 깨진다.
+///
+/// 10k 코퍼스 실측(HWP5 원본 6,432개): `0xA000..=0xABFF` 단일 유닛을 쓰는 문서 73건 중
+/// 아래 값들이 한글 출력에서 평면 15 로 확인됐다. 두 경로에서 모았다 —
+///
+/// - **본문 텍스트**(`PARA_TEXT` → `hp:t`): 23개 값이 2,857 / 2,863 = 99.8% 를 덮는다.
+///   나머지는 컨트롤 인라인 payload 오독(한글 출력 없음)이거나 위 `0xA813` 반례다.
+/// - **글자겹침**(`tcps` → `hp:compose/@composeText`): 06190·06638·08403·08396 을 한글
+///   SaveAs HWPX 로 떠서 대조했더니 29개 값이 **107/107 전량** 평면 15 로 갔다(BMP 유지 0).
+///
+/// **새 값은 한글 실측으로만 추가한다.**
+pub const HANCOM_SYMBOL_BMP_TO_PLANE15: &[u16] = &[
+    0xA0E1, 0xA12B, //
+    // 글자겹침 실측 — 06190 · 08403
+    0xA289, 0xA28A, 0xA292, 0xA293, 0xA294, 0xA295, 0xA296, 0xA297, 0xA298, 0xA299, 0xA29A,
+    0xA29B, //
+    // 본문 실측
+    0xA2B1, 0xA2B2, 0xA2B3, 0xA2B4, 0xA2B5, 0xA2B6, 0xA2B7, 0xA2B8, 0xA2B9, //
+    // 글자겹침 실측 — 06638 (0xA2C1·0xA2C2 는 코퍼스에 없어 넣지 않았다)
+    0xA2BA, 0xA2BB, 0xA2BC, 0xA2BD, 0xA2BE, 0xA2BF, 0xA2C0, 0xA2C3, 0xA2C4, 0xA2C5, 0xA2C6, 0xA2C7,
+    0xA2C8, 0xA2C9, 0xA2CA, 0xA2CB, 0xA2CC, //
+    // 본문 실측
+    // [#5861] `0xA807` — s36 오라클 20,000경로를 전수로 훑어 "원본에 없던 U+A000~U+ABFF
+    // 글자가 저장본에 생긴" 경로를 셌더니 코퍼스 전체에서 1경로·1값만 남았다
+    // (`03373.h2x` ×4). 같은 문단의 0xA80A·0xA80E·0xA80F·0xA810 은 아래 목록에 있어
+    // 정상으로 나가는데 이 값만 빠져 한글이 Syloti Nagri `ꠇ`(U+A807)로 읽었다.
+    0xA2FC, 0xA3C5, 0xA807, 0xA80A, 0xA80E, 0xA80F, 0xA810, 0xA81A, 0xA832, 0xA852, 0xA853, 0xA854,
+    0xA855,
+];
+
+/// 평면 15 보충 PUA 의 시작 — `0xA000 | X` 의 대응 코드포인트는 `PLANE15_BASE | X` 다.
+const PLANE15_BASE: u32 = 0x0F_0000;
+
+/// HWP5 사용자 정의 기호(`0xA000 | X`) → HWPX 평면 15 코드포인트. 표에 없으면 `None`.
+pub fn hancom_symbol_to_plane15(unit: u16) -> Option<u32> {
+    HANCOM_SYMBOL_BMP_TO_PLANE15
+        .contains(&unit)
+        .then(|| PLANE15_BASE | u32::from(unit & 0x0FFF))
+}
+
+/// HWPX 평면 15 코드포인트 → HWP5 사용자 정의 기호(`0xA000 | X`). 표에 없으면 `None`.
+pub fn plane15_to_hancom_symbol(cp: u32) -> Option<u16> {
+    if cp & 0xFF_F000 != PLANE15_BASE {
+        return None;
+    }
+    let unit = 0xA000u16 | u16::try_from(cp & 0x0FFF).ok()?;
+    HANCOM_SYMBOL_BMP_TO_PLANE15.contains(&unit).then_some(unit)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

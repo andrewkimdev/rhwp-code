@@ -34,6 +34,7 @@ use crate::model::paragraph::{ColumnBreakType, FieldRange, LineSeg, OrphanFieldE
 use crate::model::shape::{
     CommonObjAttr, HorzAlign, HorzRelTo, ShapeObject, SizeCriterion, TextWrap, VertAlign, VertRelTo,
 };
+use crate::parser::tags;
 
 use super::context::SerializeContext;
 use super::field::{write_bookmark, write_field_begin, write_field_end, write_field_end_full};
@@ -704,12 +705,24 @@ pub(crate) fn render_hp_t_content(
                 t_xml.push_str("<hp:fwSpace/>");
             }
             c if (c as u32) < 0x20 => { /* 기타 제어문자 무시 */ }
-            c => buf.push(c),
+            c => buf.push(hancom_symbol_for_hwpx(c)),
         }
     }
     flush_buf(&mut t_xml, &mut buf);
     t_xml.push_str("</hp:t>");
     t_xml
+}
+
+/// [#5140] IR 정본(HWP5 사영 `0xA000 | X`)의 한컴 사용자 정의 기호를 HWPX 평면 15
+/// PUA(`U+F0000 | X`)로 올려 방출한다. 리터럴 그대로 내면 Yi 음절 등 실제 유니코드
+/// 블록과 겹쳐 글자가 깨진다. 표에 없으면 원문 그대로 통과한다.
+fn hancom_symbol_for_hwpx(c: char) -> char {
+    let Ok(unit) = u16::try_from(u32::from(c)) else {
+        return c;
+    };
+    tags::hancom_symbol_to_plane15(unit)
+        .and_then(char::from_u32)
+        .unwrap_or(c)
 }
 
 /// 문단 콘텐츠를 `char_shapes` 경계 기준 다중 `<hp:run>` 으로 분할 출력하는 빌더 (#1378).
@@ -1835,7 +1848,8 @@ fn render_compose(co: &CharOverlap) -> String {
     } else {
         "SPREAD"
     };
-    let text: String = co.chars.iter().collect();
+    // [#5140] 글자겹침 실측(107/107)도 본문과 같은 규칙 — 표에 있으면 평면 15로 올린다.
+    let text: String = co.chars.iter().map(|&c| hancom_symbol_for_hwpx(c)).collect();
     let mut out = format!(
         r#"<hp:compose circleType="{}" charSz="{}" composeType="{}" charPrCnt="{}" composeText="{}">"#,
         circle_type,
