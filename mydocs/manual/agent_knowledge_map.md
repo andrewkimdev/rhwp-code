@@ -295,7 +295,7 @@ IR·provenance·plan 네 축을 한 번에 조립하고, 빠진 축은 `missingA
 를 싣고 `--dry-run` 에서는 싣지 않는다. `edit set-cell` 은 `oldText` 때문에
 `untrustedContent:true`, `edit fill-fields`·`replace-text` 는 `false` 다(실측).
 
-### 2-2. 전수 사전 — 268개 필드
+### 2-2. 전수 사전 — 275개 필드
 
 `capabilities` 의 `recordFields` 고유 **265개**와 그 밖의 실측-only 필드
 `assertions`·`docId`·`preview` **3개**를 합친 268개다. `등장 명령` 은 자기서술
@@ -711,6 +711,20 @@ IR·provenance·plan 네 축을 한 번에 조립하고, 빠진 축은 `missingA
 | 필드 | 타입 | 의미 · `null` 의 뜻 | 등장 명령 |
 |---|---|---|---|
 | `respectVposReset` | bool | `LINE_SEG vpos=0` 리셋을 쪽 경계로 봤나 | `dump-pages` |
+
+#### 템플릿 엔티티 생성 (`template-entity`)
+
+hwpx 표 역할 마커(`#REPEAT-*`·`#PAGENO`)와 누름틀에서 서버 없이 Java record 데이터/모듈
+클래스 초안을 만든다(hwpx-template-engine `TemplateEntityGenerator` 클라이언트 포트).
+
+| 필드 | 타입 | 의미 · `null` 의 뜻 | 등장 명령 |
+|---|---|---|---|
+| `code` | string | `--code` 값 그대로 — 캐치업(caller-echo), 문서 파생 아님 | `template-entity` |
+| `packageName` | string | `--package` 값(기본 `com.example.hwpx.templates`) — caller-echo | `template-entity` |
+| `dataClassName` / `moduleClassName` | string | `code`에서 유도한 PascalCase 클래스 이름(`{Code}Data`/`{Code}TemplateModule`) — 엔진값, 문서 파생 아님 | `template-entity` |
+| `dataClassSource` | string | 생성된 데이터 클래스 Java 소스. **문서의 누름틀 필드 이름이 식별자로 그대로 섞여 든다**(§2-5 출처 표지 대상) | `template-entity` |
+| `moduleClassSource` | string | 생성된 모듈 클래스 Java 소스 — `package`/클래스 이름/`code`만 보간, 문서 파생 아님 | `template-entity` |
+| `errors` | string[] | 표 역할 마커·누름틀 검증 실패 메시지. **문서의 마커 텍스트·필드 이름을 그대로 인용한다**(§2-5 출처 표지 대상) | `template-entity` |
 
 ### 2-3. 중첩 원소 사전 — 배열 안쪽 모양
 

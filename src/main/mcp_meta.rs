@@ -662,6 +662,39 @@ pub(crate) fn mcp_tool_definitions() -> Vec<serde_json::Value> {
             serde_json::json!(["fields", "{path}", "--json"]),
             &["source", "fieldCount", "fields"],
         ),
+        // [연구 스파이크] hwpx-template-engine TemplateEntityGenerator 클라이언트 포트 —
+        // 표 역할 마커(#REPEAT-*, #PAGENO)와 누름틀 이름에서 서버 없이 Java record 데이터
+        // 클래스 + 모듈 클래스 초안을 만든다. `code`는 필수(생성 클래스 이름의 근거).
+        // `--out-dir`는 CLI가 `--json` 모드에서 무시한다(`cmd_template_entity`가 json_mode
+        // 분기에서 파일을 쓰기 전에 반환) — MCP는 항상 `--json`을 붙이므로 여기 노출하지
+        // 않는다: 무시되는 파라미터를 스키마에 넣으면 소비자가 동작한다고 오해한다.
+        tool_with_optional_args(
+            "hwp_template_entity",
+            "hwpx 표 역할 마커·누름틀에서 Java record 데이터/모듈 클래스 초안을 생성한다(서버 없이).",
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "HWPX 문서 경로" },
+                    "code": { "type": "string", "description": "생성할 템플릿 코드 — 클래스 이름의 근거" },
+                    "package": { "type": "string", "description": "Java 패키지 이름. 기본 com.example.hwpx.templates" }
+                },
+                "required": ["path", "code"],
+            }),
+            "template-entity",
+            serde_json::json!(["template-entity", "{path}", "--code", "{code}", "--json"]),
+            serde_json::json!([
+                { "when": "package", "args": ["--package", "{package}"] }
+            ]),
+            &[
+                "code",
+                "packageName",
+                "dataClassName",
+                "moduleClassName",
+                "dataClassSource",
+                "moduleClassSource",
+                "errors",
+            ],
+        ),
         // [#3828] 처음 보는 문서를 한 번에 파악하는 요약 — hwp_info/hwp_export_structure/
         // hwp_export_tables/hwp_fields 를 이미 열어본 값의 조합일 뿐 새 판정은 없다.
         tool(
