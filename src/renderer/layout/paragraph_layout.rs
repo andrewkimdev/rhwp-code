@@ -7833,6 +7833,21 @@ pub fn map_pua_bullet_char(ch: char) -> char {
             // 부재 → render-time substitution. 측정/렌더링 양쪽 자동 적용.
             // sample11.hwp 머리말/꼬리말 가로선 패턴 (각 85+ 회) 시각 정합.
             0xF080F => '\u{2501}', // ━ BOX DRAWINGS HEAVY HORIZONTAL (한컴 — 굵은 가로선)
+            // [#5860/#6380 포팅] 0xF080F 와 같은 묶음의 텍스트 다이어그램 괘선 조각
+            // (johab.rs 0x3013/0x3014/0x3015/0x3019/0x301B/0x301D). 박스 드로잉으로
+            // 짐작하지 않는다 — 시각 검증 결과 한컴 자체도 글리프가 없다:
+            // (1) 한컴 변환본 samples/hwp3-sample11-hwpx.hwpx 의 hp:t 텍스트도
+            //     0xF0808 을 raw PUA 로 그대로 남긴다(미해결).
+            // (2) 한컴 정답지 pdf/hwp3/hwp3-sample11-2020.pdf p.10 "hostname ⬜⬜ le0"
+            //     자리를 600dpi 로 렌더해 보면 .notdef 두 칸(tofu box)이다 — 한컴 임베디드
+            //     폰트에도 이 서브군 글리프가 없다는 뜻. 대체 표시 문자를 지어내는 대신
+            //     "알 수 없는 문자" 의 표준 표기인 U+FFFD 로 낮춘다.
+            0xF0806 => '\u{FFFD}',
+            0xF0807 => '\u{FFFD}',
+            0xF0808 => '\u{FFFD}',
+            0xF080C => '\u{FFFD}',
+            0xF080E => '\u{FFFD}',
+            0xF0810 => '\u{FFFD}',
             // [Task #1692 Stage 9] HWP3 관계도 계열 선문자.
             // 한컴은 U+F0811/F0817/F081A를 자체 글리프로 이어진 선처럼 렌더한다.
             // 공개 폰트 경로에서는 .notdef 두부가 나오므로 대응 가능한 box drawing으로 낮춘다.
@@ -7840,6 +7855,24 @@ pub fn map_pua_bullet_char(ch: char) -> char {
             0xF0817 => '\u{2514}', // └ BOX DRAWINGS LIGHT UP AND RIGHT
             0xF081A => '\u{2500}', // ─ BOX DRAWINGS LIGHT HORIZONTAL
             0xF0827 => '\u{25A0}', // ■ BLACK SQUARE (한컴 — 잠정, 시각 판정 후 조정)
+            // [#5860/#6380 포팅] johab.rs 0x2E00/0x2E0A/0x2E0B/0x2E0D~0x2E12 —
+            // sample11 p23 "Format/Type:" 줄의 16진수 바이트 위 첨자 각주 마커.
+            // `composer.rs`의 `pua_overlap_digit`(CharOverlap tcps 컨트롤의 자릿수 성분
+            // 디코더)이 같은 수치 대역(F0289~F0291=십의자리)을 쓰지만, 그건 별도 컨트롤
+            // 페이로드 문맥이다 — 여기는 평범한 PARA_TEXT 문자라 그 디코더가 적용되지
+            // 않는다. 시각 검증: pdf/hwp3/hwp3-sample11-2020.pdf p.23 "Format/Type: 1 54
+            // [마커][마커] Ethernet:" 위 첨자 자리를 600dpi 로 렌더해 보면 역시 .notdef
+            // tofu box다 — 한컴 자체도 이 서브군 글리프가 없다. 0xF080F 계열과 같은 이유로
+            // U+FFFD 로 낮춘다(박스 드로잉/원문자로 지어내지 않는다).
+            0xF0288 => '\u{FFFD}',
+            0xF0289 => '\u{FFFD}',
+            0xF028A => '\u{FFFD}',
+            0xF028C => '\u{FFFD}',
+            0xF028D => '\u{FFFD}',
+            0xF028E => '\u{FFFD}',
+            0xF028F => '\u{FFFD}',
+            0xF0290 => '\u{FFFD}',
+            0xF0291 => '\u{FFFD}',
             _ => ch,
         };
     }
