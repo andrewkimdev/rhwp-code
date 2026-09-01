@@ -1,4 +1,4 @@
-import { REGISTERED_FONTS } from './font-loader.ts';
+import { REGISTERED_FONTS, hanyangHyIdentityName } from './font-loader.ts';
 import { resolveFont } from './font-substitution.ts';
 import {
   getDetectedLocalFonts,
@@ -110,6 +110,20 @@ export function analyzeDocumentFonts(
     if (GENERIC_FONTS.has(fontName) || REGISTERED_FONTS.has(fontName)) {
       summary.available++;
       return { fontName, status: 'available', source: GENERIC_FONTS.has(fontName) ? 'generic' : 'web', substituteFont: null };
+    }
+
+    // 한양X ≡ HYX 동일 서체(두 이름 체계, g_SubstFonts 1순위 쌍) — 대응 HY*가
+    // 로컬에 있으면 그 face로 'available', 등록 웹폰트면 로컬 확인을 묻지 않고
+    // 곧바로 그 face로 잇는다. 기본 경로의 로컬 판정은 위의 localRecord 검사
+    // (동일 별칭 폴백 포함)가 이미 처리한다.
+    const identityName = hanyangHyIdentityName(fontName);
+    if (identityName && localSet.has(identityName)) {
+      summary.available++;
+      return { fontName, status: 'available', source: 'local', substituteFont: null };
+    }
+    if (identityName && REGISTERED_FONTS.has(identityName)) {
+      summary.webSubstitute++;
+      return { fontName, status: 'web-substitute', source: 'web', substituteFont: identityName };
     }
 
     const substituteFont = resolveWebSubstitute(fontName);

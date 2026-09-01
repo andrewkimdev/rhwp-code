@@ -171,6 +171,22 @@ function normalizeFontFamily(value: string): string {
     .toLocaleLowerCase('en-US');
 }
 
+/**
+ * `한양X` 글꼴명을 동일 서체의 TTF 이름 `HYX`로 옮긴다. HFT 시절 한글 전용
+ * 풀네임(한양견고딕=HYGTRE 계열)과 Windows TTF 이름(HY견고딕)이 같은 서체의
+ * 두 이름 체계라는 확정에 기반한다 — 한글 자체 치환표(g_SubstFonts)도 이 둘을
+ * 1순위로 매핑하고, MS 문서도 "한양견고딕(H2gtrE)"으로 병기한다.
+ *
+ * 대상 `HYX`가 실제로 존재할 때만 의미가 있으므로 호출부는 등록/로컬 여부를
+ * 확인해 사용한다. 대응하지 않는 이름은 null (기존 치환 체인이 그대로 이어감).
+ */
+export function hanyangHyIdentityName(fontName: string): string | null {
+  const name = fontName.trim();
+  return name.startsWith('한양') && name.length > '한양'.length
+    ? 'HY' + name.slice('한양'.length)
+    : null;
+}
+
 function canvasKitFontUrl(file: string, localFontBaseUrl?: string): string {
   if (isExternalFontFile(file) || !localFontBaseUrl) return file;
   const base = localFontBaseUrl.replace(/\/+$/, '');
@@ -184,7 +200,6 @@ export function resolveCanvasKitFontPlan(
 ): CanvasKitFontPlan {
   const canvasKitSubstitutes = new Map([
     [normalizeFontFamily('휴먼명조'), normalizeFontFamily('HY신명조')],
-    [normalizeFontFamily('한양중고딕'), normalizeFontFamily('HY중고딕')],
     [normalizeFontFamily('한컴 윤고딕 230'), normalizeFontFamily('Noto Sans KR ExtraLight')],
   ]);
   const entriesByFamily = new Map<string, FontEntry>();
@@ -198,8 +213,11 @@ export function resolveCanvasKitFontPlan(
   for (const requested of requiredFontFamilies) {
     const normalized = normalizeFontFamily(requested);
     if (!normalized) continue;
+    // 한양X ≡ HYX 동일 서체 별칭 — 등록된 HY* 웹폰트 face를 그대로 쓴다.
+    const identityName = hanyangHyIdentityName(requested);
     const entry = entriesByFamily.get(normalized)
-      ?? entriesByFamily.get(canvasKitSubstitutes.get(normalized) ?? '');
+      ?? entriesByFamily.get(canvasKitSubstitutes.get(normalized) ?? '')
+      ?? (identityName ? entriesByFamily.get(normalizeFontFamily(identityName)) : undefined);
     if (!entry) {
       unavailableFonts.set(normalized, requested.trim());
       continue;

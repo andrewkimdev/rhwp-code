@@ -5,7 +5,7 @@
  * 글꼴 목록을 조회한다. 저장된 감지 결과는 재사용하되, 새 목록 조회는
  * 사용자 승인 흐름에서만 호출하도록 API를 분리한다.
  */
-import { REGISTERED_FONTS } from './font-loader.ts';
+import { REGISTERED_FONTS, hanyangHyIdentityName } from './font-loader.ts';
 
 /** queryLocalFonts 반환 타입 (DOM 표준 미포함) */
 interface FontData {
@@ -853,6 +853,14 @@ export function getDetectedLocalFonts(): string[] {
 
 /** HWP/CSS 글꼴명에서 동일한 설치 글꼴 face를 찾는다. */
 export function resolveLocalFont(fontName: string): LocalFontRecord | null {
+  const record = resolveLocalFontRecordByName(fontName);
+  if (record) return record;
+  // 한양X ≡ HYX 동일 서체 별칭 — 로컬에 HY* face가 설치돼 있으면 그대로 쓴다.
+  const identityName = hanyangHyIdentityName(fontName);
+  return identityName ? resolveLocalFontRecordByName(identityName) : null;
+}
+
+function resolveLocalFontRecordByName(fontName: string): LocalFontRecord | null {
   const target = normalizeFontAlias(fontName);
   if (!target) return null;
   const matches = cachedFontLookup.aliases.get(target) ?? [];

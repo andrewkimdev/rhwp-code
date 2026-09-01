@@ -29,6 +29,18 @@ test('CanvasKit font plan follows the existing Hanyang Jung Gothic substitution'
   assert.ok(plan.sources[0].aliases.includes('HY중고딕'));
 });
 
+test('CanvasKit font plan maps Hanyang Kyun Gothic to its HY identity face', () => {
+  // 한양* ≡ HY* 일반 규칙 — 종전엔 한양중고딕만 ad-hoc 매핑에 있었고 한양견고딕은
+  // 누락돼 있었다(HY견고딕=NotoSansKR-Bold가 번들돼 있는데도 unavailable 취급).
+  const plan = resolveCanvasKitFontPlan(['한양견고딕']);
+
+  assert.deepEqual(plan.unavailableFonts, []);
+  assert.equal(plan.sources.length, 1);
+  assert.match(plan.sources[0].url, /NotoSansKR-Bold\.woff2$/);
+  assert.ok(plan.sources[0].aliases.includes('한양견고딕'));
+  assert.ok(plan.sources[0].aliases.includes('HY견고딕'));
+});
+
 test('CanvasKit font plan fails closed for unavailable surface fonts', () => {
   const offline = resolveCanvasKitFontPlan(
     ['함초롬바탕', 'Times New Roman'],

@@ -866,3 +866,41 @@ test('Local Font Access API가 없으면 문서 후보 글꼴만 probe snapshot�
     restoreGlobals(originals);
   }
 });
+
+test('한양* 글꼴명은 HY* 동일 서체 face로 해석한다', async () => {
+  // 로컬에 HY견고딕 TTF만 설치된 기기 — 문서의 한양견고딕(HFT 시절 풀네임)이
+  // 같은 서체의 TTF 이름 face로 연결돼야 로컬 실물 서체로 렌더된다. 로컬 폰트이
+  //름이 HY* 체계뿐이어도(fullName에 한글명 미보유) identity 규칙이 잇는다.
+  const g = globalThis as TestGlobals;
+  const originals = {
+    browser: g.browser,
+    chrome: g.chrome,
+    document: g.document,
+    localStorage: g.localStorage,
+    queryLocalFonts: g.queryLocalFonts,
+  };
+  const storage = createStorage();
+
+  resetLocalFontsForTests();
+  g.browser = undefined;
+  g.chrome = undefined;
+  g.localStorage = storage;
+  g.queryLocalFonts = async () => [
+    { family: 'HY견고딕', fullName: 'HY견고딕', postscriptName: 'HYGothic-Gothic', style: 'Regular' },
+  ];
+
+  try {
+    await detectLocalFonts({ force: true });
+
+    const record = resolveLocalFont('한양견고딕');
+    assert.ok(record, '한양견고딕이 HY견고딕 face로 해석돼야 한다');
+    assert.equal(record.family, 'HY견고딕');
+
+    // 대응 HY*가 로컬에 없는 한양* 이름은 여전히 미해석 — 과매칭 방지 가드.
+    assert.equal(resolveLocalFont('한양궁서'), null);
+  } finally {
+    await clearStoredLocalFonts();
+    resetLocalFontsForTests();
+    restoreGlobals(originals);
+  }
+});
