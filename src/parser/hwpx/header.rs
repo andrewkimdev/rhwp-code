@@ -114,6 +114,40 @@ pub fn parse_hwpx_hwpml_version(xml: &str) -> Option<String> {
     }
 }
 
+/// `version.xml`의 `<hv:HCFVersion application=".." appVersion=".."/>`에서 마지막으로
+/// 저장한 한컴오피스 애플리케이션 이름·버전 문자열을 추출한다(#5932).
+///
+/// `version.xml`은 IR로 모델링하지 않고 `Document::hwpx_aux_entry`로 원본 바이트를
+/// 그대로 보존·재방출하는 보조 엔트리다(`parser/hwpx/mod.rs`의 `HWPX_AUX_PATHS`) — 이
+/// 함수는 그 보존된 바이트에서 `info` 출력용으로 값만 읽어낼 뿐, DocInfo에 필드를
+/// 추가하지 않는다.
+pub fn parse_hwpx_application_version(xml: &str) -> Option<(String, String)> {
+    let mut reader = Reader::from_str(xml);
+    let mut buf = Vec::new();
+    loop {
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Start(ref e)) | Ok(Event::Empty(ref e)) => {
+                let name = e.name();
+                if local_name(name.as_ref()) == b"HCFVersion" {
+                    let mut application = None;
+                    let mut app_version = None;
+                    for attr in e.attributes().flatten() {
+                        match attr.key.as_ref() {
+                            b"application" => application = Some(attr_str(&attr)),
+                            b"appVersion" => app_version = Some(attr_str(&attr)),
+                            _ => {}
+                        }
+                    }
+                    return application.zip(app_version);
+                }
+            }
+            Ok(Event::Eof) | Err(_) => return None,
+            _ => {}
+        }
+        buf.clear();
+    }
+}
+
 /// header.xml을 파싱하여 DocInfo와 DocProperties를 생성한다.
 pub fn parse_hwpx_header(xml: &str) -> Result<(DocInfo, DocProperties), HwpxError> {
     let mut doc_info = DocInfo::default();

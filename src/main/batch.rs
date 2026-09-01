@@ -1620,6 +1620,15 @@ pub(crate) fn info_json_value(
         .map(|faces| faces.iter().map(|f| f.name.clone()).collect())
         .unwrap_or_default();
     let para_count: usize = document.sections.iter().map(|s| s.paragraphs.len()).sum();
+    // [#5932] HWPX만 채워짐 — HWP5/HWP3/HML은 항상 null(상응 스트림 미조사).
+    let (last_saved_application, last_saved_application_version) =
+        match hwpx_last_saved_application(document) {
+            Some((application, app_version)) => (
+                serde_json::Value::String(application),
+                serde_json::Value::String(app_version),
+            ),
+            None => (serde_json::Value::Null, serde_json::Value::Null),
+        };
     provenance::marked(
         serde_json::json!({
             "schemaVersion": ENVELOPE_SCHEMA_VERSION,
@@ -1633,6 +1642,9 @@ pub(crate) fn info_json_value(
             "fonts": fonts,
             // [#3407] best-effort 문서 제목 — 없으면 null. batch info 로 자동 전파.
             "title": document_title(doc),
+            // [#5932] 마지막 저장 한컴오피스 애플리케이션/버전(HWPX version.xml 보존값).
+            "lastSavedApplication": last_saved_application,
+            "lastSavedApplicationVersion": last_saved_application_version,
             // [#3880 T1] 파싱 중 건너뛴 것을 봉투가 스스로 밝힌다.
             //
             // 인간 출력은 `warnings: N` 과 상세를 stderr 로 내는데 JSON 분기는 그

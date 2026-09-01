@@ -2686,6 +2686,17 @@ pub(crate) fn export_markdown(args: &[String]) -> i32 {
 
 
 
+/// [#5932] HWPX `version.xml`(원본 바이트 보존, IR 미모델링)에서 마지막 저장
+/// 한컴오피스 애플리케이션 이름·버전을 읽는다. HWPX가 아니거나 엔트리가 없거나
+/// 파싱에 실패하면 `None` — `info` 출력/JSON 계약 모두 이 함수 하나를 공유한다.
+pub(crate) fn hwpx_last_saved_application(
+    document: &rhwp::model::document::Document,
+) -> Option<(String, String)> {
+    let version_xml = document.hwpx_aux_entry("version.xml")?;
+    let version_xml = std::str::from_utf8(version_xml).ok()?;
+    rhwp::parser::hwpx::header::parse_hwpx_application_version(version_xml)
+}
+
 pub(crate) fn show_info(args: &[String]) -> i32 {
     // [#3237] --json은 위치와 무관하다. 단일 입력 명령이므로 추가 경로를 무시하지 않는다.
     let mut json_mode = false;
@@ -2802,6 +2813,13 @@ pub(crate) fn show_info(args: &[String]) -> i32 {
                 "아니오"
             }
         );
+    }
+    // [#5932] HWPX version.xml에 보존된 마지막 저장 한컴오피스 애플리케이션/버전 표시.
+    // version.xml은 IR로 모델링하지 않는 보조 엔트리라 여기서만 조회한다.
+    if detected_format == rhwp::parser::FileFormat::Hwpx {
+        if let Some((application, app_version)) = hwpx_last_saved_application(document) {
+            println!("마지막 저장 애플리케이션: {application} ({app_version})");
+        }
     }
     println!("구역 수: {}", document.sections.len());
     println!("페이지 수: {}", doc.page_count());

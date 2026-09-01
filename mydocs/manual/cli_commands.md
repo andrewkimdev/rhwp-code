@@ -554,8 +554,13 @@ rhwp 를 **실제 MCP 서버**로 실행한다. 전송은 MCP 표준 stdio(줄 �
 ### `info <파일> [--json]`
 HWP 파일 정보 표시(버전/구역 수/암호화 등).
 - `--json` (#3237): stdout 에 순수 JSON 하나 —
-  `{"schemaVersion":"1.0","source","format":"hwp5|hwpx|hwp3|hml","sizeBytes","version","sections","pageCount","paraCount","fonts"}`.
+  `{"schemaVersion":"1.0","source","format":"hwp5|hwpx|hwp3|hml","sizeBytes","version","sections","pageCount","paraCount","fonts","lastSavedApplication","lastSavedApplicationVersion"}`.
   `version` 은 HML 이면 null. 스키마 계약은 `export-text --json` 항목과 동일 규칙.
+- `lastSavedApplication`/`lastSavedApplicationVersion`(#5932): HWPX `version.xml`에 보존된
+  마지막 저장 한컴오피스 애플리케이션 이름·버전(예: `"Hancom Office Hangul"` /
+  `"11, 0, 0, 8969 WIN32LEWindows_10"`). `version.xml`은 IR에 모델링하지 않고 원본 바이트만
+  보존하는 보조 엔트리라 이 필드는 그 보존값을 그대로 읽어낸 것이다. HWP5/HWP3/HML은 항상
+  `null`(상응 스트림 미조사, 현재 라운드는 HWPX 전용).
 
 ### `digest <파일> [--sections | --pages a..b] [--max-chars N] [--json]` (#3633)
 초소형 모델용 매크로 1호 — "info 로 훑고 → export-structure 로 개요를 얻고 →

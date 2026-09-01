@@ -180,7 +180,7 @@ pub(crate) fn mcp_tool_definitions() -> Vec<serde_json::Value> {
             path_schema(serde_json::json!({})),
             "info",
             serde_json::json!(["info", "--json", "{path}"]),
-            &["format", "sizeBytes", "sections", "pageCount", "paraCount", "fonts", "title", "warnings"],
+            &["format", "sizeBytes", "sections", "pageCount", "paraCount", "fonts", "title", "warnings", "lastSavedApplication", "lastSavedApplicationVersion"],
         ),
         // [#3633] 초소형 모델용 매크로 1호. 설명은 40자 이내로 극단 압축한다 —
         // 도구 목록 자체가 컨텍스트 예산을 잠식하는 4B급 모델이 1차 소비자이기
@@ -1838,6 +1838,8 @@ pub(crate) fn capabilities_command_entries() -> Vec<serde_json::Value> {
                 "fonts",
                 "title",
                 "warnings",
+                "lastSavedApplication",
+                "lastSavedApplicationVersion",
             ],
         ),
         cmd_json(
