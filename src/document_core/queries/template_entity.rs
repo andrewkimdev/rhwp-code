@@ -1020,7 +1020,18 @@ impl DocumentCore {
     /// 블록 스키마(필드 목록 등) 자체는 아직 이 봉투에 노출하지 않는다 — 방출된 소스
     /// 문자열이 곧 스키마의 표현이라 studio UI는 소스만 있으면 된다. 전체 스키마 JSON
     /// 패리티가 필요해지면(예: 서버 없는 schema.json 미리보기) 별도 필드로 추가한다.
+    ///
+    /// 출처 표지(`untrustedContent`/`untrustedFields`)는 여기서 붙이지 않는다 — 그건
+    /// CLI 출력 계층(`provenance::marked`)의 몫이다. WASM 소비자는 이 메서드를 직접
+    /// 쓰므로 표지 없는 순수 데이터 모양을 유지한다. CLI는 [`Self::template_entity_envelope`]
+    /// 로 `Value`를 받아 `provenance::marked`로 감싼 뒤 출력한다.
     pub fn template_entity_json(&self, code: &str, package: &str) -> String {
+        self.template_entity_envelope(code, package).to_string()
+    }
+
+    /// [`Self::template_entity_json`]과 같은 모양의 `Value` — CLI가 `provenance::marked`로
+    /// 감싸기 전에 파싱을 왕복하지 않도록 값 형태로 노출한다.
+    pub fn template_entity_envelope(&self, code: &str, package: &str) -> Value {
         let result = self.template_entity(code, package);
         Value::Object({
             let mut m = serde_json::Map::new();
@@ -1036,7 +1047,6 @@ impl DocumentCore {
             m.insert("errors".into(), json!(result.errors));
             m
         })
-        .to_string()
     }
 }
 

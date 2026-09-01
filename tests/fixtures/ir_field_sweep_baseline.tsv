@@ -402,6 +402,9 @@ hwpx	aift.hwpx	sections[].paragraphs[].controls[].paragraphs[].raw_header_extra[
 hwpx	aift.hwpx	sections[].paragraphs[].controls[].shape_attr.offset_x	4
 hwpx	aift.hwpx	sections[].paragraphs[].controls[].shape_attr.offset_y	2
 hwpx	aift.hwpx	sections[].paragraphs[].raw_header_extra[]	2536
+hwpx	appccr1dlm.hwpx	doc_info.border_fills[].fill.fill_type	1
+hwpx	appccr1dlm.hwpx	sections[].paragraphs[].controls[].cells[].paragraphs[].raw_header_extra[]	146
+hwpx	appccr1dlm.hwpx	sections[].paragraphs[].raw_header_extra[]	11
 hwpx	basic-table-01.hwpx	sections[].paragraphs[].controls[].cells[].paragraphs[].raw_header_extra[]	11
 hwpx	basic-table-01.hwpx	sections[].paragraphs[].raw_header_extra[]	5
 hwpx	blank_hwpx.hwpx	sections[].paragraphs[].raw_header_extra[]	4

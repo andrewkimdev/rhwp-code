@@ -179,6 +179,24 @@ pub const MAP: &[CommandProvenance] = &[
         note: "fieldCount·location 좌표·editableInForm 은 엔진값이다.",
     },
     CommandProvenance {
+        command: "template-entity",
+        untrusted: &[
+            f(
+                "dataClassSource",
+                "generate_data_class() — scan_paragraph/classify_section 이 모은 누름틀 필드 이름이 \
+                 Identifier::of(field) 로 그대로 Java 식별자에 섞여 든다",
+            ),
+            f(
+                "errors[]",
+                "표 역할 마커·누름틀 검증 실패 메시지 — role_marker_text()(표 첫 칸 텍스트)와 \
+                 필드 이름을 그대로 인용해 조립한다",
+            ),
+        ],
+        note: "code·packageName 은 caller-echo(--code/--package)이고, dataClassName·moduleClassName은 \
+               code 에서 유도한 엔진값이며, moduleClassSource 는 package·클래스 이름·code 만 보간하는 \
+               고정 템플릿이라 문서 파생이 아니다.",
+    },
+    CommandProvenance {
         command: "explain",
         untrusted: &[
             f("fields[]", "collect_field_records — 누름틀 이름 목록"),

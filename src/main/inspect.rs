@@ -382,7 +382,8 @@ pub(crate) fn cmd_template_entity(args: &[String]) -> i32 {
     let result = doc.template_entity(code, package);
 
     if json_mode {
-        println!("{}", doc.template_entity_json(code, package));
+        let envelope = doc.template_entity_envelope(code, package);
+        println!("{}", provenance::marked(envelope, "template-entity"));
         return EXIT_OK;
     }
 

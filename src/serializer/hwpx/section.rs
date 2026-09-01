@@ -34,6 +34,7 @@ use crate::model::paragraph::{ColumnBreakType, FieldRange, LineSeg, OrphanFieldE
 use crate::model::shape::{
     CommonObjAttr, HorzAlign, HorzRelTo, ShapeObject, SizeCriterion, TextWrap, VertAlign, VertRelTo,
 };
+use crate::parser::tags;
 
 use super::context::SerializeContext;
 use super::field::{write_bookmark, write_field_begin, write_field_end, write_field_end_full};
@@ -624,8 +625,34 @@ pub(crate) fn render_hp_p_open(p: &Paragraph, id: u32, style_id_ref: u8) -> Stri
 
 /// 문단 첫 run 의 charPrIDRef. IR의 `char_shapes[0].char_shape_id` 사용.
 /// 비어있으면 0 (기본 글자모양) 반환.
-fn first_run_char_shape_id(p: &Paragraph) -> u32 {
+pub(super) fn first_run_char_shape_id(p: &Paragraph) -> u32 {
     p.char_shapes.first().map(|r| r.char_shape_id).unwrap_or(0)
+}
+
+/// `SectionDef` 를 HWPX `<hp:secPr>` run 으로 방출한다.
+///
+/// secPr 템플릿(`EMPTY_SECTION_XML`)에서 secPr 블록만 잘라 IR 값으로 치환한다 —
+/// 커스터마이즈 앵커(pagePr·visibility·scalars·footNotePr·pageBorderFill)가 모두 secPr
+/// 내부라 `write_section` 의 첫 구역 치환과 같은 헬퍼를 재사용한다. 바탕쪽(masterPage)은
+/// 이 경로에서 미지원(`masterPageCnt="0"` 유지) — 드문 경우다.
+///
+/// [#5873] 표 셀(subList) 안 문단도 이 보완이 필요하다 —
+/// `table.rs::write_sub_list_paragraphs` 가 이 함수를 재사용한다.
+pub(super) fn build_secpr_run(sd: &SectionDef, first_cs: u32) -> String {
+    let start = EMPTY_SECTION_XML
+        .find("<hp:secPr ")
+        .expect("템플릿에 secPr 열기 태그가 있어야 함");
+    let end = EMPTY_SECTION_XML[start..]
+        .find("</hp:secPr>")
+        .map(|e| start + e + "</hp:secPr>".len())
+        .expect("템플릿에 secPr 닫기 태그가 있어야 함");
+    let mut secpr = EMPTY_SECTION_XML[start..end].to_string();
+    secpr = replace_page_pr(&secpr, &sd.page_def);
+    secpr = replace_page_border_fill(&secpr, sd);
+    secpr = replace_visibility(&secpr, sd);
+    secpr = replace_secpr_scalars(&secpr, sd);
+    secpr = replace_footnote_shape(&secpr, sd);
+    format!(r#"<hp:run charPrIDRef="{}">{}</hp:run>"#, first_cs, secpr)
 }
 
 /// Paragraph 하나를 (완전한 `<hp:run>` 시퀀스 XML, `<hp:linesegarray>` 요소 XML,
@@ -704,12 +731,24 @@ pub(crate) fn render_hp_t_content(
                 t_xml.push_str("<hp:fwSpace/>");
             }
             c if (c as u32) < 0x20 => { /* 기타 제어문자 무시 */ }
-            c => buf.push(c),
+            c => buf.push(hancom_symbol_for_hwpx(c)),
         }
     }
     flush_buf(&mut t_xml, &mut buf);
     t_xml.push_str("</hp:t>");
     t_xml
+}
+
+/// [#5140] IR 정본(HWP5 사영 `0xA000 | X`)의 한컴 사용자 정의 기호를 HWPX 평면 15
+/// PUA(`U+F0000 | X`)로 올려 방출한다. 리터럴 그대로 내면 Yi 음절 등 실제 유니코드
+/// 블록과 겹쳐 글자가 깨진다. 표에 없으면 원문 그대로 통과한다.
+fn hancom_symbol_for_hwpx(c: char) -> char {
+    let Ok(unit) = u16::try_from(u32::from(c)) else {
+        return c;
+    };
+    tags::hancom_symbol_to_plane15(unit)
+        .and_then(char::from_u32)
+        .unwrap_or(c)
 }
 
 /// 문단 콘텐츠를 `char_shapes` 경계 기준 다중 `<hp:run>` 으로 분할 출력하는 빌더 (#1378).
@@ -1835,7 +1874,8 @@ fn render_compose(co: &CharOverlap) -> String {
     } else {
         "SPREAD"
     };
-    let text: String = co.chars.iter().collect();
+    // [#5140] 글자겹침 실측(107/107)도 본문과 같은 규칙 — 표에 있으면 평면 15로 올린다.
+    let text: String = co.chars.iter().map(|&c| hancom_symbol_for_hwpx(c)).collect();
     let mut out = format!(
         r#"<hp:compose circleType="{}" charSz="{}" composeType="{}" charPrCnt="{}" composeText="{}">"#,
         circle_type,
@@ -2161,12 +2201,13 @@ fn render_shape(shape: &ShapeObject, ctx: &mut SerializeContext) -> String {
             Some(&p.drawing),
             &p.points,
         ),
+        // [#4676] curve 의 점은 `<hc:pt>` 가 아니라 `<hp:seg>` 체인으로 나간다(geom_tail).
         ShapeObject::Curve(cv) => (
             "curve",
             &cv.common,
             &cv.drawing.caption,
             Some(&cv.drawing),
-            &cv.points,
+            NO_PTS,
         ),
         ShapeObject::Group(_) => unreachable!(),
         ShapeObject::Picture(pic) => {
@@ -2212,6 +2253,10 @@ fn render_shape(shape: &ShapeObject, ctx: &mut SerializeContext) -> String {
             hc("ax1", &a.axis1),
             hc("ax2", &a.axis2),
         ),
+        // [#4676] curve 는 점을 `<hp:seg>` 체인으로 방출한다 — `<hc:pt>` 나열은 한글이
+        // 열다 죽는다(RPC 0x800706BE). 한컴 원본 실측: hp:curve 는 seg 만 쓰고 hc:pt 는
+        // 한 번도 쓰지 않는다. seg 는 이웃한 두 점을 잇는 구간이므로 점 N 개 → seg N-1 개.
+        ShapeObject::Curve(cv) => curve_segs_xml(&cv.points, &cv.segment_types),
         _ => String::new(),
     };
     // [#4388] `<hp:arc>` 전용 `type` 속성(NORMAL/PIE/CHORD) — OWPML `CArcType` 계약.
@@ -2230,6 +2275,35 @@ fn render_shape(shape: &ShapeObject, ctx: &mut SerializeContext) -> String {
         &extra_attrs,
         ctx,
     )
+}
+
+/// [#4676] `CurveShape` 의 점 목록을 OWPML `<hp:seg>` 체인으로 방출한다.
+///
+/// 한글은 `<hp:curve>` 안의 `<hc:pt>` 나열을 만나면 여는 도중 죽는다(COM RPC 0x800706BE,
+/// 10k 오라클 스윕에서 크래시 산출물 다수의 공통 원인). 한컴 원본은 언제나 seg 를 쓴다:
+///
+/// ```xml
+/// <hp:seg type="CURVE" x1="0" y1="1680" x2="10440" y2="0"/>
+/// <hp:seg type="LINE"  x1="10440" y1="0" x2="20940" y2="1800"/>
+/// ```
+///
+/// `segment_types[i]` 는 HWP5 의 구간 종류(0: 직선, 1: 곡선)다. HWPX 입력은 파서가
+/// 종류를 채우므로 왕복에서 보존되고, 비어 있으면 곡선으로 본다(HWP5 곡선 개체의 통상값).
+fn curve_segs_xml(points: &[crate::model::Point], segment_types: &[u8]) -> String {
+    points
+        .windows(2)
+        .enumerate()
+        .map(|(i, w)| {
+            let kind = match segment_types.get(i) {
+                Some(0) => "LINE",
+                _ => "CURVE",
+            };
+            format!(
+                r#"<hp:seg type="{}" x1="{}" y1="{}" x2="{}" y2="{}"/>"#,
+                kind, w[0].x, w[0].y, w[1].x, w[1].y
+            )
+        })
+        .collect()
 }
 
 /// [#4388] `ArcShape.arc_type` (0: Arc, 1: CircularSector, 2: Bow) →
@@ -2852,6 +2926,44 @@ fn render_page_border_fill(ty: &str, pbf: &crate::model::page::PageBorderFill) -
 mod tests {
     use super::*;
     use crate::model::paragraph::{CharShapeRef, Paragraph};
+
+    /// #4676: `<hp:curve>` 의 점은 `<hc:pt>` 나열이 아니라 `<hp:seg>` 체인으로 나가야 한다.
+    /// `<hc:pt>` 로 저장하면 한글이 파일을 여는 도중 프로세스째 죽는다(COM RPC 0x800706BE).
+    /// 한컴 원본 실측: `hp:curve` 는 seg 만 쓰고 `hc:pt` 는 한 번도 쓰지 않는다.
+    /// 구간 종류(LINE/CURVE)는 IR 의 `segment_types` 에서 오고, 왕복에서 보존돼야 한다.
+    #[test]
+    fn issue4676_curve_emits_seg_chain_not_pts() {
+        use crate::model::shape::{CommonObjAttr, CurveShape, DrawingObjAttr};
+        use crate::model::Point;
+
+        let curve = CurveShape {
+            common: CommonObjAttr::default(),
+            drawing: DrawingObjAttr::default(),
+            points: vec![
+                Point { x: 0, y: 100 },
+                Point { x: 500, y: 0 },
+                Point { x: 900, y: 250 },
+            ],
+            segment_types: vec![1, 0],
+        };
+        let mut ctx = SerializeContext::default();
+        let xml = render_shape(&ShapeObject::Curve(curve), &mut ctx);
+
+        assert!(
+            !xml.contains("<hc:pt "),
+            "curve 는 hc:pt 를 방출하면 안 된다(한글 크래시): {xml}"
+        );
+        assert!(
+            xml.contains(r#"<hp:seg type="CURVE" x1="0" y1="100" x2="500" y2="0"/>"#),
+            "첫 구간은 곡선: {xml}"
+        );
+        assert!(
+            xml.contains(r#"<hp:seg type="LINE" x1="500" y1="0" x2="900" y2="250"/>"#),
+            "둘째 구간은 직선(segment_types 보존): {xml}"
+        );
+        // 점 N 개 → 구간 N-1 개
+        assert_eq!(xml.matches("<hp:seg ").count(), 2, "{xml}");
+    }
 
     /// [#XXXX] `<hp:pageNum formatType="...">`의 원문자(circled digit) 값은 OWPML Core
     /// 스키마 NumberType1 표기인 "CIRCLED_DIGIT"이어야 한다. 종전엔 "CIRCLE_DIGIT"(D 없음)

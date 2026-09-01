@@ -474,9 +474,22 @@ impl Hwp3DrawingExtendedPolygon {
     }
 }
 
+/// 공통 헤더가 선언한 끝(`header_start + 4 + header_length`)이 실제 소비량보다
+/// 앞설 때만 그 위치까지 전진한다. 상한을 두는 이유는 malformed/fuzzed 파일의
+/// `header_length` 값이 임의로 커서 스트림을 되돌릴 수 없는 위치까지 건너뛰는
+/// 것을 막기 위함이다(#5141).
+const MAX_HEADER_SKIP: u64 = 64 * 1024;
+
 impl Hwp3DrawingObject {
     pub fn read<R: Read + Seek>(mut reader: R) -> Result<Self, io::Error> {
+        let header_start = reader.stream_position()?;
         let header = Hwp3DrawingObjectCommonHeader::read(&mut reader)?;
+
+        let consumed_end = reader.stream_position()?;
+        let declared_end = header_start + 4 + u64::from(header.header_length);
+        if declared_end > consumed_end && declared_end - consumed_end <= MAX_HEADER_SKIP {
+            reader.seek(SeekFrom::Start(declared_end))?;
+        }
 
         // 글상자(6)인 경우, 공통 헤더 바로 뒤에 글상자 정보가 위치함.
         // 테이블 78 "글상자 세부 정보"에 따라 info1_len, info2_len, 문단 리스트가 존재함.
@@ -484,7 +497,11 @@ impl Hwp3DrawingObject {
 
         match header.object_type {
             0 => {
-                // 컨테이너: 추가 세부 길이 정보 없음
+                // 묶음 개체(Container): 사각형/타원과 동일하게 0으로 채워진 8바이트
+                // (info1_len, info2_len)가 뒤따른다. 이 8바이트를 소비하지 않으면
+                // 자식 도형 트리 파싱이 8바이트만큼 밀려 소실된다(#5141).
+                let _info1_len = reader.read_u32::<LittleEndian>()?;
+                let _info2_len = reader.read_u32::<LittleEndian>()?;
                 Ok(Hwp3DrawingObject::Container(header))
             }
             1 => {
@@ -1152,6 +1169,7 @@ mod drawing_object_recursion_depth_tests {
         buf.extend_from_slice(&[0u8; 32]); // basic_attr: line_style..pattern_color
         buf.extend_from_slice(&[0u8; 8]); // basic_attr: textbox_margin
         buf.extend_from_slice(&0u32.to_le_bytes()); // basic_attr: options
+        buf.extend_from_slice(&[0u8; 8]); // info1_len, info2_len (#5141)
         buf
     }
 

@@ -974,6 +974,39 @@ pub(crate) fn right_tab_block_width(
     w
 }
 
+/// [#6303] 칸 폭 자동 축소(#6196) 셀의 오버플로우 자간을 안쪽 폭에 수렴시킨다.
+///
+/// 저장 사다리가 한 줄·안쪽 폭으로 적어 둔 칸이 자연 폭에서 안쪽 폭을 15% 넘게
+/// 놓친 경우에만 쓴다. 선형 1회 `slack/N` 은 말미 글자·narrow glyph 클램프 때문에
+/// 목표보다 1~2% 헐겁다. 일반 문단·일반 셀의 자간은 그대로 둔다.
+fn converge_cell_overflow_char_spacing(
+    comp_line: &ComposedLine,
+    styles: &ResolvedStyleSet,
+    tab_width: f64,
+    total_char_count: usize,
+    total_text_width: f64,
+    available_width: f64,
+) -> f64 {
+    let avg_char_w = total_text_width / total_char_count as f64;
+    let min_sp = -avg_char_w * 0.5;
+    let mut extra = ((available_width - total_text_width) / total_char_count as f64).max(min_sp);
+    for _ in 0..4 {
+        let mut measured = 0.0f64;
+        for run in &comp_line.runs {
+            let mut ts = resolved_to_text_style(styles, run.char_style_id, run.lang_index);
+            ts.default_tab_width = tab_width;
+            ts.extra_char_spacing = extra;
+            measured += estimate_text_width(&run.text, &ts);
+        }
+        let delta = available_width - measured;
+        if delta >= -0.05 && delta.abs() < 0.25 {
+            break;
+        }
+        extra = (extra + delta / total_char_count as f64).max(min_sp);
+    }
+    extra.min(0.0)
+}
+
 /// [Task #2067] 정렬(양쪽/배분/나눔)·오버플로우·셀 underflow 에 따른 여분 간격 계산.
 /// 반환 = (extra_word_sp, extra_char_sp, extra_dash_sp). Task #352 dash leader 분배 포함.
 #[allow(clippy::too_many_arguments)]
@@ -987,6 +1020,7 @@ fn compute_line_extra_spacing(
     needs_distribute: bool,
     has_tabs: bool,
     suppress_cell_overflow_spacing: bool,
+    converge_auto_shrink_cell: bool,
     total_char_count: usize,
     total_text_width: f64,
     available_width: f64,
@@ -1157,6 +1191,19 @@ fn compute_line_extra_spacing(
             } else if suppress_cell_overflow_spacing && slack < 0.0 {
                 // 셀의 좁은 내부 폭은 줄바꿈 기준일 뿐, 숫자/문자를 수평 압축하지 않는다.
                 (0.0, 0.0, 0.0)
+            } else if converge_auto_shrink_cell && slack < 0.0 {
+                (
+                    0.0,
+                    converge_cell_overflow_char_spacing(
+                        comp_line,
+                        styles,
+                        tab_width,
+                        total_char_count,
+                        total_text_width,
+                        available_width,
+                    ),
+                    0.0,
+                )
             } else {
                 let raw = slack / total_char_count as f64;
                 let avg_char_w = total_text_width / total_char_count as f64;
@@ -1210,6 +1257,23 @@ fn compute_line_extra_spacing(
         // 비정렬(왼쪽/오른쪽/가운데) 텍스트가 오버플로우할 때 글자 간격 압축
         if suppress_cell_overflow_spacing {
             (0.0, 0.0, 0.0)
+        } else if converge_auto_shrink_cell {
+            // [#6303] 칸 폭 자동 축소(#6196) 가 선형 slack/N 한 번이면 목표가
+            // 1~2% 헐거워 긴 행 꼬리가 괘선 밖으로 나간다. 저장 한 줄이 안쪽 폭을
+            // 15% 넘게 넘는 칸에서만 줄바꿈은 그대로 두고 실측 폭을 수렴시킨다.
+            // 일반 in_cell 줄까지 수렴하면 page-local hash·text-overlap 이 흔들린다.
+            (
+                0.0,
+                converge_cell_overflow_char_spacing(
+                    comp_line,
+                    styles,
+                    tab_width,
+                    total_char_count,
+                    total_text_width,
+                    available_width,
+                ),
+                0.0,
+            )
         } else {
             let raw = (available_width - total_text_width) / total_char_count as f64;
             let avg_char_w = total_text_width / total_char_count as f64;
@@ -3760,8 +3824,39 @@ impl LayoutEngine {
                         .count()
                 })
                 .sum();
-            let suppress_cell_overflow_spacing =
-                cell_ctx.is_some() && total_text_width > available_width * 1.15;
+            // [Issue #6196] 저장 사다리가 이 셀 문단을 한 줄로, 그것도 셀 안쪽 폭
+            // 그대로 적어 두었으면 "한글이 이 문장을 이 폭에 담았다"는 증언이다.
+            let stored_single_line_fits_cell = cell_ctx.is_some()
+                && composed.lines.len() == 1
+                && para.is_some_and(|p| {
+                    p.line_segs.len() == 1
+                        && p.line_segs[0].tag & LineSeg::TAG_IMPLEMENTATION_PROPERTY == 0
+                        && (hwpunit_to_px(p.line_segs[0].segment_width, self.dpi)
+                            - available_width)
+                            .abs()
+                            <= 2.0
+                });
+            // [#6389] 저장 사다리 증언의 다줄 일반화 — 조합된 줄 수가 저장 line_segs
+            // 수와 같고, 모든 저장 줄의 폭이 셀 열폭 이하이면 역시 증언으로 인정한다.
+            let stored_ladder_fits_frame = cell_ctx.is_some()
+                && para.is_some_and(|p| {
+                    !p.line_segs.is_empty()
+                        && composed.lines.len() == p.line_segs.len()
+                        && p.line_segs.iter().all(|seg| {
+                            seg.tag & LineSeg::TAG_IMPLEMENTATION_PROPERTY == 0
+                                && hwpunit_to_px(seg.segment_width, self.dpi)
+                                    <= effective_col_w + 2.0
+                        })
+                });
+            let suppress_cell_overflow_spacing = cell_ctx.is_some()
+                && total_text_width > available_width * 1.15
+                && !stored_single_line_fits_cell
+                && !stored_ladder_fits_frame;
+            // [#6303] 자동 축소는 저장 한 줄이 **안쪽 폭을 놓친** 칸에만 수렴한다.
+            // 일반 셀·문단의 선형 slack/N 을 바꾸면 page-local hash 와 text-overlap 이
+            // 흔들린다. 1.15 는 #6196 억제 임계와 같다.
+            let converge_auto_shrink_cell =
+                stored_single_line_fits_cell && total_text_width > available_width * 1.15;
             let is_hancom_company_pua_logo_line =
                 is_hancom_company_pua_logo_line(comp_line, alignment);
 
@@ -3781,6 +3876,7 @@ impl LayoutEngine {
                     needs_distribute,
                     has_tabs,
                     suppress_cell_overflow_spacing,
+                    converge_auto_shrink_cell,
                     total_char_count,
                     total_text_width,
                     available_width,
@@ -7118,6 +7214,7 @@ mod issue_2809_split_alignment_tests {
             false,
             false,
             false,
+            false,
             5,
             30.0,
             90.0,
@@ -7148,6 +7245,7 @@ mod issue_2809_split_alignment_tests {
             Alignment::Split,
             true,
             true,
+            false,
             false,
             false,
             false,
@@ -7199,6 +7297,7 @@ mod issue_2809_split_alignment_tests {
             false,
             false,
             false,
+            false,
             12,
             62.5,
             481.8,
@@ -7219,12 +7318,87 @@ mod issue_2809_split_alignment_tests {
             false,
             false,
             false,
+            false,
             12,
             62.5,
             481.8,
             40.0,
         );
         assert!(extra_char_mid > 0.0);
+    }
+}
+
+/// [#6303] `converge_cell_overflow_char_spacing`(반복 수렴)가 자동 축소 셀에서
+/// 선형 1회 `slack/N`보다 목표 폭에 더 가깝게 맞추는지 직접 검증한다.
+/// upstream(edwardkim/rhwp) `#6303`이 고치려던 문제(narrow-glyph per-char 클램프로
+/// 선형 1회 배분이 1~2% 헐거워짐)를 문서 없이 함수 단위로 재현한다.
+#[cfg(test)]
+mod issue_6303_cell_shrink_convergence_tests {
+    use super::compute_line_extra_spacing;
+    use crate::model::style::Alignment;
+    use crate::renderer::composer::{ComposedLine, ComposedTextRun};
+    use crate::renderer::layout::text_measurement::{estimate_text_width, resolved_to_text_style};
+    use crate::renderer::style_resolver::ResolvedStyleSet;
+
+    fn overflow_cell_line() -> ComposedLine {
+        ComposedLine {
+            runs: vec![ComposedTextRun {
+                text: "품질균일화 시스템 구축과 체험프로그램 확대".to_string(),
+                ..Default::default()
+            }],
+            line_height: 1120,
+            baseline_distance: 952,
+            segment_width: 6972,
+            column_start: 0,
+            line_spacing: 560,
+            has_line_break: false,
+            char_start: 0,
+        }
+    }
+
+    /// `converge_auto_shrink_cell=true`로 받은 자간을 다시 실측하면 반복 수렴이
+    /// 목표 폭(`available_width`)에 0.3px 이내로 수렴해야 한다 — narrow-glyph
+    /// per-char 클램프가 있는 실제 폰트 측정기에서 선형 1회 배분이 놓치는 잔여
+    /// 오차를 반복 재측정으로 흡수하는 것이 이 함수의 계약이다.
+    #[test]
+    fn converge_auto_shrink_cell_measures_within_tolerance_of_available_width() {
+        let line = overflow_cell_line();
+        let styles = ResolvedStyleSet::default();
+        let text_style = resolved_to_text_style(&styles, 0, 0);
+        let total_text_width = estimate_text_width(&line.runs[0].text, &text_style);
+        let total_char_count = line.runs[0].text.chars().count();
+        let available_width = total_text_width / 1.2; // 자연 폭의 83% — #6303 대상 비율대
+
+        let (_, converge_ecs, _) = compute_line_extra_spacing(
+            &line,
+            &styles,
+            Alignment::Left,
+            true,  // in_cell
+            false, // needs_justify
+            false, // justify_spaces_only
+            false, // needs_distribute
+            false, // has_tabs
+            false, // suppress_cell_overflow_spacing
+            true,  // converge_auto_shrink_cell
+            total_char_count,
+            total_text_width,
+            available_width,
+            40.0,
+        );
+
+        let mut ts = text_style;
+        ts.extra_char_spacing = converge_ecs;
+        let measured = estimate_text_width(&line.runs[0].text, &ts);
+        let converge_gap = (available_width - measured).abs();
+
+        assert!(
+            converge_ecs < 0.0,
+            "오버플로우 셀은 음수 자간(압축)을 반환해야 함: {converge_ecs}"
+        );
+        assert!(
+            converge_gap <= 0.3,
+            "수렴 반복 후에도 목표 폭과 {converge_gap:.2}px 차이 — #6303 수렴이 동작하지 않음"
+        );
     }
 }
 
@@ -7261,6 +7435,7 @@ mod issue_4657_distribute_alignment_tests {
             false,
             false,
             true,
+            false,
             false,
             false,
             char_count,
@@ -7658,6 +7833,21 @@ pub fn map_pua_bullet_char(ch: char) -> char {
             // 부재 → render-time substitution. 측정/렌더링 양쪽 자동 적용.
             // sample11.hwp 머리말/꼬리말 가로선 패턴 (각 85+ 회) 시각 정합.
             0xF080F => '\u{2501}', // ━ BOX DRAWINGS HEAVY HORIZONTAL (한컴 — 굵은 가로선)
+            // [#5860/#6380 포팅] 0xF080F 와 같은 묶음의 텍스트 다이어그램 괘선 조각
+            // (johab.rs 0x3013/0x3014/0x3015/0x3019/0x301B/0x301D). 박스 드로잉으로
+            // 짐작하지 않는다 — 시각 검증 결과 한컴 자체도 글리프가 없다:
+            // (1) 한컴 변환본 samples/hwp3-sample11-hwpx.hwpx 의 hp:t 텍스트도
+            //     0xF0808 을 raw PUA 로 그대로 남긴다(미해결).
+            // (2) 한컴 정답지 pdf/hwp3/hwp3-sample11-2020.pdf p.10 "hostname ⬜⬜ le0"
+            //     자리를 600dpi 로 렌더해 보면 .notdef 두 칸(tofu box)이다 — 한컴 임베디드
+            //     폰트에도 이 서브군 글리프가 없다는 뜻. 대체 표시 문자를 지어내는 대신
+            //     "알 수 없는 문자" 의 표준 표기인 U+FFFD 로 낮춘다.
+            0xF0806 => '\u{FFFD}',
+            0xF0807 => '\u{FFFD}',
+            0xF0808 => '\u{FFFD}',
+            0xF080C => '\u{FFFD}',
+            0xF080E => '\u{FFFD}',
+            0xF0810 => '\u{FFFD}',
             // [Task #1692 Stage 9] HWP3 관계도 계열 선문자.
             // 한컴은 U+F0811/F0817/F081A를 자체 글리프로 이어진 선처럼 렌더한다.
             // 공개 폰트 경로에서는 .notdef 두부가 나오므로 대응 가능한 box drawing으로 낮춘다.
@@ -7665,6 +7855,24 @@ pub fn map_pua_bullet_char(ch: char) -> char {
             0xF0817 => '\u{2514}', // └ BOX DRAWINGS LIGHT UP AND RIGHT
             0xF081A => '\u{2500}', // ─ BOX DRAWINGS LIGHT HORIZONTAL
             0xF0827 => '\u{25A0}', // ■ BLACK SQUARE (한컴 — 잠정, 시각 판정 후 조정)
+            // [#5860/#6380 포팅] johab.rs 0x2E00/0x2E0A/0x2E0B/0x2E0D~0x2E12 —
+            // sample11 p23 "Format/Type:" 줄의 16진수 바이트 위 첨자 각주 마커.
+            // `composer.rs`의 `pua_overlap_digit`(CharOverlap tcps 컨트롤의 자릿수 성분
+            // 디코더)이 같은 수치 대역(F0289~F0291=십의자리)을 쓰지만, 그건 별도 컨트롤
+            // 페이로드 문맥이다 — 여기는 평범한 PARA_TEXT 문자라 그 디코더가 적용되지
+            // 않는다. 시각 검증: pdf/hwp3/hwp3-sample11-2020.pdf p.23 "Format/Type: 1 54
+            // [마커][마커] Ethernet:" 위 첨자 자리를 600dpi 로 렌더해 보면 역시 .notdef
+            // tofu box다 — 한컴 자체도 이 서브군 글리프가 없다. 0xF080F 계열과 같은 이유로
+            // U+FFFD 로 낮춘다(박스 드로잉/원문자로 지어내지 않는다).
+            0xF0288 => '\u{FFFD}',
+            0xF0289 => '\u{FFFD}',
+            0xF028A => '\u{FFFD}',
+            0xF028C => '\u{FFFD}',
+            0xF028D => '\u{FFFD}',
+            0xF028E => '\u{FFFD}',
+            0xF028F => '\u{FFFD}',
+            0xF0290 => '\u{FFFD}',
+            0xF0291 => '\u{FFFD}',
             _ => ch,
         };
     }

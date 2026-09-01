@@ -33,6 +33,9 @@ const FIELD_SAMPLE: &str = "samples/field-01.hwp";
 const DOCLANG_SAMPLE: &str = "samples/para-001.hwp";
 /// `export-hml` 은 HML 원본만 받는다.
 const HML_SAMPLE: &str = "samples/hml/formatting_table.hml";
+/// `fix-flat` 코드 — 반복 블록 없는 평면 누름틀 레코드. 실제 문서 필드 이름(신청인_성명 등)이
+/// `dataClassSource` 에 그대로 섞여 드는 경로를 오라클로 확인하는 데 쓴다.
+const TEMPLATE_ENTITY_SAMPLE: &str = "tests/fixtures/template-entity/fix-flat.hwpx";
 /// PrvImage 썸네일이 내장된 문서.
 const THUMBNAIL_SAMPLE: &str = "samples/2022년 국립국어원 업무계획.hwp";
 /// [#4100] 차트가 **있으면서 본문 텍스트도 있는** 문서.
@@ -385,6 +388,7 @@ fn recipes() -> Vec<Recipe> {
     let main = sample(SAMPLE);
     let table = sample(TABLE_SAMPLE);
     let field = sample(FIELD_SAMPLE);
+    let template_entity_doc = sample(TEMPLATE_ENTITY_SAMPLE);
     let doclang = sample(DOCLANG_SAMPLE);
     let hml = sample(HML_SAMPLE);
     let thumb = sample(THUMBNAIL_SAMPLE);
@@ -782,6 +786,20 @@ fn recipes() -> Vec<Recipe> {
             command: "explain",
             doc: Some(field.clone()),
             args: vec![s("explain"), p(&field), s("--json")],
+            stdin: None,
+            exit: 0,
+            ndjson: false,
+        },
+        Recipe {
+            command: "template-entity",
+            doc: Some(template_entity_doc.clone()),
+            args: vec![
+                s("template-entity"),
+                p(&template_entity_doc),
+                s("--code"),
+                s("fix-flat"),
+                s("--json"),
+            ],
             stdin: None,
             exit: 0,
             ndjson: false,

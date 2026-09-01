@@ -1000,6 +1000,16 @@ fn print_help() {
     println!();
     println!("      --json                    계약 봉투 JSON을 stdout에 출력");
     println!();
+    println!("  template-entity <파일.hwpx> --code <코드> [옵션]");
+    println!("      hwpx 표 역할 마커(#REPEAT-*, #PAGENO)·누름틀에서 서버 없이 Java record");
+    println!("      데이터/모듈 클래스 초안을 생성한다. 마커 검증 실패는 크래시가 아니라");
+    println!("      errors 데이터(--json에서는 빈 소스 + errors[]).");
+    println!();
+    println!("      --code <코드>             생성할 템플릿 코드 — 클래스 이름의 근거 (필수)");
+    println!("      --package <패키지>       Java 패키지 이름 (기본: com.example.hwpx.templates)");
+    println!("      --out-dir <디렉터리>      생성한 .java 2개를 저장 (--json과 함께 쓰면 무시됨)");
+    println!("      --json                    계약 봉투 JSON을 stdout에 출력");
+    println!();
     println!("  inspect hidden-text <파일.hwp|파일.hwpx> [--json] [옵션]");
     println!("      은닉 텍스트 조사 (읽기 전용) — 사람 눈에는 안 보이는데 텍스트 추출기가");
     println!("      읽어 LLM 프롬프트로 흘러드는 문자열을 찾는다 (간접 프롬프트 인젝션 대비).");

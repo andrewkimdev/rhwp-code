@@ -34,7 +34,9 @@ use crate::model::shape::{
 use crate::model::table::{Cell, Table, TablePageBreak, VerticalAlign};
 
 use super::context::SerializeContext;
-use super::section::{render_hp_p_open, render_paragraph_parts};
+use super::section::{
+    build_secpr_run, first_run_char_shape_id, render_hp_p_open, render_paragraph_parts,
+};
 use super::shape::numbering_type_str;
 use super::utils::{empty_tag, end_tag, start_tag, start_tag_attrs};
 use super::SerializeError;
@@ -362,6 +364,17 @@ fn write_sub_list_paragraphs<W: Write>(
         vert_cursor = advance;
         let pid = ctx.next_para_id();
         let mut p_xml = render_hp_p_open(para, pid, sid);
+        // [#5873] 셀 안 구역 나누기 — 본문 최상위 첫 구역과 같은 보완.
+        // render_runs 는 SectionDef 슬롯을 hidden 처리해 XML을 내지 않으므로, 여기서
+        // 보완하지 않으면 셀 안 구역이 secPr 없이 뒤따르는 colPr만 남아 한글이 그
+        // 지점부터 문서 끝까지 본문을 폐기한다.
+        if let Some(crate::model::control::Control::SectionDef(sd)) = para
+            .controls
+            .iter()
+            .find(|c| matches!(c, crate::model::control::Control::SectionDef(_)))
+        {
+            p_xml.push_str(&build_secpr_run(sd, first_run_char_shape_id(para)));
+        }
         p_xml.push_str(&runs);
         p_xml.push_str(&linesegs);
         p_xml.push_str("</hp:p>");
