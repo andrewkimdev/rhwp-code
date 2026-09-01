@@ -24,6 +24,18 @@ export interface TagSelectionParams {
   nestedParent?: string;
 }
 
+/** `#PAGENO` 마커 텍스트 — `template-ops.ts`가 태깅된 마커가 PAGENO인지 판정할 때도 재사용한다. */
+export const PAGENO_MARKER_TEXT = '#PAGENO';
+
+/**
+ * `#PAGENO` 표 안에 authoring해야 하는 예약 누름틀 이름 — hwpx-template-engine이
+ * `FieldSchemaExtractor`에서 하드코딩한 이름과 정확히 일치해야 한다
+ * (`src/document_core/queries/template_entity.rs`의 `CURRENT_PAGE_FIELD`/`TOTAL_PAGES_FIELD` 포트,
+ * TEMPLATE_MARKER_SYNTAX.md §3a).
+ */
+export const CURRENT_PAGE_FIELD_NAME = '현재_페이지';
+export const TOTAL_PAGES_FIELD_NAME = '전체_페이지';
+
 function requireBlockName(blockName: string | undefined, role: string): string {
   if (!blockName) throw new Error(`[template] ${role} 마커에는 블록명이 필요합니다`);
   return blockName;
@@ -42,7 +54,7 @@ export function buildTableRoleMarkerText(params: TagSelectionParams): string {
   switch (role) {
     case 'HEADER': return '#HEADER';
     case 'FOOTER': return '#FOOTER';
-    case 'PAGENO': return '#PAGENO';
+    case 'PAGENO': return PAGENO_MARKER_TEXT;
     case 'REPEAT_TITLE': return `#REPEAT-TITLE:${requireBlockName(blockName, role)}`;
     case 'REPEAT_HEADER': return `#REPEAT-HEADER:${requireBlockName(blockName, role)}`;
     case 'REPEAT_BODY': return `#REPEAT-BODY:${requireBlockName(blockName, role)}`;

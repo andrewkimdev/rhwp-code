@@ -19,6 +19,11 @@
  */
 import type { WasmBridge } from '../../core/wasm-bridge';
 import { findCellIndexForRowCol, readTableMarkerText } from '../../core/table-outline.ts';
+import {
+  CURRENT_PAGE_FIELD_NAME,
+  PAGENO_MARKER_TEXT,
+  TOTAL_PAGES_FIELD_NAME,
+} from '../../core/template-marker.ts';
 
 /**
  * 표의 첫 행 첫 셀에 마커 텍스트를 쓴다. 이미 `#`로 시작하는 마커 행이 있으면
@@ -160,6 +165,64 @@ function setTableRoleMarker(wasm: WasmBridge, sec: number, ppi: number, ci: numb
   }
   wasm.insertTextInCell(sec, ppi, ci, cellIdx, 0, 0, markerText);
   applyMarkerRowStyle(wasm, sec, ppi, ci, cellIdx, markerText);
+
+  if (markerText === PAGENO_MARKER_TEXT) {
+    ensurePageNoFields(wasm, sec, ppi, ci);
+  }
+}
+
+/**
+ * `#PAGENO` 표에 hwpx-template-engine이 요구하는 예약 누름틀 두 개
+ * (`현재_페이지`/`전체_페이지`, TEMPLATE_MARKER_SYNTAX.md §3a)를 `현재_페이지 / 전체_페이지`
+ * 모양으로 자동 채운다. 새 행을 만들지 않고 마커 행(0) 삽입 직후 남은 **마지막 행**의 (다열이면
+ * 병합한) 셀에 넣는다 — 이 행은 마커 행과 달리 렌더 파이프라인이 제거하지 않는 실제 콘텐츠라서
+ * 마커 행의 authoring 강조 스타일(`applyMarkerRowStyle`)은 적용하지 않는다.
+ */
+export function ensurePageNoFields(wasm: WasmBridge, sec: number, ppi: number, ci: number): void {
+  // 이미 구성돼 있으면(재태깅, 혹은 사용자가 이미 직접 넣어둠) 그대로 둔다 — 엔진이 문서당
+  // #PAGENO 표를 최대 1개만 허용하므로 문서 전역에서 이 두 이름을 찾는 것으로 충분하다.
+  const existingNames = new Set(wasm.getFieldList().map((f) => f.name));
+  if (existingNames.has(CURRENT_PAGE_FIELD_NAME) || existingNames.has(TOTAL_PAGES_FIELD_NAME)) return;
+
+  const dims = wasm.getTableDimensions(sec, ppi, ci);
+  const lastRow = dims.rowCount - 1; // 마커 행(0) 삽입 직후이므로 원본 표의 마지막 행 — 항상 > 0
+
+  // 병합보다 먼저 마지막 행이 통째로 비어 있는지 확인한다 — 다열 표에서 mergeTableCells는
+  // 첫 셀만 남기고 나머지 셀 내용을 버리므로, 검사보다 먼저 병합해버리면 "이미 내용이 있으니
+  // 건드리지 않는다"는 판정 자체가 그 내용을 잃은 뒤에야 내려지는 순서 버그가 된다.
+  for (let col = 0; col < dims.colCount; ) {
+    const idx = findCellIndexForRowCol(wasm, sec, ppi, ci, lastRow, col);
+    if (idx === null) break;
+    if (wasm.getCellParagraphLength(sec, ppi, ci, idx, 0) > 0) return; // 내용 있음 — 건드리지 않는다
+    const info = wasm.getCellInfo(sec, ppi, ci, idx);
+    col = info.col + info.colSpan;
+  }
+
+  if (dims.colCount > 1) {
+    wasm.mergeTableCells(sec, ppi, ci, lastRow, 0, lastRow, dims.colCount - 1);
+  }
+  const cellIdx = findCellIndexForRowCol(wasm, sec, ppi, ci, lastRow, 0) ?? 0;
+
+  const SEPARATOR = ' / ';
+  wasm.insertTextInCell(sec, ppi, ci, cellIdx, 0, 0, SEPARATOR);
+  // 누름틀(ClickHere 필드)은 문단 char position을 소비하지 않는 컨트롤이다 — guide 텍스트는
+  // 별도 "잔재"로만 저장된다(field_query.rs::insert_click_here_field_in_para). 그래서 두 필드를
+  // SEPARATOR 삽입 이후의 고정 오프셋(0, SEPARATOR.length)에 순서 상관없이 앵커할 수 있고,
+  // "필드1 삽입 → 반환 offset으로 다음 위치 계산" 같은 체이닝이 필요 없다.
+  for (const [name, offset] of [
+    [CURRENT_PAGE_FIELD_NAME, 0],
+    [TOTAL_PAGES_FIELD_NAME, SEPARATOR.length],
+  ] as const) {
+    const pos = {
+      sectionIndex: sec, paragraphIndex: 0, charOffset: offset,
+      parentParaIndex: ppi, controlIndex: ci, cellIndex: cellIdx, cellParaIndex: 0,
+    };
+    // editable:false — 두 필드 모두 사용자가 값을 채우는 대상이 아니라 렌더 파이프라인이
+    // 자동으로 계산해 채운다(TEMPLATE_MARKER_SYNTAX.md §3a) — 양식 모드에서 편집 가능하게 두면
+    // 채워도 무시되는 값을 입력하도록 잘못 유도한다.
+    const result = wasm.insertClickHereField(pos, name, '', name, false);
+    if (!result.ok) throw new Error(`[template-ops] #PAGENO 필드 삽입 실패: ${name}`);
+  }
 }
 
 export function clearTableRoleMarker(wasm: WasmBridge, sec: number, ppi: number, ci: number): void {
