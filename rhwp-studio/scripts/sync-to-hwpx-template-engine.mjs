@@ -10,6 +10,10 @@
  * `npm run build`(base 미지정, 기본값 `/`)의 산출물을 그대로 쓰면 자산 경로가 `/rhwp/` 없이
  * 루트 기준으로 나가 hwpx-template-engine의 `/rhwp` 컨텍스트에서 깨진다 — 반드시
  * `--base=/rhwp/`로 다시 빌드된 dist/여야 한다.
+ *
+ * 이 동기화는 자동으로 다시 실행되지 않는다 — rhwp-studio를 바꾼 뒤에는
+ * `npm run check:hwpx-template-engine-sync`(check-hwpx-template-engine-sync.mjs)로
+ * hwpx-template-engine의 벤더링 사본이 뒤처졌는지 직접 확인한다.
  */
 import { execFileSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
