@@ -54,6 +54,7 @@ import {
   type FileSystemWindowLike,
 } from '@/command/file-system-access';
 import { openDocumentViaPicker } from '../file-open-picker';
+import { applyDocumentTitle } from '@/app/document-title';
 import { PdfPrintDialog } from '@/ui/pdf-print-dialog';
 import { userSettings } from '@/core/user-settings';
 import { showToast } from '@/ui/toast';
@@ -219,6 +220,7 @@ function completeHandleSave(
   services.wasm.fileName = result.fileName;
   services.wasm.requiresPasswordForSave = passwordProtected;
   services.documentState.markClean(reason);
+  applyDocumentTitle(services.wasm.fileName, services.documentState.isDirty());
 }
 
 export function downloadBlob(blob: Blob, fileName: string): void {
@@ -307,6 +309,7 @@ async function saveAsFormat(services: CommandServices, format: SaveFormat): Prom
       showExportContentLoss,
     );
     services.documentState.markClean('save-as');
+    applyDocumentTitle(services.wasm.fileName, services.documentState.isDirty());
   } catch (error) {
     reportSaveError('file:save-as', error);
   } finally {
@@ -393,6 +396,7 @@ async function fallbackNameForCurrentSave(
   const downloadName = await promptFallbackName(target.suggestedName, target.format);
   if (!downloadName) return null;
   services.wasm.fileName = downloadName;
+  applyDocumentTitle(services.wasm.fileName, services.documentState.isDirty());
   if (target.forceSaveAs) services.wasm.currentFileHandle = null;
   return downloadName;
 }

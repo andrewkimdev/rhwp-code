@@ -38,6 +38,7 @@ import { showHmlImportWarning } from '@/ui/hml-import-warning';
 import { showToast } from '@/ui/toast';
 import { listRecentDocs } from '@/recent/recent-store';
 import { setupGlobalShortcuts, setupFileInput, setupZoomControls, setupEventListeners } from '@/app/setup-ui';
+import { applyDocumentTitle } from '@/app/document-title';
 import {
   type OpenDocumentDeps,
   isDocumentOpenCancelled,
@@ -104,6 +105,7 @@ async function completeHostSave(fileName?: string): Promise<{ ok: true; wasDirty
   const wasDirty = documentState.isDirty();
   if (fileName) wasm.fileName = fileName;
   documentState.markClean('host-save');
+  applyDocumentTitle(wasm.fileName, documentState.isDirty());
   await autosaveManager.discardCurrentDraft('host-save');
   return { ok: true, wasDirty };
 }
@@ -793,6 +795,7 @@ async function initializeDocument(
 
     // #2527: 자동 보정을 하지 않으므로 로드 직후 문서는 항상 clean.
     documentState.markClean('document-initialized');
+    applyDocumentTitle(wasm.fileName, documentState.isDirty());
   } catch (error) {
     console.error('[initDoc] 오류:', error);
     if (window.innerWidth < 768) alert(`초기화 오류: ${error}`);

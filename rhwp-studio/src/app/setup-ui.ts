@@ -22,6 +22,7 @@ import type { RenderBackendFallbackReason } from '@/view/render-backend';
 import type { resolveChromeModeRequest } from '@/ui/chrome-mode';
 import { isSupportedDocumentFileName } from '@/command/file-system-access';
 import { showToast } from '@/ui/toast';
+import { applyDocumentTitle } from '@/app/document-title';
 import { calculateFitPageZoom, calculateFitWidthZoom } from '@/view/zoom-fit';
 
 export function setupGlobalShortcuts(inputHandler: InputHandler | null, dispatcher: CommandDispatcher): void {
@@ -273,6 +274,8 @@ export function setupEventListeners(
 
   eventBus.on('document-dirty-changed', () => {
     eventBus.emit('command-state-changed');
+    // 탭 제목의 '*' 마커 갱신 — 파일명은 이 시점 값 기준으로 함께 다시 쓴다.
+    applyDocumentTitle(wasm.fileName, documentState.isDirty());
   });
 
   eventBus.on('autosave-settings-changed', () => {

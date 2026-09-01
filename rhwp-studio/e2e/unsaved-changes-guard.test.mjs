@@ -42,7 +42,14 @@ async function currentText(page) {
 runTest('저장되지 않은 변경사항 보호 모달', async ({ page }) => {
   setTestCase('TC-1: dirty 상태에서 새 문서 시도 시 모달 표시');
   await createNewDocument(page);
+  await page.waitForFunction(() => document.title === '새 문서.hwp | rhwp', { timeout: 5000 });
+  assert((await page.evaluate(() => document.title)) === '새 문서.hwp | rhwp',
+    '문서 초기화 후 탭 제목에 파일명 표시');
+
   await typeText(page, 'UNSAVED_GUARD_TEST');
+  await page.waitForFunction(() => document.title === '새 문서.hwp* | rhwp', { timeout: 5000 });
+  assert((await page.evaluate(() => document.title)) === '새 문서.hwp* | rhwp',
+    'dirty 전이 시 탭 제목에 * 마커 표시');
 
   await requestNewDocument(page);
   await page.waitForSelector('.modal-overlay .dialog-wrap', { timeout: 3000 });
@@ -63,5 +70,8 @@ runTest('저장되지 않은 변경사항 보호 모달', async ({ page }) => {
   await clickDialogButton(page, '저장 안 함');
   assert(!await hasUnsavedModal(page), '저장 안 함 후 모달 닫힘');
   assert(!(await currentText(page)).includes('UNSAVED_GUARD_TEST'), '저장 안 함 후 새 문서로 전환');
+  await page.waitForFunction(() => document.title === '새 문서.hwp | rhwp', { timeout: 5000 });
+  assert((await page.evaluate(() => document.title)) === '새 문서.hwp | rhwp',
+    '새 문서 전환 후 탭 제목의 * 마커 제거');
   await screenshot(page, 'unsaved-guard-discard');
 });
