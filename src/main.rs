@@ -428,7 +428,7 @@ fn main() {
 /// MCP 서버 저자(및 함수 호출 클라이언트)가 도구 이름·설명·입력 JSON Schema·실행 배선을
 /// 손으로 옮겨 적지 않게 한다. `--json` 계약을 가진 명령이 늘면
 /// `capabilities_mcp_covers_every_json_command` 가 누락을 잡는다.
-const EDIT_SUBCOMMANDS: [(&str, &str); 24] = [
+const EDIT_SUBCOMMANDS: [(&str, &str); 32] = [
     (
         "fill-fields",
         "누름틀(필드) 값 채우기 — --data 이름=값, 같은 이름은 [k] 순번 지목",
@@ -494,6 +494,38 @@ const EDIT_SUBCOMMANDS: [(&str, &str); 24] = [
     (
         "merge-paragraph-in-footnote",
         "각주/미주 안 문단을 이전 문단과 병합 — --section/--para/--ctrl/--fn-para(1 이상, 기본 1)",
+    ),
+    (
+        "insert-header-footer",
+        "머리말/꼬리말 생성 — --header|--footer [--section] [--apply-to]",
+    ),
+    (
+        "delete-header-footer",
+        "머리말/꼬리말 삭제 — --header|--footer [--section] [--apply-to]",
+    ),
+    (
+        "insert-header-footer-text",
+        "머리말/꼬리말 문단에 텍스트 삽입 — --header|--footer/--text 필수, --section/--apply-to/--para/--offset",
+    ),
+    (
+        "set-header-footer-text",
+        "머리말/꼬리말 문단 텍스트 통째 교체 — --header|--footer/--text 필수, --section/--apply-to/--para",
+    ),
+    (
+        "set-hf-picture",
+        "머리말/꼬리말 안 그림 속성 변경 — --section/--para/--ctrl/--inner-para/--inner-ctrl/--props (JSON, 모두 필수)",
+    ),
+    (
+        "apply-hf-template",
+        "머리말/꼬리말에 마당(내장 템플릿) 적용 — --header|--footer/--template(0~10) 필수",
+    ),
+    (
+        "delete-hf-text",
+        "머리말/꼬리말 문단 텍스트 삭제 — --header|--footer/--count(1 이상) 필수",
+    ),
+    (
+        "insert-field-in-hf",
+        "머리말/꼬리말에 쪽번호/총쪽수/파일이름 필드 삽입 — --header|--footer/--field-type(1|2|3) 필수",
     ),
     (
         "insert-image",

@@ -1062,6 +1062,47 @@ exit 3) · `--json`. 코어 로직은 기존 `table_ops.rs` 네이티브 함수(
 - `-o, --output <파일>` — 기본 `<입력명>_fnmerge.<입력과 같은 확장자>`
 - `--json` 봉투: `{"schemaVersion":"1.0","source","section","paragraph","ctrl","fnPara","dryRun","changedPages","output"?,"outputFormat"?,"verify"?}`
 
+### 머리말/꼬리말 편집 8종 (upstream #5185/#5192 계열)
+아래 8개 명령은 모두 `--header`/`--footer`(정확히 하나 지정) 와 `--apply-to
+0(양쪽)|1(짝수쪽)|2(홀수쪽)`(생략하면 0) 규약을 공유한다. 코어 로직은 기존
+`header_footer_ops.rs`/`object_ops/picture.rs` 네이티브 함수를 그대로 재사용 — 새
+편집 로직 없음.
+
+- **`edit insert-header-footer <파일> --header|--footer [--section N] [--apply-to 0|1|2] [옵션]`**
+  구역에 머리말/꼬리말을 생성한다. 이미 있으면 런타임 오류(exit 1).
+  `-o` 기본 `_hf.<확장자>`. 봉투: `{"section","isHeader","applyTo","dryRun","changedPages",…}`
+- **`edit delete-header-footer <파일> --header|--footer [--section N] [--apply-to 0|1|2] [옵션]`**
+  구역의 머리말/꼬리말을 삭제한다. `-o` 기본 `_delhf.<확장자>`.
+- **`edit insert-header-footer-text <파일> --header|--footer --text <문자열> [--section N] [--apply-to] [--para N] [--offset N] [옵션]`**
+  머리말/꼬리말 문단에 텍스트를 삽입한다(`--text` 빈 문자열 거부). `--para`는
+  머리말/꼬리말 **내부** 문단 인덱스(본문 문단 인덱스가 아님). `-o` 기본 `_hfins.<확장자>`.
+- **`edit set-header-footer-text <파일> --header|--footer --text <문자열> [--section N] [--apply-to] [--para N] [옵션]`**
+  머리말/꼬리말 문단의 텍스트를 통째로 교체한다(기존 텍스트를 전부 지우고 새로
+  넣는다 — `get_header_footer_para_info_native`로 길이를 먼저 조회). `-o` 기본
+  `_hfset.<확장자>`.
+- **`edit set-hf-picture <파일> --section N --para N --ctrl N --inner-para N --inner-ctrl N --props <JSON> [옵션]`**
+  머리말/꼬리말 안 그림의 속성을 고친다. 5개 좌표(구역/문단/컨트롤 — 머리말/꼬리말
+  자체 위치, 내부문단/내부컨트롤 — 그 안 그림 위치)와 `--props` 모두 필수. `-o`
+  기본 `_hfpic.<확장자>`.
+- **`edit apply-hf-template <파일> --header|--footer --template <0-10> [--section N] [--apply-to] [옵션]`**
+  머리말/꼬리말에 마당(내장 디자인 템플릿)을 적용한다. `--template`은 0~10만
+  허용. `-o` 기본 `_hftpl.<확장자>`.
+- **`edit delete-hf-text <파일> --header|--footer --count <글자수> [--section N] [--apply-to] [--para N] [--offset N] [옵션]`**
+  머리말/꼬리말 문단 텍스트를 삭제한다. `--count`는 1 이상. `-o` 기본
+  `_hfdeltxt.<확장자>`.
+- **`edit insert-field-in-hf <파일> --header|--footer --field-type <1|2|3> [--section N] [--apply-to] [--para N] [--offset N] [옵션]`**
+  머리말/꼬리말에 쪽번호(1)·총쪽수(2)·파일이름(3) 필드를 삽입한다. `-o` 기본
+  `_hffield.<확장자>`.
+
+**제외**: upstream의 `toggle-hide-hf`(쪽 단위 머리말/꼬리말 감추기 토글)는 착수
+도중 배선을 되돌렸다. 코어 `toggle_hide_header_footer_native`가 조작하는
+`hidden_header_footer`는 `DocumentCore`/`LayoutEngine`에만 있는 **세션 전용 렌더
+캐시 힌트**이며 어떤 직렬화 경로에도 연결되어 있지 않다 — 저장한 파일을 다시
+열면 항상 빈 집합으로 리셋된다. 실제로 "토글 → 저장 → 다시 열기 → 다시 토글"을
+구동해 보면 저장된 파일은 입력과 완전히 동일하고 두 번째 토글도 다시 "숨김"으로만
+나온다. CLI가 파일을 만드는 것처럼 보이지만 실제로는 아무것도 영구화하지 않는
+오해 소지 있는 명령이라 이번 라운드에서 제외했다.
+
 ### `edit insert-image <파일> --image <그림> [--page N] [--x N --y N] [--width N --height N] [-o <출력>] [--dry-run] [--verify] [--json]` (#3719 §6-5)
 도장·서명 같은 그림을 쪽 좌표에 붙인다 — 채워 넣은 서식에 직인을 얹는 실물 제출의 마지막 조각.
 - `--image <그림>` (필수) — 지원 형식은 `png`·`jpg`·`jpeg`·`bmp`·`tif`·`tiff` 뿐(확장자와 내용

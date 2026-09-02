@@ -191,4 +191,33 @@ diff를 `git show`로 읽어 인자 이름·의미가 정확히 대응하는지,
 `diffCount:1`(무해, `render-diff`로 시각 회귀 없음 확인)을 보고하는 사전 존재
 특성이 있다 — cli_commands.md에 기록, 코어 수정은 이번 라운드 범위 밖.
 
-나머지 ~30개(머리말/꼬리말 9종부터)는 여전히 다음 라운드 대상.
+**진행(2026-09-02, 계속)**: "머리말/꼬리말 9종" 배치 중 8건 완료 —
+`insert-header-footer`/`delete-header-footer`/`insert-header-footer-text`/
+`set-header-footer-text`/`set-hf-picture`/`apply-hf-template`/`delete-hf-text`/
+`insert-field-in-hf`가 각각 `create_header_footer_native`/
+`delete_header_footer_native`/`insert_text_in_header_footer_native`/
+(`get_header_footer_para_info_native`+`delete_text_in_header_footer_native`+
+`insert_text_in_header_footer_native` 조합)/`set_header_footer_picture_properties_native`
+(`object_ops/picture.rs`)/`apply_hf_template_native`/
+`delete_text_in_header_footer_native`/`insert_field_in_hf_native`에 CLI 배선만
+추가했다 — 착수 전 우려했던 "`insert-header-footer-text`/`set-header-footer-text`/
+`delete-header-footer` 1:1 대응 불확실"은 upstream 실제 diff를 읽어 전부 해소됐다.
+
+**9번째 `toggle-hide-hf`는 배선 도중 되돌렸다 — 실제 회귀 발견**: 코어
+`toggle_hide_header_footer_native`가 다루는 `hidden_header_footer` 필드는
+`DocumentCore`/`LayoutEngine`에만 존재하는 **세션 전용 렌더 캐시 힌트**이며(`grep`으로
+전 사용처를 확인) 어떤 직렬화 코드에도 연결돼 있지 않다 — 문서를 새로 열 때마다
+빈 `HashSet::new()`로 리셋된다. CLI로 "토글 → 저장 → 다시 열기 → 다시 토글"을 실제로
+구동해 통합 테스트를 돌려 확인했다: 저장된 파일은 입력과 완전히 동일하고, 두 번째
+토글도 첫 토글의 효과가 하나도 남지 않아 다시 "숨김"으로만 나온다(`hidden:true`
+두 번 연속). `--verify`도 트리비얼하게 통과한다(애초에 IR을 바꾸지 않으므로).
+즉 이 명령을 upstream처럼 "새 문서를 만드는 CLI 편집"으로 배선하면 **파일을 만드는
+것처럼 보이지만 실제로는 아무것도 영구화하지 않는 오해 소지 있는 명령**이 된다.
+코드는 되돌렸다(`git checkout` 없이 직접 제거, 순수 배선 코드라 커밋 이력에 남지
+않음) — cli_commands.md에 이유를 기록했다. 향후 이 기능이 진짜 필요하면 이미
+직렬화되는 `SectionDef.hide_header`/`hide_footer`(구역 전체, `set-section-def`로
+이미 커버됨)나 `Control::PageHide`(문단 단위, `section.rs`의 `pageHiding` 파싱이
+이미 지원) 중 하나를 실제로 조작하는 **새 코어 함수**를 설계해야 한다 — 이는
+"기존 함수 배선"이 아니라 별도 기능 개발이라 이번 라운드 범위 밖이다.
+
+나머지 ~29개(문단 기본/서식·스타일/책갈피·구조 등)는 여전히 다음 라운드 대상.

@@ -169,6 +169,14 @@ pub(crate) fn mcp_tool_definitions() -> Vec<serde_json::Value> {
                 | "hwp_delete_text_in_footnote"
                 | "hwp_split_paragraph_in_footnote"
                 | "hwp_merge_paragraph_in_footnote"
+                | "hwp_insert_header_footer"
+                | "hwp_delete_header_footer"
+                | "hwp_insert_header_footer_text"
+                | "hwp_set_header_footer_text"
+                | "hwp_set_hf_picture"
+                | "hwp_apply_hf_template"
+                | "hwp_delete_hf_text"
+                | "hwp_insert_field_in_hf"
         )
     }
 
@@ -1586,6 +1594,266 @@ pub(crate) fn mcp_tool_definitions() -> Vec<serde_json::Value> {
                 { "when": "verify", "args": ["--verify"] }
             ]),
             &["schemaVersion", "source", "section", "paragraph", "ctrl", "fnPara", "dryRun", "changedPages", "output", "outputFormat", "verify"],
+        ),
+        // [upstream #5185/#5192 계열 선별 이식, "머리말/꼬리말" 배치] 코어는 기존
+        // header_footer_ops.rs/object_ops/picture.rs 네이티브 함수 재사용, CLI 배선만
+        // 신규.
+        tool_with_optional_args(
+            "hwp_insert_header_footer",
+            "구역에 머리말/꼬리말을 생성해 새 문서를 만든다. header/footer 중 정확히 하나를 지정한다. applyTo 는 0(양쪽)·1(짝수쪽)·2(홀수쪽), 생략하면 0. 산출물은 입력 형식을 따른다(HWPX 입력 → HWPX 산출).",
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "입력 HWP/HWPX 문서 경로" },
+                    "header": { "type": "boolean", "description": "true 면 머리말. footer 와 정확히 하나만 지정" },
+                    "footer": { "type": "boolean", "description": "true 면 꼬리말. header 와 정확히 하나만 지정" },
+                    "section": { "type": "integer", "minimum": 0, "description": "구역 (0부터). 생략하면 0" },
+                    "applyTo": { "type": "integer", "minimum": 0, "maximum": 2, "description": "0(양쪽)·1(짝수쪽)·2(홀수쪽). 생략하면 0" },
+                    "output": { "type": "string", "description": "출력 파일 경로. 생략하면 <입력명>_hf.hwp (HWPX 입력이면 _hf.hwpx)" },
+                    "dryRun": { "type": "boolean", "description": "true 면 파일을 쓰지 않고 생성 예정만 보고" },
+                    "verify": { "type": "boolean", "description": "저장 직후 재파싱 IR 자기검증 — 차이가 있으면 exit 3" }
+                },
+                "required": ["path"],
+            }),
+            "edit",
+            serde_json::json!(["edit", "insert-header-footer", "{path}", "--json"]),
+            serde_json::json!([
+                { "when": "header", "args": ["--header"] },
+                { "when": "footer", "args": ["--footer"] },
+                { "when": "section", "args": ["--section", "{section}"] },
+                { "when": "applyTo", "args": ["--apply-to", "{applyTo}"] },
+                { "when": "output", "args": ["-o", "{output}"] },
+                { "when": "dryRun", "args": ["--dry-run"] },
+                { "when": "verify", "args": ["--verify"] }
+            ]),
+            &["schemaVersion", "source", "section", "isHeader", "applyTo", "dryRun", "changedPages", "output", "outputFormat", "verify"],
+        ),
+        tool_with_optional_args(
+            "hwp_delete_header_footer",
+            "구역의 머리말/꼬리말을 삭제해 새 문서를 만든다. header/footer 중 정확히 하나를 지정한다. 산출물은 입력 형식을 따른다(HWPX 입력 → HWPX 산출).",
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "입력 HWP/HWPX 문서 경로" },
+                    "header": { "type": "boolean", "description": "true 면 머리말. footer 와 정확히 하나만 지정" },
+                    "footer": { "type": "boolean", "description": "true 면 꼬리말. header 와 정확히 하나만 지정" },
+                    "section": { "type": "integer", "minimum": 0, "description": "구역 (0부터). 생략하면 0" },
+                    "applyTo": { "type": "integer", "minimum": 0, "maximum": 2, "description": "0(양쪽)·1(짝수쪽)·2(홀수쪽). 생략하면 0" },
+                    "output": { "type": "string", "description": "출력 파일 경로. 생략하면 <입력명>_delhf.hwp (HWPX 입력이면 _delhf.hwpx)" },
+                    "dryRun": { "type": "boolean", "description": "true 면 파일을 쓰지 않고 좌표 검증만 수행" },
+                    "verify": { "type": "boolean", "description": "저장 직후 재파싱 IR 자기검증 — 차이가 있으면 exit 3" }
+                },
+                "required": ["path"],
+            }),
+            "edit",
+            serde_json::json!(["edit", "delete-header-footer", "{path}", "--json"]),
+            serde_json::json!([
+                { "when": "header", "args": ["--header"] },
+                { "when": "footer", "args": ["--footer"] },
+                { "when": "section", "args": ["--section", "{section}"] },
+                { "when": "applyTo", "args": ["--apply-to", "{applyTo}"] },
+                { "when": "output", "args": ["-o", "{output}"] },
+                { "when": "dryRun", "args": ["--dry-run"] },
+                { "when": "verify", "args": ["--verify"] }
+            ]),
+            &["schemaVersion", "source", "section", "isHeader", "applyTo", "dryRun", "changedPages", "output", "outputFormat", "verify"],
+        ),
+        tool_with_optional_args(
+            "hwp_insert_header_footer_text",
+            "머리말/꼬리말 문단에 텍스트를 삽입해 새 문서를 만든다. header/footer 와 text 는 필수, section/applyTo/para/offset 은 생략하면 0. 산출물은 입력 형식을 따른다(HWPX 입력 → HWPX 산출).",
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "입력 HWP/HWPX 문서 경로" },
+                    "header": { "type": "boolean", "description": "true 면 머리말. footer 와 정확히 하나만 지정" },
+                    "footer": { "type": "boolean", "description": "true 면 꼬리말. header 와 정확히 하나만 지정" },
+                    "text": { "type": "string", "description": "삽입할 문자열 (빈 문자열 거부)" },
+                    "section": { "type": "integer", "minimum": 0, "description": "구역 (0부터). 생략하면 0" },
+                    "applyTo": { "type": "integer", "minimum": 0, "maximum": 2, "description": "0(양쪽)·1(짝수쪽)·2(홀수쪽). 생략하면 0" },
+                    "para": { "type": "integer", "minimum": 0, "description": "머리말/꼬리말 내부 문단 (0부터). 생략하면 0" },
+                    "offset": { "type": "integer", "minimum": 0, "description": "문단 내 문자 오프셋. 생략하면 0" },
+                    "output": { "type": "string", "description": "출력 파일 경로. 생략하면 <입력명>_hfins.hwp (HWPX 입력이면 _hfins.hwpx)" },
+                    "dryRun": { "type": "boolean", "description": "true 면 파일을 쓰지 않고 좌표 검증만 수행" },
+                    "verify": { "type": "boolean", "description": "저장 직후 재파싱 IR 자기검증 — 차이가 있으면 exit 3" }
+                },
+                "required": ["path", "text"],
+            }),
+            "edit",
+            serde_json::json!(["edit", "insert-header-footer-text", "{path}", "--text", "{text}", "--json"]),
+            serde_json::json!([
+                { "when": "header", "args": ["--header"] },
+                { "when": "footer", "args": ["--footer"] },
+                { "when": "section", "args": ["--section", "{section}"] },
+                { "when": "applyTo", "args": ["--apply-to", "{applyTo}"] },
+                { "when": "para", "args": ["--para", "{para}"] },
+                { "when": "offset", "args": ["--offset", "{offset}"] },
+                { "when": "output", "args": ["-o", "{output}"] },
+                { "when": "dryRun", "args": ["--dry-run"] },
+                { "when": "verify", "args": ["--verify"] }
+            ]),
+            &["schemaVersion", "source", "section", "isHeader", "applyTo", "paragraph", "offset", "text", "insertedChars", "dryRun", "changedPages", "output", "outputFormat", "verify"],
+        ),
+        tool_with_optional_args(
+            "hwp_set_header_footer_text",
+            "머리말/꼬리말 문단의 텍스트를 통째로 교체해 새 문서를 만든다(기존 텍스트를 지우고 새로 넣는다). header/footer 와 text 는 필수. 산출물은 입력 형식을 따른다(HWPX 입력 → HWPX 산출).",
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "입력 HWP/HWPX 문서 경로" },
+                    "header": { "type": "boolean", "description": "true 면 머리말. footer 와 정확히 하나만 지정" },
+                    "footer": { "type": "boolean", "description": "true 면 꼬리말. header 와 정확히 하나만 지정" },
+                    "text": { "type": "string", "description": "교체할 문자열 (빈 문자열 거부)" },
+                    "section": { "type": "integer", "minimum": 0, "description": "구역 (0부터). 생략하면 0" },
+                    "applyTo": { "type": "integer", "minimum": 0, "maximum": 2, "description": "0(양쪽)·1(짝수쪽)·2(홀수쪽). 생략하면 0" },
+                    "para": { "type": "integer", "minimum": 0, "description": "머리말/꼬리말 내부 문단 (0부터). 생략하면 0" },
+                    "output": { "type": "string", "description": "출력 파일 경로. 생략하면 <입력명>_hfset.hwp (HWPX 입력이면 _hfset.hwpx)" },
+                    "dryRun": { "type": "boolean", "description": "true 면 파일을 쓰지 않고 좌표 검증만 수행" },
+                    "verify": { "type": "boolean", "description": "저장 직후 재파싱 IR 자기검증 — 차이가 있으면 exit 3" }
+                },
+                "required": ["path", "text"],
+            }),
+            "edit",
+            serde_json::json!(["edit", "set-header-footer-text", "{path}", "--text", "{text}", "--json"]),
+            serde_json::json!([
+                { "when": "header", "args": ["--header"] },
+                { "when": "footer", "args": ["--footer"] },
+                { "when": "section", "args": ["--section", "{section}"] },
+                { "when": "applyTo", "args": ["--apply-to", "{applyTo}"] },
+                { "when": "para", "args": ["--para", "{para}"] },
+                { "when": "output", "args": ["-o", "{output}"] },
+                { "when": "dryRun", "args": ["--dry-run"] },
+                { "when": "verify", "args": ["--verify"] }
+            ]),
+            &["schemaVersion", "source", "section", "isHeader", "applyTo", "paragraph", "text", "dryRun", "changedPages", "output", "outputFormat", "verify"],
+        ),
+        tool_with_optional_args(
+            "hwp_set_hf_picture",
+            "머리말/꼬리말 안 그림의 속성을 JSON 객체로 고쳐 새 문서를 만든다. section/para/ctrl(머리말/꼬리말 컨트롤 좌표)과 innerPara/innerCtrl(그 안 그림 컨트롤 좌표)/props 모두 필수. 산출물은 입력 형식을 따른다(HWPX 입력 → HWPX 산출).",
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "입력 HWP/HWPX 문서 경로" },
+                    "section": { "type": "integer", "minimum": 0, "description": "구역 (0부터)" },
+                    "para": { "type": "integer", "minimum": 0, "description": "머리말/꼬리말 컨트롤이 걸린 문단 (0부터)" },
+                    "ctrl": { "type": "integer", "minimum": 0, "description": "머리말/꼬리말 컨트롤 인덱스" },
+                    "innerPara": { "type": "integer", "minimum": 0, "description": "머리말/꼬리말 내부, 그림이 걸린 문단 (0부터)" },
+                    "innerCtrl": { "type": "integer", "minimum": 0, "description": "그림 컨트롤 인덱스" },
+                    "props": { "type": "string", "description": "그림 속성 JSON 객체 문자열" },
+                    "output": { "type": "string", "description": "출력 파일 경로. 생략하면 <입력명>_hfpic.hwp (HWPX 입력이면 _hfpic.hwpx)" },
+                    "dryRun": { "type": "boolean", "description": "true 면 파일을 쓰지 않고 좌표 검증만 수행" },
+                    "verify": { "type": "boolean", "description": "저장 직후 재파싱 IR 자기검증 — 차이가 있으면 exit 3" }
+                },
+                "required": ["path", "section", "para", "ctrl", "innerPara", "innerCtrl", "props"],
+            }),
+            "edit",
+            serde_json::json!(["edit", "set-hf-picture", "{path}", "--section", "{section}", "--para", "{para}", "--ctrl", "{ctrl}", "--inner-para", "{innerPara}", "--inner-ctrl", "{innerCtrl}", "--props", "{props}", "--json"]),
+            serde_json::json!([
+                { "when": "output", "args": ["-o", "{output}"] },
+                { "when": "dryRun", "args": ["--dry-run"] },
+                { "when": "verify", "args": ["--verify"] }
+            ]),
+            &["schemaVersion", "source", "section", "paragraph", "ctrl", "innerPara", "innerCtrl", "props", "dryRun", "changedPages", "output", "outputFormat", "verify"],
+        ),
+        tool_with_optional_args(
+            "hwp_apply_hf_template",
+            "머리말/꼬리말에 마당(내장 디자인 템플릿)을 적용해 새 문서를 만든다. header/footer 와 template(0~10) 은 필수. 산출물은 입력 형식을 따른다(HWPX 입력 → HWPX 산출).",
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "입력 HWP/HWPX 문서 경로" },
+                    "header": { "type": "boolean", "description": "true 면 머리말. footer 와 정확히 하나만 지정" },
+                    "footer": { "type": "boolean", "description": "true 면 꼬리말. header 와 정확히 하나만 지정" },
+                    "template": { "type": "integer", "minimum": 0, "maximum": 10, "description": "내장 마당 번호 (0~10)" },
+                    "section": { "type": "integer", "minimum": 0, "description": "구역 (0부터). 생략하면 0" },
+                    "applyTo": { "type": "integer", "minimum": 0, "maximum": 2, "description": "0(양쪽)·1(짝수쪽)·2(홀수쪽). 생략하면 0" },
+                    "output": { "type": "string", "description": "출력 파일 경로. 생략하면 <입력명>_hftpl.hwp (HWPX 입력이면 _hftpl.hwpx)" },
+                    "dryRun": { "type": "boolean", "description": "true 면 파일을 쓰지 않고 좌표 검증만 수행" },
+                    "verify": { "type": "boolean", "description": "저장 직후 재파싱 IR 자기검증 — 차이가 있으면 exit 3" }
+                },
+                "required": ["path", "template"],
+            }),
+            "edit",
+            serde_json::json!(["edit", "apply-hf-template", "{path}", "--template", "{template}", "--json"]),
+            serde_json::json!([
+                { "when": "header", "args": ["--header"] },
+                { "when": "footer", "args": ["--footer"] },
+                { "when": "section", "args": ["--section", "{section}"] },
+                { "when": "applyTo", "args": ["--apply-to", "{applyTo}"] },
+                { "when": "output", "args": ["-o", "{output}"] },
+                { "when": "dryRun", "args": ["--dry-run"] },
+                { "when": "verify", "args": ["--verify"] }
+            ]),
+            &["schemaVersion", "source", "section", "isHeader", "applyTo", "templateId", "dryRun", "changedPages", "output", "outputFormat", "verify"],
+        ),
+        tool_with_optional_args(
+            "hwp_delete_hf_text",
+            "머리말/꼬리말 문단 텍스트를 삭제해 새 문서를 만든다. header/footer 와 count(1 이상) 는 필수, 나머지 좌표는 생략하면 0. 산출물은 입력 형식을 따른다(HWPX 입력 → HWPX 산출).",
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "입력 HWP/HWPX 문서 경로" },
+                    "header": { "type": "boolean", "description": "true 면 머리말. footer 와 정확히 하나만 지정" },
+                    "footer": { "type": "boolean", "description": "true 면 꼬리말. header 와 정확히 하나만 지정" },
+                    "count": { "type": "integer", "minimum": 1, "description": "삭제할 글자 수 (1 이상)" },
+                    "section": { "type": "integer", "minimum": 0, "description": "구역 (0부터). 생략하면 0" },
+                    "applyTo": { "type": "integer", "minimum": 0, "maximum": 2, "description": "0(양쪽)·1(짝수쪽)·2(홀수쪽). 생략하면 0" },
+                    "para": { "type": "integer", "minimum": 0, "description": "머리말/꼬리말 내부 문단 (0부터). 생략하면 0" },
+                    "offset": { "type": "integer", "minimum": 0, "description": "문단 내 문자 오프셋. 생략하면 0" },
+                    "output": { "type": "string", "description": "출력 파일 경로. 생략하면 <입력명>_hfdeltxt.hwp (HWPX 입력이면 _hfdeltxt.hwpx)" },
+                    "dryRun": { "type": "boolean", "description": "true 면 파일을 쓰지 않고 좌표 검증만 수행" },
+                    "verify": { "type": "boolean", "description": "저장 직후 재파싱 IR 자기검증 — 차이가 있으면 exit 3" }
+                },
+                "required": ["path", "count"],
+            }),
+            "edit",
+            serde_json::json!(["edit", "delete-hf-text", "{path}", "--count", "{count}", "--json"]),
+            serde_json::json!([
+                { "when": "header", "args": ["--header"] },
+                { "when": "footer", "args": ["--footer"] },
+                { "when": "section", "args": ["--section", "{section}"] },
+                { "when": "applyTo", "args": ["--apply-to", "{applyTo}"] },
+                { "when": "para", "args": ["--para", "{para}"] },
+                { "when": "offset", "args": ["--offset", "{offset}"] },
+                { "when": "output", "args": ["-o", "{output}"] },
+                { "when": "dryRun", "args": ["--dry-run"] },
+                { "when": "verify", "args": ["--verify"] }
+            ]),
+            &["schemaVersion", "source", "section", "isHeader", "applyTo", "paragraph", "offset", "count", "dryRun", "changedPages", "output", "outputFormat", "verify"],
+        ),
+        tool_with_optional_args(
+            "hwp_insert_field_in_hf",
+            "머리말/꼬리말에 쪽번호·총쪽수·파일이름 필드를 삽입해 새 문서를 만든다. header/footer 와 fieldType(1=쪽번호, 2=총쪽수, 3=파일이름) 은 필수. 산출물은 입력 형식을 따른다(HWPX 입력 → HWPX 산출).",
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "입력 HWP/HWPX 문서 경로" },
+                    "header": { "type": "boolean", "description": "true 면 머리말. footer 와 정확히 하나만 지정" },
+                    "footer": { "type": "boolean", "description": "true 면 꼬리말. header 와 정확히 하나만 지정" },
+                    "fieldType": { "type": "integer", "minimum": 1, "maximum": 3, "description": "1(쪽번호)·2(총쪽수)·3(파일이름)" },
+                    "section": { "type": "integer", "minimum": 0, "description": "구역 (0부터). 생략하면 0" },
+                    "applyTo": { "type": "integer", "minimum": 0, "maximum": 2, "description": "0(양쪽)·1(짝수쪽)·2(홀수쪽). 생략하면 0" },
+                    "para": { "type": "integer", "minimum": 0, "description": "머리말/꼬리말 내부 문단 (0부터). 생략하면 0" },
+                    "offset": { "type": "integer", "minimum": 0, "description": "문단 내 문자 오프셋. 생략하면 0" },
+                    "output": { "type": "string", "description": "출력 파일 경로. 생략하면 <입력명>_hffield.hwp (HWPX 입력이면 _hffield.hwpx)" },
+                    "dryRun": { "type": "boolean", "description": "true 면 파일을 쓰지 않고 좌표 검증만 수행" },
+                    "verify": { "type": "boolean", "description": "저장 직후 재파싱 IR 자기검증 — 차이가 있으면 exit 3" }
+                },
+                "required": ["path", "fieldType"],
+            }),
+            "edit",
+            serde_json::json!(["edit", "insert-field-in-hf", "{path}", "--field-type", "{fieldType}", "--json"]),
+            serde_json::json!([
+                { "when": "header", "args": ["--header"] },
+                { "when": "footer", "args": ["--footer"] },
+                { "when": "section", "args": ["--section", "{section}"] },
+                { "when": "applyTo", "args": ["--apply-to", "{applyTo}"] },
+                { "when": "para", "args": ["--para", "{para}"] },
+                { "when": "offset", "args": ["--offset", "{offset}"] },
+                { "when": "output", "args": ["-o", "{output}"] },
+                { "when": "dryRun", "args": ["--dry-run"] },
+                { "when": "verify", "args": ["--verify"] }
+            ]),
+            &["schemaVersion", "source", "section", "isHeader", "applyTo", "paragraph", "offset", "fieldType", "dryRun", "changedPages", "output", "outputFormat", "verify"],
         ),
         tool_with_optional_args(
             "hwp_export_ir_schema",

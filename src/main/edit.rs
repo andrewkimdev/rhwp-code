@@ -66,7 +66,7 @@ pub(crate) fn collect_field_records(doc: &rhwp::wasm_api::HwpDocument) -> Vec<se
 /// **실패 시 원본 불변**(하나라도 실패하면 출력 파일을 쓰지 않는다).
 pub(crate) fn run_edit(args: &[String]) -> i32 {
     const USAGE: &str =
-        "사용법: rhwp edit <fill-fields|replace-text|set-cell|set-table-props|set-section-def|move-table|transpose-table|set-column-widths|insert-row|insert-col|delete-row|delete-col|merge-cells|split-cell|insert-footnote|insert-endnote|delete-footnote|insert-footnote-text|delete-text-in-footnote|split-paragraph-in-footnote|merge-paragraph-in-footnote|insert-image|redact|sanitize> <파일.hwp|파일.hwpx> [옵션] (rhwp --help 참조)";
+        "사용법: rhwp edit <fill-fields|replace-text|set-cell|set-table-props|set-section-def|move-table|transpose-table|set-column-widths|insert-row|insert-col|delete-row|delete-col|merge-cells|split-cell|insert-footnote|insert-endnote|delete-footnote|insert-footnote-text|delete-text-in-footnote|split-paragraph-in-footnote|merge-paragraph-in-footnote|insert-header-footer|delete-header-footer|insert-header-footer-text|set-header-footer-text|set-hf-picture|apply-hf-template|delete-hf-text|insert-field-in-hf|insert-image|redact|sanitize> <파일.hwp|파일.hwpx> [옵션] (rhwp --help 참조)";
 
     match args.first().map(String::as_str) {
         Some("fill-fields") => edit_fill_fields(&args[1..]),
@@ -96,6 +96,17 @@ pub(crate) fn run_edit(args: &[String]) -> i32 {
         Some("delete-text-in-footnote") => edit_delete_text_in_footnote(&args[1..]),
         Some("split-paragraph-in-footnote") => edit_split_paragraph_in_footnote(&args[1..]),
         Some("merge-paragraph-in-footnote") => edit_merge_paragraph_in_footnote(&args[1..]),
+        // [upstream #5185/#5192 계열 선별 이식, "머리말/꼬리말" 배치] 코어는 기존
+        // header_footer_ops.rs/object_ops/picture.rs 네이티브 함수 재사용, CLI 배선만
+        // 신규.
+        Some("insert-header-footer") => edit_insert_header_footer(&args[1..]),
+        Some("delete-header-footer") => edit_delete_header_footer(&args[1..]),
+        Some("insert-header-footer-text") => edit_insert_header_footer_text(&args[1..]),
+        Some("set-header-footer-text") => edit_set_header_footer_text(&args[1..]),
+        Some("set-hf-picture") => edit_set_hf_picture(&args[1..]),
+        Some("apply-hf-template") => edit_apply_hf_template(&args[1..]),
+        Some("delete-hf-text") => edit_delete_hf_text(&args[1..]),
+        Some("insert-field-in-hf") => edit_insert_field_in_hf(&args[1..]),
         Some("insert-image") => edit_insert_image(&args[1..]),
         // [#3719 §6-11] 공개 전 정리 — 개인정보 마스킹 / 메타데이터 제거.
         Some("redact") => edit_redact(&args[1..]),
@@ -5965,6 +5976,1762 @@ pub(crate) fn edit_merge_paragraph_in_footnote(args: &[String]) -> i32 {
         println!(
             "각주/미주 문단 병합 완료: {} → {} — 구역{} 문단{} 컨트롤{} 각주문단{}",
             file_path, output_path, section, para, ctrl, fn_para
+        );
+    }
+    if verify_failed {
+        eprintln!("검증 실패(--verify): 저장본 재파싱 IR 차이 — 상세는 --json 또는 ir-diff");
+        process::exit(3);
+    }
+    EXIT_OK
+}
+
+
+
+/// `edit insert-header-footer` — 구역에 머리말/꼬리말을 생성한다 (upstream
+/// #5185/#5192 계열 선별 이식 — 배선은 CLI뿐, 코어 로직은 기존
+/// `create_header_footer_native` 재사용).
+///
+/// `--header`/`--footer` 중 정확히 하나를 지정해야 한다. `--apply-to`는
+/// 0(양쪽)·1(짝수쪽)·2(홀수쪽)만 허용하며 생략하면 0.
+pub(crate) fn edit_insert_header_footer(args: &[String]) -> i32 {
+    const USAGE: &str = "사용법: rhwp edit insert-header-footer <파일> --header|--footer [--section N] [--apply-to 0|1|2] [-o <출력>] [--dry-run] [--verify] [--json]";
+
+    let mut file_path: Option<&str> = None;
+    let mut is_header: Option<bool> = None;
+    let mut section: usize = 0;
+    let mut apply_to: u8 = 0;
+    let mut out_path: Option<String> = None;
+    let mut dry_run = false;
+    let mut json_mode = false;
+    let mut verify_mode = false;
+
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--header" => {
+                if is_header.replace(true).is_some() {
+                    eprintln!("오류: --header 와 --footer 는 하나만 지정합니다.");
+                    return EXIT_USAGE;
+                }
+            }
+            "--footer" => {
+                if is_header.replace(false).is_some() {
+                    eprintln!("오류: --header 와 --footer 는 하나만 지정합니다.");
+                    return EXIT_USAGE;
+                }
+            }
+            "--section" => {
+                i += 1;
+                match args.get(i).and_then(|v| v.parse::<usize>().ok()) {
+                    Some(v) => section = v,
+                    None => {
+                        eprintln!("오류: --section 뒤에 0 이상의 정수가 필요합니다.");
+                        return EXIT_USAGE;
+                    }
+                }
+            }
+            "--apply-to" => {
+                i += 1;
+                match args.get(i).and_then(|v| v.parse::<u8>().ok()) {
+                    Some(v) if v <= 2 => apply_to = v,
+                    _ => {
+                        eprintln!("오류: --apply-to 는 0(양쪽)·1(짝수)·2(홀수)만 허용합니다.");
+                        return EXIT_USAGE;
+                    }
+                }
+            }
+            "-o" | "--output" => {
+                i += 1;
+                match args.get(i) {
+                    Some(v) => out_path = Some(v.clone()),
+                    None => {
+                        eprintln!("오류: -o 뒤에 출력 파일 경로가 필요합니다.");
+                        return EXIT_USAGE;
+                    }
+                }
+            }
+            "--dry-run" => dry_run = true,
+            "--json" => json_mode = true,
+            "--verify" => verify_mode = true,
+            other if other.starts_with('-') => {
+                eprintln!("알 수 없는 옵션: {other}");
+                return EXIT_USAGE;
+            }
+            other => {
+                if file_path.replace(other).is_some() {
+                    eprintln!("오류: 입력 파일은 하나만 지정할 수 있습니다: {other}");
+                    return EXIT_USAGE;
+                }
+            }
+        }
+        i += 1;
+    }
+
+    let (Some(file_path), Some(is_header)) = (file_path, is_header) else {
+        eprintln!("{USAGE}");
+        return EXIT_USAGE;
+    };
+
+    let bytes = match fs::read(file_path) {
+        Ok(d) => d,
+        Err(e) => {
+            eprintln!("오류: 파일을 읽을 수 없습니다 - {}: {}", file_path, e);
+            return EXIT_RUNTIME;
+        }
+    };
+    let mut doc = match load_document(&bytes) {
+        Ok(d) => d,
+        Err(e) => return e.report(),
+    };
+
+    if !dry_run {
+        if let Err(e) = doc.create_header_footer_native(section, is_header, apply_to) {
+            eprintln!("오류: 머리말/꼬리말 생성 실패 - {}", e);
+            return EXIT_RUNTIME;
+        }
+    }
+
+    let out_format = edit_output_format(&bytes, out_path.as_deref());
+    let output_path = out_path.unwrap_or_else(|| {
+        let stem = Path::new(file_path)
+            .file_stem()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_else(|| "output".to_string());
+        format!("{}_hf.{}", stem, out_format.ext())
+    });
+
+    let mut verify_report = serde_json::Value::Null;
+    let mut verify_failed = false;
+    if !dry_run {
+        let out_bytes = match edit_serialize(&mut doc, out_format) {
+            Ok(b) => b,
+            Err(e) => {
+                eprintln!(
+                    "오류: {} 직렬화 실패 - {}",
+                    out_format.label().to_uppercase(),
+                    e
+                );
+                return EXIT_RUNTIME;
+            }
+        };
+        if let Err(e) = fs::write(&output_path, &out_bytes) {
+            eprintln!("오류: 출력 쓰기 실패 - {}: {}", output_path, e);
+            return EXIT_RUNTIME;
+        }
+        if verify_mode {
+            let cross = out_format == EditOutputFormat::Hwp
+                && rhwp::parser::detect_format(&bytes) == rhwp::parser::FileFormat::Hwpx;
+            let (report, failed) = edit_verify_report(&doc, &out_bytes, cross);
+            verify_report = report;
+            verify_failed = failed;
+        }
+    }
+
+    let changed_pages = if dry_run {
+        serde_json::Value::Null
+    } else {
+        match doc.pages_covering_paragraphs(&[(section, 0)]) {
+            Some(pages) => serde_json::json!(pages),
+            None => serde_json::Value::Null,
+        }
+    };
+
+    if json_mode {
+        let mut envelope = serde_json::json!({
+            "schemaVersion": ENVELOPE_SCHEMA_VERSION,
+            "source": file_path,
+            "section": section,
+            "isHeader": is_header,
+            "applyTo": apply_to,
+            "dryRun": dry_run,
+            "changedPages": changed_pages,
+        });
+        if !dry_run {
+            envelope["output"] = serde_json::Value::String(output_path.clone());
+            envelope["outputFormat"] = serde_json::Value::String(out_format.label().to_string());
+            envelope["verify"] = verify_report.clone();
+        }
+        println!("{}", provenance::marked(envelope, "edit"));
+        if verify_failed {
+            process::exit(3);
+        }
+        return EXIT_OK;
+    }
+
+    let kind = if is_header { "머리말" } else { "꼬리말" };
+    if dry_run {
+        println!(
+            "{} 생성 예정: {} 구역{} apply-to{}",
+            kind, file_path, section, apply_to
+        );
+    } else {
+        println!(
+            "{} 생성 완료: {} → {} — 구역{} apply-to{}",
+            kind, file_path, output_path, section, apply_to
+        );
+    }
+    if verify_failed {
+        eprintln!("검증 실패(--verify): 저장본 재파싱 IR 차이 — 상세는 --json 또는 ir-diff");
+        process::exit(3);
+    }
+    EXIT_OK
+}
+
+
+
+/// `edit delete-header-footer` — 구역의 머리말/꼬리말을 삭제한다 (upstream
+/// #5185/#5192 계열 선별 이식 — 배선은 CLI뿐, 코어 로직은 기존
+/// `delete_header_footer_native` 재사용).
+pub(crate) fn edit_delete_header_footer(args: &[String]) -> i32 {
+    const USAGE: &str = "사용법: rhwp edit delete-header-footer <파일> --header|--footer [--section N] [--apply-to 0|1|2] [-o <출력>] [--dry-run] [--verify] [--json]";
+
+    let mut file_path: Option<&str> = None;
+    let mut is_header: Option<bool> = None;
+    let mut section: usize = 0;
+    let mut apply_to: u8 = 0;
+    let mut out_path: Option<String> = None;
+    let mut dry_run = false;
+    let mut json_mode = false;
+    let mut verify_mode = false;
+
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--header" => {
+                if is_header.replace(true).is_some() {
+                    eprintln!("오류: --header 와 --footer 중 하나만 지정합니다.");
+                    return EXIT_USAGE;
+                }
+            }
+            "--footer" => {
+                if is_header.replace(false).is_some() {
+                    eprintln!("오류: --header 와 --footer 중 하나만 지정합니다.");
+                    return EXIT_USAGE;
+                }
+            }
+            "--section" => {
+                i += 1;
+                match args.get(i).and_then(|v| v.parse::<usize>().ok()) {
+                    Some(v) => section = v,
+                    None => {
+                        eprintln!("오류: --section 뒤에 0 이상의 정수가 필요합니다.");
+                        return EXIT_USAGE;
+                    }
+                }
+            }
+            "--apply-to" => {
+                i += 1;
+                match args.get(i).and_then(|v| v.parse::<u8>().ok()) {
+                    Some(v) if v <= 2 => apply_to = v,
+                    _ => {
+                        eprintln!("오류: --apply-to 는 0(양쪽)·1(짝수)·2(홀수)만 허용합니다.");
+                        return EXIT_USAGE;
+                    }
+                }
+            }
+            "-o" | "--output" => {
+                i += 1;
+                match args.get(i) {
+                    Some(v) => out_path = Some(v.clone()),
+                    None => {
+                        eprintln!("오류: -o 뒤에 출력 파일 경로가 필요합니다.");
+                        return EXIT_USAGE;
+                    }
+                }
+            }
+            "--dry-run" => dry_run = true,
+            "--json" => json_mode = true,
+            "--verify" => verify_mode = true,
+            other if other.starts_with('-') => {
+                eprintln!("알 수 없는 옵션: {other}");
+                return EXIT_USAGE;
+            }
+            other => {
+                if file_path.replace(other).is_some() {
+                    eprintln!("오류: 입력 파일은 하나만 지정할 수 있습니다: {other}");
+                    return EXIT_USAGE;
+                }
+            }
+        }
+        i += 1;
+    }
+
+    let (Some(file_path), Some(is_header)) = (file_path, is_header) else {
+        eprintln!("{USAGE}");
+        return EXIT_USAGE;
+    };
+
+    let bytes = match fs::read(file_path) {
+        Ok(d) => d,
+        Err(e) => {
+            eprintln!("오류: 파일을 읽을 수 없습니다 - {}: {}", file_path, e);
+            return EXIT_RUNTIME;
+        }
+    };
+    let mut doc = match load_document(&bytes) {
+        Ok(d) => d,
+        Err(e) => return e.report(),
+    };
+
+    if !dry_run {
+        if let Err(e) = doc.delete_header_footer_native(section, is_header, apply_to) {
+            eprintln!("오류: 머리말/꼬리말 삭제 실패 - {}", e);
+            return EXIT_RUNTIME;
+        }
+    }
+
+    let out_format = edit_output_format(&bytes, out_path.as_deref());
+    let output_path = out_path.unwrap_or_else(|| {
+        let stem = Path::new(file_path)
+            .file_stem()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_else(|| "output".to_string());
+        format!("{}_delhf.{}", stem, out_format.ext())
+    });
+
+    let mut verify_report = serde_json::Value::Null;
+    let mut verify_failed = false;
+    if !dry_run {
+        let out_bytes = match edit_serialize(&mut doc, out_format) {
+            Ok(b) => b,
+            Err(e) => {
+                eprintln!(
+                    "오류: {} 직렬화 실패 - {}",
+                    out_format.label().to_uppercase(),
+                    e
+                );
+                return EXIT_RUNTIME;
+            }
+        };
+        if let Err(e) = fs::write(&output_path, &out_bytes) {
+            eprintln!("오류: 출력 쓰기 실패 - {}: {}", output_path, e);
+            return EXIT_RUNTIME;
+        }
+        if verify_mode {
+            let cross = out_format == EditOutputFormat::Hwp
+                && rhwp::parser::detect_format(&bytes) == rhwp::parser::FileFormat::Hwpx;
+            let (report, failed) = edit_verify_report(&doc, &out_bytes, cross);
+            verify_report = report;
+            verify_failed = failed;
+        }
+    }
+
+    let changed_pages = if dry_run {
+        serde_json::Value::Null
+    } else {
+        match doc.pages_covering_paragraphs(&[(section, 0)]) {
+            Some(pages) => serde_json::json!(pages),
+            None => serde_json::Value::Null,
+        }
+    };
+
+    if json_mode {
+        let mut envelope = serde_json::json!({
+            "schemaVersion": ENVELOPE_SCHEMA_VERSION,
+            "source": file_path,
+            "section": section,
+            "isHeader": is_header,
+            "applyTo": apply_to,
+            "dryRun": dry_run,
+            "changedPages": changed_pages,
+        });
+        if !dry_run {
+            envelope["output"] = serde_json::Value::String(output_path.clone());
+            envelope["outputFormat"] = serde_json::Value::String(out_format.label().to_string());
+            envelope["verify"] = verify_report.clone();
+        }
+        println!("{}", provenance::marked(envelope, "edit"));
+        if verify_failed {
+            process::exit(3);
+        }
+        return EXIT_OK;
+    }
+
+    let kind = if is_header { "머리말" } else { "꼬리말" };
+    if dry_run {
+        println!(
+            "{} 삭제 예정: {} 구역{} apply-to{}",
+            kind, file_path, section, apply_to
+        );
+    } else {
+        println!(
+            "{} 삭제 완료: {} → {} — 구역{} apply-to{}",
+            kind, file_path, output_path, section, apply_to
+        );
+    }
+    if verify_failed {
+        eprintln!("검증 실패(--verify): 저장본 재파싱 IR 차이 — 상세는 --json 또는 ir-diff");
+        process::exit(3);
+    }
+    EXIT_OK
+}
+
+
+
+/// `edit insert-header-footer-text` — 머리말/꼬리말 문단에 텍스트를 삽입한다
+/// (upstream #5185/#5192 계열 선별 이식 — 배선은 CLI뿐, 코어 로직은 기존
+/// `insert_text_in_header_footer_native` 재사용).
+pub(crate) fn edit_insert_header_footer_text(args: &[String]) -> i32 {
+    const USAGE: &str = "사용법: rhwp edit insert-header-footer-text <파일> --header|--footer --text <문자열> [--section N] [--apply-to 0|1|2] [--para N] [--offset N] [-o <출력>] [--dry-run] [--verify] [--json]";
+
+    let mut file_path: Option<&str> = None;
+    let mut is_header: Option<bool> = None;
+    let mut text_arg: Option<&str> = None;
+    let mut section: usize = 0;
+    let mut apply_to: u8 = 0;
+    let mut para: usize = 0;
+    let mut offset: usize = 0;
+    let mut out_path: Option<String> = None;
+    let mut dry_run = false;
+    let mut json_mode = false;
+    let mut verify_mode = false;
+
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--header" => {
+                if is_header.replace(true).is_some() {
+                    eprintln!("오류: --header 와 --footer 중 하나만 지정합니다.");
+                    return EXIT_USAGE;
+                }
+            }
+            "--footer" => {
+                if is_header.replace(false).is_some() {
+                    eprintln!("오류: --header 와 --footer 중 하나만 지정합니다.");
+                    return EXIT_USAGE;
+                }
+            }
+            "--text" => {
+                i += 1;
+                match args.get(i) {
+                    Some(v) if !v.is_empty() => text_arg = Some(v),
+                    _ => {
+                        eprintln!("오류: --text 는 빈 문자열일 수 없습니다.");
+                        return EXIT_USAGE;
+                    }
+                }
+            }
+            "--section" => {
+                i += 1;
+                match args.get(i).and_then(|v| v.parse::<usize>().ok()) {
+                    Some(v) => section = v,
+                    None => {
+                        eprintln!("오류: --section 뒤에 0 이상의 정수가 필요합니다.");
+                        return EXIT_USAGE;
+                    }
+                }
+            }
+            "--apply-to" => {
+                i += 1;
+                match args.get(i).and_then(|v| v.parse::<u8>().ok()) {
+                    Some(v) if v <= 2 => apply_to = v,
+                    _ => {
+                        eprintln!("오류: --apply-to 는 0(양쪽)·1(짝수)·2(홀수)만 허용합니다.");
+                        return EXIT_USAGE;
+                    }
+                }
+            }
+            "--para" => {
+                i += 1;
+                match args.get(i).and_then(|v| v.parse::<usize>().ok()) {
+                    Some(v) => para = v,
+                    None => {
+                        eprintln!("오류: --para 뒤에 0 이상의 정수가 필요합니다.");
+                        return EXIT_USAGE;
+                    }
+                }
+            }
+            "--offset" => {
+                i += 1;
+                match args.get(i).and_then(|v| v.parse::<usize>().ok()) {
+                    Some(v) => offset = v,
+                    None => {
+                        eprintln!("오류: --offset 뒤에 0 이상의 정수가 필요합니다.");
+                        return EXIT_USAGE;
+                    }
+                }
+            }
+            "-o" | "--output" => {
+                i += 1;
+                match args.get(i) {
+                    Some(v) => out_path = Some(v.clone()),
+                    None => {
+                        eprintln!("오류: -o 뒤에 출력 파일 경로가 필요합니다.");
+                        return EXIT_USAGE;
+                    }
+                }
+            }
+            "--dry-run" => dry_run = true,
+            "--json" => json_mode = true,
+            "--verify" => verify_mode = true,
+            other if other.starts_with('-') => {
+                eprintln!("알 수 없는 옵션: {other}");
+                return EXIT_USAGE;
+            }
+            other => {
+                if file_path.replace(other).is_some() {
+                    eprintln!("오류: 입력 파일은 하나만 지정할 수 있습니다: {other}");
+                    return EXIT_USAGE;
+                }
+            }
+        }
+        i += 1;
+    }
+
+    let (Some(file_path), Some(is_header), Some(text)) = (file_path, is_header, text_arg) else {
+        eprintln!("{USAGE}");
+        return EXIT_USAGE;
+    };
+
+    let bytes = match fs::read(file_path) {
+        Ok(d) => d,
+        Err(e) => {
+            eprintln!("오류: 파일을 읽을 수 없습니다 - {}: {}", file_path, e);
+            return EXIT_RUNTIME;
+        }
+    };
+    let mut doc = match load_document(&bytes) {
+        Ok(d) => d,
+        Err(e) => return e.report(),
+    };
+
+    if !dry_run {
+        if let Err(e) =
+            doc.insert_text_in_header_footer_native(section, is_header, apply_to, para, offset, text)
+        {
+            eprintln!("오류: 머리말/꼬리말 텍스트 삽입 실패 - {}", e);
+            return EXIT_RUNTIME;
+        }
+    }
+
+    let out_format = edit_output_format(&bytes, out_path.as_deref());
+    let output_path = out_path.unwrap_or_else(|| {
+        let stem = Path::new(file_path)
+            .file_stem()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_else(|| "output".to_string());
+        format!("{}_hfins.{}", stem, out_format.ext())
+    });
+
+    let mut verify_report = serde_json::Value::Null;
+    let mut verify_failed = false;
+    if !dry_run {
+        let out_bytes = match edit_serialize(&mut doc, out_format) {
+            Ok(b) => b,
+            Err(e) => {
+                eprintln!(
+                    "오류: {} 직렬화 실패 - {}",
+                    out_format.label().to_uppercase(),
+                    e
+                );
+                return EXIT_RUNTIME;
+            }
+        };
+        if let Err(e) = fs::write(&output_path, &out_bytes) {
+            eprintln!("오류: 출력 쓰기 실패 - {}: {}", output_path, e);
+            return EXIT_RUNTIME;
+        }
+        if verify_mode {
+            let cross = out_format == EditOutputFormat::Hwp
+                && rhwp::parser::detect_format(&bytes) == rhwp::parser::FileFormat::Hwpx;
+            let (report, failed) = edit_verify_report(&doc, &out_bytes, cross);
+            verify_report = report;
+            verify_failed = failed;
+        }
+    }
+
+    let changed_pages = if dry_run {
+        serde_json::Value::Null
+    } else {
+        match doc.pages_covering_paragraphs(&[(section, 0)]) {
+            Some(pages) => serde_json::json!(pages),
+            None => serde_json::Value::Null,
+        }
+    };
+
+    if json_mode {
+        let mut envelope = serde_json::json!({
+            "schemaVersion": ENVELOPE_SCHEMA_VERSION,
+            "source": file_path,
+            "section": section,
+            "isHeader": is_header,
+            "applyTo": apply_to,
+            "paragraph": para,
+            "offset": offset,
+            "text": text,
+            "insertedChars": text.chars().count(),
+            "dryRun": dry_run,
+            "changedPages": changed_pages,
+        });
+        if !dry_run {
+            envelope["output"] = serde_json::Value::String(output_path.clone());
+            envelope["outputFormat"] = serde_json::Value::String(out_format.label().to_string());
+            envelope["verify"] = verify_report.clone();
+        }
+        println!("{}", provenance::marked(envelope, "edit"));
+        if verify_failed {
+            process::exit(3);
+        }
+        return EXIT_OK;
+    }
+
+    let kind = if is_header { "머리말" } else { "꼬리말" };
+    if dry_run {
+        println!(
+            "{} 텍스트 삽입 예정: {} 구역{} 문단{} 오프셋{}",
+            kind, file_path, section, para, offset
+        );
+    } else {
+        println!(
+            "{} 텍스트 삽입 완료: {} → {} — 구역{} 문단{} 오프셋{}",
+            kind, file_path, output_path, section, para, offset
+        );
+    }
+    if verify_failed {
+        eprintln!("검증 실패(--verify): 저장본 재파싱 IR 차이 — 상세는 --json 또는 ir-diff");
+        process::exit(3);
+    }
+    EXIT_OK
+}
+
+
+
+/// `edit set-header-footer-text` — 머리말/꼬리말 문단의 텍스트를 통째로 교체한다
+/// (upstream #5185/#5192 계열 선별 이식 — 배선은 CLI뿐, 코어 로직은 기존
+/// `get_header_footer_para_info_native`(현재 글자 수 조회)로 기존 텍스트 길이를 알아낸
+/// 뒤 `delete_text_in_header_footer_native`(있으면)와
+/// `insert_text_in_header_footer_native`를 순서대로 재사용 — 새 편집 로직 없음).
+pub(crate) fn edit_set_header_footer_text(args: &[String]) -> i32 {
+    const USAGE: &str = "사용법: rhwp edit set-header-footer-text <파일> --header|--footer --text <문자열> [--section N] [--apply-to 0|1|2] [--para N] [-o <출력>] [--dry-run] [--verify] [--json]";
+
+    let mut file_path: Option<&str> = None;
+    let mut is_header: Option<bool> = None;
+    let mut text_arg: Option<&str> = None;
+    let mut section: usize = 0;
+    let mut apply_to: u8 = 0;
+    let mut para: usize = 0;
+    let mut out_path: Option<String> = None;
+    let mut dry_run = false;
+    let mut json_mode = false;
+    let mut verify_mode = false;
+
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--header" => {
+                if is_header.replace(true).is_some() {
+                    eprintln!("오류: --header 와 --footer 중 하나만 지정합니다.");
+                    return EXIT_USAGE;
+                }
+            }
+            "--footer" => {
+                if is_header.replace(false).is_some() {
+                    eprintln!("오류: --header 와 --footer 중 하나만 지정합니다.");
+                    return EXIT_USAGE;
+                }
+            }
+            "--text" => {
+                i += 1;
+                match args.get(i) {
+                    Some(v) if !v.is_empty() => text_arg = Some(v),
+                    _ => {
+                        eprintln!("오류: --text 는 빈 문자열일 수 없습니다.");
+                        return EXIT_USAGE;
+                    }
+                }
+            }
+            "--section" => {
+                i += 1;
+                match args.get(i).and_then(|v| v.parse::<usize>().ok()) {
+                    Some(v) => section = v,
+                    None => {
+                        eprintln!("오류: --section 뒤에 0 이상의 정수가 필요합니다.");
+                        return EXIT_USAGE;
+                    }
+                }
+            }
+            "--apply-to" => {
+                i += 1;
+                match args.get(i).and_then(|v| v.parse::<u8>().ok()) {
+                    Some(v) if v <= 2 => apply_to = v,
+                    _ => {
+                        eprintln!("오류: --apply-to 는 0(양쪽)·1(짝수)·2(홀수)만 허용합니다.");
+                        return EXIT_USAGE;
+                    }
+                }
+            }
+            "--para" => {
+                i += 1;
+                match args.get(i).and_then(|v| v.parse::<usize>().ok()) {
+                    Some(v) => para = v,
+                    None => {
+                        eprintln!("오류: --para 뒤에 0 이상의 정수가 필요합니다.");
+                        return EXIT_USAGE;
+                    }
+                }
+            }
+            "-o" | "--output" => {
+                i += 1;
+                match args.get(i) {
+                    Some(v) => out_path = Some(v.clone()),
+                    None => {
+                        eprintln!("오류: -o 뒤에 출력 파일 경로가 필요합니다.");
+                        return EXIT_USAGE;
+                    }
+                }
+            }
+            "--dry-run" => dry_run = true,
+            "--json" => json_mode = true,
+            "--verify" => verify_mode = true,
+            other if other.starts_with('-') => {
+                eprintln!("알 수 없는 옵션: {other}");
+                return EXIT_USAGE;
+            }
+            other => {
+                if file_path.replace(other).is_some() {
+                    eprintln!("오류: 입력 파일은 하나만 지정할 수 있습니다: {other}");
+                    return EXIT_USAGE;
+                }
+            }
+        }
+        i += 1;
+    }
+
+    let (Some(file_path), Some(is_header), Some(text)) = (file_path, is_header, text_arg) else {
+        eprintln!("{USAGE}");
+        return EXIT_USAGE;
+    };
+
+    let bytes = match fs::read(file_path) {
+        Ok(d) => d,
+        Err(e) => {
+            eprintln!("오류: 파일을 읽을 수 없습니다 - {}: {}", file_path, e);
+            return EXIT_RUNTIME;
+        }
+    };
+    let mut doc = match load_document(&bytes) {
+        Ok(d) => d,
+        Err(e) => return e.report(),
+    };
+
+    if !dry_run {
+        let info_raw = match doc.get_header_footer_para_info_native(section, is_header, apply_to, para)
+        {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("오류: 머리말/꼬리말 문단 조회 실패 - {}", e);
+                return EXIT_RUNTIME;
+            }
+        };
+        let char_count = serde_json::from_str::<serde_json::Value>(&info_raw)
+            .ok()
+            .and_then(|v| v["charCount"].as_u64())
+            .unwrap_or(0) as usize;
+        if char_count > 0 {
+            if let Err(e) = doc
+                .delete_text_in_header_footer_native(section, is_header, apply_to, para, 0, char_count)
+            {
+                eprintln!("오류: 머리말/꼬리말 기존 텍스트 삭제 실패 - {}", e);
+                return EXIT_RUNTIME;
+            }
+        }
+        if let Err(e) =
+            doc.insert_text_in_header_footer_native(section, is_header, apply_to, para, 0, text)
+        {
+            eprintln!("오류: 머리말/꼬리말 텍스트 교체 실패 - {}", e);
+            return EXIT_RUNTIME;
+        }
+    }
+
+    let out_format = edit_output_format(&bytes, out_path.as_deref());
+    let output_path = out_path.unwrap_or_else(|| {
+        let stem = Path::new(file_path)
+            .file_stem()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_else(|| "output".to_string());
+        format!("{}_hfset.{}", stem, out_format.ext())
+    });
+
+    let mut verify_report = serde_json::Value::Null;
+    let mut verify_failed = false;
+    if !dry_run {
+        let out_bytes = match edit_serialize(&mut doc, out_format) {
+            Ok(b) => b,
+            Err(e) => {
+                eprintln!(
+                    "오류: {} 직렬화 실패 - {}",
+                    out_format.label().to_uppercase(),
+                    e
+                );
+                return EXIT_RUNTIME;
+            }
+        };
+        if let Err(e) = fs::write(&output_path, &out_bytes) {
+            eprintln!("오류: 출력 쓰기 실패 - {}: {}", output_path, e);
+            return EXIT_RUNTIME;
+        }
+        if verify_mode {
+            let cross = out_format == EditOutputFormat::Hwp
+                && rhwp::parser::detect_format(&bytes) == rhwp::parser::FileFormat::Hwpx;
+            let (report, failed) = edit_verify_report(&doc, &out_bytes, cross);
+            verify_report = report;
+            verify_failed = failed;
+        }
+    }
+
+    let changed_pages = if dry_run {
+        serde_json::Value::Null
+    } else {
+        match doc.pages_covering_paragraphs(&[(section, 0)]) {
+            Some(pages) => serde_json::json!(pages),
+            None => serde_json::Value::Null,
+        }
+    };
+
+    if json_mode {
+        let mut envelope = serde_json::json!({
+            "schemaVersion": ENVELOPE_SCHEMA_VERSION,
+            "source": file_path,
+            "section": section,
+            "isHeader": is_header,
+            "applyTo": apply_to,
+            "paragraph": para,
+            "text": text,
+            "dryRun": dry_run,
+            "changedPages": changed_pages,
+        });
+        if !dry_run {
+            envelope["output"] = serde_json::Value::String(output_path.clone());
+            envelope["outputFormat"] = serde_json::Value::String(out_format.label().to_string());
+            envelope["verify"] = verify_report.clone();
+        }
+        println!("{}", provenance::marked(envelope, "edit"));
+        if verify_failed {
+            process::exit(3);
+        }
+        return EXIT_OK;
+    }
+
+    let kind = if is_header { "머리말" } else { "꼬리말" };
+    if dry_run {
+        println!(
+            "{} 텍스트 교체 예정: {} 구역{} 문단{}",
+            kind, file_path, section, para
+        );
+    } else {
+        println!(
+            "{} 텍스트 교체 완료: {} → {} — 구역{} 문단{}",
+            kind, file_path, output_path, section, para
+        );
+    }
+    if verify_failed {
+        eprintln!("검증 실패(--verify): 저장본 재파싱 IR 차이 — 상세는 --json 또는 ir-diff");
+        process::exit(3);
+    }
+    EXIT_OK
+}
+
+
+
+/// `edit set-hf-picture` — 머리말/꼬리말 안 그림의 속성을 고친다 (upstream
+/// #5185/#5192 계열 선별 이식 — 배선은 CLI뿐, 코어 로직은 기존
+/// `set_header_footer_picture_properties_native` 재사용).
+///
+/// `--section`/`--para`/`--ctrl`(머리말/꼬리말 컨트롤 좌표)와 `--inner-para`/
+/// `--inner-ctrl`(그 안 그림 컨트롤 좌표)/`--props`(JSON) 모두 필수.
+pub(crate) fn edit_set_hf_picture(args: &[String]) -> i32 {
+    const USAGE: &str = "사용법: rhwp edit set-hf-picture <파일> --section N --para N --ctrl N --inner-para N --inner-ctrl N --props <JSON> [-o <출력>] [--dry-run] [--verify] [--json]";
+
+    let mut file_path: Option<&str> = None;
+    let mut section_arg: Option<usize> = None;
+    let mut para_arg: Option<usize> = None;
+    let mut ctrl_arg: Option<usize> = None;
+    let mut inner_para_arg: Option<usize> = None;
+    let mut inner_ctrl_arg: Option<usize> = None;
+    let mut props_arg: Option<&str> = None;
+    let mut out_path: Option<String> = None;
+    let mut dry_run = false;
+    let mut json_mode = false;
+    let mut verify_mode = false;
+
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--section" => {
+                i += 1;
+                match args.get(i).and_then(|v| v.parse::<usize>().ok()) {
+                    Some(v) => section_arg = Some(v),
+                    None => {
+                        eprintln!("오류: --section 뒤에 0 이상의 정수가 필요합니다.");
+                        return EXIT_USAGE;
+                    }
+                }
+            }
+            "--para" => {
+                i += 1;
+                match args.get(i).and_then(|v| v.parse::<usize>().ok()) {
+                    Some(v) => para_arg = Some(v),
+                    None => {
+                        eprintln!("오류: --para 뒤에 0 이상의 정수가 필요합니다.");
+                        return EXIT_USAGE;
+                    }
+                }
+            }
+            "--ctrl" => {
+                i += 1;
+                match args.get(i).and_then(|v| v.parse::<usize>().ok()) {
+                    Some(v) => ctrl_arg = Some(v),
+                    None => {
+                        eprintln!("오류: --ctrl 뒤에 0 이상의 정수가 필요합니다.");
+                        return EXIT_USAGE;
+                    }
+                }
+            }
+            "--inner-para" => {
+                i += 1;
+                match args.get(i).and_then(|v| v.parse::<usize>().ok()) {
+                    Some(v) => inner_para_arg = Some(v),
+                    None => {
+                        eprintln!("오류: --inner-para 뒤에 0 이상의 정수가 필요합니다.");
+                        return EXIT_USAGE;
+                    }
+                }
+            }
+            "--inner-ctrl" => {
+                i += 1;
+                match args.get(i).and_then(|v| v.parse::<usize>().ok()) {
+                    Some(v) => inner_ctrl_arg = Some(v),
+                    None => {
+                        eprintln!("오류: --inner-ctrl 뒤에 0 이상의 정수가 필요합니다.");
+                        return EXIT_USAGE;
+                    }
+                }
+            }
+            "--props" => {
+                i += 1;
+                match args.get(i) {
+                    Some(v) if !v.is_empty() => props_arg = Some(v),
+                    _ => {
+                        eprintln!("오류: --props 뒤에 그림 속성 JSON이 필요합니다.");
+                        return EXIT_USAGE;
+                    }
+                }
+            }
+            "-o" | "--output" => {
+                i += 1;
+                match args.get(i) {
+                    Some(v) => out_path = Some(v.clone()),
+                    None => {
+                        eprintln!("오류: -o 뒤에 출력 파일 경로가 필요합니다.");
+                        return EXIT_USAGE;
+                    }
+                }
+            }
+            "--dry-run" => dry_run = true,
+            "--json" => json_mode = true,
+            "--verify" => verify_mode = true,
+            other if other.starts_with('-') => {
+                eprintln!("알 수 없는 옵션: {other}");
+                return EXIT_USAGE;
+            }
+            other => {
+                if file_path.replace(other).is_some() {
+                    eprintln!("오류: 입력 파일은 하나만 지정할 수 있습니다: {other}");
+                    return EXIT_USAGE;
+                }
+            }
+        }
+        i += 1;
+    }
+
+    let (
+        Some(file_path),
+        Some(section),
+        Some(para),
+        Some(ctrl),
+        Some(inner_para),
+        Some(inner_ctrl),
+        Some(props),
+    ) = (
+        file_path,
+        section_arg,
+        para_arg,
+        ctrl_arg,
+        inner_para_arg,
+        inner_ctrl_arg,
+        props_arg,
+    )
+    else {
+        eprintln!("{USAGE}");
+        return EXIT_USAGE;
+    };
+
+    let bytes = match fs::read(file_path) {
+        Ok(d) => d,
+        Err(e) => {
+            eprintln!("오류: 파일을 읽을 수 없습니다 - {}: {}", file_path, e);
+            return EXIT_RUNTIME;
+        }
+    };
+    let mut doc = match load_document(&bytes) {
+        Ok(d) => d,
+        Err(e) => return e.report(),
+    };
+
+    if !dry_run {
+        if let Err(e) = doc.set_header_footer_picture_properties_native(
+            section, para, ctrl, inner_para, inner_ctrl, props,
+        ) {
+            eprintln!("오류: 머리말/꼬리말 그림 속성 변경 실패 - {}", e);
+            return EXIT_RUNTIME;
+        }
+    }
+
+    let out_format = edit_output_format(&bytes, out_path.as_deref());
+    let output_path = out_path.unwrap_or_else(|| {
+        let stem = Path::new(file_path)
+            .file_stem()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_else(|| "output".to_string());
+        format!("{}_hfpic.{}", stem, out_format.ext())
+    });
+
+    let mut verify_report = serde_json::Value::Null;
+    let mut verify_failed = false;
+    if !dry_run {
+        let out_bytes = match edit_serialize(&mut doc, out_format) {
+            Ok(b) => b,
+            Err(e) => {
+                eprintln!(
+                    "오류: {} 직렬화 실패 - {}",
+                    out_format.label().to_uppercase(),
+                    e
+                );
+                return EXIT_RUNTIME;
+            }
+        };
+        if let Err(e) = fs::write(&output_path, &out_bytes) {
+            eprintln!("오류: 출력 쓰기 실패 - {}: {}", output_path, e);
+            return EXIT_RUNTIME;
+        }
+        if verify_mode {
+            let cross = out_format == EditOutputFormat::Hwp
+                && rhwp::parser::detect_format(&bytes) == rhwp::parser::FileFormat::Hwpx;
+            let (report, failed) = edit_verify_report(&doc, &out_bytes, cross);
+            verify_report = report;
+            verify_failed = failed;
+        }
+    }
+
+    let changed_pages = if dry_run {
+        serde_json::Value::Null
+    } else {
+        match doc.pages_covering_paragraphs(&[(section, para)]) {
+            Some(pages) => serde_json::json!(pages),
+            None => serde_json::Value::Null,
+        }
+    };
+
+    if json_mode {
+        let mut envelope = serde_json::json!({
+            "schemaVersion": ENVELOPE_SCHEMA_VERSION,
+            "source": file_path,
+            "section": section,
+            "paragraph": para,
+            "ctrl": ctrl,
+            "innerPara": inner_para,
+            "innerCtrl": inner_ctrl,
+            "props": serde_json::from_str::<serde_json::Value>(props).unwrap_or(serde_json::Value::Null),
+            "dryRun": dry_run,
+            "changedPages": changed_pages,
+        });
+        if !dry_run {
+            envelope["output"] = serde_json::Value::String(output_path.clone());
+            envelope["outputFormat"] = serde_json::Value::String(out_format.label().to_string());
+            envelope["verify"] = verify_report.clone();
+        }
+        println!("{}", provenance::marked(envelope, "edit"));
+        if verify_failed {
+            process::exit(3);
+        }
+        return EXIT_OK;
+    }
+
+    if dry_run {
+        println!(
+            "머리말/꼬리말 그림 속성 변경 예정: {} 구역{} 문단{} 컨트롤{} 내부{}/{}",
+            file_path, section, para, ctrl, inner_para, inner_ctrl
+        );
+    } else {
+        println!(
+            "머리말/꼬리말 그림 속성 변경 완료: {} → {} — 구역{} 문단{} 컨트롤{} 내부{}/{}",
+            file_path, output_path, section, para, ctrl, inner_para, inner_ctrl
+        );
+    }
+    if verify_failed {
+        eprintln!("검증 실패(--verify): 저장본 재파싱 IR 차이 — 상세는 --json 또는 ir-diff");
+        process::exit(3);
+    }
+    EXIT_OK
+}
+
+
+
+/// `edit apply-hf-template` — 머리말/꼬리말에 마당(내장 디자인 템플릿)을 적용한다
+/// (upstream #5185/#5192 계열 선별 이식 — 배선은 CLI뿐, 코어 로직은 기존
+/// `apply_hf_template_native` 재사용).
+///
+/// `--template`은 0~10 범위만 허용한다.
+pub(crate) fn edit_apply_hf_template(args: &[String]) -> i32 {
+    const USAGE: &str = "사용법: rhwp edit apply-hf-template <파일> --header|--footer --template <0-10> [--section N] [--apply-to 0|1|2] [-o <출력>] [--dry-run] [--verify] [--json]";
+
+    let mut file_path: Option<&str> = None;
+    let mut is_header: Option<bool> = None;
+    let mut template_arg: Option<u8> = None;
+    let mut section: usize = 0;
+    let mut apply_to: u8 = 0;
+    let mut out_path: Option<String> = None;
+    let mut dry_run = false;
+    let mut json_mode = false;
+    let mut verify_mode = false;
+
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--header" => {
+                if is_header.replace(true).is_some() {
+                    eprintln!("오류: --header 와 --footer 는 하나만 지정합니다.");
+                    return EXIT_USAGE;
+                }
+            }
+            "--footer" => {
+                if is_header.replace(false).is_some() {
+                    eprintln!("오류: --header 와 --footer 는 하나만 지정합니다.");
+                    return EXIT_USAGE;
+                }
+            }
+            "--template" => {
+                i += 1;
+                match args.get(i).and_then(|v| v.parse::<u8>().ok()) {
+                    Some(v) if v <= 10 => template_arg = Some(v),
+                    _ => {
+                        eprintln!("오류: --template 은 0~10 만 허용합니다.");
+                        return EXIT_USAGE;
+                    }
+                }
+            }
+            "--section" => {
+                i += 1;
+                match args.get(i).and_then(|v| v.parse::<usize>().ok()) {
+                    Some(v) => section = v,
+                    None => {
+                        eprintln!("오류: --section 뒤에 0 이상의 정수가 필요합니다.");
+                        return EXIT_USAGE;
+                    }
+                }
+            }
+            "--apply-to" => {
+                i += 1;
+                match args.get(i).and_then(|v| v.parse::<u8>().ok()) {
+                    Some(v) if v <= 2 => apply_to = v,
+                    _ => {
+                        eprintln!("오류: --apply-to 는 0(양쪽)·1(짝수)·2(홀수)만 허용합니다.");
+                        return EXIT_USAGE;
+                    }
+                }
+            }
+            "-o" | "--output" => {
+                i += 1;
+                match args.get(i) {
+                    Some(v) => out_path = Some(v.clone()),
+                    None => {
+                        eprintln!("오류: -o 뒤에 출력 파일 경로가 필요합니다.");
+                        return EXIT_USAGE;
+                    }
+                }
+            }
+            "--dry-run" => dry_run = true,
+            "--json" => json_mode = true,
+            "--verify" => verify_mode = true,
+            other if other.starts_with('-') => {
+                eprintln!("알 수 없는 옵션: {other}");
+                return EXIT_USAGE;
+            }
+            other => {
+                if file_path.replace(other).is_some() {
+                    eprintln!("오류: 입력 파일은 하나만 지정할 수 있습니다: {other}");
+                    return EXIT_USAGE;
+                }
+            }
+        }
+        i += 1;
+    }
+
+    let (Some(file_path), Some(is_header), Some(template)) = (file_path, is_header, template_arg)
+    else {
+        eprintln!("{USAGE}");
+        return EXIT_USAGE;
+    };
+
+    let bytes = match fs::read(file_path) {
+        Ok(d) => d,
+        Err(e) => {
+            eprintln!("오류: 파일을 읽을 수 없습니다 - {}: {}", file_path, e);
+            return EXIT_RUNTIME;
+        }
+    };
+    let mut doc = match load_document(&bytes) {
+        Ok(d) => d,
+        Err(e) => return e.report(),
+    };
+
+    if !dry_run {
+        if let Err(e) = doc.apply_hf_template_native(section, is_header, apply_to, template) {
+            eprintln!("오류: 머리말/꼬리말 마당 적용 실패 - {}", e);
+            return EXIT_RUNTIME;
+        }
+    }
+
+    let out_format = edit_output_format(&bytes, out_path.as_deref());
+    let output_path = out_path.unwrap_or_else(|| {
+        let stem = Path::new(file_path)
+            .file_stem()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_else(|| "output".to_string());
+        format!("{}_hftpl.{}", stem, out_format.ext())
+    });
+
+    let mut verify_report = serde_json::Value::Null;
+    let mut verify_failed = false;
+    if !dry_run {
+        let out_bytes = match edit_serialize(&mut doc, out_format) {
+            Ok(b) => b,
+            Err(e) => {
+                eprintln!(
+                    "오류: {} 직렬화 실패 - {}",
+                    out_format.label().to_uppercase(),
+                    e
+                );
+                return EXIT_RUNTIME;
+            }
+        };
+        if let Err(e) = fs::write(&output_path, &out_bytes) {
+            eprintln!("오류: 출력 쓰기 실패 - {}: {}", output_path, e);
+            return EXIT_RUNTIME;
+        }
+        if verify_mode {
+            let cross = out_format == EditOutputFormat::Hwp
+                && rhwp::parser::detect_format(&bytes) == rhwp::parser::FileFormat::Hwpx;
+            let (report, failed) = edit_verify_report(&doc, &out_bytes, cross);
+            verify_report = report;
+            verify_failed = failed;
+        }
+    }
+
+    let changed_pages = if dry_run {
+        serde_json::Value::Null
+    } else {
+        match doc.pages_covering_paragraphs(&[(section, 0)]) {
+            Some(pages) => serde_json::json!(pages),
+            None => serde_json::Value::Null,
+        }
+    };
+
+    if json_mode {
+        let mut envelope = serde_json::json!({
+            "schemaVersion": ENVELOPE_SCHEMA_VERSION,
+            "source": file_path,
+            "section": section,
+            "isHeader": is_header,
+            "applyTo": apply_to,
+            "templateId": template,
+            "dryRun": dry_run,
+            "changedPages": changed_pages,
+        });
+        if !dry_run {
+            envelope["output"] = serde_json::Value::String(output_path.clone());
+            envelope["outputFormat"] = serde_json::Value::String(out_format.label().to_string());
+            envelope["verify"] = verify_report.clone();
+        }
+        println!("{}", provenance::marked(envelope, "edit"));
+        if verify_failed {
+            process::exit(3);
+        }
+        return EXIT_OK;
+    }
+
+    let kind = if is_header { "머리말" } else { "꼬리말" };
+    if dry_run {
+        println!(
+            "{} 마당 적용 예정: {} 구역{} template{}",
+            kind, file_path, section, template
+        );
+    } else {
+        println!(
+            "{} 마당 적용 완료: {} → {} — 구역{} template{}",
+            kind, file_path, output_path, section, template
+        );
+    }
+    if verify_failed {
+        eprintln!("검증 실패(--verify): 저장본 재파싱 IR 차이 — 상세는 --json 또는 ir-diff");
+        process::exit(3);
+    }
+    EXIT_OK
+}
+
+
+
+/// `edit delete-hf-text` — 머리말/꼬리말 문단 텍스트를 삭제한다 (upstream
+/// #5185/#5192 계열 선별 이식 — 배선은 CLI뿐, 코어 로직은 기존
+/// `delete_text_in_header_footer_native` 재사용).
+///
+/// `--count`(1 이상)는 필수, 나머지 좌표는 생략하면 0.
+pub(crate) fn edit_delete_hf_text(args: &[String]) -> i32 {
+    const USAGE: &str = "사용법: rhwp edit delete-hf-text <파일> --header|--footer --count <글자수> [--section N] [--apply-to 0|1|2] [--para N] [--offset N] [-o <출력>] [--dry-run] [--verify] [--json]";
+
+    let mut file_path: Option<&str> = None;
+    let mut is_header: Option<bool> = None;
+    let mut count_arg: Option<usize> = None;
+    let mut section: usize = 0;
+    let mut apply_to: u8 = 0;
+    let mut para: usize = 0;
+    let mut offset: usize = 0;
+    let mut out_path: Option<String> = None;
+    let mut dry_run = false;
+    let mut json_mode = false;
+    let mut verify_mode = false;
+
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--header" => {
+                if is_header.replace(true).is_some() {
+                    eprintln!("오류: --header 와 --footer 중 하나만 지정합니다.");
+                    return EXIT_USAGE;
+                }
+            }
+            "--footer" => {
+                if is_header.replace(false).is_some() {
+                    eprintln!("오류: --header 와 --footer 중 하나만 지정합니다.");
+                    return EXIT_USAGE;
+                }
+            }
+            "--count" => {
+                i += 1;
+                match args.get(i).and_then(|v| v.parse::<usize>().ok()) {
+                    Some(v) if v >= 1 => count_arg = Some(v),
+                    _ => {
+                        eprintln!("오류: --count 는 1 이상의 정수가 필요합니다.");
+                        return EXIT_USAGE;
+                    }
+                }
+            }
+            "--section" => {
+                i += 1;
+                match args.get(i).and_then(|v| v.parse::<usize>().ok()) {
+                    Some(v) => section = v,
+                    None => {
+                        eprintln!("오류: --section 뒤에 0 이상의 정수가 필요합니다.");
+                        return EXIT_USAGE;
+                    }
+                }
+            }
+            "--apply-to" => {
+                i += 1;
+                match args.get(i).and_then(|v| v.parse::<u8>().ok()) {
+                    Some(v) if v <= 2 => apply_to = v,
+                    _ => {
+                        eprintln!("오류: --apply-to 는 0(양쪽)·1(짝수)·2(홀수)만 허용합니다.");
+                        return EXIT_USAGE;
+                    }
+                }
+            }
+            "--para" => {
+                i += 1;
+                match args.get(i).and_then(|v| v.parse::<usize>().ok()) {
+                    Some(v) => para = v,
+                    None => {
+                        eprintln!("오류: --para 뒤에 0 이상의 정수가 필요합니다.");
+                        return EXIT_USAGE;
+                    }
+                }
+            }
+            "--offset" => {
+                i += 1;
+                match args.get(i).and_then(|v| v.parse::<usize>().ok()) {
+                    Some(v) => offset = v,
+                    None => {
+                        eprintln!("오류: --offset 뒤에 0 이상의 정수가 필요합니다.");
+                        return EXIT_USAGE;
+                    }
+                }
+            }
+            "-o" | "--output" => {
+                i += 1;
+                match args.get(i) {
+                    Some(v) => out_path = Some(v.clone()),
+                    None => {
+                        eprintln!("오류: -o 뒤에 출력 파일 경로가 필요합니다.");
+                        return EXIT_USAGE;
+                    }
+                }
+            }
+            "--dry-run" => dry_run = true,
+            "--json" => json_mode = true,
+            "--verify" => verify_mode = true,
+            other if other.starts_with('-') => {
+                eprintln!("알 수 없는 옵션: {other}");
+                return EXIT_USAGE;
+            }
+            other => {
+                if file_path.replace(other).is_some() {
+                    eprintln!("오류: 입력 파일은 하나만 지정할 수 있습니다: {other}");
+                    return EXIT_USAGE;
+                }
+            }
+        }
+        i += 1;
+    }
+
+    let (Some(file_path), Some(is_header), Some(count)) = (file_path, is_header, count_arg) else {
+        eprintln!("{USAGE}");
+        return EXIT_USAGE;
+    };
+
+    let bytes = match fs::read(file_path) {
+        Ok(d) => d,
+        Err(e) => {
+            eprintln!("오류: 파일을 읽을 수 없습니다 - {}: {}", file_path, e);
+            return EXIT_RUNTIME;
+        }
+    };
+    let mut doc = match load_document(&bytes) {
+        Ok(d) => d,
+        Err(e) => return e.report(),
+    };
+
+    if !dry_run {
+        if let Err(e) = doc
+            .delete_text_in_header_footer_native(section, is_header, apply_to, para, offset, count)
+        {
+            eprintln!("오류: 머리말/꼬리말 텍스트 삭제 실패 - {}", e);
+            return EXIT_RUNTIME;
+        }
+    }
+
+    let out_format = edit_output_format(&bytes, out_path.as_deref());
+    let output_path = out_path.unwrap_or_else(|| {
+        let stem = Path::new(file_path)
+            .file_stem()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_else(|| "output".to_string());
+        format!("{}_hfdeltxt.{}", stem, out_format.ext())
+    });
+
+    let mut verify_report = serde_json::Value::Null;
+    let mut verify_failed = false;
+    if !dry_run {
+        let out_bytes = match edit_serialize(&mut doc, out_format) {
+            Ok(b) => b,
+            Err(e) => {
+                eprintln!(
+                    "오류: {} 직렬화 실패 - {}",
+                    out_format.label().to_uppercase(),
+                    e
+                );
+                return EXIT_RUNTIME;
+            }
+        };
+        if let Err(e) = fs::write(&output_path, &out_bytes) {
+            eprintln!("오류: 출력 쓰기 실패 - {}: {}", output_path, e);
+            return EXIT_RUNTIME;
+        }
+        if verify_mode {
+            let cross = out_format == EditOutputFormat::Hwp
+                && rhwp::parser::detect_format(&bytes) == rhwp::parser::FileFormat::Hwpx;
+            let (report, failed) = edit_verify_report(&doc, &out_bytes, cross);
+            verify_report = report;
+            verify_failed = failed;
+        }
+    }
+
+    let changed_pages = if dry_run {
+        serde_json::Value::Null
+    } else {
+        match doc.pages_covering_paragraphs(&[(section, 0)]) {
+            Some(pages) => serde_json::json!(pages),
+            None => serde_json::Value::Null,
+        }
+    };
+
+    if json_mode {
+        let mut envelope = serde_json::json!({
+            "schemaVersion": ENVELOPE_SCHEMA_VERSION,
+            "source": file_path,
+            "section": section,
+            "isHeader": is_header,
+            "applyTo": apply_to,
+            "paragraph": para,
+            "offset": offset,
+            "count": count,
+            "dryRun": dry_run,
+            "changedPages": changed_pages,
+        });
+        if !dry_run {
+            envelope["output"] = serde_json::Value::String(output_path.clone());
+            envelope["outputFormat"] = serde_json::Value::String(out_format.label().to_string());
+            envelope["verify"] = verify_report.clone();
+        }
+        println!("{}", provenance::marked(envelope, "edit"));
+        if verify_failed {
+            process::exit(3);
+        }
+        return EXIT_OK;
+    }
+
+    let kind = if is_header { "머리말" } else { "꼬리말" };
+    if dry_run {
+        println!(
+            "{} 텍스트 삭제 예정: {} 구역{} 문단{} 오프셋{} 글자{}",
+            kind, file_path, section, para, offset, count
+        );
+    } else {
+        println!(
+            "{} 텍스트 삭제 완료: {} → {} — 구역{} 문단{} 오프셋{} 글자{}",
+            kind, file_path, output_path, section, para, offset, count
+        );
+    }
+    if verify_failed {
+        eprintln!("검증 실패(--verify): 저장본 재파싱 IR 차이 — 상세는 --json 또는 ir-diff");
+        process::exit(3);
+    }
+    EXIT_OK
+}
+
+
+
+/// `edit insert-field-in-hf` — 머리말/꼬리말에 쪽번호/총쪽수/파일이름 필드를
+/// 삽입한다 (upstream #5185/#5192 계열 선별 이식 — 배선은 CLI뿐, 코어 로직은 기존
+/// `insert_field_in_hf_native` 재사용).
+///
+/// `--field-type`은 1(쪽번호)·2(총쪽수)·3(파일이름)만 허용한다.
+pub(crate) fn edit_insert_field_in_hf(args: &[String]) -> i32 {
+    const USAGE: &str = "사용법: rhwp edit insert-field-in-hf <파일> --header|--footer --field-type <1|2|3> [--section N] [--apply-to 0|1|2] [--para N] [--offset N] [-o <출력>] [--dry-run] [--verify] [--json]";
+
+    let mut file_path: Option<&str> = None;
+    let mut is_header: Option<bool> = None;
+    let mut field_type_arg: Option<u8> = None;
+    let mut section: usize = 0;
+    let mut apply_to: u8 = 0;
+    let mut para: usize = 0;
+    let mut offset: usize = 0;
+    let mut out_path: Option<String> = None;
+    let mut dry_run = false;
+    let mut json_mode = false;
+    let mut verify_mode = false;
+
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--header" => {
+                if is_header.replace(true).is_some() {
+                    eprintln!("오류: --header 와 --footer 는 하나만 지정합니다.");
+                    return EXIT_USAGE;
+                }
+            }
+            "--footer" => {
+                if is_header.replace(false).is_some() {
+                    eprintln!("오류: --header 와 --footer 는 하나만 지정합니다.");
+                    return EXIT_USAGE;
+                }
+            }
+            "--field-type" => {
+                i += 1;
+                match args.get(i).and_then(|v| v.parse::<u8>().ok()) {
+                    Some(v) if (1..=3).contains(&v) => field_type_arg = Some(v),
+                    _ => {
+                        eprintln!(
+                            "오류: --field-type 은 1(쪽번호)·2(총쪽수)·3(파일이름)만 허용합니다."
+                        );
+                        return EXIT_USAGE;
+                    }
+                }
+            }
+            "--section" => {
+                i += 1;
+                match args.get(i).and_then(|v| v.parse::<usize>().ok()) {
+                    Some(v) => section = v,
+                    None => {
+                        eprintln!("오류: --section 뒤에 0 이상의 정수가 필요합니다.");
+                        return EXIT_USAGE;
+                    }
+                }
+            }
+            "--apply-to" => {
+                i += 1;
+                match args.get(i).and_then(|v| v.parse::<u8>().ok()) {
+                    Some(v) if v <= 2 => apply_to = v,
+                    _ => {
+                        eprintln!("오류: --apply-to 는 0(양쪽)·1(짝수)·2(홀수)만 허용합니다.");
+                        return EXIT_USAGE;
+                    }
+                }
+            }
+            "--para" => {
+                i += 1;
+                match args.get(i).and_then(|v| v.parse::<usize>().ok()) {
+                    Some(v) => para = v,
+                    None => {
+                        eprintln!("오류: --para 뒤에 0 이상의 정수가 필요합니다.");
+                        return EXIT_USAGE;
+                    }
+                }
+            }
+            "--offset" => {
+                i += 1;
+                match args.get(i).and_then(|v| v.parse::<usize>().ok()) {
+                    Some(v) => offset = v,
+                    None => {
+                        eprintln!("오류: --offset 뒤에 0 이상의 정수가 필요합니다.");
+                        return EXIT_USAGE;
+                    }
+                }
+            }
+            "-o" | "--output" => {
+                i += 1;
+                match args.get(i) {
+                    Some(v) => out_path = Some(v.clone()),
+                    None => {
+                        eprintln!("오류: -o 뒤에 출력 파일 경로가 필요합니다.");
+                        return EXIT_USAGE;
+                    }
+                }
+            }
+            "--dry-run" => dry_run = true,
+            "--json" => json_mode = true,
+            "--verify" => verify_mode = true,
+            other if other.starts_with('-') => {
+                eprintln!("알 수 없는 옵션: {other}");
+                return EXIT_USAGE;
+            }
+            other => {
+                if file_path.replace(other).is_some() {
+                    eprintln!("오류: 입력 파일은 하나만 지정할 수 있습니다: {other}");
+                    return EXIT_USAGE;
+                }
+            }
+        }
+        i += 1;
+    }
+
+    let (Some(file_path), Some(is_header), Some(field_type)) =
+        (file_path, is_header, field_type_arg)
+    else {
+        eprintln!("{USAGE}");
+        return EXIT_USAGE;
+    };
+
+    let bytes = match fs::read(file_path) {
+        Ok(d) => d,
+        Err(e) => {
+            eprintln!("오류: 파일을 읽을 수 없습니다 - {}: {}", file_path, e);
+            return EXIT_RUNTIME;
+        }
+    };
+    let mut doc = match load_document(&bytes) {
+        Ok(d) => d,
+        Err(e) => return e.report(),
+    };
+
+    if !dry_run {
+        if let Err(e) =
+            doc.insert_field_in_hf_native(section, is_header, apply_to, para, offset, field_type)
+        {
+            eprintln!("오류: 머리말/꼬리말 필드 삽입 실패 - {}", e);
+            return EXIT_RUNTIME;
+        }
+    }
+
+    let out_format = edit_output_format(&bytes, out_path.as_deref());
+    let output_path = out_path.unwrap_or_else(|| {
+        let stem = Path::new(file_path)
+            .file_stem()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_else(|| "output".to_string());
+        format!("{}_hffield.{}", stem, out_format.ext())
+    });
+
+    let mut verify_report = serde_json::Value::Null;
+    let mut verify_failed = false;
+    if !dry_run {
+        let out_bytes = match edit_serialize(&mut doc, out_format) {
+            Ok(b) => b,
+            Err(e) => {
+                eprintln!(
+                    "오류: {} 직렬화 실패 - {}",
+                    out_format.label().to_uppercase(),
+                    e
+                );
+                return EXIT_RUNTIME;
+            }
+        };
+        if let Err(e) = fs::write(&output_path, &out_bytes) {
+            eprintln!("오류: 출력 쓰기 실패 - {}: {}", output_path, e);
+            return EXIT_RUNTIME;
+        }
+        if verify_mode {
+            let cross = out_format == EditOutputFormat::Hwp
+                && rhwp::parser::detect_format(&bytes) == rhwp::parser::FileFormat::Hwpx;
+            let (report, failed) = edit_verify_report(&doc, &out_bytes, cross);
+            verify_report = report;
+            verify_failed = failed;
+        }
+    }
+
+    let changed_pages = if dry_run {
+        serde_json::Value::Null
+    } else {
+        match doc.pages_covering_paragraphs(&[(section, 0)]) {
+            Some(pages) => serde_json::json!(pages),
+            None => serde_json::Value::Null,
+        }
+    };
+
+    if json_mode {
+        let mut envelope = serde_json::json!({
+            "schemaVersion": ENVELOPE_SCHEMA_VERSION,
+            "source": file_path,
+            "section": section,
+            "isHeader": is_header,
+            "applyTo": apply_to,
+            "paragraph": para,
+            "offset": offset,
+            "fieldType": field_type,
+            "dryRun": dry_run,
+            "changedPages": changed_pages,
+        });
+        if !dry_run {
+            envelope["output"] = serde_json::Value::String(output_path.clone());
+            envelope["outputFormat"] = serde_json::Value::String(out_format.label().to_string());
+            envelope["verify"] = verify_report.clone();
+        }
+        println!("{}", provenance::marked(envelope, "edit"));
+        if verify_failed {
+            process::exit(3);
+        }
+        return EXIT_OK;
+    }
+
+    let kind = if is_header { "머리말" } else { "꼬리말" };
+    if dry_run {
+        println!(
+            "{} 필드 삽입 예정: {} 구역{} type{}",
+            kind, file_path, section, field_type
+        );
+    } else {
+        println!(
+            "{} 필드 삽입 완료: {} → {} — 구역{} type{}",
+            kind, file_path, output_path, section, field_type
         );
     }
     if verify_failed {
