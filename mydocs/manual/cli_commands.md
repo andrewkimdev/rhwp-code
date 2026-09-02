@@ -980,6 +980,42 @@ rhwp export-tables 작성본.hwpx --json | jq '.tables[0].cells[] | select(.row=
 - `--verify` — 저장 직후 재파싱 IR 자기검증(차이 시 exit 3).
 - `--json` 봉투: `{"schemaVersion":"1.0","source","table","widths":[…],"colCount","tableWidth","dryRun","changedPages","output"?,"outputFormat"?,"verify"?}`
 
+### `edit insert-row <파일> --table <번호> --row <행> [--below] [옵션]` (upstream #5185/#5192 계열)
+표에 행을 삽입한다. `--below` 를 생략하면 지정 행 **위**에 삽입한다.
+- `-o, --output <파일>` — 기본 `<입력명>_row.<입력과 같은 확장자>`
+- `--json` 봉투: `{"schemaVersion":"1.0","source","table","row","below","dryRun","changedPages","output"?,"outputFormat"?,"verify"?}`
+
+### `edit insert-col <파일> --table <번호> --col <열> [--right] [옵션]` (upstream #5185/#5192 계열)
+표에 열을 삽입한다. `--right` 를 생략하면 지정 열 **왼쪽**에 삽입한다.
+- `-o, --output <파일>` — 기본 `<입력명>_col.<입력과 같은 확장자>`
+- `--json` 봉투: `{"schemaVersion":"1.0","source","table","col","right","dryRun","changedPages","output"?,"outputFormat"?,"verify"?}`
+
+### `edit delete-row <파일> --table <번호> --row <행> [옵션]` (upstream #5185/#5192 계열)
+표의 행을 삭제한다.
+- `-o, --output <파일>` — 기본 `<입력명>_delrow.<입력과 같은 확장자>`
+- `--json` 봉투: `{"schemaVersion":"1.0","source","table","row","dryRun","changedPages","output"?,"outputFormat"?,"verify"?}`
+
+### `edit delete-col <파일> --table <번호> --col <열> [옵션]` (upstream #5185/#5192 계열)
+표의 열을 삭제한다.
+- `-o, --output <파일>` — 기본 `<입력명>_delcol.<입력과 같은 확장자>`
+- `--json` 봉투: `{"schemaVersion":"1.0","source","table","col","dryRun","changedPages","output"?,"outputFormat"?,"verify"?}`
+
+### `edit merge-cells <파일> --table <번호> --row <행> --col <열> --end-row <행> --end-col <열> [옵션]` (upstream #5185/#5192 계열)
+표의 (row,col)-(endRow,endCol) 사각 범위 셀을 병합한다.
+- `-o, --output <파일>` — 기본 `<입력명>_merge.<입력과 같은 확장자>`
+- `--json` 봉투: `{"schemaVersion":"1.0","source","table","row","col","endRow","endCol","dryRun","changedPages","output"?,"outputFormat"?,"verify"?}`
+
+### `edit split-cell <파일> --table <번호> --row <행> --col <열> [옵션]` (upstream #5185/#5192 계열)
+병합된 셀을 원래 격자로 되돌린다. `--row`/`--col` 은 병합 범위 안 아무 좌표(앵커일
+필요 없음)를 가리켜도 된다. 병합되지 않은 셀을 지정하면 런타임 오류(exit 1)다.
+- `-o, --output <파일>` — 기본 `<입력명>_split.<입력과 같은 확장자>`
+- `--json` 봉투: `{"schemaVersion":"1.0","source","table","row","col","dryRun","changedPages","output"?,"outputFormat"?,"verify"?}`
+
+위 6개 명령 공통: `-o, --output`(기본 산출 형식은 입력 형식을 따름) · `--dry-run`(파일을
+쓰지 않고 표 좌표 검증만 수행) · `--verify`(저장 직후 재파싱 IR 자기검증, 차이 시
+exit 3) · `--json`. 코어 로직은 기존 `table_ops.rs` 네이티브 함수(`insert_table_row_native`
+등)를 그대로 재사용한다 — 새 편집 로직 없음.
+
 ### `edit insert-image <파일> --image <그림> [--page N] [--x N --y N] [--width N --height N] [-o <출력>] [--dry-run] [--verify] [--json]` (#3719 §6-5)
 도장·서명 같은 그림을 쪽 좌표에 붙인다 — 채워 넣은 서식에 직인을 얹는 실물 제출의 마지막 조각.
 - `--image <그림>` (필수) — 지원 형식은 `png`·`jpg`·`jpeg`·`bmp`·`tif`·`tiff` 뿐(확장자와 내용

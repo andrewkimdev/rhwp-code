@@ -1,12 +1,17 @@
 //! `edit set-table-props` / `edit set-section-def` / `edit move-table` /
-//! `edit transpose-table` / `edit set-column-widths` 계약 회귀 테스트 (upstream
-//! #5185/#5192 계열 선별 이식 — Tier 2 라운드).
+//! `edit transpose-table` / `edit set-column-widths` / `edit insert-row` /
+//! `edit insert-col` / `edit delete-row` / `edit delete-col` / `edit merge-cells` /
+//! `edit split-cell` 계약 회귀 테스트 (upstream #5185/#5192 계열 선별 이식 — Tier 2
+//! 라운드, "표 편집" 배치).
 //!
 //! 코어 로직은 기존 네이티브 함수(`set_table_properties_native`,
 //! `set_section_def_native`, `move_table_offset_native`,
-//! `transpose_table_cells_in_place_native`, `set_table_column_widths_native`)를 그대로
-//! 재사용하고 CLI 배선만 신규다. 이 테스트는 그 배선 — 인자 파싱, `--dry-run`(무변경),
-//! `--verify`(저장본 재파싱 IR 대조), 종료 코드(#2707 계약) — 을 검증한다.
+//! `transpose_table_cells_in_place_native`, `set_table_column_widths_native`,
+//! `insert_table_row_native`, `insert_table_column_native`,
+//! `delete_table_row_native`, `delete_table_column_native`,
+//! `merge_table_cells_native`, `split_table_cell_native`)를 그대로 재사용하고 CLI
+//! 배선만 신규다. 이 테스트는 그 배선 — 인자 파싱, `--dry-run`(무변경), `--verify`
+//! (저장본 재파싱 IR 대조), 종료 코드(#2707 계약) — 을 검증한다.
 #![cfg(not(target_arch = "wasm32"))]
 
 use std::path::{Path, PathBuf};
@@ -534,4 +539,211 @@ fn set_section_def_applies_hide_header_and_verify_passes() {
         "hideHeader가 토글돼야 한다"
     );
     assert_eq!(after_sd.column_spacing, 777, "columnSpacing이 반영돼야 한다");
+}
+
+// ---------------------------------------------------------------------------
+// insert-row / insert-col / delete-row / delete-col / merge-cells / split-cell
+// (upstream #5185/#5192 "표 편집" 배치)
+// ---------------------------------------------------------------------------
+
+fn table_dims(doc: &HwpDocument, table_no: usize) -> (u16, u16) {
+    let (sec, para, ctrl) = find_table(doc, table_no);
+    let Control::Table(t) = &doc.document().sections[sec].paragraphs[para].controls[ctrl] else {
+        panic!("표 컨트롤 아님");
+    };
+    (t.row_count, t.col_count)
+}
+
+#[test]
+fn insert_row_adds_one_row_and_verify_passes() {
+    let source_path = sample(PLAIN_TABLE);
+    let file = path_str(&source_path);
+    let out_path = tmp_dir().join("insrow.hwpx");
+    let out_str = path_str(&out_path);
+    let (before_rows, before_cols) = table_dims(&load(&source_path), 0);
+
+    let args = [
+        "edit", "insert-row", &file, "--table", "0", "--row", "1", "--below", "-o", &out_str,
+        "--verify", "--json",
+    ];
+    let out = run(&args);
+    assert_eq!(out.status.code(), Some(0), "{}", describe(&args, &out));
+    let env = json_of(&out);
+    assert_eq!(env["verify"]["identical"], true, "{env}");
+
+    let (after_rows, after_cols) = table_dims(&load(&out_path), 0);
+    assert_eq!(after_rows, before_rows + 1, "행이 하나 늘어야 한다");
+    assert_eq!(after_cols, before_cols, "열 수는 그대로여야 한다");
+}
+
+#[test]
+fn insert_col_adds_one_col_and_verify_passes() {
+    let source_path = sample(PLAIN_TABLE);
+    let file = path_str(&source_path);
+    let out_path = tmp_dir().join("inscol.hwpx");
+    let out_str = path_str(&out_path);
+    let (before_rows, before_cols) = table_dims(&load(&source_path), 0);
+
+    let args = [
+        "edit", "insert-col", &file, "--table", "0", "--col", "1", "--right", "-o", &out_str,
+        "--verify", "--json",
+    ];
+    let out = run(&args);
+    assert_eq!(out.status.code(), Some(0), "{}", describe(&args, &out));
+    let env = json_of(&out);
+    assert_eq!(env["verify"]["identical"], true, "{env}");
+
+    let (after_rows, after_cols) = table_dims(&load(&out_path), 0);
+    assert_eq!(after_rows, before_rows, "행 수는 그대로여야 한다");
+    assert_eq!(after_cols, before_cols + 1, "열이 하나 늘어야 한다");
+}
+
+#[test]
+fn delete_row_removes_one_row_and_verify_passes() {
+    let source_path = sample(PLAIN_TABLE);
+    let file = path_str(&source_path);
+    let out_path = tmp_dir().join("delrow.hwpx");
+    let out_str = path_str(&out_path);
+    let (before_rows, _) = table_dims(&load(&source_path), 0);
+
+    let args = [
+        "edit", "delete-row", &file, "--table", "0", "--row", "5", "-o", &out_str, "--verify",
+        "--json",
+    ];
+    let out = run(&args);
+    assert_eq!(out.status.code(), Some(0), "{}", describe(&args, &out));
+    let env = json_of(&out);
+    assert_eq!(env["verify"]["identical"], true, "{env}");
+
+    let (after_rows, _) = table_dims(&load(&out_path), 0);
+    assert_eq!(after_rows, before_rows - 1, "행이 하나 줄어야 한다");
+}
+
+#[test]
+fn delete_col_removes_one_col_and_verify_passes() {
+    let source_path = sample(PLAIN_TABLE);
+    let file = path_str(&source_path);
+    let out_path = tmp_dir().join("delcol.hwpx");
+    let out_str = path_str(&out_path);
+    let (_, before_cols) = table_dims(&load(&source_path), 0);
+
+    let args = [
+        "edit", "delete-col", &file, "--table", "0", "--col", "4", "-o", &out_str, "--verify",
+        "--json",
+    ];
+    let out = run(&args);
+    assert_eq!(out.status.code(), Some(0), "{}", describe(&args, &out));
+    let env = json_of(&out);
+    assert_eq!(env["verify"]["identical"], true, "{env}");
+
+    let (_, after_cols) = table_dims(&load(&out_path), 0);
+    assert_eq!(after_cols, before_cols - 1, "열이 하나 줄어야 한다");
+}
+
+#[test]
+fn merge_cells_then_split_cell_roundtrips_back_to_unmerged() {
+    let source_path = sample(PLAIN_TABLE);
+    let file = path_str(&source_path);
+    let merged_path = tmp_dir().join("merged_for_split.hwpx");
+    let merged_str = path_str(&merged_path);
+
+    let merge_args = [
+        "edit",
+        "merge-cells",
+        &file,
+        "--table",
+        "0",
+        "--row",
+        "1",
+        "--col",
+        "1",
+        "--end-row",
+        "2",
+        "--end-col",
+        "2",
+        "-o",
+        &merged_str,
+        "--verify",
+        "--json",
+    ];
+    let out = run(&merge_args);
+    assert_eq!(out.status.code(), Some(0), "{}", describe(&merge_args, &out));
+    let env = json_of(&out);
+    assert_eq!(env["verify"]["identical"], true, "{env}");
+
+    let merged = load(&merged_path);
+    let (sec, para, ctrl) = find_table(&merged, 0);
+    let Control::Table(t) = &merged.document().sections[sec].paragraphs[para].controls[ctrl]
+    else {
+        panic!("표 컨트롤 아님");
+    };
+    let anchor = t
+        .cells
+        .iter()
+        .find(|c| c.row == 1 && c.col == 1)
+        .expect("병합 앵커 셀");
+    assert_eq!(anchor.row_span, 2, "{merged_str:?} 행 병합 범위");
+    assert_eq!(anchor.col_span, 2, "{merged_str:?} 열 병합 범위");
+
+    let split_path = tmp_dir().join("split_back.hwpx");
+    let split_str = path_str(&split_path);
+    let split_args = [
+        "edit",
+        "split-cell",
+        &merged_str,
+        "--table",
+        "0",
+        "--row",
+        "1",
+        "--col",
+        "1",
+        "-o",
+        &split_str,
+        "--verify",
+        "--json",
+    ];
+    let out = run(&split_args);
+    assert_eq!(out.status.code(), Some(0), "{}", describe(&split_args, &out));
+    let env = json_of(&out);
+    assert_eq!(env["verify"]["identical"], true, "{env}");
+
+    let split = load(&split_path);
+    let (sec2, para2, ctrl2) = find_table(&split, 0);
+    let Control::Table(t2) = &split.document().sections[sec2].paragraphs[para2].controls[ctrl2]
+    else {
+        panic!("표 컨트롤 아님");
+    };
+    assert!(
+        t2.cells.iter().all(|c| c.row_span == 1 && c.col_span == 1),
+        "분할 후에는 병합 셀이 남아 있으면 안 된다"
+    );
+}
+
+#[test]
+fn split_cell_rejects_unmerged_cell() {
+    let file = path_str(&sample(PLAIN_TABLE));
+    let args = [
+        "edit", "split-cell", &file, "--table", "0", "--row", "1", "--col", "1", "--json",
+    ];
+    let out = run(&args);
+    assert_eq!(out.status.code(), Some(1), "{}", describe(&args, &out));
+}
+
+#[test]
+fn table_edit_batch_rejects_missing_table_index() {
+    let file = path_str(&sample(PLAIN_TABLE));
+    for args in [
+        vec!["edit", "insert-row", &file, "--table", "999", "--row", "0", "--dry-run"],
+        vec!["edit", "insert-col", &file, "--table", "999", "--col", "0", "--dry-run"],
+        vec!["edit", "delete-row", &file, "--table", "999", "--row", "0", "--dry-run"],
+        vec!["edit", "delete-col", &file, "--table", "999", "--col", "0", "--dry-run"],
+        vec![
+            "edit", "merge-cells", &file, "--table", "999", "--row", "0", "--col", "0",
+            "--end-row", "1", "--end-col", "1", "--dry-run",
+        ],
+        vec!["edit", "split-cell", &file, "--table", "999", "--row", "0", "--col", "0", "--dry-run"],
+    ] {
+        let out = run(&args);
+        assert_eq!(out.status.code(), Some(1), "{}", describe(&args, &out));
+    }
 }

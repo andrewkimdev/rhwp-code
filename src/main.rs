@@ -428,7 +428,7 @@ fn main() {
 /// MCP 서버 저자(및 함수 호출 클라이언트)가 도구 이름·설명·입력 JSON Schema·실행 배선을
 /// 손으로 옮겨 적지 않게 한다. `--json` 계약을 가진 명령이 늘면
 /// `capabilities_mcp_covers_every_json_command` 가 누락을 잡는다.
-const EDIT_SUBCOMMANDS: [(&str, &str); 11] = [
+const EDIT_SUBCOMMANDS: [(&str, &str); 17] = [
     (
         "fill-fields",
         "누름틀(필드) 값 채우기 — --data 이름=값, 같은 이름은 [k] 순번 지목",
@@ -458,6 +458,15 @@ const EDIT_SUBCOMMANDS: [(&str, &str); 11] = [
         "set-column-widths",
         "표 열 폭 절대값 설정 — --table/--widths (쉼표 구분 HWPUNIT, 열 수와 일치)",
     ),
+    ("insert-row", "표 행 삽입 — --table/--row [--below]"),
+    ("insert-col", "표 열 삽입 — --table/--col [--right]"),
+    ("delete-row", "표 행 삭제 — --table/--row"),
+    ("delete-col", "표 열 삭제 — --table/--col"),
+    (
+        "merge-cells",
+        "표 셀 병합 — --table/--row/--col/--end-row/--end-col",
+    ),
+    ("split-cell", "병합 셀 분할 — --table/--row/--col"),
     (
         "insert-image",
         "도장·서명 그림 삽입 — --image/--page/--x/--y (HWPUNIT)",

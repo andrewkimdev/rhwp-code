@@ -156,6 +156,12 @@ pub(crate) fn mcp_tool_definitions() -> Vec<serde_json::Value> {
                 | "hwp_move_table"
                 | "hwp_transpose_table"
                 | "hwp_set_column_widths"
+                | "hwp_insert_table_row"
+                | "hwp_insert_table_column"
+                | "hwp_delete_table_row"
+                | "hwp_delete_table_column"
+                | "hwp_merge_table_cells"
+                | "hwp_split_table_cell"
         )
     }
 
@@ -1209,6 +1215,160 @@ pub(crate) fn mcp_tool_definitions() -> Vec<serde_json::Value> {
                 { "when": "verify", "args": ["--verify"] }
             ]),
             &["schemaVersion", "source", "table", "widths", "colCount", "tableWidth", "dryRun", "changedPages", "output", "outputFormat", "verify"],
+        ),
+        // [upstream #5185/#5192 계열 선별 이식, "표 편집" 배치] 코어는 기존
+        // table_ops.rs 네이티브 함수 재사용, CLI 배선만 신규.
+        tool_with_optional_args(
+            "hwp_insert_table_row",
+            "표에 행을 삽입해 새 문서를 만든다. below 를 생략하면 지정 행 위에 삽입한다. 산출물은 입력 형식을 따른다(HWPX 입력 → HWPX 산출).",
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "입력 HWP/HWPX 문서 경로" },
+                    "table": { "type": "integer", "minimum": 0, "description": "본문 최상위 표 번호 (export-tables 의 index)" },
+                    "row": { "type": "integer", "minimum": 0, "description": "기준 행 (0부터)" },
+                    "below": { "type": "boolean", "description": "true 면 기준 행 아래에 삽입. 생략하면 위에 삽입" },
+                    "output": { "type": "string", "description": "출력 파일 경로. 생략하면 <입력명>_row.hwp (HWPX 입력이면 _row.hwpx)" },
+                    "dryRun": { "type": "boolean", "description": "true 면 파일을 쓰지 않고 표 좌표 검증만 수행" },
+                    "verify": { "type": "boolean", "description": "저장 직후 재파싱 IR 자기검증 — 차이가 있으면 exit 3" }
+                },
+                "required": ["path", "table", "row"],
+            }),
+            "edit",
+            serde_json::json!(["edit", "insert-row", "{path}", "--table", "{table}", "--row", "{row}", "--json"]),
+            serde_json::json!([
+                { "when": "below", "args": ["--below"] },
+                { "when": "output", "args": ["-o", "{output}"] },
+                { "when": "dryRun", "args": ["--dry-run"] },
+                { "when": "verify", "args": ["--verify"] }
+            ]),
+            &["schemaVersion", "source", "table", "row", "below", "dryRun", "changedPages", "output", "outputFormat", "verify"],
+        ),
+        tool_with_optional_args(
+            "hwp_insert_table_column",
+            "표에 열을 삽입해 새 문서를 만든다. right 를 생략하면 지정 열 왼쪽에 삽입한다. 산출물은 입력 형식을 따른다(HWPX 입력 → HWPX 산출).",
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "입력 HWP/HWPX 문서 경로" },
+                    "table": { "type": "integer", "minimum": 0, "description": "본문 최상위 표 번호 (export-tables 의 index)" },
+                    "col": { "type": "integer", "minimum": 0, "description": "기준 열 (0부터)" },
+                    "right": { "type": "boolean", "description": "true 면 기준 열 오른쪽에 삽입. 생략하면 왼쪽에 삽입" },
+                    "output": { "type": "string", "description": "출력 파일 경로. 생략하면 <입력명>_col.hwp (HWPX 입력이면 _col.hwpx)" },
+                    "dryRun": { "type": "boolean", "description": "true 면 파일을 쓰지 않고 표 좌표 검증만 수행" },
+                    "verify": { "type": "boolean", "description": "저장 직후 재파싱 IR 자기검증 — 차이가 있으면 exit 3" }
+                },
+                "required": ["path", "table", "col"],
+            }),
+            "edit",
+            serde_json::json!(["edit", "insert-col", "{path}", "--table", "{table}", "--col", "{col}", "--json"]),
+            serde_json::json!([
+                { "when": "right", "args": ["--right"] },
+                { "when": "output", "args": ["-o", "{output}"] },
+                { "when": "dryRun", "args": ["--dry-run"] },
+                { "when": "verify", "args": ["--verify"] }
+            ]),
+            &["schemaVersion", "source", "table", "col", "right", "dryRun", "changedPages", "output", "outputFormat", "verify"],
+        ),
+        tool_with_optional_args(
+            "hwp_delete_table_row",
+            "표의 행을 삭제해 새 문서를 만든다. 산출물은 입력 형식을 따른다(HWPX 입력 → HWPX 산출).",
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "입력 HWP/HWPX 문서 경로" },
+                    "table": { "type": "integer", "minimum": 0, "description": "본문 최상위 표 번호 (export-tables 의 index)" },
+                    "row": { "type": "integer", "minimum": 0, "description": "삭제할 행 (0부터)" },
+                    "output": { "type": "string", "description": "출력 파일 경로. 생략하면 <입력명>_delrow.hwp (HWPX 입력이면 _delrow.hwpx)" },
+                    "dryRun": { "type": "boolean", "description": "true 면 파일을 쓰지 않고 표 좌표 검증만 수행" },
+                    "verify": { "type": "boolean", "description": "저장 직후 재파싱 IR 자기검증 — 차이가 있으면 exit 3" }
+                },
+                "required": ["path", "table", "row"],
+            }),
+            "edit",
+            serde_json::json!(["edit", "delete-row", "{path}", "--table", "{table}", "--row", "{row}", "--json"]),
+            serde_json::json!([
+                { "when": "output", "args": ["-o", "{output}"] },
+                { "when": "dryRun", "args": ["--dry-run"] },
+                { "when": "verify", "args": ["--verify"] }
+            ]),
+            &["schemaVersion", "source", "table", "row", "dryRun", "changedPages", "output", "outputFormat", "verify"],
+        ),
+        tool_with_optional_args(
+            "hwp_delete_table_column",
+            "표의 열을 삭제해 새 문서를 만든다. 산출물은 입력 형식을 따른다(HWPX 입력 → HWPX 산출).",
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "입력 HWP/HWPX 문서 경로" },
+                    "table": { "type": "integer", "minimum": 0, "description": "본문 최상위 표 번호 (export-tables 의 index)" },
+                    "col": { "type": "integer", "minimum": 0, "description": "삭제할 열 (0부터)" },
+                    "output": { "type": "string", "description": "출력 파일 경로. 생략하면 <입력명>_delcol.hwp (HWPX 입력이면 _delcol.hwpx)" },
+                    "dryRun": { "type": "boolean", "description": "true 면 파일을 쓰지 않고 표 좌표 검증만 수행" },
+                    "verify": { "type": "boolean", "description": "저장 직후 재파싱 IR 자기검증 — 차이가 있으면 exit 3" }
+                },
+                "required": ["path", "table", "col"],
+            }),
+            "edit",
+            serde_json::json!(["edit", "delete-col", "{path}", "--table", "{table}", "--col", "{col}", "--json"]),
+            serde_json::json!([
+                { "when": "output", "args": ["-o", "{output}"] },
+                { "when": "dryRun", "args": ["--dry-run"] },
+                { "when": "verify", "args": ["--verify"] }
+            ]),
+            &["schemaVersion", "source", "table", "col", "dryRun", "changedPages", "output", "outputFormat", "verify"],
+        ),
+        tool_with_optional_args(
+            "hwp_merge_table_cells",
+            "표의 (row,col)-(endRow,endCol) 사각 범위 셀을 병합해 새 문서를 만든다. 산출물은 입력 형식을 따른다(HWPX 입력 → HWPX 산출).",
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "입력 HWP/HWPX 문서 경로" },
+                    "table": { "type": "integer", "minimum": 0, "description": "본문 최상위 표 번호 (export-tables 의 index)" },
+                    "row": { "type": "integer", "minimum": 0, "description": "시작 행 (0부터)" },
+                    "col": { "type": "integer", "minimum": 0, "description": "시작 열 (0부터)" },
+                    "endRow": { "type": "integer", "minimum": 0, "description": "끝 행 (0부터, 포함)" },
+                    "endCol": { "type": "integer", "minimum": 0, "description": "끝 열 (0부터, 포함)" },
+                    "output": { "type": "string", "description": "출력 파일 경로. 생략하면 <입력명>_merge.hwp (HWPX 입력이면 _merge.hwpx)" },
+                    "dryRun": { "type": "boolean", "description": "true 면 파일을 쓰지 않고 표 좌표 검증만 수행" },
+                    "verify": { "type": "boolean", "description": "저장 직후 재파싱 IR 자기검증 — 차이가 있으면 exit 3" }
+                },
+                "required": ["path", "table", "row", "col", "endRow", "endCol"],
+            }),
+            "edit",
+            serde_json::json!(["edit", "merge-cells", "{path}", "--table", "{table}", "--row", "{row}", "--col", "{col}", "--end-row", "{endRow}", "--end-col", "{endCol}", "--json"]),
+            serde_json::json!([
+                { "when": "output", "args": ["-o", "{output}"] },
+                { "when": "dryRun", "args": ["--dry-run"] },
+                { "when": "verify", "args": ["--verify"] }
+            ]),
+            &["schemaVersion", "source", "table", "row", "col", "endRow", "endCol", "dryRun", "changedPages", "output", "outputFormat", "verify"],
+        ),
+        tool_with_optional_args(
+            "hwp_split_table_cell",
+            "병합된 셀을 원래 격자로 되돌려 새 문서를 만든다. row/col 은 병합 범위 안 아무 좌표(앵커일 필요 없음)를 가리켜도 된다. 산출물은 입력 형식을 따른다(HWPX 입력 → HWPX 산출).",
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "입력 HWP/HWPX 문서 경로" },
+                    "table": { "type": "integer", "minimum": 0, "description": "본문 최상위 표 번호 (export-tables 의 index)" },
+                    "row": { "type": "integer", "minimum": 0, "description": "병합 범위 안 행 (0부터)" },
+                    "col": { "type": "integer", "minimum": 0, "description": "병합 범위 안 열 (0부터)" },
+                    "output": { "type": "string", "description": "출력 파일 경로. 생략하면 <입력명>_split.hwp (HWPX 입력이면 _split.hwpx)" },
+                    "dryRun": { "type": "boolean", "description": "true 면 파일을 쓰지 않고 표 좌표 검증만 수행" },
+                    "verify": { "type": "boolean", "description": "저장 직후 재파싱 IR 자기검증 — 차이가 있으면 exit 3" }
+                },
+                "required": ["path", "table", "row", "col"],
+            }),
+            "edit",
+            serde_json::json!(["edit", "split-cell", "{path}", "--table", "{table}", "--row", "{row}", "--col", "{col}", "--json"]),
+            serde_json::json!([
+                { "when": "output", "args": ["-o", "{output}"] },
+                { "when": "dryRun", "args": ["--dry-run"] },
+                { "when": "verify", "args": ["--verify"] }
+            ]),
+            &["schemaVersion", "source", "table", "row", "col", "dryRun", "changedPages", "output", "outputFormat", "verify"],
         ),
         tool_with_optional_args(
             "hwp_export_ir_schema",

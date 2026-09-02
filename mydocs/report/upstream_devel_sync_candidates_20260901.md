@@ -170,6 +170,12 @@ diff를 `git show`로 읽어 인자 이름·의미가 정확히 대응하는지,
 
 **다음 라운드 착수 순서 제안**(문서의 착수 순서 원칙 그대로): 43개 모두 저위험
 와이어링이므로 순서보다 배치 크기가 관건이다 — 한 라운드에 5~8개씩 묶어(관련
-영역별로: 표 편집 6종 → 각주/미주 7종 → 머리말/꼬리말 9종 → 서식/스타일 6종 →
+영역별로: ~~표 편집 6종~~ → 각주/미주 7종 → 머리말/꼬리말 9종 → 서식/스타일 6종 →
 책갈피/구조 5종 → 문단 기본 6종 → 나머지) PR을 나누는 편이 한 PR에 43개를 몰아
 리뷰 난이도를 키우는 것보다 낫다.
+
+**진행(2026-09-02)**: "표 편집 6종" 배치(`insert-row`/`insert-col`/`delete-row`/
+`delete-col`/`merge-cells`/`split-cell`) 완료 — `insert_table_row_native`/
+`insert_table_column_native`/`delete_table_row_native`/`delete_table_column_native`/
+`merge_table_cells_native`/`split_table_cell_native`에 CLI 배선만 추가했다. 나머지
+37개(각주/미주 7종부터)는 여전히 다음 라운드 대상.
