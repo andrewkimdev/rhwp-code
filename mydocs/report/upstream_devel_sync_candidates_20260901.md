@@ -110,3 +110,62 @@
 작업이다. 위 Tier 1~2의 upstream 커밋을 실제로 이식할 때는, 이 104개 커밋이 건드린
 동일 파일(특히 `wasm_api`, `renderer/table_layout`, `parser/hwpx/section`)과의 구조적
 충돌 가능성을 별도로 확인해야 한다.
+
+## 8. 부록 — 편집 명령 13건/29건(#5185/#5192) 나머지 43개 개별 트리아지 (2026-09-02)
+
+4절의 "편집 명령 13건/29건 통합" 항목을 재조사했다. 먼저 정정: 이미 이식한
+`set-table-props`/`set-section-def`/`move-table`/`transpose-table`/`set-column-widths`
+5건은 **이 두 커밋(`ba097d6bf`/`e0851908b`)에 실제로는 포함되어 있지 않다** — 같은
+시기의 별도 커밋(`4909e3922`, `0e908e344` 등)이었다. 따라서 `ba097d6bf`+`e0851908b`가
+도입한 실제 43개 명령은 5건과 전혀 겹치지 않으며, 이번 부록이 그 43개 전부를 다룬다.
+
+**방법**: 상용구(--table/--row/--col 류 인자, `-o`/`--dry-run`/`--verify`/`--json`)를
+갖는 얇은 CLI 배선인지 판정하기 위해, 각 명령이 부를 만한 코어 네이티브 함수가
+rhwp-code에 이미 있는지 이름 패턴으로 스윕했다(예: `insert-table-row` →
+`insert_table_row_native`).
+
+**결과: 43개 전부 rhwp-code에 동형 네이티브 함수가 이미 있다** — 신규 IR/편집
+로직이 필요한 항목이 하나도 없다. `set-table-props`/`set-section-def`와 정확히 같은
+패턴: rhwp-code와 upstream이 공유했던 성숙한 코어 위에 upstream만 나중에 CLI/MCP
+배선을 추가한 것이다.
+
+| upstream 명령 | 대응 네이티브 함수(rhwp-code, 위치 생략) |
+|---|---|
+| `insert-text`/`delete-text` | `insert_text_native`/`delete_text_native` |
+| `insert-paragraph`/`delete-paragraph`/`merge-paragraph` | `insert_paragraph_native`/`delete_paragraph_native`/`merge_paragraph_native` |
+| `insert-page-break`/`insert-column-break` | `insert_page_break_native`/`insert_column_break_native` |
+| `insert-row`/`insert-col`/`delete-row`/`delete-col` (표) | `insert_table_row_native`/`insert_table_column_native`/`delete_table_row_native`/`delete_table_column_native` |
+| `merge-cells`/`split-cell` | `merge_table_cells_native`/`split_table_cell_native` |
+| `insert-footnote`/`insert-endnote`/`delete-footnote` | `insert_footnote_native`/`insert_endnote_native`/`delete_footnote_native` |
+| `add-bookmark`/`delete-bookmark`/`rename-bookmark` | `add_bookmark_native`/`delete_bookmark_native`/`rename_bookmark_native` |
+| `delete-table` | `delete_table_control_native` |
+| `insert-header-footer` | `create_header_footer_native` |
+| `insert-header-footer-text`/`delete-header-footer` | `insert_text_in_header_footer_native`/(삭제 경로 별도 확인 필요) |
+| `set-header-footer-text` | `insert_text_in_header_footer_native`+`delete_text_in_header_footer_native` 조합으로 추정(전용 setter는 미확인) |
+| `set-hf-picture` | `set_header_footer_picture_properties`(이미 `pub`, wasm_bindgen 래퍼만 있고 `_native` 접미 없음 — 이름 예외) |
+| `apply-hf-template` | `apply_hf_template_native` |
+| `delete-hf-text` | `delete_text_in_header_footer_native` |
+| `insert-field-in-hf` | `insert_field_in_hf_native` |
+| `split-paragraph-in-hf`/`merge-paragraph-in-hf` | `split_paragraph_in_header_footer_native`/`merge_paragraph_in_header_footer_native` |
+| `toggle-hide-hf` | `toggle_hide_header_footer_native` |
+| `apply-char-format`/`apply-para-format`/`apply-style` | `apply_char_format_native`/`apply_para_format_native`/`apply_style_native` |
+| `split-paragraph` | `split_paragraph_native` |
+| `set-numbering-restart` | `set_numbering_restart_native` |
+| `apply-para-format-in-hf` | `apply_para_format_in_hf_native` |
+| `apply-endnote-shape` | `apply_endnote_shape_native` |
+| `insert-footnote-text` | `insert_text_in_footnote_native` |
+| `delete-text-in-footnote`/`split-paragraph-in-footnote`/`merge-paragraph-in-footnote`/`apply-para-format-in-footnote` | 이름 그대로 대응하는 `*_in_footnote_native` 4종 |
+
+**주의**: 이 표는 "함수 이름이 존재한다"까지만 확인한 1차 스윕이다. 실제 CLI 배선
+착수 전에는 `set-table-props`/`set-section-def` 때처럼 **각 명령마다 upstream 원
+diff를 `git show`로 읽어 인자 이름·의미가 정확히 대응하는지, 그리고 rhwp-code
+쪽 함수의 시그니처(특히 좌표계 — 문단/컨트롤 인덱스 vs export-tables 격자 좌표)가
+같은지** 재확인해야 한다(문서의 "후보 커밋 선확인 필수 규칙"). 특히
+`insert-header-footer-text`/`set-header-footer-text`/`delete-header-footer`
+3건은 이번 스윕에서 정확한 1:1 대응을 못 찾아 착수 전 별도 확인이 필요하다.
+
+**다음 라운드 착수 순서 제안**(문서의 착수 순서 원칙 그대로): 43개 모두 저위험
+와이어링이므로 순서보다 배치 크기가 관건이다 — 한 라운드에 5~8개씩 묶어(관련
+영역별로: 표 편집 6종 → 각주/미주 7종 → 머리말/꼬리말 9종 → 서식/스타일 6종 →
+책갈피/구조 5종 → 문단 기본 6종 → 나머지) PR을 나누는 편이 한 PR에 43개를 몰아
+리뷰 난이도를 키우는 것보다 낫다.
