@@ -85,7 +85,7 @@ export class FieldSuggestSection {
    * 읽는다(`suggestBlockNameFromCurrentCell`과 같은 전례). 두 조건이 함께
    * 게이트가 된다:
    *
-   * 1. **마커 게이트** — 역할 마커(#HEADER/#FOOTER/#PAGENO/#REPEAT-*:)가 지정된
+   * 1. **마커 게이트** — 역할 마커(#BLOCK/#PAGENO/#REPEAT-*:)가 지정된
    *    표에서만 만든다. 마커 authoring("태그 지정")의 다음 단계다 — 이
    *    패널의 워크플로(표에 역할을 선언 → 그 표의 누름틀을 채운다)와 같은
    *    순서. 반복 블록(#REPEAT-*)도 예외가 아니다: 검색 범위가 "선택된 행"이므로
@@ -110,7 +110,7 @@ export class FieldSuggestSection {
     const marker = readTableMarkerText(this.deps.wasm, sec, ppi, ci);
     if (!isTemplateTableMarkerText(marker)) {
       this.messageEl.textContent =
-        '역할 마커(#HEADER/#FOOTER/#PAGENO/#REPEAT-*)가 지정된 표에서만 누름틀을 만듭니다. 위 "태그 지정"으로 먼저 역할을 지정하세요.';
+        '역할 마커(#BLOCK/#PAGENO/#REPEAT-*)가 지정된 표에서만 누름틀을 만듭니다. 위 "태그 지정"으로 먼저 역할을 지정하세요.';
       return;
     }
 

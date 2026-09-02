@@ -2,7 +2,9 @@
  * hwpx-template-engine 표 역할 마커 문법(순수 텍스트 빌더).
  *
  * 표 마커 텍스트는 hwpx-template-engine 이 이미 읽는 그대로의 평문 텍스트
- * (`#HEADER`/`#REPEAT-BODY:<name>` 등)이다. 이 모듈은 "무엇을 쓸지"만 결정하고
+ * (`#BLOCK`/`#REPEAT-BODY:<name>` 등)이다. 이 모듈은 새 마커를 authoring할 때 항상
+ * 정식 표기 `#BLOCK`만 쓴다 — 폐지된 동의어 `#HEADER`/`#FOOTER`는 엔진이 기존 문서를
+ * 읽을 때만 인식한다. 이 모듈은 "무엇을 쓸지"만 결정하고
  * 실제 authoring 규칙(TITLE→HEADER→BODY→FOOTER 순서, `-NESTED:` 부모 존재
  * 등)의 최종 권위는 여전히 엔진의 `TableRoleMarkerLintValidator`다 — 여기서는
  * 명백히 잘못된 입력만 막는다.
@@ -12,7 +14,7 @@
  * 의존 방향을 오염시키지 않고, mutation-routing-guard 원장과도 무관하다.
  */
 export type TemplateTableRole =
-  | 'HEADER' | 'FOOTER' | 'PAGENO'
+  | 'BLOCK' | 'PAGENO'
   | 'REPEAT_TITLE' | 'REPEAT_HEADER' | 'REPEAT_BODY' | 'REPEAT_FOOTER'
   | 'REPEAT_TITLE_NESTED' | 'REPEAT_HEADER_NESTED' | 'REPEAT_BODY_NESTED' | 'REPEAT_FOOTER_NESTED';
 
@@ -52,8 +54,7 @@ function requireNestedPair(nestedParent: string | undefined, blockName: string |
 export function buildTableRoleMarkerText(params: TagSelectionParams): string {
   const { role, blockName, nestedParent } = params;
   switch (role) {
-    case 'HEADER': return '#HEADER';
-    case 'FOOTER': return '#FOOTER';
+    case 'BLOCK': return '#BLOCK';
     case 'PAGENO': return PAGENO_MARKER_TEXT;
     case 'REPEAT_TITLE': return `#REPEAT-TITLE:${requireBlockName(blockName, role)}`;
     case 'REPEAT_HEADER': return `#REPEAT-HEADER:${requireBlockName(blockName, role)}`;

@@ -2,7 +2,7 @@
  * hwpx-template-engine 마커 authoring 을 위한 읽기 전용 표 개요(outline) 헬퍼.
  *
  * 문서에 존재하는 최상위(top-level) 표를 문서 순서대로 나열하고, 각 표의 첫 행
- * 첫 셀에 이미 적혀 있는 역할 마커 텍스트(`#HEADER`/`#REPEAT-BODY:<name>` 등,
+ * 첫 셀에 이미 적혀 있는 역할 마커 텍스트(`#BLOCK`/`#REPEAT-BODY:<name>` 등,
  * 아직 없으면 null)를 읽어 온다. 여기 있는 함수는 전부 조회 전용이다 —
  * `mutation-method-registry.ts`의 뮤테이터 원장에 걸리지 않으므로 `src/core`에
  * 둬도 안전하다. 실제 마커를 쓰거나 표를 나누는 로직은 `src/command/commands/template.ts`에

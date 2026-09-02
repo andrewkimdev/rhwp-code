@@ -1,7 +1,7 @@
 /**
  * 템플릿 패널의 "역할 선택" 폼(panel.ts에서 분리) — 라디오 그룹 2개("일반"/
  * "반복 블록") + 블록명 입력 + 중첩 체크박스/부모 블록 select, 그리고 패널 안
- * 숫자 단축키(1~7, N).
+ * 숫자 단축키(1~6, N).
  *
  * 역할 선택은 라디오 그룹 2개("일반"/"반복 블록") + 중첩 체크박스 1개로
  * 구성한다(11개 항목을 한 줄로 나열하던 select 대신) — `-NESTED:` 4종은 실제로는
@@ -17,7 +17,7 @@
  * 한 줄로 압축한 설명이 붙는다 — 라디오 `label`의 `title`(hover)과, 선택된 역할이
  * 바뀔 때마다 갱신되는 `roleDescEl`(항상 보이는 캡션) 두 군데에 쓴다.
  *
- * 역할 라디오 1~7과 중첩 체크박스(N)에는 숫자/문자 키보드 단축키가 있다 —
+ * 역할 라디오 1~6과 중첩 체크박스(N)에는 숫자/문자 키보드 단축키가 있다 —
  * `#template-panel` 컨테이너의 `keydown`에서 처리하며(전역 단축키가 아니다),
  * 블록명 입력/부모 블록 select에 포커스가 있을 때는 숫자를 그대로 입력해야 하므로
  * 그 두 컨트롤에 포커스가 있으면 무시한다.
@@ -28,7 +28,7 @@ import type { TemplateTableRole } from '@/core/template-marker';
 import { findCellIndexForRowCol } from '@/core/table-outline';
 
 interface GeneralRoleOption {
-  value: 'HEADER' | 'FOOTER' | 'PAGENO';
+  value: 'BLOCK' | 'PAGENO';
   label: string;
   description: string;
 }
@@ -41,8 +41,7 @@ interface RepeatRoleOption {
 }
 
 const GENERAL_ROLES: readonly GeneralRoleOption[] = [
-  { value: 'HEADER', label: '#HEADER', description: '표의 역할을 문서화만 합니다 — 렌더링에는 영향을 주지 않습니다.' },
-  { value: 'FOOTER', label: '#FOOTER', description: '표의 역할을 문서화만 합니다 — 렌더링에는 영향을 주지 않습니다.' },
+  { value: 'BLOCK', label: '#BLOCK', description: '표의 역할을 문서화만 합니다 — 렌더링에는 영향을 주지 않습니다.' },
   { value: 'PAGENO', label: '#PAGENO', description: '표 전체를 반복 꼬리말로 승격해 모든 페이지에 쪽 번호를 표시합니다. 문서당 최대 1개.' },
 ];
 

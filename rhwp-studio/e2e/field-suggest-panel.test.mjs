@@ -7,10 +7,10 @@
 // 후보는 건너뛰고 메시지로 보고하는지 검증한다(field-name-suggest.test.ts의
 // 순수 로직 단위 테스트를 실제 UI+wasm 경로로 재확인 — #template-panel 첫 e2e).
 //
-// 생성은 두 조건이 게이트다 — ① 역할 마커(#HEADER/#FOOTER/#PAGENO/#REPEAT-*)
+// 생성은 두 조건이 게이트다 — ① 역할 마커(#BLOCK/#PAGENO/#REPEAT-*)
 // 가 지정된 표에서만, ② 검색 범위는 선택된 행(셀 선택 모드) 또는 커서 행만.
 // 그래서 각 TC는 먼저 마커 없는 표에서 게이트 메시지가 나오는지 확인하고(TC-1b),
-// 전체 행을 선택해 #HEADER 태깅한 뒤(TC-1c — 태그 지정은 선택 행만 표로 분리하므로
+// 전체 행을 선택해 #BLOCK 태깅한 뒤(TC-1c — 태그 지정은 선택 행만 표로 분리하므로
 // 표 전체에 마커를 붙이려면 전체 범위 선택이 필요), 마커 행 다음 행부터 끝까지
 // 다시 선택해 누름틀을 만든다.
 //
@@ -103,8 +103,8 @@ runTest('누름틀 만들기 — 행 선택 시 즉시 생성/skip', async ({ pa
   assert(gateState.fieldCount === 0, '마커 없는 표에서는 필드가 생성되지 않는다');
   await screenshot(page, 'field-suggest-01b-gated');
 
-  // ── TC-1c: 전체 행 선택 → #HEADER 태깅 → 내용 행 재선택 ──────
-  setTestCase('TC-1c: #HEADER 태깅');
+  // ── TC-1c: 전체 행 선택 → #BLOCK 태깅 → 내용 행 재선택 ──────
+  setTestCase('TC-1c: #BLOCK 태깅');
   await page.evaluate(({ ppi, ci }) => {
     const ih = window.__inputHandler;
     // 태그 지정(template:tag-selection)은 선택된 행만 표로 분리해 마커를 붙인다 —
@@ -112,7 +112,7 @@ runTest('누름틀 만들기 — 행 선택 시 즉시 생성/skip', async ({ pa
     ih.cursor.enterCellSelectionMode();
     ih.cursor.expandCellSelection(5, 0); // 6행 전체 (rows 0~5)
     window.__eventBus?.emit('command-state-changed');
-    document.querySelector('#template-panel .tp-actions .tp-btn--primary').click(); // "태그 지정" (기본 역할 #HEADER)
+    document.querySelector('#template-panel .tp-actions .tp-btn--primary').click(); // "태그 지정" (기본 역할 #BLOCK)
   }, { ppi: tbl.ppi, ci: tbl.ci });
   await sleep(page, 300);
   await screenshot(page, 'field-suggest-01c-tagged');
@@ -152,7 +152,7 @@ runTest('누름틀 만들기 — 행 선택 시 즉시 생성/skip', async ({ pa
     };
   }, { ppi: tbl.ppi, ci: tbl.ci });
   assert(taggedMarker.rowCount === 7, `마커 행 삽입으로 7행: ${taggedMarker.rowCount}행`);
-  assert(taggedMarker.marker === '#HEADER', `첫 셀에 #HEADER 마커: ${taggedMarker.marker}`);
+  assert(taggedMarker.marker === '#BLOCK', `첫 셀에 #BLOCK 마커: ${taggedMarker.marker}`);
   assert(
     taggedMarker.hint.includes('2~7'),
     `hint가 선택된 행(2~7)을 표시한다: ${taggedMarker.hint}`,
@@ -292,9 +292,9 @@ runTest('누름틀 만들기 — 행 선택 시 즉시 생성/skip', async ({ pa
   assert(tbl2.ci !== undefined, `표 생성 및 커서 진입 완료 (ppi=${tbl2.ppi}, ci=${tbl2.ci})`);
   await sleep(page, 300);
 
-  // TC-1과 같은 게이트 흐름 — 전체 행(4행) 선택 → #HEADER 태깅 → 마커 행 다음
+  // TC-1과 같은 게이트 흐름 — 전체 행(4행) 선택 → #BLOCK 태깅 → 마커 행 다음
   // (row 1)부터 끝(row 4)까지 재선택.
-  setTestCase('TC-5b: #HEADER 태깅');
+  setTestCase('TC-5b: #BLOCK 태깅');
   await page.evaluate(({ ppi, ci }) => {
     const ih = window.__inputHandler;
     ih.cursor.enterCellSelectionMode();

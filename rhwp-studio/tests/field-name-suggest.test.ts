@@ -425,7 +425,8 @@ test('isRepeatTaggedTable: #REPEAT-* 계열 마커(및 -NESTED)만 참으로 판
   assert.equal(isRepeatTaggedTable(null), false);
 });
 
-test('isTemplateTableMarkerText: 게이트 어휘(#HEADER/#FOOTER/#PAGENO/#REPEAT-*)만 참으로 판정한다', () => {
+test('isTemplateTableMarkerText: 게이트 어휘(#BLOCK/#PAGENO/#REPEAT-*, 및 폐지된 동의어 #HEADER/#FOOTER)만 참으로 판정한다', () => {
+  assert.equal(isTemplateTableMarkerText('#BLOCK'), true);
   assert.equal(isTemplateTableMarkerText('#HEADER'), true);
   assert.equal(isTemplateTableMarkerText('#FOOTER'), true);
   assert.equal(isTemplateTableMarkerText('#PAGENO'), true);
@@ -435,6 +436,7 @@ test('isTemplateTableMarkerText: 게이트 어휘(#HEADER/#FOOTER/#PAGENO/#REPEA
   assert.equal(isTemplateTableMarkerText('평범한 표 제목'), false);
   assert.equal(isTemplateTableMarkerText(''), false);
   // 어휘 밖 '#...' — 첫 셀 텍스트가 우연히 #으로 시작하는 원본 내용은 게이트를 열지 않는다.
+  assert.equal(isTemplateTableMarkerText('#BLOCK2'), false);
   assert.equal(isTemplateTableMarkerText('#HEADER2'), false);
   assert.equal(isTemplateTableMarkerText('#NOTE'), false);
 });

@@ -13,7 +13,8 @@ rhwp-studio `#template-panel`의 "누름틀 만들기" 그룹(`src/core/field-na
 "어떤 모양을 어떻게 이름으로 바꾸는가"를 순서 있는 규칙 목록으로 유지한다.
 
 제안 생성은 **게이트가 붙어 있다**(아래 "마커 게이트와 검색 범위" 참고): 역할 마커
-(`#HEADER`/`#FOOTER`/`#PAGENO`/`#REPEAT-*:`)가 지정된 표에서만 제안을 만들고, 검색
+(`#BLOCK`/`#PAGENO`/`#REPEAT-*:`, 그리고 `#BLOCK`의 폐지된 동의어 `#HEADER`/`#FOOTER`)가
+지정된 표에서만 제안을 만들고, 검색
 범위는 표 전체가 아니라 **선택된 행**(셀 선택 모드 범위, 없으면 커서가 있는 행)이다.
 제안 생성은 마커 authoring("태그 지정")의 다음 단계라는 것이 이 게이트의 의도다.
 
@@ -189,7 +190,8 @@ inline-room)처럼 `insertAt`이 있는 인라인 삽입은 그 지점)에 이�
 호출부(`template-panel.ts`의 `createFieldsFromRows`)는 두 조건으로 생성을 게이트한다:
 
 1. **마커 게이트** — 현재 표의 첫 셀 텍스트(`readTableMarkerText`)가 역할 마커
-   어휘(`#HEADER`/`#FOOTER`/`#PAGENO`/`#REPEAT-*:`, `isTemplateTableMarkerText`) 안에
+   어휘(`#BLOCK`/`#PAGENO`/`#REPEAT-*:`, 그리고 `#BLOCK`의 폐지된 동의어 `#HEADER`/
+   `#FOOTER`, `isTemplateTableMarkerText`) 안에
    있을 때만 `suggestFieldNames`를 부른다. 단순 `#` 접두사가 아니라 어휘 전체로
    매칭하므로 첫 셀에 우연히 `#`으로 시작하는 원본 텍스트가 있어도 게이트가 열리지
    않는다. 마커가 없으면 "위 '태그 지정'으로 먼저 역할을 지정하세요" 안내만 나온다.
@@ -203,7 +205,7 @@ inline-room)처럼 `insertAt`이 있는 인라인 삽입은 그 지점)에 이�
 태깅은 마커 행(전체 폭 병합 셀)을 row 0에 삽입하므로(`setTableRoleMarker`,
 `command/commands/template.ts`), 태깅된 표의 마커 셀 텍스트는 규칙 2/3/4의 라벨 후보에서
 제외한다(`isTemplateTableMarkerText` 재사용) — 마커는 authoring 주석이지 라벨이 아니다.
-이 제외가 없으면 규칙 3이 마커 행 아래 같은 폭의 빈 행을 발견했을 때 `#HEADER`나
+이 제외가 없으면 규칙 3이 마커 행 아래 같은 폭의 빈 행을 발견했을 때 `#BLOCK`이나
 `#REPEAT-BODY:품목내역`(공백 제거 17자 — `MAX_PLAUSIBLE_LABEL_LEN` 가드도 통과) 같은
 마커 텍스트 자체를 이름으로 제안한다.
 
@@ -304,7 +306,7 @@ cellParaIndex, charOffset }`가 있다 — 규칙 1~3처럼 "빈 셀을 채우�
   `rhwp-studio/tests/selection-text.test.ts`, `rhwp-studio/tests/field-name-dedup.test.ts`,
   `rhwp-studio/tests/table-outline.test.ts`(`findMatchingRepeatHeaderEntry` 케이스)
 - e2e: `rhwp-studio/e2e/field-suggest-panel.test.mjs`(표 인접 셀 — 게이트 메시지 TC-1b,
-  #HEADER 태깅 후 규칙 1/2 TC-1c~4, 규칙 3/4 TC-5~7, 규칙 5 TC-8 — 5446234.hwp "변경 사항"),
+  #BLOCK 태깅 후 규칙 1/2 TC-1c~4, 규칙 3/4 TC-5~7, 규칙 5 TC-8 — 5446234.hwp "변경 사항"),
   `rhwp-studio/e2e/field-suggest-selection.test.mjs`(선택 텍스트)
 
 이 문서는 **감지 규칙**(무엇을 어떻게 이름으로 바꾸는가)만 다룬다. wasm 필드 API 시그니처,

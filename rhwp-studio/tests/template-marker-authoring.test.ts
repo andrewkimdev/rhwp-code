@@ -14,8 +14,7 @@ import { buildTableRoleMarkerText } from '../src/core/template-marker.ts';
 // 정확히 같은 문자열을 만드는지 확인한다(docs/TEMPLATE_MARKER_SYNTAX.md §3/§3e). ───
 
 test('buildTableRoleMarkerText: 인자 없는 마커', () => {
-  assert.equal(buildTableRoleMarkerText({ role: 'HEADER' }), '#HEADER');
-  assert.equal(buildTableRoleMarkerText({ role: 'FOOTER' }), '#FOOTER');
+  assert.equal(buildTableRoleMarkerText({ role: 'BLOCK' }), '#BLOCK');
   assert.equal(buildTableRoleMarkerText({ role: 'PAGENO' }), '#PAGENO');
 });
 

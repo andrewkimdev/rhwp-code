@@ -91,17 +91,20 @@ export function readTableGrid(
 }
 
 const REPEAT_MARKER_PATTERN = /^#REPEAT-(BODY|HEADER|FOOTER|TITLE)(-NESTED)?:/;
-const GENERAL_MARKER_PATTERN = /^#(HEADER|FOOTER|PAGENO)$/;
+// BLOCK is the canonical general-role marker; HEADER/FOOTER are its deprecated synonyms —
+// still recognized on read (existing templates use them), but the role picker (roles.ts) only
+// ever writes BLOCK for new tagging.
+const GENERAL_MARKER_PATTERN = /^#(BLOCK|HEADER|FOOTER|PAGENO)$/;
 
 /**
- * 텍스트가 템플릿 역할 마커 어휘(#HEADER/#FOOTER/#PAGENO/#REPEAT-*:) 그 자체인지
- * 판정한다. 두 곳에서 쓰인다:
+ * 텍스트가 템플릿 역할 마커 어휘(#BLOCK/#PAGENO/#REPEAT-*:, 그리고 #BLOCK의 폐지된
+ * 동의어 #HEADER/#FOOTER) 그 자체인지 판정한다. 두 곳에서 쓰인다:
  *
  * 1. **게이트** — 호출부(`template-panel.ts`)는 현재 표의 첫 셀 텍스트
  *    (`readTableMarkerText`)로 이 함수를 먼저 호출해, 마커가 지정된 표에서만
  *    `suggestFieldNames`를 실행한다. 제안 생성이 마커 authoring("태그 지정")의
  *    다음 단계가 되게 하는 게이트다. 단순 `#` 접두사가 아니라 어휘 전체로
- *    매칭하므로(`#HEADER2` 따위는 거짓), 첫 셀에 우연히 `#`으로 시작하는 원본
+ *    매칭하므로(`#BLOCK2` 따위는 거짓), 첫 셀에 우연히 `#`으로 시작하는 원본
  *    텍스트가 있어도 게이트가 열리지 않는다.
  * 2. **마커 셀 제외** — 태깅된 표의 마커 행(row 0, 전체 폭 병합 셀)은
  *    authoring 주석이지 라벨이 아니므로, 규칙 2/3/4의 라벨 후보에서 제외한다.
