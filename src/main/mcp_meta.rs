@@ -162,6 +162,13 @@ pub(crate) fn mcp_tool_definitions() -> Vec<serde_json::Value> {
                 | "hwp_delete_table_column"
                 | "hwp_merge_table_cells"
                 | "hwp_split_table_cell"
+                | "hwp_insert_footnote"
+                | "hwp_insert_endnote"
+                | "hwp_delete_footnote"
+                | "hwp_insert_footnote_text"
+                | "hwp_delete_text_in_footnote"
+                | "hwp_split_paragraph_in_footnote"
+                | "hwp_merge_paragraph_in_footnote"
         )
     }
 
@@ -1369,6 +1376,216 @@ pub(crate) fn mcp_tool_definitions() -> Vec<serde_json::Value> {
                 { "when": "verify", "args": ["--verify"] }
             ]),
             &["schemaVersion", "source", "table", "row", "col", "dryRun", "changedPages", "output", "outputFormat", "verify"],
+        ),
+        // [upstream #5185/#5192 계열 선별 이식, "각주/미주" 배치] 코어는 기존
+        // footnote_ops.rs/object_ops/note.rs 네이티브 함수 재사용, CLI 배선만 신규.
+        tool_with_optional_args(
+            "hwp_insert_footnote",
+            "각주를 삽입해 새 문서를 만든다. section/para/offset 을 생략하면 0. 산출물은 입력 형식을 따른다(HWPX 입력 → HWPX 산출).",
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "입력 HWP/HWPX 문서 경로" },
+                    "section": { "type": "integer", "minimum": 0, "description": "구역 (0부터). 생략하면 0" },
+                    "para": { "type": "integer", "minimum": 0, "description": "문단 (0부터). 생략하면 0" },
+                    "offset": { "type": "integer", "minimum": 0, "description": "문단 내 문자 오프셋. 생략하면 0" },
+                    "output": { "type": "string", "description": "출력 파일 경로. 생략하면 <입력명>_footnote.hwp (HWPX 입력이면 _footnote.hwpx)" },
+                    "dryRun": { "type": "boolean", "description": "true 면 파일을 쓰지 않고 삽입 예정만 보고" },
+                    "verify": { "type": "boolean", "description": "저장 직후 재파싱 IR 자기검증 — 차이가 있으면 exit 3" }
+                },
+                "required": ["path"],
+            }),
+            "edit",
+            serde_json::json!(["edit", "insert-footnote", "{path}", "--json"]),
+            serde_json::json!([
+                { "when": "section", "args": ["--section", "{section}"] },
+                { "when": "para", "args": ["--para", "{para}"] },
+                { "when": "offset", "args": ["--offset", "{offset}"] },
+                { "when": "output", "args": ["-o", "{output}"] },
+                { "when": "dryRun", "args": ["--dry-run"] },
+                { "when": "verify", "args": ["--verify"] }
+            ]),
+            &["schemaVersion", "source", "section", "paragraph", "offset", "dryRun", "changedPages", "output", "outputFormat", "verify"],
+        ),
+        tool_with_optional_args(
+            "hwp_insert_endnote",
+            "미주를 삽입해 새 문서를 만든다. section/para/offset 을 생략하면 0. 산출물은 입력 형식을 따른다(HWPX 입력 → HWPX 산출).",
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "입력 HWP/HWPX 문서 경로" },
+                    "section": { "type": "integer", "minimum": 0, "description": "구역 (0부터). 생략하면 0" },
+                    "para": { "type": "integer", "minimum": 0, "description": "문단 (0부터). 생략하면 0" },
+                    "offset": { "type": "integer", "minimum": 0, "description": "문단 내 문자 오프셋. 생략하면 0" },
+                    "output": { "type": "string", "description": "출력 파일 경로. 생략하면 <입력명>_endnote.hwp (HWPX 입력이면 _endnote.hwpx)" },
+                    "dryRun": { "type": "boolean", "description": "true 면 파일을 쓰지 않고 삽입 예정만 보고" },
+                    "verify": { "type": "boolean", "description": "저장 직후 재파싱 IR 자기검증 — 차이가 있으면 exit 3" }
+                },
+                "required": ["path"],
+            }),
+            "edit",
+            serde_json::json!(["edit", "insert-endnote", "{path}", "--json"]),
+            serde_json::json!([
+                { "when": "section", "args": ["--section", "{section}"] },
+                { "when": "para", "args": ["--para", "{para}"] },
+                { "when": "offset", "args": ["--offset", "{offset}"] },
+                { "when": "output", "args": ["-o", "{output}"] },
+                { "when": "dryRun", "args": ["--dry-run"] },
+                { "when": "verify", "args": ["--verify"] }
+            ]),
+            &["schemaVersion", "source", "section", "paragraph", "offset", "dryRun", "changedPages", "output", "outputFormat", "verify"],
+        ),
+        tool_with_optional_args(
+            "hwp_delete_footnote",
+            "각주/미주를 삭제해 새 문서를 만든다. section/para/ctrl 모두 필수 — 잘못된 컨트롤을 실수로 지우지 않도록 기본값이 없다. 산출물은 입력 형식을 따른다(HWPX 입력 → HWPX 산출).",
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "입력 HWP/HWPX 문서 경로" },
+                    "section": { "type": "integer", "minimum": 0, "description": "구역 (0부터)" },
+                    "para": { "type": "integer", "minimum": 0, "description": "문단 (0부터)" },
+                    "ctrl": { "type": "integer", "minimum": 0, "description": "각주/미주 컨트롤 인덱스" },
+                    "output": { "type": "string", "description": "출력 파일 경로. 생략하면 <입력명>_delfn.hwp (HWPX 입력이면 _delfn.hwpx)" },
+                    "dryRun": { "type": "boolean", "description": "true 면 파일을 쓰지 않고 좌표 검증만 수행" },
+                    "verify": { "type": "boolean", "description": "저장 직후 재파싱 IR 자기검증 — 차이가 있으면 exit 3" }
+                },
+                "required": ["path", "section", "para", "ctrl"],
+            }),
+            "edit",
+            serde_json::json!(["edit", "delete-footnote", "{path}", "--section", "{section}", "--para", "{para}", "--ctrl", "{ctrl}", "--json"]),
+            serde_json::json!([
+                { "when": "output", "args": ["-o", "{output}"] },
+                { "when": "dryRun", "args": ["--dry-run"] },
+                { "when": "verify", "args": ["--verify"] }
+            ]),
+            &["schemaVersion", "source", "section", "paragraph", "ctrl", "dryRun", "changedPages", "output", "outputFormat", "verify"],
+        ),
+        tool_with_optional_args(
+            "hwp_insert_footnote_text",
+            "각주/미주 안 문단에 텍스트를 삽입해 새 문서를 만든다. ctrl(각주/미주 컨트롤 인덱스)과 text 는 필수, section/para/fnPara(각주 내부 문단)/offset 은 생략하면 0. 산출물은 입력 형식을 따른다(HWPX 입력 → HWPX 산출).",
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "입력 HWP/HWPX 문서 경로" },
+                    "section": { "type": "integer", "minimum": 0, "description": "구역 (0부터). 생략하면 0" },
+                    "para": { "type": "integer", "minimum": 0, "description": "문단 (0부터). 생략하면 0" },
+                    "ctrl": { "type": "integer", "minimum": 0, "description": "각주/미주 컨트롤 인덱스" },
+                    "fnPara": { "type": "integer", "minimum": 0, "description": "각주/미주 내부 문단 (0부터). 생략하면 0" },
+                    "offset": { "type": "integer", "minimum": 0, "description": "각주/미주 문단 내 문자 오프셋. 생략하면 0" },
+                    "text": { "type": "string", "description": "넣을 문자열 (빈 문자열 거부)" },
+                    "output": { "type": "string", "description": "출력 파일 경로. 생략하면 <입력명>_fntext.hwp (HWPX 입력이면 _fntext.hwpx)" },
+                    "dryRun": { "type": "boolean", "description": "true 면 파일을 쓰지 않고 좌표 검증만 수행" },
+                    "verify": { "type": "boolean", "description": "저장 직후 재파싱 IR 자기검증 — 차이가 있으면 exit 3" }
+                },
+                "required": ["path", "ctrl", "text"],
+            }),
+            "edit",
+            serde_json::json!(["edit", "insert-footnote-text", "{path}", "--ctrl", "{ctrl}", "--text", "{text}", "--json"]),
+            serde_json::json!([
+                { "when": "section", "args": ["--section", "{section}"] },
+                { "when": "para", "args": ["--para", "{para}"] },
+                { "when": "fnPara", "args": ["--fn-para", "{fnPara}"] },
+                { "when": "offset", "args": ["--offset", "{offset}"] },
+                { "when": "output", "args": ["-o", "{output}"] },
+                { "when": "dryRun", "args": ["--dry-run"] },
+                { "when": "verify", "args": ["--verify"] }
+            ]),
+            &["schemaVersion", "source", "section", "paragraph", "ctrl", "fnPara", "offset", "text", "dryRun", "changedPages", "output", "outputFormat", "verify"],
+        ),
+        tool_with_optional_args(
+            "hwp_delete_text_in_footnote",
+            "각주/미주 안 문단 텍스트를 삭제해 새 문서를 만든다. count(1 이상)는 필수, 나머지 좌표는 생략하면 0. 산출물은 입력 형식을 따른다(HWPX 입력 → HWPX 산출).",
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "입력 HWP/HWPX 문서 경로" },
+                    "section": { "type": "integer", "minimum": 0, "description": "구역 (0부터). 생략하면 0" },
+                    "para": { "type": "integer", "minimum": 0, "description": "문단 (0부터). 생략하면 0" },
+                    "ctrl": { "type": "integer", "minimum": 0, "description": "각주/미주 컨트롤 인덱스. 생략하면 0" },
+                    "fnPara": { "type": "integer", "minimum": 0, "description": "각주/미주 내부 문단 (0부터). 생략하면 0" },
+                    "offset": { "type": "integer", "minimum": 0, "description": "각주/미주 문단 내 문자 오프셋. 생략하면 0" },
+                    "count": { "type": "integer", "minimum": 1, "description": "삭제할 글자 수 (1 이상)" },
+                    "output": { "type": "string", "description": "출력 파일 경로. 생략하면 <입력명>_fndeltxt.hwp (HWPX 입력이면 _fndeltxt.hwpx)" },
+                    "dryRun": { "type": "boolean", "description": "true 면 파일을 쓰지 않고 좌표 검증만 수행" },
+                    "verify": { "type": "boolean", "description": "저장 직후 재파싱 IR 자기검증 — 차이가 있으면 exit 3" }
+                },
+                "required": ["path", "count"],
+            }),
+            "edit",
+            serde_json::json!(["edit", "delete-text-in-footnote", "{path}", "--count", "{count}", "--json"]),
+            serde_json::json!([
+                { "when": "section", "args": ["--section", "{section}"] },
+                { "when": "para", "args": ["--para", "{para}"] },
+                { "when": "ctrl", "args": ["--ctrl", "{ctrl}"] },
+                { "when": "fnPara", "args": ["--fn-para", "{fnPara}"] },
+                { "when": "offset", "args": ["--offset", "{offset}"] },
+                { "when": "output", "args": ["-o", "{output}"] },
+                { "when": "dryRun", "args": ["--dry-run"] },
+                { "when": "verify", "args": ["--verify"] }
+            ]),
+            &["schemaVersion", "source", "section", "paragraph", "ctrl", "fnPara", "offset", "count", "dryRun", "changedPages", "output", "outputFormat", "verify"],
+        ),
+        tool_with_optional_args(
+            "hwp_split_paragraph_in_footnote",
+            "각주/미주 안 문단을 분할해 새 문서를 만든다. 모든 좌표는 생략하면 0. 산출물은 입력 형식을 따른다(HWPX 입력 → HWPX 산출).",
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "입력 HWP/HWPX 문서 경로" },
+                    "section": { "type": "integer", "minimum": 0, "description": "구역 (0부터). 생략하면 0" },
+                    "para": { "type": "integer", "minimum": 0, "description": "문단 (0부터). 생략하면 0" },
+                    "ctrl": { "type": "integer", "minimum": 0, "description": "각주/미주 컨트롤 인덱스. 생략하면 0" },
+                    "fnPara": { "type": "integer", "minimum": 0, "description": "각주/미주 내부 문단 (0부터). 생략하면 0" },
+                    "offset": { "type": "integer", "minimum": 0, "description": "분할 지점 문자 오프셋. 생략하면 0" },
+                    "output": { "type": "string", "description": "출력 파일 경로. 생략하면 <입력명>_fnsplit.hwp (HWPX 입력이면 _fnsplit.hwpx)" },
+                    "dryRun": { "type": "boolean", "description": "true 면 파일을 쓰지 않고 좌표 검증만 수행" },
+                    "verify": { "type": "boolean", "description": "저장 직후 재파싱 IR 자기검증 — 차이가 있으면 exit 3" }
+                },
+                "required": ["path"],
+            }),
+            "edit",
+            serde_json::json!(["edit", "split-paragraph-in-footnote", "{path}", "--json"]),
+            serde_json::json!([
+                { "when": "section", "args": ["--section", "{section}"] },
+                { "when": "para", "args": ["--para", "{para}"] },
+                { "when": "ctrl", "args": ["--ctrl", "{ctrl}"] },
+                { "when": "fnPara", "args": ["--fn-para", "{fnPara}"] },
+                { "when": "offset", "args": ["--offset", "{offset}"] },
+                { "when": "output", "args": ["-o", "{output}"] },
+                { "when": "dryRun", "args": ["--dry-run"] },
+                { "when": "verify", "args": ["--verify"] }
+            ]),
+            &["schemaVersion", "source", "section", "paragraph", "ctrl", "fnPara", "offset", "dryRun", "changedPages", "output", "outputFormat", "verify"],
+        ),
+        tool_with_optional_args(
+            "hwp_merge_paragraph_in_footnote",
+            "각주/미주 안 문단을 이전 문단과 병합해 새 문서를 만든다. fnPara 를 생략하면 1(0은 '첫 문단은 병합 불가'로 항상 거부되므로 기본값에서 제외) — 명시적으로 0을 주면 인자 오류. 산출물은 입력 형식을 따른다(HWPX 입력 → HWPX 산출).",
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "입력 HWP/HWPX 문서 경로" },
+                    "section": { "type": "integer", "minimum": 0, "description": "구역 (0부터). 생략하면 0" },
+                    "para": { "type": "integer", "minimum": 0, "description": "문단 (0부터). 생략하면 0" },
+                    "ctrl": { "type": "integer", "minimum": 0, "description": "각주/미주 컨트롤 인덱스. 생략하면 0" },
+                    "fnPara": { "type": "integer", "minimum": 1, "description": "이전 문단과 병합할 각주/미주 내부 문단 (1 이상). 생략하면 1" },
+                    "output": { "type": "string", "description": "출력 파일 경로. 생략하면 <입력명>_fnmerge.hwp (HWPX 입력이면 _fnmerge.hwpx)" },
+                    "dryRun": { "type": "boolean", "description": "true 면 파일을 쓰지 않고 좌표 검증만 수행" },
+                    "verify": { "type": "boolean", "description": "저장 직후 재파싱 IR 자기검증 — 차이가 있으면 exit 3" }
+                },
+                "required": ["path"],
+            }),
+            "edit",
+            serde_json::json!(["edit", "merge-paragraph-in-footnote", "{path}", "--json"]),
+            serde_json::json!([
+                { "when": "section", "args": ["--section", "{section}"] },
+                { "when": "para", "args": ["--para", "{para}"] },
+                { "when": "ctrl", "args": ["--ctrl", "{ctrl}"] },
+                { "when": "fnPara", "args": ["--fn-para", "{fnPara}"] },
+                { "when": "output", "args": ["-o", "{output}"] },
+                { "when": "dryRun", "args": ["--dry-run"] },
+                { "when": "verify", "args": ["--verify"] }
+            ]),
+            &["schemaVersion", "source", "section", "paragraph", "ctrl", "fnPara", "dryRun", "changedPages", "output", "outputFormat", "verify"],
         ),
         tool_with_optional_args(
             "hwp_export_ir_schema",

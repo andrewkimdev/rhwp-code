@@ -428,7 +428,7 @@ fn main() {
 /// MCP 서버 저자(및 함수 호출 클라이언트)가 도구 이름·설명·입력 JSON Schema·실행 배선을
 /// 손으로 옮겨 적지 않게 한다. `--json` 계약을 가진 명령이 늘면
 /// `capabilities_mcp_covers_every_json_command` 가 누락을 잡는다.
-const EDIT_SUBCOMMANDS: [(&str, &str); 17] = [
+const EDIT_SUBCOMMANDS: [(&str, &str); 24] = [
     (
         "fill-fields",
         "누름틀(필드) 값 채우기 — --data 이름=값, 같은 이름은 [k] 순번 지목",
@@ -467,6 +467,34 @@ const EDIT_SUBCOMMANDS: [(&str, &str); 17] = [
         "표 셀 병합 — --table/--row/--col/--end-row/--end-col",
     ),
     ("split-cell", "병합 셀 분할 — --table/--row/--col"),
+    (
+        "insert-footnote",
+        "각주 삽입 — --section/--para/--offset (생략 시 0)",
+    ),
+    (
+        "insert-endnote",
+        "미주 삽입 — --section/--para/--offset (생략 시 0)",
+    ),
+    (
+        "delete-footnote",
+        "각주/미주 삭제 — --section/--para/--ctrl (모두 필수)",
+    ),
+    (
+        "insert-footnote-text",
+        "각주/미주 안 문단에 텍스트 삽입 — --ctrl/--text 필수, --section/--para/--fn-para/--offset",
+    ),
+    (
+        "delete-text-in-footnote",
+        "각주/미주 안 문단 텍스트 삭제 — --count 필수, --section/--para/--ctrl/--fn-para/--offset",
+    ),
+    (
+        "split-paragraph-in-footnote",
+        "각주/미주 안 문단 분할 — --section/--para/--ctrl/--fn-para/--offset",
+    ),
+    (
+        "merge-paragraph-in-footnote",
+        "각주/미주 안 문단을 이전 문단과 병합 — --section/--para/--ctrl/--fn-para(1 이상, 기본 1)",
+    ),
     (
         "insert-image",
         "도장·서명 그림 삽입 — --image/--page/--x/--y (HWPUNIT)",

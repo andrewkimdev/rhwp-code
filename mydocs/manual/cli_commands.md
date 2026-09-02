@@ -1016,6 +1016,52 @@ rhwp export-tables 작성본.hwpx --json | jq '.tables[0].cells[] | select(.row=
 exit 3) · `--json`. 코어 로직은 기존 `table_ops.rs` 네이티브 함수(`insert_table_row_native`
 등)를 그대로 재사용한다 — 새 편집 로직 없음.
 
+### `edit insert-footnote <파일> [--section N] [--para N] [--offset N] [옵션]` (upstream #5185/#5192 계열)
+각주를 삽입한다. `--section`/`--para`/`--offset`은 생략하면 0.
+- `-o, --output <파일>` — 기본 `<입력명>_footnote.<입력과 같은 확장자>`
+- `--json` 봉투: `{"schemaVersion":"1.0","source","section","paragraph","offset","dryRun","changedPages","output"?,"outputFormat"?,"verify"?}`
+
+### `edit insert-endnote <파일> [--section N] [--para N] [--offset N] [옵션]` (upstream #5185/#5192 계열)
+미주를 삽입한다. `--section`/`--para`/`--offset`은 생략하면 0.
+- `-o, --output <파일>` — 기본 `<입력명>_endnote.<입력과 같은 확장자>`
+- `--json` 봉투: `{"schemaVersion":"1.0","source","section","paragraph","offset","dryRun","changedPages","output"?,"outputFormat"?,"verify"?}`
+
+### `edit delete-footnote <파일> --section N --para N --ctrl N [옵션]` (upstream #5185/#5192 계열)
+각주/미주를 삭제한다. `--section`/`--para`/`--ctrl` **모두 필수** — 잘못된 컨트롤을
+실수로 지우지 않도록 기본값을 두지 않았다.
+- `-o, --output <파일>` — 기본 `<입력명>_delfn.<입력과 같은 확장자>`
+- `--json` 봉투: `{"schemaVersion":"1.0","source","section","paragraph","ctrl","dryRun","changedPages","output"?,"outputFormat"?,"verify"?}`
+
+### `edit insert-footnote-text <파일> --ctrl N --text <문자열> [--section N] [--para N] [--fn-para N] [--offset N] [옵션]` (upstream #5185/#5192 계열)
+각주/미주 안 문단에 텍스트를 삽입한다. `--ctrl`(각주/미주 컨트롤 인덱스)과 `--text`
+(빈 문자열 거부)는 필수. `--section`/`--para`/`--fn-para`(각주 내부 문단 인덱스)/
+`--offset`은 생략하면 0.
+- `-o, --output <파일>` — 기본 `<입력명>_fntext.<입력과 같은 확장자>`
+- `--json` 봉투: `{"schemaVersion":"1.0","source","section","paragraph","ctrl","fnPara","offset","text","dryRun","changedPages","output"?,"outputFormat"?,"verify"?}`
+
+### `edit delete-text-in-footnote <파일> --count <글자수> [--section N] [--para N] [--ctrl N] [--fn-para N] [--offset N] [옵션]` (upstream #5185/#5192 계열)
+각주/미주 안 문단 텍스트를 삭제한다. `--count`(1 이상)는 필수, 나머지 좌표는
+생략하면 0.
+- `-o, --output <파일>` — 기본 `<입력명>_fndeltxt.<입력과 같은 확장자>`
+- `--json` 봉투: `{"schemaVersion":"1.0","source","section","paragraph","ctrl","fnPara","offset","count","dryRun","changedPages","output"?,"outputFormat"?,"verify"?}`
+
+### `edit split-paragraph-in-footnote <파일> [--section N] [--para N] [--ctrl N] [--fn-para N] [--offset N] [옵션]` (upstream #5185/#5192 계열)
+각주/미주 안 문단을 지정 오프셋에서 분할한다. 모든 좌표는 생략하면 0.
+- `-o, --output <파일>` — 기본 `<입력명>_fnsplit.<입력과 같은 확장자>`
+- `--json` 봉투: `{"schemaVersion":"1.0","source","section","paragraph","ctrl","fnPara","offset","dryRun","changedPages","output"?,"outputFormat"?,"verify"?}`
+
+### `edit merge-paragraph-in-footnote <파일> [--section N] [--para N] [--ctrl N] [--fn-para N(1 이상)] [옵션]` (upstream #5185/#5192 계열)
+각주/미주 안 문단을 **이전** 문단과 병합한다(`--fn-para`가 가리키는 문단이
+`--fn-para`−1과 합쳐진다). `--fn-para`는 생략하면 1 — 0은 "첫 문단은 병합 대상
+없음"으로 항상 거부되므로 기본값에서 제외했고, 명시적으로 0을 주면 사용법 오류다.
+- **알려진 특성**: 병합 경계 앞뒤 글자가 같은 글자모양이면(예: 방금 분할한 균일한
+  텍스트를 바로 다시 병합) 저장 시 인접 동일 `charShape` 항목이 정리되어 `--verify`
+  가 `diffCount:1`(무해한 정리, 렌더링에 영향 없음 — `render-diff`로 확인됨)을
+  보고할 수 있다. 이 명령의 사전 존재하던 `merge_paragraph_in_footnote_native` 코어
+  동작이며 이번 CLI 배선이 만든 문제가 아니다.
+- `-o, --output <파일>` — 기본 `<입력명>_fnmerge.<입력과 같은 확장자>`
+- `--json` 봉투: `{"schemaVersion":"1.0","source","section","paragraph","ctrl","fnPara","dryRun","changedPages","output"?,"outputFormat"?,"verify"?}`
+
 ### `edit insert-image <파일> --image <그림> [--page N] [--x N --y N] [--width N --height N] [-o <출력>] [--dry-run] [--verify] [--json]` (#3719 §6-5)
 도장·서명 같은 그림을 쪽 좌표에 붙인다 — 채워 넣은 서식에 직인을 얹는 실물 제출의 마지막 조각.
 - `--image <그림>` (필수) — 지원 형식은 `png`·`jpg`·`jpeg`·`bmp`·`tif`·`tiff` 뿐(확장자와 내용

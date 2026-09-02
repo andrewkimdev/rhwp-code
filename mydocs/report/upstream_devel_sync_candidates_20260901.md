@@ -177,5 +177,18 @@ diff를 `git show`로 읽어 인자 이름·의미가 정확히 대응하는지,
 **진행(2026-09-02)**: "표 편집 6종" 배치(`insert-row`/`insert-col`/`delete-row`/
 `delete-col`/`merge-cells`/`split-cell`) 완료 — `insert_table_row_native`/
 `insert_table_column_native`/`delete_table_row_native`/`delete_table_column_native`/
-`merge_table_cells_native`/`split_table_cell_native`에 CLI 배선만 추가했다. 나머지
-37개(각주/미주 7종부터)는 여전히 다음 라운드 대상.
+`merge_table_cells_native`/`split_table_cell_native`에 CLI 배선만 추가했다.
+
+**진행(2026-09-02, 계속)**: "각주/미주 7종" 배치(`insert-footnote`/`insert-endnote`/
+`delete-footnote`/`insert-footnote-text`/`delete-text-in-footnote`/
+`split-paragraph-in-footnote`/`merge-paragraph-in-footnote`) 완료 —
+`insert_footnote_native`/`insert_endnote_native`(둘 다 `object_ops/note.rs`)와
+`delete_footnote_native`/`insert_text_in_footnote_native`/
+`delete_text_in_footnote_native`/`split_paragraph_in_footnote_native`/
+`merge_paragraph_in_footnote_native`(전부 `footnote_ops.rs`, 전부 이미 `pub`)에 CLI
+배선만 추가했다. 부수 발견: `merge-paragraph-in-footnote`는 병합 경계 앞뒤가 같은
+글자모양일 때 저장 후 재파싱에서 인접 동일 `charShape` 항목이 정리되어 `--verify`가
+`diffCount:1`(무해, `render-diff`로 시각 회귀 없음 확인)을 보고하는 사전 존재
+특성이 있다 — cli_commands.md에 기록, 코어 수정은 이번 라운드 범위 밖.
+
+나머지 ~30개(머리말/꼬리말 9종부터)는 여전히 다음 라운드 대상.
