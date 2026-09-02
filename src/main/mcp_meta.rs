@@ -151,6 +151,9 @@ pub(crate) fn mcp_tool_definitions() -> Vec<serde_json::Value> {
                 | "hwp_replace_text"
                 | "hwp_set_checkbox"
                 | "hwp_set_cell"
+                | "hwp_move_table"
+                | "hwp_transpose_table"
+                | "hwp_set_column_widths"
         )
     }
 
@@ -1079,6 +1082,82 @@ pub(crate) fn mcp_tool_definitions() -> Vec<serde_json::Value> {
                 { "when": "dryRun", "args": ["--dry-run"] }
             ]),
             &["schemaVersion", "source", "table", "row", "col", "oldText", "newText", "dryRun", "overflow", "output", "outputFormat", "changedPages"],
+        ),
+        // [upstream #5185/#5192 계열 선별 이식] 표 단위 편집 3종 — 셀 값이 아니라 표
+        // 자체(위치/모양/열 폭)를 바꾼다. 코어는 기존 table_ops.rs 네이티브 함수 재사용.
+        tool_with_optional_args(
+            "hwp_move_table",
+            "표의 위치 오프셋(HWPUNIT)을 이동해 새 문서를 만든다 — deltaH/deltaV 는 각각 가로/세로 이동량(양수=오른쪽/아래)이며 최소 하나는 0이 아니어야 한다. 본문배치(treat_as_char) 표는 이동량이 현재 줄 높이를 넘으면 다른 문단으로 옮겨갈 수 있다. 산출물은 입력 형식을 따른다(HWPX 입력 → HWPX 산출).",
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "입력 HWP/HWPX 문서 경로" },
+                    "table": { "type": "integer", "minimum": 0, "description": "본문 최상위 표 번호 (export-tables 의 index)" },
+                    "deltaH": { "type": "integer", "description": "가로 이동량 (HWPUNIT, 1/7200 inch). 생략하면 0" },
+                    "deltaV": { "type": "integer", "description": "세로 이동량 (HWPUNIT, 1/7200 inch). 생략하면 0" },
+                    "output": { "type": "string", "description": "출력 파일 경로. 생략하면 <입력명>_moved.hwp (HWPX 입력이면 _moved.hwpx)" },
+                    "dryRun": { "type": "boolean", "description": "true 면 파일을 쓰지 않고 이동 예정만 보고" },
+                    "verify": { "type": "boolean", "description": "저장 직후 재파싱 IR 자기검증 — 차이가 있으면 exit 3" }
+                },
+                "required": ["path", "table"],
+            }),
+            "edit",
+            serde_json::json!(["edit", "move-table", "{path}", "--table", "{table}", "--json"]),
+            serde_json::json!([
+                { "when": "deltaH", "args": ["--dh", "{deltaH}"] },
+                { "when": "deltaV", "args": ["--dv", "{deltaV}"] },
+                { "when": "output", "args": ["-o", "{output}"] },
+                { "when": "dryRun", "args": ["--dry-run"] },
+                { "when": "verify", "args": ["--verify"] }
+            ]),
+            &["schemaVersion", "source", "table", "deltaH", "deltaV", "dryRun", "changedPages", "output", "outputFormat", "verify"],
+        ),
+        tool_with_optional_args(
+            "hwp_transpose_table",
+            "표 전체의 행/열을 제자리에서 바꿔 새 문서를 만든다(N행×M열 → M행×N열). 병합 셀이 있는 표는 대상이 아니며 오류로 거부한다(부분 선택 행/열 바꿈은 이 도구의 범위 밖). 산출물은 입력 형식을 따른다(HWPX 입력 → HWPX 산출).",
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "입력 HWP/HWPX 문서 경로" },
+                    "table": { "type": "integer", "minimum": 0, "description": "본문 최상위 표 번호 (export-tables 의 index)" },
+                    "output": { "type": "string", "description": "출력 파일 경로. 생략하면 <입력명>_transposed.hwp (HWPX 입력이면 _transposed.hwpx)" },
+                    "dryRun": { "type": "boolean", "description": "true 면 파일을 쓰지 않고 바뀔 행/열 수만 보고" },
+                    "verify": { "type": "boolean", "description": "저장 직후 재파싱 IR 자기검증 — 차이가 있으면 exit 3" }
+                },
+                "required": ["path", "table"],
+            }),
+            "edit",
+            serde_json::json!(["edit", "transpose-table", "{path}", "--table", "{table}", "--json"]),
+            serde_json::json!([
+                { "when": "output", "args": ["-o", "{output}"] },
+                { "when": "dryRun", "args": ["--dry-run"] },
+                { "when": "verify", "args": ["--verify"] }
+            ]),
+            &["schemaVersion", "source", "table", "sourceRows", "sourceCols", "targetRows", "targetCols", "dryRun", "changedPages", "output", "outputFormat", "verify"],
+        ),
+        tool_with_optional_args(
+            "hwp_set_column_widths",
+            "표의 열별 폭(HWPUNIT)을 절대값으로 설정해 새 문서를 만든다. widths 의 개수는 표의 열 수와 정확히 같아야 한다(다르면 --dry-run 에서도 인자 오류로 거부). 표 전체 폭은 입력한 폭의 합이 된다 — 페이지를 넘지 않으려면 합을 본문 폭 이하로 맞춘다. 산출물은 입력 형식을 따른다(HWPX 입력 → HWPX 산출).",
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "입력 HWP/HWPX 문서 경로" },
+                    "table": { "type": "integer", "minimum": 0, "description": "본문 최상위 표 번호 (export-tables 의 index)" },
+                    "widths": { "type": "string", "description": "쉼표로 구분한 HWPUNIT 정수 목록, 예: \"2000,3000,2000\" (개수 = 표의 열 수)" },
+                    "output": { "type": "string", "description": "출력 파일 경로. 생략하면 <입력명>_colwidths.hwp (HWPX 입력이면 _colwidths.hwpx)" },
+                    "dryRun": { "type": "boolean", "description": "true 면 파일을 쓰지 않고 개수 검증과 산출 폭 합만 보고" },
+                    "verify": { "type": "boolean", "description": "저장 직후 재파싱 IR 자기검증 — 차이가 있으면 exit 3" }
+                },
+                "required": ["path", "table", "widths"],
+            }),
+            "edit",
+            serde_json::json!(["edit", "set-column-widths", "{path}", "--table", "{table}", "--widths", "{widths}", "--json"]),
+            serde_json::json!([
+                { "when": "output", "args": ["-o", "{output}"] },
+                { "when": "dryRun", "args": ["--dry-run"] },
+                { "when": "verify", "args": ["--verify"] }
+            ]),
+            &["schemaVersion", "source", "table", "widths", "colCount", "tableWidth", "dryRun", "changedPages", "output", "outputFormat", "verify"],
         ),
         tool_with_optional_args(
             "hwp_export_ir_schema",

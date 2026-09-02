@@ -911,6 +911,36 @@ rhwp edit set-cell 양식.hwpx --table 0 --row 2 --col 1 --text "1,234" -o 작�
 rhwp export-tables 작성본.hwpx --json | jq '.tables[0].cells[] | select(.row==2 and .col==1).text'
 ```
 
+### `edit move-table <파일> --table <번호> [--dh <HWPUNIT>] [--dv <HWPUNIT>] [옵션]` (upstream #5185/#5192 계열)
+표의 위치 오프셋(HWPUNIT, 1/7200 inch)을 이동한다. `--dh`/`--dv` 는 생략하면 0(그
+축은 이동하지 않음) — 최소 하나는 0이 아니어야 한다(둘 다 생략·0이면 exit 2).
+- 본문배치(treat_as_char) 표는 `--dv` 가 현재 줄 높이를 넘으면 다른 문단으로 옮겨갈
+  수 있다 — `changedPages` 는 이동 후 최종 문단 기준으로 계산한다.
+- `-o, --output <파일>` — 기본 `<입력명>_moved.<입력과 같은 확장자>`
+- `--dry-run` — 파일을 쓰지 않고 표 좌표 해석만 검증한다.
+- `--verify` — 저장 직후 재파싱 IR 자기검증(차이 시 exit 3).
+- `--json` 봉투: `{"schemaVersion":"1.0","source","table","deltaH","deltaV","dryRun","changedPages","output"?,"outputFormat"?,"verify"?}`
+
+### `edit transpose-table <파일> --table <번호> [옵션]` (upstream #5185/#5192 계열)
+표 전체의 행/열을 제자리에서 바꾼다(N행×M열 → M행×N열). 병합 셀이 있는 표는 대상이
+아니며 오류로 거부한다(exit 1) — 부분 선택 행/열 바꿈(클립보드 경로)은 스튜디오
+전용이며 이 CLI 명령의 범위 밖이다.
+- `-o, --output <파일>` — 기본 `<입력명>_transposed.<입력과 같은 확장자>`
+- `--dry-run` — 파일을 쓰지 않고 (행,열) → (열,행) 크기 변화만 보고한다.
+- `--verify` — 저장 직후 재파싱 IR 자기검증(차이 시 exit 3).
+- `--json` 봉투: `{"schemaVersion":"1.0","source","table","sourceRows","sourceCols","targetRows","targetCols","dryRun","changedPages","output"?,"outputFormat"?,"verify"?}`
+
+### `edit set-column-widths <파일> --table <번호> --widths <W1,W2,...> [옵션]` (upstream #5185/#5192 계열)
+표의 열별 폭(HWPUNIT)을 절대값으로 설정한다. `--widths` 는 쉼표로 구분한 정수
+목록이며 개수가 표의 열 수와 정확히 같아야 한다 — 다르면 **`--dry-run` 에서도**
+사용법 오류(exit 2)로 미리 알린다(파일을 열어 표를 확인한 뒤에도 실행 전에 잡는다).
+- 표 전체 폭은 입력한 폭의 합이 된다 — `insert-table-column` 과 달리 페이지를 넘지
+  않으려면 합을 본문 폭 이하로 맞춰야 한다.
+- `-o, --output <파일>` — 기본 `<입력명>_colwidths.<입력과 같은 확장자>`
+- `--dry-run` — 파일을 쓰지 않고 개수 검증과 산출 폭 합만 보고한다.
+- `--verify` — 저장 직후 재파싱 IR 자기검증(차이 시 exit 3).
+- `--json` 봉투: `{"schemaVersion":"1.0","source","table","widths":[…],"colCount","tableWidth","dryRun","changedPages","output"?,"outputFormat"?,"verify"?}`
+
 ### `edit insert-image <파일> --image <그림> [--page N] [--x N --y N] [--width N --height N] [-o <출력>] [--dry-run] [--verify] [--json]` (#3719 §6-5)
 도장·서명 같은 그림을 쪽 좌표에 붙인다 — 채워 넣은 서식에 직인을 얹는 실물 제출의 마지막 조각.
 - `--image <그림>` (필수) — 지원 형식은 `png`·`jpg`·`jpeg`·`bmp`·`tif`·`tiff` 뿐(확장자와 내용

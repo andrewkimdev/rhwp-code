@@ -66,12 +66,17 @@ pub(crate) fn collect_field_records(doc: &rhwp::wasm_api::HwpDocument) -> Vec<se
 /// **실패 시 원본 불변**(하나라도 실패하면 출력 파일을 쓰지 않는다).
 pub(crate) fn run_edit(args: &[String]) -> i32 {
     const USAGE: &str =
-        "사용법: rhwp edit <fill-fields|replace-text|set-cell|insert-image|redact|sanitize> <파일.hwp|파일.hwpx> [옵션] (rhwp --help 참조)";
+        "사용법: rhwp edit <fill-fields|replace-text|set-cell|move-table|transpose-table|set-column-widths|insert-image|redact|sanitize> <파일.hwp|파일.hwpx> [옵션] (rhwp --help 참조)";
 
     match args.first().map(String::as_str) {
         Some("fill-fields") => edit_fill_fields(&args[1..]),
         Some("replace-text") => edit_replace_text(&args[1..]),
         Some("set-cell") => edit_set_cell(&args[1..]),
+        // [upstream #5185/#5192 계열 선별 이식] 표 단위 편집 3종 — 코어는 기존
+        // table_ops.rs 네이티브 함수 재사용, CLI 배선만 신규.
+        Some("move-table") => edit_move_table(&args[1..]),
+        Some("transpose-table") => edit_transpose_table(&args[1..]),
+        Some("set-column-widths") => edit_set_column_widths(&args[1..]),
         Some("insert-image") => edit_insert_image(&args[1..]),
         // [#3719 §6-11] 공개 전 정리 — 개인정보 마스킹 / 메타데이터 제거.
         Some("redact") => edit_redact(&args[1..]),
@@ -1920,6 +1925,46 @@ pub(crate) fn resolve_table_cell(
 }
 
 
+/// 최상위 표 번호(`--table N`, `set-cell`/`export-tables`와 같은 채번)를 셀 좌표 없이
+/// (구역, 부모 문단, 컨트롤) 로만 해석한다. 표 단위 편집(`move-table`/`transpose-table`/
+/// `set-column-widths`)이 공유한다 — `resolve_table_cell`에서 row/col 해석만 뺀 부분집합.
+pub(crate) fn resolve_table_index(
+    document: &rhwp::model::document::Document,
+    table_no: usize,
+) -> Result<(usize, usize, usize), CellResolveError> {
+    use rhwp::document_core::queries::table_extract::extract_tables;
+    let grids = extract_tables(document);
+    let Some(grid) = grids
+        .iter()
+        .find(|g| g.index == table_no && g.container_path.is_empty())
+    else {
+        let top_level = grids.iter().filter(|g| g.container_path.is_empty()).count();
+        return Err(CellResolveError::Runtime(format!(
+            "오류: 본문 최상위 표 {} 번이 없습니다 (최상위 표 {}개; 중첩 표는 v1 범위 밖).",
+            table_no, top_level
+        )));
+    };
+    Ok((grid.section, grid.paragraph, grid.control))
+}
+
+/// `resolve_table_index`가 가리키는 표의 (행 수, 열 수) — dry-run 미리보기와
+/// 폭 개수 사전 검증에 쓴다(표를 실제로 바꾸지 않는 읽기 전용 조회).
+pub(crate) fn table_dimensions(
+    document: &rhwp::model::document::Document,
+    section_idx: usize,
+    parent_para_idx: usize,
+    control_idx: usize,
+) -> Option<(u16, u16)> {
+    use rhwp::model::control::Control;
+    match document.sections[section_idx].paragraphs[parent_para_idx]
+        .controls
+        .get(control_idx)
+    {
+        Some(Control::Table(t)) => Some((t.row_count, t.col_count)),
+        _ => None,
+    }
+}
+
 pub(crate) fn edit_set_cell(args: &[String]) -> i32 {
     let mut file_path: Option<&str> = None;
     let mut table_arg: Option<usize> = None;
@@ -2193,6 +2238,635 @@ pub(crate) fn edit_set_cell(args: &[String]) -> i32 {
         println!(
             "셀 기록 완료: {} → {} — 표{} ({},{}) {:?} → {:?}",
             file_path, output_path, table_no, row, col, old_text, new_text
+        );
+    }
+    if verify_failed {
+        eprintln!("검증 실패(--verify): 저장본 재파싱 IR 차이 — 상세는 --json 또는 ir-diff");
+        process::exit(3);
+    }
+    EXIT_OK
+}
+
+
+
+/// `edit move-table` — 표의 위치 오프셋(HWPUNIT)을 이동한다 (upstream #5185/#5192 계열
+/// 선별 이식 — 배선은 CLI뿐, 코어 로직은 기존 `move_table_offset_native` 재사용).
+///
+/// `--dh`/`--dv` 는 생략하면 0(그 축은 이동하지 않음). treat_as_char(본문배치) 표가
+/// 문단 경계를 넘으면 표가 다른 문단으로 옮겨갈 수 있어 `changedPages`는 이동 후
+/// 최종 문단 기준으로 계산한다.
+pub(crate) fn edit_move_table(args: &[String]) -> i32 {
+    const USAGE: &str = "사용법: rhwp edit move-table <파일> --table <번호> [--dh <HWPUNIT>] [--dv <HWPUNIT>] [-o <출력>] [--dry-run] [--verify] [--json]";
+
+    let mut file_path: Option<&str> = None;
+    let mut table_arg: Option<usize> = None;
+    let mut dh: i32 = 0;
+    let mut dv: i32 = 0;
+    let mut out_path: Option<String> = None;
+    let mut dry_run = false;
+    let mut json_mode = false;
+    let mut verify_mode = false;
+
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--table" => {
+                i += 1;
+                match args.get(i).and_then(|v| v.parse::<usize>().ok()) {
+                    Some(v) => table_arg = Some(v),
+                    None => {
+                        eprintln!("오류: --table 뒤에 0 이상의 정수가 필요합니다.");
+                        return EXIT_USAGE;
+                    }
+                }
+            }
+            "--dh" => {
+                i += 1;
+                match args.get(i).and_then(|v| v.parse::<i32>().ok()) {
+                    Some(v) => dh = v,
+                    None => {
+                        eprintln!("오류: --dh 뒤에 정수(HWPUNIT)가 필요합니다.");
+                        return EXIT_USAGE;
+                    }
+                }
+            }
+            "--dv" => {
+                i += 1;
+                match args.get(i).and_then(|v| v.parse::<i32>().ok()) {
+                    Some(v) => dv = v,
+                    None => {
+                        eprintln!("오류: --dv 뒤에 정수(HWPUNIT)가 필요합니다.");
+                        return EXIT_USAGE;
+                    }
+                }
+            }
+            "-o" | "--output" => {
+                i += 1;
+                match args.get(i) {
+                    Some(v) => out_path = Some(v.clone()),
+                    None => {
+                        eprintln!("오류: -o 뒤에 출력 파일 경로가 필요합니다.");
+                        return EXIT_USAGE;
+                    }
+                }
+            }
+            "--dry-run" => dry_run = true,
+            "--json" => json_mode = true,
+            "--verify" => verify_mode = true,
+            other if other.starts_with('-') => {
+                eprintln!("알 수 없는 옵션: {other}");
+                return EXIT_USAGE;
+            }
+            other => {
+                if file_path.replace(other).is_some() {
+                    eprintln!("오류: 입력 파일은 하나만 지정할 수 있습니다: {other}");
+                    return EXIT_USAGE;
+                }
+            }
+        }
+        i += 1;
+    }
+
+    let (Some(file_path), Some(table_no)) = (file_path, table_arg) else {
+        eprintln!("{USAGE}");
+        return EXIT_USAGE;
+    };
+    if dh == 0 && dv == 0 {
+        eprintln!("오류: --dh 또는 --dv 중 하나 이상 0이 아닌 값을 지정해야 합니다.");
+        return EXIT_USAGE;
+    }
+
+    let bytes = match fs::read(file_path) {
+        Ok(d) => d,
+        Err(e) => {
+            eprintln!("오류: 파일을 읽을 수 없습니다 - {}: {}", file_path, e);
+            return EXIT_RUNTIME;
+        }
+    };
+    let mut doc = match load_document(&bytes) {
+        Ok(d) => d,
+        Err(e) => return e.report(),
+    };
+
+    let (sec, para, ctrl) = match resolve_table_index(doc.document(), table_no) {
+        Ok(v) => v,
+        Err(CellResolveError::Usage(msg)) => {
+            eprintln!("{msg}");
+            return EXIT_USAGE;
+        }
+        Err(CellResolveError::Runtime(msg)) => {
+            eprintln!("{msg}");
+            return EXIT_RUNTIME;
+        }
+    };
+
+    let mut final_para = para;
+    if !dry_run {
+        let result = match doc.move_table_offset_native(sec, para, ctrl, dh, dv) {
+            Ok(v) => v,
+            Err(e) => {
+                eprintln!("오류: 표 이동 실패 - {}", e);
+                return EXIT_RUNTIME;
+            }
+        };
+        final_para = serde_json::from_str::<serde_json::Value>(&result)
+            .ok()
+            .and_then(|v| v["ppi"].as_u64())
+            .map(|n| n as usize)
+            .unwrap_or(para);
+    }
+
+    let out_format = edit_output_format(&bytes, out_path.as_deref());
+    let output_path = out_path.unwrap_or_else(|| {
+        let stem = Path::new(file_path)
+            .file_stem()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_else(|| "output".to_string());
+        format!("{}_moved.{}", stem, out_format.ext())
+    });
+
+    let mut verify_report = serde_json::Value::Null;
+    let mut verify_failed = false;
+    if !dry_run {
+        let out_bytes = match edit_serialize(&mut doc, out_format) {
+            Ok(b) => b,
+            Err(e) => {
+                eprintln!(
+                    "오류: {} 직렬화 실패 - {}",
+                    out_format.label().to_uppercase(),
+                    e
+                );
+                return EXIT_RUNTIME;
+            }
+        };
+        if let Err(e) = fs::write(&output_path, &out_bytes) {
+            eprintln!("오류: 출력 쓰기 실패 - {}: {}", output_path, e);
+            return EXIT_RUNTIME;
+        }
+        if verify_mode {
+            let cross = out_format == EditOutputFormat::Hwp
+                && rhwp::parser::detect_format(&bytes) == rhwp::parser::FileFormat::Hwpx;
+            let (report, failed) = edit_verify_report(&doc, &out_bytes, cross);
+            verify_report = report;
+            verify_failed = failed;
+        }
+    }
+
+    let changed_pages = if dry_run {
+        serde_json::Value::Null
+    } else {
+        match doc.pages_covering_paragraphs(&[(sec, final_para)]) {
+            Some(pages) => serde_json::json!(pages),
+            None => serde_json::Value::Null,
+        }
+    };
+
+    if json_mode {
+        let mut envelope = serde_json::json!({
+            "schemaVersion": ENVELOPE_SCHEMA_VERSION,
+            "source": file_path,
+            "table": table_no,
+            "deltaH": dh,
+            "deltaV": dv,
+            "dryRun": dry_run,
+            "changedPages": changed_pages,
+        });
+        if !dry_run {
+            envelope["output"] = serde_json::Value::String(output_path.clone());
+            envelope["outputFormat"] = serde_json::Value::String(out_format.label().to_string());
+            envelope["verify"] = verify_report.clone();
+        }
+        println!("{}", provenance::marked(envelope, "edit"));
+        if verify_failed {
+            process::exit(3);
+        }
+        return EXIT_OK;
+    }
+
+    if dry_run {
+        println!(
+            "이동 예정: {} 표{} (dh={}, dv={})",
+            file_path, table_no, dh, dv
+        );
+    } else {
+        println!(
+            "표 이동 완료: {} → {} — 표{} (dh={}, dv={})",
+            file_path, output_path, table_no, dh, dv
+        );
+    }
+    if verify_failed {
+        eprintln!("검증 실패(--verify): 저장본 재파싱 IR 차이 — 상세는 --json 또는 ir-diff");
+        process::exit(3);
+    }
+    EXIT_OK
+}
+
+
+
+/// `edit transpose-table` — 표 전체의 행/열을 제자리에서 바꾼다 (upstream #5185/#5192
+/// 계열 선별 이식 — 코어 로직은 기존 `transpose_table_cells_in_place_native` 재사용).
+///
+/// 병합 셀이 있는 표는 대상이 아니다(코어가 `Err`로 거부) — 부분 선택 행/열 바꿈은
+/// 클립보드 경로(`copy_table_cells_transposed_native`/`paste_table_cells_transposed_native`,
+/// 스튜디오 전용)가 다루며, 이번 라운드 CLI 배선 범위 밖이다.
+pub(crate) fn edit_transpose_table(args: &[String]) -> i32 {
+    const USAGE: &str = "사용법: rhwp edit transpose-table <파일> --table <번호> [-o <출력>] [--dry-run] [--verify] [--json]";
+
+    let mut file_path: Option<&str> = None;
+    let mut table_arg: Option<usize> = None;
+    let mut out_path: Option<String> = None;
+    let mut dry_run = false;
+    let mut json_mode = false;
+    let mut verify_mode = false;
+
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--table" => {
+                i += 1;
+                match args.get(i).and_then(|v| v.parse::<usize>().ok()) {
+                    Some(v) => table_arg = Some(v),
+                    None => {
+                        eprintln!("오류: --table 뒤에 0 이상의 정수가 필요합니다.");
+                        return EXIT_USAGE;
+                    }
+                }
+            }
+            "-o" | "--output" => {
+                i += 1;
+                match args.get(i) {
+                    Some(v) => out_path = Some(v.clone()),
+                    None => {
+                        eprintln!("오류: -o 뒤에 출력 파일 경로가 필요합니다.");
+                        return EXIT_USAGE;
+                    }
+                }
+            }
+            "--dry-run" => dry_run = true,
+            "--json" => json_mode = true,
+            "--verify" => verify_mode = true,
+            other if other.starts_with('-') => {
+                eprintln!("알 수 없는 옵션: {other}");
+                return EXIT_USAGE;
+            }
+            other => {
+                if file_path.replace(other).is_some() {
+                    eprintln!("오류: 입력 파일은 하나만 지정할 수 있습니다: {other}");
+                    return EXIT_USAGE;
+                }
+            }
+        }
+        i += 1;
+    }
+
+    let (Some(file_path), Some(table_no)) = (file_path, table_arg) else {
+        eprintln!("{USAGE}");
+        return EXIT_USAGE;
+    };
+
+    let bytes = match fs::read(file_path) {
+        Ok(d) => d,
+        Err(e) => {
+            eprintln!("오류: 파일을 읽을 수 없습니다 - {}: {}", file_path, e);
+            return EXIT_RUNTIME;
+        }
+    };
+    let mut doc = match load_document(&bytes) {
+        Ok(d) => d,
+        Err(e) => return e.report(),
+    };
+
+    let (sec, para, ctrl) = match resolve_table_index(doc.document(), table_no) {
+        Ok(v) => v,
+        Err(CellResolveError::Usage(msg)) => {
+            eprintln!("{msg}");
+            return EXIT_USAGE;
+        }
+        Err(CellResolveError::Runtime(msg)) => {
+            eprintln!("{msg}");
+            return EXIT_RUNTIME;
+        }
+    };
+    let Some((source_rows, source_cols)) = table_dimensions(doc.document(), sec, para, ctrl)
+    else {
+        eprintln!("오류: 표 컨트롤 좌표 해석 실패 (내부 불일치).");
+        return EXIT_RUNTIME;
+    };
+
+    if !dry_run {
+        if let Err(e) = doc.transpose_table_cells_in_place_native(sec, para, ctrl) {
+            eprintln!("오류: 표 행/열 바꿈 실패 - {}", e);
+            return EXIT_RUNTIME;
+        }
+    }
+
+    let out_format = edit_output_format(&bytes, out_path.as_deref());
+    let output_path = out_path.unwrap_or_else(|| {
+        let stem = Path::new(file_path)
+            .file_stem()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_else(|| "output".to_string());
+        format!("{}_transposed.{}", stem, out_format.ext())
+    });
+
+    let mut verify_report = serde_json::Value::Null;
+    let mut verify_failed = false;
+    if !dry_run {
+        let out_bytes = match edit_serialize(&mut doc, out_format) {
+            Ok(b) => b,
+            Err(e) => {
+                eprintln!(
+                    "오류: {} 직렬화 실패 - {}",
+                    out_format.label().to_uppercase(),
+                    e
+                );
+                return EXIT_RUNTIME;
+            }
+        };
+        if let Err(e) = fs::write(&output_path, &out_bytes) {
+            eprintln!("오류: 출력 쓰기 실패 - {}: {}", output_path, e);
+            return EXIT_RUNTIME;
+        }
+        if verify_mode {
+            let cross = out_format == EditOutputFormat::Hwp
+                && rhwp::parser::detect_format(&bytes) == rhwp::parser::FileFormat::Hwpx;
+            let (report, failed) = edit_verify_report(&doc, &out_bytes, cross);
+            verify_report = report;
+            verify_failed = failed;
+        }
+    }
+
+    let changed_pages = if dry_run {
+        serde_json::Value::Null
+    } else {
+        match doc.pages_covering_paragraphs(&[(sec, para)]) {
+            Some(pages) => serde_json::json!(pages),
+            None => serde_json::Value::Null,
+        }
+    };
+
+    if json_mode {
+        let mut envelope = serde_json::json!({
+            "schemaVersion": ENVELOPE_SCHEMA_VERSION,
+            "source": file_path,
+            "table": table_no,
+            "sourceRows": source_rows,
+            "sourceCols": source_cols,
+            "targetRows": source_cols,
+            "targetCols": source_rows,
+            "dryRun": dry_run,
+            "changedPages": changed_pages,
+        });
+        if !dry_run {
+            envelope["output"] = serde_json::Value::String(output_path.clone());
+            envelope["outputFormat"] = serde_json::Value::String(out_format.label().to_string());
+            envelope["verify"] = verify_report.clone();
+        }
+        println!("{}", provenance::marked(envelope, "edit"));
+        if verify_failed {
+            process::exit(3);
+        }
+        return EXIT_OK;
+    }
+
+    if dry_run {
+        println!(
+            "행/열 바꿈 예정: {} 표{} ({}x{} → {}x{})",
+            file_path, table_no, source_rows, source_cols, source_cols, source_rows
+        );
+    } else {
+        println!(
+            "표 행/열 바꿈 완료: {} → {} — 표{} ({}x{} → {}x{})",
+            file_path, output_path, table_no, source_rows, source_cols, source_cols, source_rows
+        );
+    }
+    if verify_failed {
+        eprintln!("검증 실패(--verify): 저장본 재파싱 IR 차이 — 상세는 --json 또는 ir-diff");
+        process::exit(3);
+    }
+    EXIT_OK
+}
+
+
+
+/// `edit set-column-widths` — 표의 열별 폭(HWPUNIT)을 절대값으로 설정한다 (upstream
+/// #5185/#5192 계열 선별 이식 — 코어 로직은 기존 `set_table_column_widths_native` 재사용).
+///
+/// `--widths`는 쉼표로 구분한 HWPUNIT 정수 목록이며 개수가 표의 열 수와 정확히 같아야
+/// 한다 — 일치하지 않으면 `--dry-run` 에서도 usage 오류로 미리 알린다. 표 전체 폭은
+/// 입력한 폭의 합이 된다(페이지를 넘지 않으려면 합을 본문 폭 이하로 맞추거나
+/// `edit set-cell` 저장 후 `fit-table-to-page`류 후속 조정을 쓴다).
+pub(crate) fn edit_set_column_widths(args: &[String]) -> i32 {
+    const USAGE: &str = "사용법: rhwp edit set-column-widths <파일> --table <번호> --widths <W1,W2,...> [-o <출력>] [--dry-run] [--verify] [--json]";
+
+    let mut file_path: Option<&str> = None;
+    let mut table_arg: Option<usize> = None;
+    let mut widths_arg: Option<Vec<u32>> = None;
+    let mut out_path: Option<String> = None;
+    let mut dry_run = false;
+    let mut json_mode = false;
+    let mut verify_mode = false;
+
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--table" => {
+                i += 1;
+                match args.get(i).and_then(|v| v.parse::<usize>().ok()) {
+                    Some(v) => table_arg = Some(v),
+                    None => {
+                        eprintln!("오류: --table 뒤에 0 이상의 정수가 필요합니다.");
+                        return EXIT_USAGE;
+                    }
+                }
+            }
+            "--widths" => {
+                i += 1;
+                match args.get(i) {
+                    Some(v) => {
+                        let parsed: Result<Vec<u32>, _> =
+                            v.split(',').map(|s| s.trim().parse::<u32>()).collect();
+                        match parsed {
+                            Ok(widths) if !widths.is_empty() => widths_arg = Some(widths),
+                            _ => {
+                                eprintln!(
+                                    "오류: --widths 는 쉼표로 구분한 0 이상의 정수 목록이어야 합니다 (예: 2000,3000,2000)."
+                                );
+                                return EXIT_USAGE;
+                            }
+                        }
+                    }
+                    None => {
+                        eprintln!("오류: --widths 뒤에 쉼표로 구분한 HWPUNIT 목록이 필요합니다.");
+                        return EXIT_USAGE;
+                    }
+                }
+            }
+            "-o" | "--output" => {
+                i += 1;
+                match args.get(i) {
+                    Some(v) => out_path = Some(v.clone()),
+                    None => {
+                        eprintln!("오류: -o 뒤에 출력 파일 경로가 필요합니다.");
+                        return EXIT_USAGE;
+                    }
+                }
+            }
+            "--dry-run" => dry_run = true,
+            "--json" => json_mode = true,
+            "--verify" => verify_mode = true,
+            other if other.starts_with('-') => {
+                eprintln!("알 수 없는 옵션: {other}");
+                return EXIT_USAGE;
+            }
+            other => {
+                if file_path.replace(other).is_some() {
+                    eprintln!("오류: 입력 파일은 하나만 지정할 수 있습니다: {other}");
+                    return EXIT_USAGE;
+                }
+            }
+        }
+        i += 1;
+    }
+
+    let (Some(file_path), Some(table_no), Some(widths)) = (file_path, table_arg, widths_arg)
+    else {
+        eprintln!("{USAGE}");
+        return EXIT_USAGE;
+    };
+
+    let bytes = match fs::read(file_path) {
+        Ok(d) => d,
+        Err(e) => {
+            eprintln!("오류: 파일을 읽을 수 없습니다 - {}: {}", file_path, e);
+            return EXIT_RUNTIME;
+        }
+    };
+    let mut doc = match load_document(&bytes) {
+        Ok(d) => d,
+        Err(e) => return e.report(),
+    };
+
+    let (sec, para, ctrl) = match resolve_table_index(doc.document(), table_no) {
+        Ok(v) => v,
+        Err(CellResolveError::Usage(msg)) => {
+            eprintln!("{msg}");
+            return EXIT_USAGE;
+        }
+        Err(CellResolveError::Runtime(msg)) => {
+            eprintln!("{msg}");
+            return EXIT_RUNTIME;
+        }
+    };
+    let Some((_, col_count)) = table_dimensions(doc.document(), sec, para, ctrl) else {
+        eprintln!("오류: 표 컨트롤 좌표 해석 실패 (내부 불일치).");
+        return EXIT_RUNTIME;
+    };
+    // [set_column_widths 계약] 개수 불일치는 코어도 거부하지만, --dry-run 에서도
+    // 같은 오류를 미리 보게 해 실행 전에 잡는다(set-cell 의 격자 범위 사전검증과 동형).
+    if widths.len() != col_count as usize {
+        eprintln!(
+            "오류: --widths 개수 {} 가 표 {} 의 열 수 {} 와 다릅니다.",
+            widths.len(),
+            table_no,
+            col_count
+        );
+        return EXIT_USAGE;
+    }
+
+    let mut col_count_result = col_count as u64;
+    let mut table_width_result: u64 = widths.iter().map(|w| *w as u64).sum();
+    if !dry_run {
+        let result = match doc.set_table_column_widths_native(sec, para, ctrl, widths.clone()) {
+            Ok(v) => v,
+            Err(e) => {
+                eprintln!("오류: 열 폭 설정 실패 - {}", e);
+                return EXIT_RUNTIME;
+            }
+        };
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&result) {
+            col_count_result = v["colCount"].as_u64().unwrap_or(col_count_result);
+            table_width_result = v["tableWidth"].as_u64().unwrap_or(table_width_result);
+        }
+    }
+
+    let out_format = edit_output_format(&bytes, out_path.as_deref());
+    let output_path = out_path.unwrap_or_else(|| {
+        let stem = Path::new(file_path)
+            .file_stem()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_else(|| "output".to_string());
+        format!("{}_colwidths.{}", stem, out_format.ext())
+    });
+
+    let mut verify_report = serde_json::Value::Null;
+    let mut verify_failed = false;
+    if !dry_run {
+        let out_bytes = match edit_serialize(&mut doc, out_format) {
+            Ok(b) => b,
+            Err(e) => {
+                eprintln!(
+                    "오류: {} 직렬화 실패 - {}",
+                    out_format.label().to_uppercase(),
+                    e
+                );
+                return EXIT_RUNTIME;
+            }
+        };
+        if let Err(e) = fs::write(&output_path, &out_bytes) {
+            eprintln!("오류: 출력 쓰기 실패 - {}: {}", output_path, e);
+            return EXIT_RUNTIME;
+        }
+        if verify_mode {
+            let cross = out_format == EditOutputFormat::Hwp
+                && rhwp::parser::detect_format(&bytes) == rhwp::parser::FileFormat::Hwpx;
+            let (report, failed) = edit_verify_report(&doc, &out_bytes, cross);
+            verify_report = report;
+            verify_failed = failed;
+        }
+    }
+
+    let changed_pages = if dry_run {
+        serde_json::Value::Null
+    } else {
+        match doc.pages_covering_paragraphs(&[(sec, para)]) {
+            Some(pages) => serde_json::json!(pages),
+            None => serde_json::Value::Null,
+        }
+    };
+
+    if json_mode {
+        let mut envelope = serde_json::json!({
+            "schemaVersion": ENVELOPE_SCHEMA_VERSION,
+            "source": file_path,
+            "table": table_no,
+            "widths": widths,
+            "colCount": col_count_result,
+            "tableWidth": table_width_result,
+            "dryRun": dry_run,
+            "changedPages": changed_pages,
+        });
+        if !dry_run {
+            envelope["output"] = serde_json::Value::String(output_path.clone());
+            envelope["outputFormat"] = serde_json::Value::String(out_format.label().to_string());
+            envelope["verify"] = verify_report.clone();
+        }
+        println!("{}", provenance::marked(envelope, "edit"));
+        if verify_failed {
+            process::exit(3);
+        }
+        return EXIT_OK;
+    }
+
+    if dry_run {
+        println!(
+            "열 폭 설정 예정: {} 표{} widths={:?}",
+            file_path, table_no, widths
+        );
+    } else {
+        println!(
+            "표 열 폭 설정 완료: {} → {} — 표{} widths={:?} (표 전체 폭 {})",
+            file_path, output_path, table_no, widths, table_width_result
         );
     }
     if verify_failed {
