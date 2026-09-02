@@ -932,6 +932,24 @@ rhwp export-tables 작성본.hwpx --json | jq '.tables[0].cells[] | select(.row=
 - `--json` 봉투: `{"schemaVersion":"1.0","source","table","props":{…},"dryRun","changedPages","captionCharOffset"?,"output"?,"outputFormat"?,"verify"?}`
   (`captionCharOffset` 은 `hasCaption:true` 로 새 캡션을 만들었을 때만 있다)
 
+### `edit set-section-def <파일> --props <JSON> [--section <번호>] [옵션]` (upstream #5185/#5192 계열)
+구역 정의(SectionDef)를 JSON 객체로 고친다. `--section` 은 생략하면 0(첫 구역).
+`--props` 가 JSON 객체가 아니거나 `--section` 이 구역 수를 벗어나면 **`--dry-run`
+에서도** 오류로 미리 잡는다(전자는 사용법 오류 exit 2, 후자는 실행 오류 exit 1).
+지원 필드 전체는 코어 `apply_section_def_json`
+(`src/document_core/queries/rendering.rs`) 구현이 정본이다 — 이 명령은 필드를
+해석하지 않고 그대로 넘긴다. 대표 필드:
+  - `pageNum`/`pictureNum`/`tableNum`/`equationNum` — 쪽/그림/표/수식 시작 번호
+  - `pageNumType`, `columnSpacing`(단 간격, HWPUNIT), `defaultTabSpacing`(HWPUNIT)
+  - `hideHeader`/`hideFooter`/`hideMasterPage`/`hideBorder`/`hideFill`/`hideEmptyLine`(bool)
+- 원래 report(2026-09-01)는 이 항목을 "신규 IR 필요"로 분류했으나, 착수 전
+  선확인(2026-09-02)에서 rhwp-code에 이미 동형 네이티브 함수가 있음을 확인해 다른
+  표 편집 3종과 같은 저위험 CLI 배선으로 전환됐다.
+- `-o, --output <파일>` — 기본 `<입력명>_secdef.<입력과 같은 확장자>`
+- `--dry-run` — 파일을 쓰지 않고 구역 번호·props 형식 검증만 수행한다.
+- `--verify` — 저장 직후 재파싱 IR 자기검증(차이 시 exit 3).
+- `--json` 봉투: `{"schemaVersion":"1.0","source","section","props":{…},"dryRun","changedPages","pageCount"?,"output"?,"outputFormat"?,"verify"?}`
+
 ### `edit move-table <파일> --table <번호> [--dh <HWPUNIT>] [--dv <HWPUNIT>] [옵션]` (upstream #5185/#5192 계열)
 표의 위치 오프셋(HWPUNIT, 1/7200 inch)을 이동한다. `--dh`/`--dv` 는 생략하면 0(그
 축은 이동하지 않음) — 최소 하나는 0이 아니어야 한다(둘 다 생략·0이면 exit 2).

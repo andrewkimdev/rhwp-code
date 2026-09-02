@@ -1,12 +1,12 @@
-//! `edit set-table-props` / `edit move-table` / `edit transpose-table` /
-//! `edit set-column-widths` 계약 회귀 테스트 (upstream #5185/#5192 계열 선별 이식 —
-//! Tier 2 라운드).
+//! `edit set-table-props` / `edit set-section-def` / `edit move-table` /
+//! `edit transpose-table` / `edit set-column-widths` 계약 회귀 테스트 (upstream
+//! #5185/#5192 계열 선별 이식 — Tier 2 라운드).
 //!
-//! 코어 로직은 기존 `table_ops.rs` 네이티브 함수(`set_table_properties_native`,
-//! `move_table_offset_native`, `transpose_table_cells_in_place_native`,
-//! `set_table_column_widths_native`)를 그대로 재사용하고 CLI 배선만 신규다. 이 테스트는
-//! 그 배선 — 인자 파싱, `--dry-run`(무변경), `--verify`(저장본 재파싱 IR 대조), 종료
-//! 코드(#2707 계약) — 을 검증한다.
+//! 코어 로직은 기존 네이티브 함수(`set_table_properties_native`,
+//! `set_section_def_native`, `move_table_offset_native`,
+//! `transpose_table_cells_in_place_native`, `set_table_column_widths_native`)를 그대로
+//! 재사용하고 CLI 배선만 신규다. 이 테스트는 그 배선 — 인자 파싱, `--dry-run`(무변경),
+//! `--verify`(저장본 재파싱 IR 대조), 종료 코드(#2707 계약) — 을 검증한다.
 #![cfg(not(target_arch = "wasm32"))]
 
 use std::path::{Path, PathBuf};
@@ -461,4 +461,77 @@ fn set_column_widths_rejects_missing_table_index() {
     ];
     let out = run(&args);
     assert_eq!(out.status.code(), Some(1), "{}", describe(&args, &out));
+}
+
+// ---------------------------------------------------------------------------
+// set-section-def
+// ---------------------------------------------------------------------------
+
+#[test]
+fn set_section_def_rejects_non_object_props_even_in_dry_run() {
+    let file = path_str(&sample(PLAIN_TABLE));
+    let args = [
+        "edit",
+        "set-section-def",
+        &file,
+        "--props",
+        "true",
+        "--dry-run",
+    ];
+    let out = run(&args);
+    assert_eq!(out.status.code(), Some(2), "{}", describe(&args, &out));
+}
+
+#[test]
+fn set_section_def_rejects_out_of_range_section_even_in_dry_run() {
+    let file = path_str(&sample(PLAIN_TABLE));
+    let args = [
+        "edit",
+        "set-section-def",
+        &file,
+        "--props",
+        "{\"hideHeader\":true}",
+        "--section",
+        "99",
+        "--dry-run",
+    ];
+    let out = run(&args);
+    assert_eq!(out.status.code(), Some(1), "{}", describe(&args, &out));
+}
+
+#[test]
+fn set_section_def_applies_hide_header_and_verify_passes() {
+    let source_path = sample(PLAIN_TABLE);
+    let file = path_str(&source_path);
+    let out_path = tmp_dir().join("secdef.hwpx");
+    let out_str = path_str(&out_path);
+
+    let before = load(&source_path);
+    let before_hide_header = before.document().sections[0].section_def.hide_header;
+
+    let args = [
+        "edit",
+        "set-section-def",
+        &file,
+        "--props",
+        &format!("{{\"hideHeader\":{},\"columnSpacing\":777}}", !before_hide_header),
+        "-o",
+        &out_str,
+        "--verify",
+        "--json",
+    ];
+    let out = run(&args);
+    assert_eq!(out.status.code(), Some(0), "{}", describe(&args, &out));
+    let env = json_of(&out);
+    assert_eq!(env["verify"]["identical"], true, "{env}");
+    assert!(env["changedPages"].is_array(), "{env}");
+    assert!(env["pageCount"].as_u64().is_some(), "{env}");
+
+    let after = load(&out_path);
+    let after_sd = &after.document().sections[0].section_def;
+    assert_eq!(
+        after_sd.hide_header, !before_hide_header,
+        "hideHeader가 토글돼야 한다"
+    );
+    assert_eq!(after_sd.column_spacing, 777, "columnSpacing이 반영돼야 한다");
 }

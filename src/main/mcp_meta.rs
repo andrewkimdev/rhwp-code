@@ -152,6 +152,7 @@ pub(crate) fn mcp_tool_definitions() -> Vec<serde_json::Value> {
                 | "hwp_set_checkbox"
                 | "hwp_set_cell"
                 | "hwp_set_table_props"
+                | "hwp_set_section_def"
                 | "hwp_move_table"
                 | "hwp_transpose_table"
                 | "hwp_set_column_widths"
@@ -1109,6 +1110,31 @@ pub(crate) fn mcp_tool_definitions() -> Vec<serde_json::Value> {
                 { "when": "verify", "args": ["--verify"] }
             ]),
             &["schemaVersion", "source", "table", "props", "dryRun", "changedPages", "captionCharOffset", "output", "outputFormat", "verify"],
+        ),
+        tool_with_optional_args(
+            "hwp_set_section_def",
+            "구역 정의(SectionDef: 머리말/꼬리말/바탕쪽/테두리/채움 감추기, 쪽·그림·표·수식 시작 번호, 단 간격, 기본 탭 간격)를 JSON 객체로 고쳐 새 문서를 만든다. 지원 필드는 코어 set_section_def_native 구현이 정본이며, 이 도구는 필드를 해석하지 않고 그대로 넘긴다(예: {\"hideHeader\":true}). section 을 생략하면 첫 구역(0). JSON 객체가 아니거나 구역 번호가 범위를 벗어나면 --dry-run 에서도 거부한다. 산출물은 입력 형식을 따른다(HWPX 입력 → HWPX 산출).",
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "입력 HWP/HWPX 문서 경로" },
+                    "section": { "type": "integer", "minimum": 0, "description": "구역 번호 (0부터). 생략하면 0" },
+                    "props": { "type": "string", "description": "구역 정의 JSON 객체 문자열, 예: \"{\\\"hideHeader\\\":true}\"" },
+                    "output": { "type": "string", "description": "출력 파일 경로. 생략하면 <입력명>_secdef.hwp (HWPX 입력이면 _secdef.hwpx)" },
+                    "dryRun": { "type": "boolean", "description": "true 면 파일을 쓰지 않고 구역 번호·props 형식 검증만 수행" },
+                    "verify": { "type": "boolean", "description": "저장 직후 재파싱 IR 자기검증 — 차이가 있으면 exit 3" }
+                },
+                "required": ["path", "props"],
+            }),
+            "edit",
+            serde_json::json!(["edit", "set-section-def", "{path}", "--props", "{props}", "--json"]),
+            serde_json::json!([
+                { "when": "section", "args": ["--section", "{section}"] },
+                { "when": "output", "args": ["-o", "{output}"] },
+                { "when": "dryRun", "args": ["--dry-run"] },
+                { "when": "verify", "args": ["--verify"] }
+            ]),
+            &["schemaVersion", "source", "section", "props", "dryRun", "changedPages", "pageCount", "output", "outputFormat", "verify"],
         ),
         tool_with_optional_args(
             "hwp_move_table",
