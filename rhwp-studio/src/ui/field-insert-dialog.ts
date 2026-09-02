@@ -11,15 +11,20 @@ import {
   MAX_FIELD_NAME_LEN,
   type ClickHereProps,
 } from './field-edit-dialog';
+import { checkNameCollision, wireTitleNameSync } from './field-name-sync';
 
 export class FieldInsertDialog extends ModalDialog {
   private guideInput!: HTMLInputElement;
   private memoInput!: HTMLTextAreaElement;
   private nameInput!: HTMLInputElement;
   private editableCheckbox!: HTMLInputElement;
+  private titleNameSyncCheckbox!: HTMLInputElement;
   private nameErrorLabel!: HTMLDivElement;
   private guideErrorLabel!: HTMLDivElement;
   private memoErrorLabel!: HTMLDivElement;
+  private nameCollisionLabel!: HTMLDivElement;
+  private confirmBtn!: HTMLButtonElement;
+  private existingNames: ReadonlySet<string> = new Set();
 
   onApply: ((props: ClickHereProps) => void) | null = null;
 
@@ -110,8 +115,33 @@ export class FieldInsertDialog extends ModalDialog {
     editableRow.appendChild(document.createTextNode(' 양식 모드에서 편집 가능(F)'));
     panel.appendChild(editableRow);
 
+    const syncRow = document.createElement('label');
+    syncRow.className = 'field-edit-checkbox-row';
+    this.titleNameSyncCheckbox = document.createElement('input');
+    this.titleNameSyncCheckbox.type = 'checkbox';
+    this.titleNameSyncCheckbox.checked = true;
+    syncRow.appendChild(this.titleNameSyncCheckbox);
+    syncRow.appendChild(document.createTextNode(' 제목과 이름 일치'));
+    panel.appendChild(syncRow);
+
+    this.nameCollisionLabel = document.createElement('div');
+    this.nameCollisionLabel.className = 'field-edit-error';
+    this.nameCollisionLabel.style.color = '#c00';
+    this.nameCollisionLabel.style.fontSize = '11px';
+    this.nameCollisionLabel.style.display = 'none';
+    this.nameCollisionLabel.textContent = '동일한 이름의 필드가 있습니다.';
+    panel.appendChild(this.nameCollisionLabel);
+
+    wireTitleNameSync(this.guideInput, this.nameInput, this.titleNameSyncCheckbox, () => this.checkCollision());
+
     body.appendChild(panel);
     return body;
+  }
+
+  private checkCollision(): void {
+    const collision = checkNameCollision(this.nameInput.value, this.existingNames);
+    this.nameCollisionLabel.style.display = collision ? '' : 'none';
+    this.confirmBtn.disabled = collision;
   }
 
   protected onConfirm(): void | boolean {
@@ -147,13 +177,23 @@ export class FieldInsertDialog extends ModalDialog {
     });
   }
 
+  /** 대화상자를 열고 문서 내 기존 필드 이름 목록(충돌 검사용)을 설정한다 */
+  showWith(existingNames: ReadonlySet<string>): void {
+    this.existingNames = existingNames;
+    this.show();
+    this.checkCollision();
+  }
+
   override show(): void {
     super.show();
 
     const footer = this.dialog.querySelector('.dialog-footer');
     if (footer) {
       const buttons = footer.querySelectorAll('button');
-      if (buttons[0]) buttons[0].textContent = '넣기(D)';
+      if (buttons[0]) {
+        buttons[0].textContent = '넣기(D)';
+        this.confirmBtn = buttons[0] as HTMLButtonElement;
+      }
       if (buttons[1]) buttons[1].textContent = '취소';
     }
 
@@ -162,6 +202,7 @@ export class FieldInsertDialog extends ModalDialog {
     this.memoInput.value = '';
     this.nameInput.value = '';
     this.editableCheckbox.checked = true;
+    this.titleNameSyncCheckbox.checked = true;
 
     this.guideInput.focus();
     this.guideInput.select();

@@ -239,7 +239,8 @@ export const insertCommands: CommandDef[] = [
           console.warn('[insert:field] 누름틀 삽입 실패:', err);
         }
       };
-      fieldInsertDialog.show();
+      const existingNames = new Set(services.wasm.getFieldList().map((f) => f.name));
+      fieldInsertDialog.showWith(existingNames);
     },
   },
   stub('insert:caption-top', '캡션 - 위'),
