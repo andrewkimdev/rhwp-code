@@ -255,12 +255,17 @@ export const editCommands: CommandDef[] = [
         }
       };
       dialog.onClose = restoreEditorFocus;
+      const existingNames = new Set(
+        services.wasm.getFieldList()
+          .filter((f) => f.fieldId !== fi.fieldId)
+          .map((f) => f.name),
+      );
       dialog.showWith({
         guide: props.guide ?? '',
         memo: props.memo ?? '',
         name: props.name ?? '',
         editable: props.editable ?? true,
-      });
+      }, existingNames);
     },
   },
   {

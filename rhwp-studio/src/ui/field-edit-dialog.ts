@@ -4,6 +4,7 @@
  * 누름틀(ClickHere) 필드의 안내문, 메모, 필드 이름, 양식 모드 편집 가능 여부를 편집한다.
  */
 import { ModalDialog } from './dialog';
+import { checkNameCollision, wireTitleNameSync } from './field-name-sync';
 
 export interface ClickHereProps {
   guide: string;
@@ -43,9 +44,13 @@ export class FieldEditDialog extends ModalDialog {
   private memoInput!: HTMLTextAreaElement;
   private nameInput!: HTMLInputElement;
   private editableCheckbox!: HTMLInputElement;
+  private titleNameSyncCheckbox!: HTMLInputElement;
   private nameErrorLabel!: HTMLDivElement;
   private guideErrorLabel!: HTMLDivElement;
   private memoErrorLabel!: HTMLDivElement;
+  private nameCollisionLabel!: HTMLDivElement;
+  private confirmBtn!: HTMLButtonElement;
+  private existingNames: ReadonlySet<string> = new Set();
 
   /** 적용 콜백 */
   onApply: ((props: ClickHereProps) => void) | null = null;
@@ -59,8 +64,9 @@ export class FieldEditDialog extends ModalDialog {
   }
 
   /** 대화상자를 열고 초기값을 설정한다 */
-  showWith(props: ClickHereProps): void {
+  showWith(props: ClickHereProps, existingNames: ReadonlySet<string>): void {
     this.initialProps = props;
+    this.existingNames = existingNames;
     this.show();
 
     // 초기값 반영
@@ -68,10 +74,19 @@ export class FieldEditDialog extends ModalDialog {
     this.memoInput.value = props.memo;
     this.nameInput.value = props.name;
     this.editableCheckbox.checked = props.editable;
+    this.titleNameSyncCheckbox.checked = true;
+
+    this.checkCollision();
 
     // 안내문 입력에 포커스
     this.guideInput.focus();
     this.guideInput.select();
+  }
+
+  private checkCollision(): void {
+    const collision = checkNameCollision(this.nameInput.value, this.existingNames);
+    this.nameCollisionLabel.style.display = collision ? '' : 'none';
+    this.confirmBtn.disabled = collision;
   }
 
   protected createBody(): HTMLElement {
@@ -161,6 +176,25 @@ export class FieldEditDialog extends ModalDialog {
     editableRow.appendChild(editableText);
     panel.appendChild(editableRow);
 
+    // ── 제목과 이름 일치 ──
+    const syncRow = document.createElement('label');
+    syncRow.className = 'field-edit-checkbox-row';
+    this.titleNameSyncCheckbox = document.createElement('input');
+    this.titleNameSyncCheckbox.type = 'checkbox';
+    syncRow.appendChild(this.titleNameSyncCheckbox);
+    syncRow.appendChild(document.createTextNode(' 제목과 이름 일치'));
+    panel.appendChild(syncRow);
+
+    this.nameCollisionLabel = document.createElement('div');
+    this.nameCollisionLabel.className = 'field-edit-error';
+    this.nameCollisionLabel.style.color = '#c00';
+    this.nameCollisionLabel.style.fontSize = '11px';
+    this.nameCollisionLabel.style.display = 'none';
+    this.nameCollisionLabel.textContent = '동일한 이름의 필드가 있습니다.';
+    panel.appendChild(this.nameCollisionLabel);
+
+    wireTitleNameSync(this.guideInput, this.nameInput, this.titleNameSyncCheckbox, () => this.checkCollision());
+
     body.appendChild(panel);
     return body;
   }
@@ -207,7 +241,10 @@ export class FieldEditDialog extends ModalDialog {
     const footer = this.dialog.querySelector('.dialog-footer');
     if (footer) {
       const buttons = footer.querySelectorAll('button');
-      if (buttons[0]) buttons[0].textContent = '고치기(D)';
+      if (buttons[0]) {
+        buttons[0].textContent = '고치기(D)';
+        this.confirmBtn = buttons[0] as HTMLButtonElement;
+      }
       if (buttons[1]) buttons[1].textContent = '취소';
     }
   }
