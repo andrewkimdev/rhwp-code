@@ -1,6 +1,7 @@
 # Rust
 /target/
 /target-local/
+/dist/
 # 루트 Cargo.lock 은 추적한다 — rhwp 는 bin 산출 패키지라 재현 가능 빌드를 위해
 # 커밋 권장(#1423, Cargo 공식 가이드). 의존성 갱신은 별도 PR 로 관리.
 # bindings/Native(iOS FFI, ios/devel 분기) 는 별개 패키지이며 Linux 메인 환경에서
@@ -13,7 +14,6 @@ bindings/Native/Cargo.lock
 
 # Output (렌더링 결과물)
 /output/
-/dist/swift/
 
 # Docker
 .docker/
