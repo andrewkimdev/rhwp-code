@@ -1,10 +1,12 @@
-//! `edit move-table` / `edit transpose-table` / `edit set-column-widths` 계약 회귀
-//! 테스트 (upstream #5185/#5192 계열 선별 이식 — Tier 2 라운드).
+//! `edit set-table-props` / `edit move-table` / `edit transpose-table` /
+//! `edit set-column-widths` 계약 회귀 테스트 (upstream #5185/#5192 계열 선별 이식 —
+//! Tier 2 라운드).
 //!
-//! 코어 로직은 기존 `table_ops.rs` 네이티브 함수(`move_table_offset_native`,
-//! `transpose_table_cells_in_place_native`, `set_table_column_widths_native`)를 그대로
-//! 재사용하고 CLI 배선만 신규다. 이 테스트는 그 배선 — 인자 파싱, `--dry-run`(무변경),
-//! `--verify`(저장본 재파싱 IR 대조), 종료 코드(#2707 계약) — 을 검증한다.
+//! 코어 로직은 기존 `table_ops.rs` 네이티브 함수(`set_table_properties_native`,
+//! `move_table_offset_native`, `transpose_table_cells_in_place_native`,
+//! `set_table_column_widths_native`)를 그대로 재사용하고 CLI 배선만 신규다. 이 테스트는
+//! 그 배선 — 인자 파싱, `--dry-run`(무변경), `--verify`(저장본 재파싱 IR 대조), 종료
+//! 코드(#2707 계약) — 을 검증한다.
 #![cfg(not(target_arch = "wasm32"))]
 
 use std::path::{Path, PathBuf};
@@ -76,6 +78,80 @@ fn find_table(doc: &HwpDocument, table_no: usize) -> (usize, usize, usize) {
 fn load(path: &Path) -> HwpDocument {
     let bytes = std::fs::read(path).expect("샘플 읽기");
     HwpDocument::from_bytes(&bytes).expect("샘플 파싱")
+}
+
+// ---------------------------------------------------------------------------
+// set-table-props
+// ---------------------------------------------------------------------------
+
+#[test]
+fn set_table_props_rejects_non_object_props_even_in_dry_run() {
+    let file = path_str(&sample(PLAIN_TABLE));
+    let args = [
+        "edit",
+        "set-table-props",
+        &file,
+        "--table",
+        "0",
+        "--props",
+        "200",
+        "--dry-run",
+    ];
+    let out = run(&args);
+    assert_eq!(out.status.code(), Some(2), "{}", describe(&args, &out));
+}
+
+#[test]
+fn set_table_props_applies_cell_spacing_and_verify_passes() {
+    let source_path = sample(PLAIN_TABLE);
+    let file = path_str(&source_path);
+    let out_path = tmp_dir().join("props.hwpx");
+    let out_str = path_str(&out_path);
+
+    let args = [
+        "edit",
+        "set-table-props",
+        &file,
+        "--table",
+        "0",
+        "--props",
+        "{\"cellSpacing\":333,\"treatAsChar\":true}",
+        "-o",
+        &out_str,
+        "--verify",
+        "--json",
+    ];
+    let out = run(&args);
+    assert_eq!(out.status.code(), Some(0), "{}", describe(&args, &out));
+    let env = json_of(&out);
+    assert_eq!(env["verify"]["identical"], true, "{env}");
+    assert!(env["changedPages"].is_array(), "{env}");
+
+    let after = load(&out_path);
+    let (sec, para, ctrl) = find_table(&after, 0);
+    let Control::Table(after_table) = &after.document().sections[sec].paragraphs[para].controls[ctrl]
+    else {
+        panic!("표 컨트롤 아님");
+    };
+    assert_eq!(after_table.cell_spacing, 333, "cellSpacing이 반영돼야 한다");
+    assert_ne!(after_table.attr & 0x01, 0, "treatAsChar 비트가 설정돼야 한다");
+}
+
+#[test]
+fn set_table_props_rejects_missing_table_index() {
+    let file = path_str(&sample(PLAIN_TABLE));
+    let args = [
+        "edit",
+        "set-table-props",
+        &file,
+        "--table",
+        "999",
+        "--props",
+        "{\"cellSpacing\":100}",
+        "--dry-run",
+    ];
+    let out = run(&args);
+    assert_eq!(out.status.code(), Some(1), "{}", describe(&args, &out));
 }
 
 // ---------------------------------------------------------------------------

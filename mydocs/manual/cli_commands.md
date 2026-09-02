@@ -911,6 +911,27 @@ rhwp edit set-cell 양식.hwpx --table 0 --row 2 --col 1 --text "1,234" -o 작�
 rhwp export-tables 작성본.hwpx --json | jq '.tables[0].cells[] | select(.row==2 and .col==1).text'
 ```
 
+### `edit set-table-props <파일> --table <번호> --props <JSON> [옵션]` (upstream #5185/#5192 계열)
+표 속성(칸간격·여백·글자처럼·배치·테두리/배경·캡션 등)을 JSON 객체로 고친다.
+`--props` 가 JSON 객체가 아니면 **`--dry-run` 에서도** 사용법 오류(exit 2)로 미리
+잡는다. 지원 필드 전체는 코어 `set_table_properties_native`
+(`src/document_core/commands/table_ops.rs`) 구현이 정본이다 — 이 명령은 필드를
+해석하지 않고 그대로 넘긴다. 대표 필드:
+  - `cellSpacing`/`paddingLeft`/`paddingRight`/`paddingTop`/`paddingBottom` (HWPUNIT)
+  - `pageBreak`(0=None/1=CellBreak/2=RowBreak), `repeatHeader`(bool)
+  - `treatAsChar`(bool, 본문배치), `textWrap`/`vertRelTo`/`vertAlign`/`horzRelTo`/`horzAlign`
+    (문자열 enum), `vertOffset`/`horzOffset`(HWPUNIT)
+  - `restrictInPage`/`allowOverlap`/`keepWithAnchor`(bool), `outerLeft`/`outerRight`/
+    `outerTop`/`outerBottom`(바깥 여백 HWPUNIT)
+  - `hasCaption`(bool, 생성/삭제)·`captionDirection`/`captionSpacing`/`captionWidth`/
+    `captionVertAlign`(캡션이 있을 때만 적용)
+  - 테두리/배경: `borderLeft`류 필드가 있으면 표 전체와 모든 셀에 새 BorderFill을 적용
+- `-o, --output <파일>` — 기본 `<입력명>_tblprop.<입력과 같은 확장자>`
+- `--dry-run` — 파일을 쓰지 않고 표 좌표·props 형식 검증만 수행한다.
+- `--verify` — 저장 직후 재파싱 IR 자기검증(차이 시 exit 3).
+- `--json` 봉투: `{"schemaVersion":"1.0","source","table","props":{…},"dryRun","changedPages","captionCharOffset"?,"output"?,"outputFormat"?,"verify"?}`
+  (`captionCharOffset` 은 `hasCaption:true` 로 새 캡션을 만들었을 때만 있다)
+
 ### `edit move-table <파일> --table <번호> [--dh <HWPUNIT>] [--dv <HWPUNIT>] [옵션]` (upstream #5185/#5192 계열)
 표의 위치 오프셋(HWPUNIT, 1/7200 inch)을 이동한다. `--dh`/`--dv` 는 생략하면 0(그
 축은 이동하지 않음) — 최소 하나는 0이 아니어야 한다(둘 다 생략·0이면 exit 2).

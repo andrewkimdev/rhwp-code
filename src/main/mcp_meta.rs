@@ -151,6 +151,7 @@ pub(crate) fn mcp_tool_definitions() -> Vec<serde_json::Value> {
                 | "hwp_replace_text"
                 | "hwp_set_checkbox"
                 | "hwp_set_cell"
+                | "hwp_set_table_props"
                 | "hwp_move_table"
                 | "hwp_transpose_table"
                 | "hwp_set_column_widths"
@@ -1083,8 +1084,32 @@ pub(crate) fn mcp_tool_definitions() -> Vec<serde_json::Value> {
             ]),
             &["schemaVersion", "source", "table", "row", "col", "oldText", "newText", "dryRun", "overflow", "output", "outputFormat", "changedPages"],
         ),
-        // [upstream #5185/#5192 계열 선별 이식] 표 단위 편집 3종 — 셀 값이 아니라 표
-        // 자체(위치/모양/열 폭)를 바꾼다. 코어는 기존 table_ops.rs 네이티브 함수 재사용.
+        // [upstream #5185/#5192 계열 선별 이식] 표 단위 편집 4종 — 셀 값이 아니라 표
+        // 자체(속성/위치/모양/열 폭)를 바꾼다. 코어는 기존 table_ops.rs 네이티브 함수 재사용.
+        tool_with_optional_args(
+            "hwp_set_table_props",
+            "표 속성(칸간격·여백·글자처럼·배치·테두리/배경·캡션 등)을 JSON 객체로 고쳐 새 문서를 만든다. 지원 필드는 코어 set_table_properties_native 구현이 정본이며, 이 도구는 필드를 해석하지 않고 그대로 넘긴다(예: {\"cellSpacing\":200}, {\"treatAsChar\":true}). JSON 객체가 아니면 --dry-run 에서도 인자 오류로 거부한다. 산출물은 입력 형식을 따른다(HWPX 입력 → HWPX 산출).",
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "입력 HWP/HWPX 문서 경로" },
+                    "table": { "type": "integer", "minimum": 0, "description": "본문 최상위 표 번호 (export-tables 의 index)" },
+                    "props": { "type": "string", "description": "표 속성 JSON 객체 문자열, 예: \"{\\\"cellSpacing\\\":200}\"" },
+                    "output": { "type": "string", "description": "출력 파일 경로. 생략하면 <입력명>_tblprop.hwp (HWPX 입력이면 _tblprop.hwpx)" },
+                    "dryRun": { "type": "boolean", "description": "true 면 파일을 쓰지 않고 표 좌표·props 형식 검증만 수행" },
+                    "verify": { "type": "boolean", "description": "저장 직후 재파싱 IR 자기검증 — 차이가 있으면 exit 3" }
+                },
+                "required": ["path", "table", "props"],
+            }),
+            "edit",
+            serde_json::json!(["edit", "set-table-props", "{path}", "--table", "{table}", "--props", "{props}", "--json"]),
+            serde_json::json!([
+                { "when": "output", "args": ["-o", "{output}"] },
+                { "when": "dryRun", "args": ["--dry-run"] },
+                { "when": "verify", "args": ["--verify"] }
+            ]),
+            &["schemaVersion", "source", "table", "props", "dryRun", "changedPages", "captionCharOffset", "output", "outputFormat", "verify"],
+        ),
         tool_with_optional_args(
             "hwp_move_table",
             "표의 위치 오프셋(HWPUNIT)을 이동해 새 문서를 만든다 — deltaH/deltaV 는 각각 가로/세로 이동량(양수=오른쪽/아래)이며 최소 하나는 0이 아니어야 한다. 본문배치(treat_as_char) 표는 이동량이 현재 줄 높이를 넘으면 다른 문단으로 옮겨갈 수 있다. 산출물은 입력 형식을 따른다(HWPX 입력 → HWPX 산출).",

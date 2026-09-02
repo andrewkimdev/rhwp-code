@@ -66,14 +66,15 @@ pub(crate) fn collect_field_records(doc: &rhwp::wasm_api::HwpDocument) -> Vec<se
 /// **실패 시 원본 불변**(하나라도 실패하면 출력 파일을 쓰지 않는다).
 pub(crate) fn run_edit(args: &[String]) -> i32 {
     const USAGE: &str =
-        "사용법: rhwp edit <fill-fields|replace-text|set-cell|move-table|transpose-table|set-column-widths|insert-image|redact|sanitize> <파일.hwp|파일.hwpx> [옵션] (rhwp --help 참조)";
+        "사용법: rhwp edit <fill-fields|replace-text|set-cell|set-table-props|move-table|transpose-table|set-column-widths|insert-image|redact|sanitize> <파일.hwp|파일.hwpx> [옵션] (rhwp --help 참조)";
 
     match args.first().map(String::as_str) {
         Some("fill-fields") => edit_fill_fields(&args[1..]),
         Some("replace-text") => edit_replace_text(&args[1..]),
         Some("set-cell") => edit_set_cell(&args[1..]),
-        // [upstream #5185/#5192 계열 선별 이식] 표 단위 편집 3종 — 코어는 기존
+        // [upstream #5185/#5192 계열 선별 이식] 표 단위 편집 4종 — 코어는 기존
         // table_ops.rs 네이티브 함수 재사용, CLI 배선만 신규.
+        Some("set-table-props") => edit_set_table_props(&args[1..]),
         Some("move-table") => edit_move_table(&args[1..]),
         Some("transpose-table") => edit_transpose_table(&args[1..]),
         Some("set-column-widths") => edit_set_column_widths(&args[1..]),
@@ -2238,6 +2239,215 @@ pub(crate) fn edit_set_cell(args: &[String]) -> i32 {
         println!(
             "셀 기록 완료: {} → {} — 표{} ({},{}) {:?} → {:?}",
             file_path, output_path, table_no, row, col, old_text, new_text
+        );
+    }
+    if verify_failed {
+        eprintln!("검증 실패(--verify): 저장본 재파싱 IR 차이 — 상세는 --json 또는 ir-diff");
+        process::exit(3);
+    }
+    EXIT_OK
+}
+
+
+
+/// `edit set-table-props` — 표 속성(칸간격·여백·글자처럼·배치·테두리/배경·캡션 등)을
+/// 고친다 (upstream #5185/#5192 계열 선별 이식 — 배선은 CLI뿐, 코어 로직은 기존
+/// `set_table_properties_native` 재사용).
+///
+/// `--props`는 JSON 객체 문자열이며 다루는 속성은 그 필드 이름으로 정한다(예:
+/// `{"cellSpacing":200}`, `{"treatAsChar":true}`). 지원 필드 전체는
+/// `set_table_properties_native`(`document_core/commands/table_ops.rs`) 구현이 정본이다
+/// — 이 CLI 배선은 필드를 해석하지 않고 그대로 넘긴다. JSON 객체가 아니면
+/// `--dry-run`에서도 사용법 오류(exit 2)로 미리 잡는다.
+pub(crate) fn edit_set_table_props(args: &[String]) -> i32 {
+    const USAGE: &str = "사용법: rhwp edit set-table-props <파일> --table <번호> --props <JSON> [-o <출력>] [--dry-run] [--verify] [--json]";
+
+    let mut file_path: Option<&str> = None;
+    let mut table_arg: Option<usize> = None;
+    let mut props: Option<String> = None;
+    let mut out_path: Option<String> = None;
+    let mut dry_run = false;
+    let mut json_mode = false;
+    let mut verify_mode = false;
+
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--table" => {
+                i += 1;
+                match args.get(i).and_then(|v| v.parse::<usize>().ok()) {
+                    Some(v) => table_arg = Some(v),
+                    None => {
+                        eprintln!("오류: --table 뒤에 0 이상의 정수가 필요합니다.");
+                        return EXIT_USAGE;
+                    }
+                }
+            }
+            "--props" => {
+                i += 1;
+                match args.get(i) {
+                    Some(v) => props = Some(v.clone()),
+                    None => {
+                        eprintln!("오류: --props 뒤에 JSON 객체 문자열이 필요합니다.");
+                        return EXIT_USAGE;
+                    }
+                }
+            }
+            "-o" | "--output" => {
+                i += 1;
+                match args.get(i) {
+                    Some(v) => out_path = Some(v.clone()),
+                    None => {
+                        eprintln!("오류: -o 뒤에 출력 파일 경로가 필요합니다.");
+                        return EXIT_USAGE;
+                    }
+                }
+            }
+            "--dry-run" => dry_run = true,
+            "--json" => json_mode = true,
+            "--verify" => verify_mode = true,
+            other if other.starts_with('-') => {
+                eprintln!("알 수 없는 옵션: {other}");
+                return EXIT_USAGE;
+            }
+            other => {
+                if file_path.replace(other).is_some() {
+                    eprintln!("오류: 입력 파일은 하나만 지정할 수 있습니다: {other}");
+                    return EXIT_USAGE;
+                }
+            }
+        }
+        i += 1;
+    }
+
+    let (Some(file_path), Some(table_no), Some(props)) = (file_path, table_arg, props) else {
+        eprintln!("{USAGE}");
+        return EXIT_USAGE;
+    };
+    if !matches!(
+        serde_json::from_str::<serde_json::Value>(&props),
+        Ok(serde_json::Value::Object(_))
+    ) {
+        eprintln!("오류: --props 는 JSON 객체여야 합니다.");
+        return EXIT_USAGE;
+    }
+
+    let bytes = match fs::read(file_path) {
+        Ok(d) => d,
+        Err(e) => {
+            eprintln!("오류: 파일을 읽을 수 없습니다 - {}: {}", file_path, e);
+            return EXIT_RUNTIME;
+        }
+    };
+    let mut doc = match load_document(&bytes) {
+        Ok(d) => d,
+        Err(e) => return e.report(),
+    };
+
+    let (sec, para, ctrl) = match resolve_table_index(doc.document(), table_no) {
+        Ok(v) => v,
+        Err(CellResolveError::Usage(msg)) => {
+            eprintln!("{msg}");
+            return EXIT_USAGE;
+        }
+        Err(CellResolveError::Runtime(msg)) => {
+            eprintln!("{msg}");
+            return EXIT_RUNTIME;
+        }
+    };
+
+    let mut caption_char_offset: Option<u64> = None;
+    if !dry_run {
+        let result = match doc.set_table_properties_native(sec, para, ctrl, &props) {
+            Ok(v) => v,
+            Err(e) => {
+                eprintln!("오류: 표 속성 변경 실패 - {}", e);
+                return EXIT_RUNTIME;
+            }
+        };
+        caption_char_offset = serde_json::from_str::<serde_json::Value>(&result)
+            .ok()
+            .and_then(|v| v["captionCharOffset"].as_u64());
+    }
+
+    let out_format = edit_output_format(&bytes, out_path.as_deref());
+    let output_path = out_path.unwrap_or_else(|| {
+        let stem = Path::new(file_path)
+            .file_stem()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_else(|| "output".to_string());
+        format!("{}_tblprop.{}", stem, out_format.ext())
+    });
+
+    let mut verify_report = serde_json::Value::Null;
+    let mut verify_failed = false;
+    if !dry_run {
+        let out_bytes = match edit_serialize(&mut doc, out_format) {
+            Ok(b) => b,
+            Err(e) => {
+                eprintln!(
+                    "오류: {} 직렬화 실패 - {}",
+                    out_format.label().to_uppercase(),
+                    e
+                );
+                return EXIT_RUNTIME;
+            }
+        };
+        if let Err(e) = fs::write(&output_path, &out_bytes) {
+            eprintln!("오류: 출력 쓰기 실패 - {}: {}", output_path, e);
+            return EXIT_RUNTIME;
+        }
+        if verify_mode {
+            let cross = out_format == EditOutputFormat::Hwp
+                && rhwp::parser::detect_format(&bytes) == rhwp::parser::FileFormat::Hwpx;
+            let (report, failed) = edit_verify_report(&doc, &out_bytes, cross);
+            verify_report = report;
+            verify_failed = failed;
+        }
+    }
+
+    let changed_pages = if dry_run {
+        serde_json::Value::Null
+    } else {
+        match doc.pages_covering_paragraphs(&[(sec, para)]) {
+            Some(pages) => serde_json::json!(pages),
+            None => serde_json::Value::Null,
+        }
+    };
+
+    if json_mode {
+        let mut envelope = serde_json::json!({
+            "schemaVersion": ENVELOPE_SCHEMA_VERSION,
+            "source": file_path,
+            "table": table_no,
+            "props": serde_json::from_str::<serde_json::Value>(&props).unwrap_or(serde_json::Value::Null),
+            "dryRun": dry_run,
+            "changedPages": changed_pages,
+        });
+        if let Some(offset) = caption_char_offset {
+            envelope["captionCharOffset"] = serde_json::json!(offset);
+        }
+        if !dry_run {
+            envelope["output"] = serde_json::Value::String(output_path.clone());
+            envelope["outputFormat"] = serde_json::Value::String(out_format.label().to_string());
+            envelope["verify"] = verify_report.clone();
+        }
+        println!("{}", provenance::marked(envelope, "edit"));
+        if verify_failed {
+            process::exit(3);
+        }
+        return EXIT_OK;
+    }
+
+    if dry_run {
+        println!(
+            "표 속성 변경 예정: {} 표{} props={}",
+            file_path, table_no, props
+        );
+    } else {
+        println!(
+            "표 속성 변경 완료: {} → {} — 표{} props={}",
+            file_path, output_path, table_no, props
         );
     }
     if verify_failed {
