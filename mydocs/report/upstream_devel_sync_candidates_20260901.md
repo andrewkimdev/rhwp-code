@@ -220,4 +220,17 @@ diff를 `git show`로 읽어 인자 이름·의미가 정확히 대응하는지,
 이미 지원) 중 하나를 실제로 조작하는 **새 코어 함수**를 설계해야 한다 — 이는
 "기존 함수 배선"이 아니라 별도 기능 개발이라 이번 라운드 범위 밖이다.
 
-나머지 ~29개(문단 기본/서식·스타일/책갈피·구조 등)는 여전히 다음 라운드 대상.
+**진행(2026-09-02, 계속)**: "문단 기본 6종" 배치(`insert-text`/`delete-text`/
+`insert-paragraph`/`delete-paragraph`/`merge-paragraph`/`split-paragraph`) 완료 —
+`text_editing.rs`의 `insert_text_native`/`delete_text_native`/
+`insert_paragraph_native`/`delete_paragraph_native`/`merge_paragraph_native`/
+`split_paragraph_native`(전부 이미 `pub`)에 CLI 배선만 추가했다. `insert-text`/
+`insert-paragraph`는 upstream 원본대로 `--dry-run`에서도 구역/문단/오프셋 범위를
+미리 검사한다(나머지 4개는 안 함). 부수 발견: `merge-paragraph`도 각주/미주
+배치의 `merge-paragraph-in-footnote`와 동일하게, 병합되는 두 문단의 경계
+`charShape` id가 우연히 같으면 저장 후 재파싱에서 인접 동일 항목이 정리돼
+`--verify`가 `diffCount:1`(무해, `render-diff` PASS 0px로 시각 회귀 없음 확인)을
+보고하는 사전 존재 특성이 재현된다 — cli_commands.md에 기록, 코어 수정은 이번
+라운드 범위 밖.
+
+나머지 ~23개(서식·스타일/책갈피·구조/기타)는 여전히 다음 라운드 대상.

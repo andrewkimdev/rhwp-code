@@ -428,7 +428,7 @@ fn main() {
 /// MCP 서버 저자(및 함수 호출 클라이언트)가 도구 이름·설명·입력 JSON Schema·실행 배선을
 /// 손으로 옮겨 적지 않게 한다. `--json` 계약을 가진 명령이 늘면
 /// `capabilities_mcp_covers_every_json_command` 가 누락을 잡는다.
-const EDIT_SUBCOMMANDS: [(&str, &str); 32] = [
+const EDIT_SUBCOMMANDS: [(&str, &str); 38] = [
     (
         "fill-fields",
         "누름틀(필드) 값 채우기 — --data 이름=값, 같은 이름은 [k] 순번 지목",
@@ -526,6 +526,30 @@ const EDIT_SUBCOMMANDS: [(&str, &str); 32] = [
     (
         "insert-field-in-hf",
         "머리말/꼬리말에 쪽번호/총쪽수/파일이름 필드 삽입 — --header|--footer/--field-type(1|2|3) 필수",
+    ),
+    (
+        "insert-text",
+        "본문 문단 좌표에 텍스트 삽입 — --text 필수, --section/--para/--offset (생략 시 0)",
+    ),
+    (
+        "delete-text",
+        "본문 문단 좌표 텍스트 삭제 — --count(1 이상) 필수, --section/--para/--offset",
+    ),
+    (
+        "insert-paragraph",
+        "빈 문단 삽입(앞 문단 서식 상속) — --section/--para (생략 시 0)",
+    ),
+    (
+        "delete-paragraph",
+        "문단 삭제(마지막 남은 문단은 거부) — --section/--para (생략 시 0)",
+    ),
+    (
+        "merge-paragraph",
+        "문단을 이전 문단과 병합 — --section/--para (para 를 para-1과 합침, 0 거부)",
+    ),
+    (
+        "split-paragraph",
+        "문단을 오프셋에서 분할 — --section/--para/--offset (생략 시 0)",
     ),
     (
         "insert-image",

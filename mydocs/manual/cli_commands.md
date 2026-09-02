@@ -1103,6 +1103,47 @@ exit 3) · `--json`. 코어 로직은 기존 `table_ops.rs` 네이티브 함수(
 나온다. CLI가 파일을 만드는 것처럼 보이지만 실제로는 아무것도 영구화하지 않는
 오해 소지 있는 명령이라 이번 라운드에서 제외했다.
 
+### 문단 기본 편집 6종 (upstream #5185/#5192 계열)
+아래 6개 명령은 본문 문단에 대한 기본 텍스트/문단 편집을 제공한다. 코어 로직은
+기존 `text_editing.rs` 네이티브 함수(`insert_text_native` 등)를 그대로 재사용 —
+새 편집 로직 없음. 공통: `-o, --output`(기본 산출 형식은 입력 형식을 따름) ·
+`--dry-run` · `--verify`(저장 직후 재파싱 IR 자기검증, 차이 시 exit 3) · `--json`.
+
+- **`edit insert-text <파일> --text <문자열> [--section N] [--para N] [--offset N] [옵션]`**
+  문단 좌표에 텍스트를 삽입한다. `--text`는 빈 문자열 거부. **`--dry-run`에서도
+  구역/문단/오프셋 범위를 미리 검사한다**(upstream 원본 그대로 — 이 명령과
+  `insert-paragraph`만 이 특성을 가진다). `-o` 기본 `_inserted.<확장자>`. 봉투:
+  `{"section","paragraph","offset","text","insertedChars","dryRun","changedPages",…}`.
+- **`edit delete-text <파일> --count <글자수> [--section N] [--para N] [--offset N] [옵션]`**
+  문단 좌표의 텍스트를 삭제한다. `--count`(1 이상)는 필수, 나머지 좌표는 생략하면
+  0. 범위는 `--dry-run`에서 미리 검사하지 않는다(네이티브 함수가 실행 시점에
+  검사). `-o` 기본 `_deltext.<확장자>`.
+- **`edit insert-paragraph <파일> [--section N] [--para N] [옵션]`**
+  빈 문단을 삽입한다(앞 문단 서식 상속). `--section`/`--para`는 생략하면 0.
+  **`--dry-run`에서도 범위를 미리 검사한다**(insert-text와 동일 특성).
+  `--para`는 해당 구역 문단 수와 같은 값(맨 끝에 추가)까지 허용한다. `-o` 기본
+  `_paragraph.<확장자>`.
+- **`edit delete-paragraph <파일> [--section N] [--para N] [옵션]`**
+  문단을 삭제한다(구역의 마지막 남은 문단은 네이티브 함수가 런타임 오류로 거부).
+  `--section`/`--para`는 생략하면 0. `changedPages`는 삭제된 인덱스가 더 이상
+  없으므로 이전 문단(`para.saturating_sub(1)`) 기준으로 계산한다. `-o` 기본
+  `_delpara.<확장자>`.
+- **`edit merge-paragraph <파일> [--section N] [--para N] [옵션]`**
+  문단을 **이전** 문단과 병합한다(`--para`가 가리키는 문단이 `--para`−1과
+  합쳐진다). 구역의 첫 문단(`--para 0`)을 지정하면 병합 대상이 없어 런타임
+  오류(exit 1)다. `changedPages`는 흡수 대상(`para-1`) 기준으로 계산한다.
+  - **알려진 특성**: 병합되는 두 문단의 경계 글자모양(`charShape`) id가 우연히
+    같으면 저장 시 인접 동일 항목이 정리되어 `--verify`가 `diffCount:1`(무해한
+    정리, 렌더링에 영향 없음 — `render-diff`로 확인됨)을 보고할 수 있다. 이
+    명령의 사전 존재하던 `merge_paragraph_native` 코어 동작이며 이번 CLI 배선이
+    만든 문제가 아니다(각주/미주 배치의 `merge-paragraph-in-footnote`와 동일한
+    특성).
+  - `-o` 기본 `_mergepara.<확장자>`.
+- **`edit split-paragraph <파일> [--section N] [--para N] [--offset N] [옵션]`**
+  문단을 지정 오프셋에서 분할한다. `--section`/`--para`/`--offset`은 생략하면 0.
+  CLI에서는 undo 전용 축인 `restore_meta`를 항상 `None`으로 넘긴다(이 명령의
+  범위 밖). `-o` 기본 `_splitpara.<확장자>`.
+
 ### `edit insert-image <파일> --image <그림> [--page N] [--x N --y N] [--width N --height N] [-o <출력>] [--dry-run] [--verify] [--json]` (#3719 §6-5)
 도장·서명 같은 그림을 쪽 좌표에 붙인다 — 채워 넣은 서식에 직인을 얹는 실물 제출의 마지막 조각.
 - `--image <그림>` (필수) — 지원 형식은 `png`·`jpg`·`jpeg`·`bmp`·`tif`·`tiff` 뿐(확장자와 내용
