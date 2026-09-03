@@ -707,6 +707,45 @@ fn first_input_into_empty_clickhere_is_rendered() {
 }
 
 #[test]
+fn empty_clickhere_guide_text_survives_focus_and_hides_only_on_first_input() {
+    let mut core = DocumentCore::new_empty();
+    core.create_blank_document_native()
+        .expect("create blank document");
+    core.insert_click_here_field_at(0, 0, 0, "입력하세요", "", "name", true)
+        .expect("insert empty clickhere");
+
+    // 웹 브라우저의 placeholder처럼, 커서만 진입한 상태(아직 미입력)에서는
+    // 안내문이 그대로 보여야 한다 — 포커스만으로 사라지면 안 된다.
+    assert!(
+        core.set_active_field(0, 0, 0),
+        "guide click should activate empty clickhere"
+    );
+    // SVG는 글자마다 별도 <text> 노드로 그리므로("입력하세요" 문자열이 그대로 이어져
+    // 있지 않음), 각 글자가 개별적으로 나타나는지로 확인한다.
+    let guide_chars = ["입", "력", "하", "세", "요"];
+    let svg_before_input = core.render_page_svg_native(0).expect("render page 1");
+    for ch in guide_chars {
+        assert!(
+            svg_before_input.contains(&format!(">{ch}<")),
+            "guide char '{ch}' should remain visible right after focus, before any typing: {}",
+            svg_before_input
+        );
+    }
+
+    // 실제로 입력을 시작하면 그때는 안내문이 사라져야 한다.
+    core.insert_text_native(0, 0, 0, "값")
+        .expect("first input should fill empty clickhere");
+    let svg_after_input = core.render_page_svg_native(0).expect("render page 1");
+    for ch in guide_chars {
+        assert!(
+            !svg_after_input.contains(&format!(">{ch}<")),
+            "guide char '{ch}' should disappear once real content is typed: {}",
+            svg_after_input
+        );
+    }
+}
+
+#[test]
 fn inserted_clickhere_roundtrips_hwp_and_hwpx() {
     let core = make_doc_with_inserted_clickhere();
 

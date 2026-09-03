@@ -3770,9 +3770,6 @@ impl LayoutEngine {
                     comp_line,
                     composed_line_char_end(composed, line_idx),
                     styles,
-                    section_index,
-                    para_index,
-                    &cell_ctx,
                 );
             }
             // TAC 이미지/Shape 폭이 est_x에 미포함된 경우 별도 추가
@@ -5805,41 +5802,6 @@ impl LayoutEngine {
         }
     }
 
-    /// 주어진 누름틀 필드가 현재 활성(편집 중) 필드인지 — 활성 필드는 안내문을
-    /// 그리지 않으므로(`layout_click_here_and_bookmark_markers`), 안내문 폭을
-    /// 줄 자연 폭에 반영하는 `empty_field_guide_width_for_line` 도 같은 판정을
-    /// 써야 두 계산이 어긋나지 않는다.
-    fn field_is_active_for_marker(
-        &self,
-        section_index: usize,
-        para_index: usize,
-        control_idx: usize,
-        cell_ctx: &Option<CellContext>,
-    ) -> bool {
-        let active = self.active_field.borrow();
-        let Some((af_sec, af_para, af_ctrl, ref af_cell)) = *active else {
-            return false;
-        };
-        if af_sec != section_index || af_para != para_index || af_ctrl != control_idx {
-            return false;
-        }
-        // cell_path 전체 일치 확인
-        match (af_cell, cell_ctx) {
-            (None, None) => true,
-            (Some(af_path), Some(ctx)) => {
-                // af_path와 ctx.path의 (control_index, cell_index) 쌍이 모두 일치해야 함
-                af_path.len() == ctx.path.len()
-                    && af_path
-                        .iter()
-                        .zip(ctx.path.iter())
-                        .all(|(&(ac, ax, _ap), entry)| {
-                            ac == entry.control_index && ax == entry.cell_index
-                        })
-            }
-            _ => false,
-        }
-    }
-
     /// [잘림 수정] 줄에 포함된 빈 누름틀 안내문 폭의 합.
     ///
     /// 안내문은 `layout_click_here_and_bookmark_markers` 가 `comp_line.runs` 밖의
@@ -5851,17 +5813,14 @@ impl LayoutEngine {
     ///
     /// 자격 조건과 스타일은 `layout_click_here_and_bookmark_markers` 의 안내문
     /// 블록과 정확히 같아야 한다 — 측정 폭과 실제로 그려지는 폭이 어긋나면 축소된
-    /// 형태로 같은 버그가 재발한다.
-    #[allow(clippy::too_many_arguments)]
+    /// 형태로 같은 버그가 재발한다. 안내문은 필드가 비어있기만 하면(포커스 여부와
+    /// 무관하게) 그려지므로 여기서도 `is_empty` 만 확인한다.
     fn empty_field_guide_width_for_line(
         &self,
         p: &Paragraph,
         comp_line: &crate::renderer::composer::ComposedLine,
         line_char_end: usize,
         styles: &ResolvedStyleSet,
-        section_index: usize,
-        para_index: usize,
-        cell_ctx: &Option<CellContext>,
     ) -> f64 {
         let line_char_start = comp_line.char_start;
         let base_run = comp_line.runs.last().or(comp_line.runs.first());
@@ -5884,10 +5843,6 @@ impl LayoutEngine {
             let start_in_line =
                 fr.start_char_idx >= line_char_start && fr.start_char_idx <= line_char_end;
             if !is_empty || !start_in_line {
-                continue;
-            }
-            if self.field_is_active_for_marker(section_index, para_index, fr.control_idx, cell_ctx)
-            {
                 continue;
             }
             if let Some(guide) = field.guide_text() {
@@ -5962,13 +5917,6 @@ impl LayoutEngine {
                 if !start_in_line && !end_in_line {
                     continue;
                 }
-
-                let is_active = self.field_is_active_for_marker(
-                    section_index,
-                    para_index,
-                    fr.control_idx,
-                    cell_ctx,
-                );
 
                 let base_run = comp_line.runs.last().or(comp_line.runs.first());
                 let base_style = if let Some(run) = base_run {
@@ -6051,8 +5999,8 @@ impl LayoutEngine {
                     });
                 }
 
-                // 빈 필드 안내문 (활성 필드가 아닐 때만)
-                if is_empty && !is_active && start_in_line {
+                // 빈 필드 안내문 (입력된 텍스트가 없을 때만 — 커서 진입만으로는 숨기지 않는다)
+                if is_empty && start_in_line {
                     if let Some(guide) = field.guide_text() {
                         let guide_style = guide_display_style(&base_style);
                         let guide_width = estimate_text_width(guide, &guide_style);
