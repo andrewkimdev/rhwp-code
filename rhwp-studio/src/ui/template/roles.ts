@@ -1,26 +1,30 @@
 /**
- * 템플릿 패널의 "역할 선택" 폼(panel.ts에서 분리) — 라디오 그룹 2개("일반"/
- * "반복 블록") + 블록명 입력 + 중첩 체크박스/부모 블록 select, 그리고 패널 안
- * 숫자 단축키(1~6, N).
+ * 템플릿 패널의 "역할 선택" 폼(panel.ts에서 분리) — 라디오 그룹 3개("일반"/
+ * "반복 블록"/"메모") + 블록명 입력 + 중첩·바닥고정 체크박스/부모 블록 select,
+ * 그리고 패널 안 숫자 단축키(1~8, N, B).
  *
- * 역할 선택은 라디오 그룹 2개("일반"/"반복 블록") + 중첩 체크박스 1개로
- * 구성한다(11개 항목을 한 줄로 나열하던 select 대신) — `-NESTED:` 4종은 실제로는
- * 별도 역할이 아니라 "반복 블록 역할 + 이미 있는 `#REPEAT-BODY:<name>` 표 아래
- * 중첩"이라는 수정자이므로, 체크박스로 표현하는 쪽이 실제 마커 문법과 더 정확히
- * 대응하고 전체 어휘도 한눈에 보인다. 문서에 `#REPEAT-BODY:<name>` 표가 하나도
+ * 역할 선택은 라디오 그룹 3개("일반"/"반복 블록"/"메모") + 중첩 체크박스 1개 +
+ * 바닥고정 체크박스 1개로 구성한다(항목을 한 줄로 나열하던 select 대신) —
+ * `-NESTED:` 4종은 실제로는 별도 역할이 아니라 "반복 블록 역할 + 이미 있는
+ * `#REPEAT-BODY:<name>` 표 아래 중첩"이라는 수정자이고, `#REPEAT-BODY-BOTTOM:`도
+ * 마찬가지로 "REPEAT_BODY 역할 + 페이지 바닥 고정"이라는 위치 수정자이므로,
+ * 체크박스로 표현하는 쪽이 실제 마커 문법과 더 정확히 대응하고 전체 어휘도
+ * 한눈에 보인다. 두 체크박스는 상호배타다 — 엔진 마커 어휘에 "중첩+바닥고정"을
+ * 동시에 표현하는 토큰이 없다. 문서에 `#REPEAT-BODY:<name>` 표가 하나도
  * 없으면(`availableNestedParentBlockNames`, table-outline.ts) 중첩 체크박스
  * 자체를 감춘다(`setNestedAvailable`) — 골라도 만들 수 없는 옵션이라서다.
+ * 바닥고정은 이런 의존이 없어(항상 만들 수 있음) REPEAT_BODY 선택 시 무조건 노출한다.
  * v1은 존재 여부만 확인한다 — 정확한 인접성 재검증은 `#6. "Validate now"`의 실제
  * lint가 최종 권위다.
  *
- * 각 역할에는 `hwpx-template-engine/docs/TEMPLATE_MARKER_SYNTAX.md` §3/§3e 요약을
+ * 각 역할에는 `hwpx-template-engine/docs/TEMPLATE_MARKER_SYNTAX.md` §3/§3e/§3g 요약을
  * 한 줄로 압축한 설명이 붙는다 — 라디오 `label`의 `title`(hover)과, 선택된 역할이
  * 바뀔 때마다 갱신되는 `roleDescEl`(항상 보이는 캡션) 두 군데에 쓴다.
  *
- * 역할 라디오 1~6과 중첩 체크박스(N)에는 숫자/문자 키보드 단축키가 있다 —
- * `#template-panel` 컨테이너의 `keydown`에서 처리하며(전역 단축키가 아니다),
- * 블록명 입력/부모 블록 select에 포커스가 있을 때는 숫자를 그대로 입력해야 하므로
- * 그 두 컨트롤에 포커스가 있으면 무시한다.
+ * 역할 라디오 1~8과 중첩 체크박스(N)/바닥고정 체크박스(B)에는 숫자/문자 키보드
+ * 단축키가 있다 — `#template-panel` 컨테이너의 `keydown`에서 처리하며(전역
+ * 단축키가 아니다), 블록명 입력/부모 블록 select에 포커스가 있을 때는 숫자를
+ * 그대로 입력해야 하므로 그 두 컨트롤에 포커스가 있으면 무시한다.
  */
 import type { WasmBridge } from '@/core/wasm-bridge';
 import type { InputHandler } from '@/engine/input-handler';
@@ -28,7 +32,7 @@ import type { TemplateTableRole } from '@/core/template-marker';
 import { findCellIndexForRowCol } from '@/core/table-outline';
 
 interface GeneralRoleOption {
-  value: 'BLOCK' | 'PAGENO';
+  value: 'BLOCK' | 'PAGENO' | 'BLOCK_BOTTOM' | 'NOTE';
   label: string;
   description: string;
 }
@@ -43,6 +47,7 @@ interface RepeatRoleOption {
 const GENERAL_ROLES: readonly GeneralRoleOption[] = [
   { value: 'BLOCK', label: '#BLOCK', description: '표의 역할을 문서화만 합니다 — 렌더링에는 영향을 주지 않습니다.' },
   { value: 'PAGENO', label: '#PAGENO', description: '표 전체를 반복 꼬리말로 승격해 모든 페이지에 쪽 번호를 표시합니다. 문서당 최대 1개.' },
+  { value: 'BLOCK_BOTTOM', label: '#BLOCK-BOTTOM', description: '#BLOCK과 역할은 같지만, 표가 자연스럽게 도달하는 페이지의 바닥에 붙입니다(예: 서명/직인 표). 남는 공간이 없으면 조용히 원래 위치로 되돌아갑니다.' },
 ];
 
 const REPEAT_ROLES: readonly RepeatRoleOption[] = [
@@ -52,13 +57,24 @@ const REPEAT_ROLES: readonly RepeatRoleOption[] = [
   { value: 'REPEAT_FOOTER', nestedValue: 'REPEAT_FOOTER_NESTED', label: '#REPEAT-FOOTER:', description: '항목들 뒤에 한 번만 렌더되는 합계 등 요약 표. (선택)' },
 ];
 
+/** "메모" 그룹 — #NOTE 단독. GENERAL_ROLES와 별개 fieldset이지만 라디오는
+ * `name='tp-role'`을 공유하므로(buildRoleGroup) 자동으로 상호배타다. */
+const NOTE_ROLES: readonly GeneralRoleOption[] = [
+  { value: 'NOTE', label: '#NOTE', description: '이 표 전체(마커 행 포함)를 최종 출력에서 삭제합니다 — authoring 중 한/글에서만 보이는 메모용입니다. 다른 역할과 함께 쓸 수 없습니다.' },
+];
+
 /** 역할 값 → 설명 한 줄. 라디오 label의 title(hover)과 상시 캡션(roleDescEl)이 공유한다. */
 const ROLE_DESCRIPTIONS: Readonly<Record<string, string>> = Object.fromEntries(
-  [...GENERAL_ROLES, ...REPEAT_ROLES].map(r => [r.value, r.description]),
+  [...GENERAL_ROLES, ...REPEAT_ROLES, ...NOTE_ROLES].map(r => [r.value, r.description]),
 );
 
 const NESTED_TOGGLE_DESCRIPTION =
   '이미 있는 #REPEAT-BODY:<부모블록> 표 바로 뒤에, 그 항목마다 자기만의 하위 반복 목록을 붙입니다(최대 1단계 중첩).';
+
+/** #REPEAT-BODY:만 대상 — TITLE/HEADER/FOOTER엔 위치 동의어가 없다(TEMPLATE_MARKER_SYNTAX.md §3g).
+ * 중첩과는 상호배타다 — 엔진 마커 어휘에 "중첩+바닥고정" 조합 토큰이 없다. */
+const BOTTOM_ANCHOR_TOGGLE_DESCRIPTION =
+  '#REPEAT-BODY:와 역할은 같지만, 블록 전체(있는 TITLE/HEADER/BODY/FOOTER)를 그 블록이 자연스럽게 도달하는 페이지의 바닥에 붙입니다. 중첩 자식 블록과는 함께 쓸 수 없습니다.';
 
 const DEFAULT_ROLE: TemplateTableRole = GENERAL_ROLES[0].value;
 
@@ -76,6 +92,7 @@ export class RoleForm {
   blockNameFieldEl!: HTMLDivElement;
   nestedToggleFieldEl!: HTMLDivElement;
   nestedParentFieldEl!: HTMLDivElement;
+  bottomAnchorToggleFieldEl!: HTMLDivElement;
 
   private roleRadios: HTMLInputElement[] = [];
   private roleDescEl!: HTMLElement;
@@ -85,6 +102,7 @@ export class RoleForm {
   private blockNameManuallyEdited = false;
   private nestedToggle!: HTMLInputElement;
   private nestedParentSelect!: HTMLSelectElement;
+  private bottomAnchorToggle!: HTMLInputElement;
 
   constructor(private deps: RoleFormDeps) {
     this.build();
@@ -133,6 +151,7 @@ export class RoleForm {
   private resolveSelectedRole(): TemplateTableRole {
     const repeat = this.selectedRepeatRole();
     if (repeat && this.nestedToggle.checked) return repeat.nestedValue;
+    if (repeat?.value === 'REPEAT_BODY' && this.bottomAnchorToggle.checked) return 'REPEAT_BODY_BOTTOM';
     return (this.roleRadios.find(r => r.checked)?.value as TemplateTableRole | undefined) ?? DEFAULT_ROLE;
   }
 
@@ -143,6 +162,11 @@ export class RoleForm {
     this.nestedToggleFieldEl.style.display = nestedTogglable ? '' : 'none';
     if (!nestedTogglable) this.nestedToggle.checked = false;
     this.nestedParentFieldEl.style.display = (nestedTogglable && this.nestedToggle.checked) ? '' : 'none';
+
+    const bottomAnchorTogglable = repeat?.value === 'REPEAT_BODY';
+    this.bottomAnchorToggleFieldEl.style.display = bottomAnchorTogglable ? '' : 'none';
+    if (!bottomAnchorTogglable) this.bottomAnchorToggle.checked = false;
+
     const checkedValue = this.roleRadios.find(r => r.checked)?.value;
     this.roleDescEl.textContent = (checkedValue && ROLE_DESCRIPTIONS[checkedValue]) || '';
     const ih = this.deps.getInputHandler();
@@ -214,6 +238,13 @@ export class RoleForm {
       this.nestedToggle.checked = !this.nestedToggle.checked;
       this.nestedToggle.focus();
       this.onRoleChanged();
+      return;
+    }
+    if (e.key.toLowerCase() === 'b' && this.bottomAnchorToggleFieldEl.style.display !== 'none') {
+      e.preventDefault();
+      this.bottomAnchorToggle.checked = !this.bottomAnchorToggle.checked;
+      this.bottomAnchorToggle.focus();
+      this.onRoleChanged();
     }
   }
 
@@ -265,6 +296,7 @@ export class RoleForm {
     this.roleFieldEl.appendChild(roleLabel);
     this.roleFieldEl.appendChild(this.buildRoleGroup('일반', GENERAL_ROLES));
     this.roleFieldEl.appendChild(this.buildRoleGroup('반복 블록', REPEAT_ROLES));
+    this.roleFieldEl.appendChild(this.buildRoleGroup('메모', NOTE_ROLES));
     this.roleDescEl = document.createElement('div');
     this.roleDescEl.className = 'tp-role-desc';
     this.roleFieldEl.appendChild(this.roleDescEl);
@@ -300,7 +332,12 @@ export class RoleForm {
     this.nestedToggle = document.createElement('input');
     this.nestedToggle.type = 'checkbox';
     this.nestedToggle.className = 'tp-checkbox';
-    this.nestedToggle.addEventListener('change', () => this.onRoleChanged());
+    this.nestedToggle.addEventListener('change', () => {
+      // 중첩과 바닥 고정은 상호배타다 — 엔진 마커 어휘에 두 위치를 동시에 표현하는
+      // 토큰이 없다(REPEAT_BODY_NESTED_PREFIX와 REPEAT_BODY_BOTTOM_PREFIX는 별개 상수).
+      if (this.nestedToggle.checked) this.bottomAnchorToggle.checked = false;
+      this.onRoleChanged();
+    });
     const nestedKeyBadge = document.createElement('span');
     nestedKeyBadge.className = 'tp-role-key';
     nestedKeyBadge.textContent = 'N';
@@ -308,6 +345,28 @@ export class RoleForm {
     nestedToggleLabel.appendChild(document.createTextNode('중첩 자식 블록으로 지정'));
     nestedToggleLabel.appendChild(nestedKeyBadge);
     this.nestedToggleFieldEl.appendChild(nestedToggleLabel);
+
+    // 바닥 고정 체크박스 — REPEAT_BODY 역할에서만 노출(onRoleChanged). 중첩과 달리
+    // "기존 부모 표 존재" 의존이 없으므로 nestedRoleAvailable 게이트는 쓰지 않는다.
+    this.bottomAnchorToggleFieldEl = document.createElement('div');
+    this.bottomAnchorToggleFieldEl.className = 'tp-field';
+    const bottomAnchorLabel = document.createElement('label');
+    bottomAnchorLabel.className = 'tp-checkbox-label';
+    bottomAnchorLabel.title = BOTTOM_ANCHOR_TOGGLE_DESCRIPTION;
+    this.bottomAnchorToggle = document.createElement('input');
+    this.bottomAnchorToggle.type = 'checkbox';
+    this.bottomAnchorToggle.className = 'tp-checkbox';
+    this.bottomAnchorToggle.addEventListener('change', () => {
+      if (this.bottomAnchorToggle.checked) this.nestedToggle.checked = false;
+      this.onRoleChanged();
+    });
+    const bottomAnchorKeyBadge = document.createElement('span');
+    bottomAnchorKeyBadge.className = 'tp-role-key';
+    bottomAnchorKeyBadge.textContent = 'B';
+    bottomAnchorLabel.appendChild(this.bottomAnchorToggle);
+    bottomAnchorLabel.appendChild(document.createTextNode('바닥에 고정(#REPEAT-BODY-BOTTOM:)'));
+    bottomAnchorLabel.appendChild(bottomAnchorKeyBadge);
+    this.bottomAnchorToggleFieldEl.appendChild(bottomAnchorLabel);
 
     // 중첩 부모 블록명
     this.nestedParentFieldEl = document.createElement('div');

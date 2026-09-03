@@ -16,6 +16,16 @@ import { buildTableRoleMarkerText } from '../src/core/template-marker.ts';
 test('buildTableRoleMarkerText: 인자 없는 마커', () => {
   assert.equal(buildTableRoleMarkerText({ role: 'BLOCK' }), '#BLOCK');
   assert.equal(buildTableRoleMarkerText({ role: 'PAGENO' }), '#PAGENO');
+  assert.equal(buildTableRoleMarkerText({ role: 'BLOCK_BOTTOM' }), '#BLOCK-BOTTOM');
+  assert.equal(buildTableRoleMarkerText({ role: 'NOTE' }), '#NOTE');
+});
+
+test('buildTableRoleMarkerText: #REPEAT-BODY-BOTTOM:는 블록명이 필요하다', () => {
+  assert.equal(
+    buildTableRoleMarkerText({ role: 'REPEAT_BODY_BOTTOM', blockName: '품목내역' }),
+    '#REPEAT-BODY-BOTTOM:품목내역',
+  );
+  assert.throws(() => buildTableRoleMarkerText({ role: 'REPEAT_BODY_BOTTOM' }));
 });
 
 test('buildTableRoleMarkerText: 블록명이 필요한 REPEAT-* 마커', () => {

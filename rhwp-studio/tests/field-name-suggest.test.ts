@@ -7,6 +7,8 @@ import {
   suggestFieldNames,
   isRepeatTaggedTable,
   isTemplateTableMarkerText,
+  isRepeatBodyMarkerText,
+  isRepeatFooterMarkerText,
 } from '../src/core/field-name-suggest.ts';
 
 interface FakeCell {
@@ -430,7 +432,10 @@ test('isTemplateTableMarkerText: 게이트 어휘(#BLOCK/#PAGENO/#REPEAT-*, 및 
   assert.equal(isTemplateTableMarkerText('#HEADER'), true);
   assert.equal(isTemplateTableMarkerText('#FOOTER'), true);
   assert.equal(isTemplateTableMarkerText('#PAGENO'), true);
+  assert.equal(isTemplateTableMarkerText('#BLOCK-BOTTOM'), true);
+  assert.equal(isTemplateTableMarkerText('#NOTE'), true);
   assert.equal(isTemplateTableMarkerText('#REPEAT-BODY:품목내역'), true);
+  assert.equal(isTemplateTableMarkerText('#REPEAT-BODY-BOTTOM:품목내역'), true);
   assert.equal(isTemplateTableMarkerText('#REPEAT-TITLE-NESTED:부모/자식'), true);
   assert.equal(isTemplateTableMarkerText(null), false);
   assert.equal(isTemplateTableMarkerText('평범한 표 제목'), false);
@@ -438,7 +443,23 @@ test('isTemplateTableMarkerText: 게이트 어휘(#BLOCK/#PAGENO/#REPEAT-*, 및 
   // 어휘 밖 '#...' — 첫 셀 텍스트가 우연히 #으로 시작하는 원본 내용은 게이트를 열지 않는다.
   assert.equal(isTemplateTableMarkerText('#BLOCK2'), false);
   assert.equal(isTemplateTableMarkerText('#HEADER2'), false);
-  assert.equal(isTemplateTableMarkerText('#NOTE'), false);
+  assert.equal(isTemplateTableMarkerText('#NOTE2'), false);
+});
+
+test('isRepeatBodyMarkerText: #REPEAT-BODY:/-NESTED:/-BOTTOM:만 참으로 판정한다', () => {
+  assert.equal(isRepeatBodyMarkerText('#REPEAT-BODY:품목내역'), true);
+  assert.equal(isRepeatBodyMarkerText('#REPEAT-BODY-NESTED:부모/자식'), true);
+  assert.equal(isRepeatBodyMarkerText('#REPEAT-BODY-BOTTOM:품목내역'), true);
+  assert.equal(isRepeatBodyMarkerText('#REPEAT-HEADER:품목내역'), false);
+  assert.equal(isRepeatBodyMarkerText('#REPEAT-FOOTER:품목내역'), false);
+  assert.equal(isRepeatBodyMarkerText(null), false);
+});
+
+test('isRepeatFooterMarkerText: #REPEAT-FOOTER:/-NESTED:만 참으로 판정한다(바닥고정 동의어 없음)', () => {
+  assert.equal(isRepeatFooterMarkerText('#REPEAT-FOOTER:품목내역'), true);
+  assert.equal(isRepeatFooterMarkerText('#REPEAT-FOOTER-NESTED:부모/자식'), true);
+  assert.equal(isRepeatFooterMarkerText('#REPEAT-BODY:품목내역'), false);
+  assert.equal(isRepeatFooterMarkerText(null), false);
 });
 
 test('suggestFieldNames(rowRange): 후보 대상 셀의 행이 범위 안일 때만 제안한다', () => {

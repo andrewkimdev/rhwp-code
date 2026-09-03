@@ -90,11 +90,28 @@ export function readTableGrid(
   return grid;
 }
 
-const REPEAT_MARKER_PATTERN = /^#REPEAT-(BODY|HEADER|FOOTER|TITLE)(-NESTED)?:/;
+const REPEAT_MARKER_PATTERN = /^#REPEAT-(BODY|HEADER|FOOTER|TITLE)(-NESTED|-BOTTOM)?:/;
 // BLOCK is the canonical general-role marker; HEADER/FOOTER are its deprecated synonyms —
 // still recognized on read (existing templates use them), but the role picker (roles.ts) only
-// ever writes BLOCK for new tagging.
-const GENERAL_MARKER_PATTERN = /^#(BLOCK|HEADER|FOOTER|PAGENO)$/;
+// ever writes BLOCK for new tagging. BLOCK-BOTTOM is not a synonym — it's a distinct positional
+// variant of BLOCK that actually affects rendering (bottom-anchors the table on its page).
+// NOTE marks the whole table for deletion at render time (not a role/documentation marker).
+const GENERAL_MARKER_PATTERN = /^#(BLOCK-BOTTOM|BLOCK|HEADER|FOOTER|PAGENO|NOTE)$/;
+
+const REPEAT_BODY_ROLE_PATTERN = /^#REPEAT-BODY(-NESTED|-BOTTOM)?:/;
+const REPEAT_FOOTER_ROLE_PATTERN = /^#REPEAT-FOOTER(-NESTED)?:/;
+
+/** markerText가 `#REPEAT-BODY:`/`#REPEAT-BODY-NESTED:`/`#REPEAT-BODY-BOTTOM:` 중 하나로
+ * 시작하면 true — `#seq:` 계산 필드는 이 역할의 표 안에서만 유효하다(TEMPLATE_MARKER_SYNTAX.md §3b). */
+export function isRepeatBodyMarkerText(markerText: string | null): boolean {
+  return markerText !== null && REPEAT_BODY_ROLE_PATTERN.test(markerText);
+}
+
+/** markerText가 `#REPEAT-FOOTER:`/`#REPEAT-FOOTER-NESTED:`로 시작하면 true — `#sum:` 계산
+ * 필드는 이 역할의 표 안에서만 유효하다(TEMPLATE_MARKER_SYNTAX.md §3d). */
+export function isRepeatFooterMarkerText(markerText: string | null): boolean {
+  return markerText !== null && REPEAT_FOOTER_ROLE_PATTERN.test(markerText);
+}
 
 /**
  * 텍스트가 템플릿 역할 마커 어휘(#BLOCK/#PAGENO/#REPEAT-*:, 그리고 #BLOCK의 폐지된

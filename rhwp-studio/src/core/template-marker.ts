@@ -14,9 +14,10 @@
  * 의존 방향을 오염시키지 않고, mutation-routing-guard 원장과도 무관하다.
  */
 export type TemplateTableRole =
-  | 'BLOCK' | 'PAGENO'
+  | 'BLOCK' | 'PAGENO' | 'BLOCK_BOTTOM' | 'NOTE'
   | 'REPEAT_TITLE' | 'REPEAT_HEADER' | 'REPEAT_BODY' | 'REPEAT_FOOTER'
-  | 'REPEAT_TITLE_NESTED' | 'REPEAT_HEADER_NESTED' | 'REPEAT_BODY_NESTED' | 'REPEAT_FOOTER_NESTED';
+  | 'REPEAT_TITLE_NESTED' | 'REPEAT_HEADER_NESTED' | 'REPEAT_BODY_NESTED' | 'REPEAT_FOOTER_NESTED'
+  | 'REPEAT_BODY_BOTTOM';
 
 export interface TagSelectionParams {
   role: TemplateTableRole;
@@ -56,10 +57,13 @@ export function buildTableRoleMarkerText(params: TagSelectionParams): string {
   switch (role) {
     case 'BLOCK': return '#BLOCK';
     case 'PAGENO': return PAGENO_MARKER_TEXT;
+    case 'BLOCK_BOTTOM': return '#BLOCK-BOTTOM';
+    case 'NOTE': return '#NOTE';
     case 'REPEAT_TITLE': return `#REPEAT-TITLE:${requireBlockName(blockName, role)}`;
     case 'REPEAT_HEADER': return `#REPEAT-HEADER:${requireBlockName(blockName, role)}`;
     case 'REPEAT_BODY': return `#REPEAT-BODY:${requireBlockName(blockName, role)}`;
     case 'REPEAT_FOOTER': return `#REPEAT-FOOTER:${requireBlockName(blockName, role)}`;
+    case 'REPEAT_BODY_BOTTOM': return `#REPEAT-BODY-BOTTOM:${requireBlockName(blockName, role)}`;
     case 'REPEAT_TITLE_NESTED': return `#REPEAT-TITLE-NESTED:${requireNestedPair(nestedParent, blockName, role)}`;
     case 'REPEAT_HEADER_NESTED': return `#REPEAT-HEADER-NESTED:${requireNestedPair(nestedParent, blockName, role)}`;
     case 'REPEAT_BODY_NESTED': return `#REPEAT-BODY-NESTED:${requireNestedPair(nestedParent, blockName, role)}`;

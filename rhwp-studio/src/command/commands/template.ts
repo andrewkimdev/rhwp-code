@@ -10,7 +10,7 @@ import type { CommandDef } from '../types';
 import { expandRowRangeForMerges, readTableMarkerText } from '../../core/table-outline.ts';
 import { showToast } from '../../ui/toast.ts';
 import { buildTableRoleMarkerText, type TemplateTableRole } from '../../core/template-marker.ts';
-import { tagSelectionOperation, clearTableRoleMarker } from './template-ops.ts';
+import { tagSelectionOperation, clearTableRoleMarker, insertComputedField } from './template-ops.ts';
 import {
   createSavePayload,
   downloadBlob,
@@ -154,6 +154,56 @@ export const templateCommands: CommandDef[] = [
         });
       } catch (err) {
         console.error('[template:clear-marker] 실패:', err);
+      }
+    },
+  },
+  {
+    // "계산 필드 삽입"(#seq:/#sum:) — computed-field-section.ts가 게이트(REPEAT-BODY/
+    // REPEAT-FOOTER 표 안인지)와 이름 dedup을 미리 마치고 최종 이름만 넘긴다. 위치는
+    // template:tag-selection/clear-marker와 같은 이유로 params를 신뢰하지 않고 커서에서
+    // 직접 다시 읽는다.
+    id: 'template:insert-computed-field',
+    label: '계산 필드 삽입',
+    canExecute: (ctx) => ctx.inTable,
+    execute(services, params) {
+      const ih = services.getInputHandler();
+      if (!ih) return;
+      const pos = ih.getCursorPosition();
+      if (pos.parentParaIndex === undefined || pos.controlIndex === undefined) return;
+      if ((pos.cellPath?.length ?? 0) > 1) return;
+
+      const name = params?.name as string | undefined;
+      if (!name) return;
+      const ppi = pos.parentParaIndex, ci = pos.controlIndex;
+
+      try {
+        ih.executeOperation({
+          kind: 'snapshot',
+          operationType: 'templateInsertComputedField',
+          operation: (wasm) => {
+            insertComputedField(wasm, {
+              sectionIndex: pos.sectionIndex,
+              parentParaIndex: ppi,
+              controlIndex: ci,
+              cellIndex: pos.cellIndex ?? 0,
+              cellParaIndex: pos.cellParaIndex ?? 0,
+              charOffset: pos.charOffset,
+            }, name);
+            return {
+              sectionIndex: pos.sectionIndex,
+              paragraphIndex: 0,
+              charOffset: 0,
+              parentParaIndex: ppi,
+              controlIndex: ci,
+              cellIndex: pos.cellIndex ?? 0,
+              cellParaIndex: pos.cellParaIndex ?? 0,
+            };
+          },
+        });
+      } catch (err) {
+        console.error('[template:insert-computed-field] 실패:', err);
+        const msg = err instanceof Error ? err.message : String(err);
+        showToast({ message: `계산 필드를 삽입하지 못했습니다: ${msg}`, durationMs: 4000 });
       }
     },
   },

@@ -225,6 +225,38 @@ export function ensurePageNoFields(wasm: WasmBridge, sec: number, ppi: number, c
   }
 }
 
+/**
+ * 커서 위치에 계산 필드(`#seq:<라벨>`/`#sum:<필드명>`)를 하나 삽입한다 — 값을 서버가
+ * 계산해 채우므로(TEMPLATE_MARKER_SYNTAX.md §3b/§3d) `ensurePageNoFields`의 예약 필드와
+ * 같은 이유로 editable:false로 삽입한다. 게이트(REPEAT-BODY/REPEAT-FOOTER 표 안인지)는
+ * 호출부(`ui/template/computed-field-section.ts`)가 이미 확인했다고 가정한다 — 최종
+ * 유효성의 권위는 여전히 엔진의 `TableRoleMarkerLintValidator`다.
+ */
+export function insertComputedField(
+  wasm: WasmBridge,
+  pos: {
+    sectionIndex: number;
+    parentParaIndex: number;
+    controlIndex: number;
+    cellIndex: number;
+    cellParaIndex: number;
+    charOffset: number;
+  },
+  name: string,
+): void {
+  const insertPos = {
+    sectionIndex: pos.sectionIndex,
+    paragraphIndex: 0,
+    charOffset: pos.charOffset,
+    parentParaIndex: pos.parentParaIndex,
+    controlIndex: pos.controlIndex,
+    cellIndex: pos.cellIndex,
+    cellParaIndex: pos.cellParaIndex,
+  };
+  const result = wasm.insertClickHereField(insertPos, name, '', name, false);
+  if (!result.ok) throw new Error(`[template-ops] 계산 필드 삽입 실패: ${name}`);
+}
+
 export function clearTableRoleMarker(wasm: WasmBridge, sec: number, ppi: number, ci: number): void {
   const existing = readTableMarkerText(wasm, sec, ppi, ci);
   if (existing === null || !existing.startsWith('#')) return; // 실제 마커 행이 아니면 지울 것이 없다

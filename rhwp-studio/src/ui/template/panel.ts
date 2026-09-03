@@ -26,6 +26,7 @@ import { listTopLevelTables, availableNestedParentBlockNames, type TableOutlineE
 import { buildTableRoleMarkerText } from '@/core/template-marker';
 import { RoleForm } from './roles';
 import { FieldSuggestSection } from './fieldsuggest';
+import { ComputedFieldSection } from './computed-field-section';
 import { EntitySection } from './entity-section';
 import { describeSelectedRows } from './row-range';
 
@@ -40,6 +41,7 @@ export class TemplatePanel {
 
   private roles!: RoleForm;
   private fieldSuggest!: FieldSuggestSection;
+  private computedField!: ComputedFieldSection;
   private entity!: EntitySection;
 
   constructor(
@@ -87,6 +89,7 @@ export class TemplatePanel {
     const nestedParentNames = availableNestedParentBlockNames(entries);
     this.roles.renderNestedParentOptions(nestedParentNames);
     this.roles.setNestedAvailable(nestedParentNames.length > 0);
+    this.computedField.refresh();
 
     const inTable = pos?.parentParaIndex !== undefined && pos?.controlIndex !== undefined;
     const isNested = (pos?.cellPath?.length ?? 0) > 1;
@@ -269,6 +272,12 @@ export class TemplatePanel {
       getInputHandler: this.getInputHandler,
       onApplied: () => this.refresh(),
     });
+    this.computedField = new ComputedFieldSection({
+      wasm: this.wasm,
+      dispatcher: this.dispatcher,
+      getInputHandler: this.getInputHandler,
+      onApplied: () => this.refresh(),
+    });
     this.entity = new EntitySection(this.wasm);
 
     this.contentEl.appendChild(saveTemplateBtn);
@@ -281,6 +290,7 @@ export class TemplatePanel {
     this.contentEl.appendChild(this.roles.roleFieldEl);
     this.contentEl.appendChild(this.roles.blockNameFieldEl);
     this.contentEl.appendChild(this.roles.nestedToggleFieldEl);
+    this.contentEl.appendChild(this.roles.bottomAnchorToggleFieldEl);
     this.contentEl.appendChild(this.roles.nestedParentFieldEl);
     this.contentEl.appendChild(previewLabel);
     this.contentEl.appendChild(this.previewEl);
@@ -288,6 +298,9 @@ export class TemplatePanel {
     this.contentEl.appendChild(TemplatePanel.divider());
 
     this.contentEl.appendChild(this.fieldSuggest.fieldsetEl);
+    this.contentEl.appendChild(TemplatePanel.divider());
+
+    this.contentEl.appendChild(this.computedField.fieldsetEl);
     this.contentEl.appendChild(TemplatePanel.divider());
 
     this.contentEl.appendChild(this.entity.fieldsetEl);

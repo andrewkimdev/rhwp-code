@@ -145,13 +145,17 @@ export function expandRowRangeForMerges(
   return { startRow, endRow };
 }
 
-const REPEAT_BODY_PATTERN = /^#REPEAT-BODY:(.+)$/;
+// `-BOTTOM:`(위치 동의어)도 인정한다 — 엔진의 roleOf()는 REPEAT_BODY_BOTTOM_PREFIX도
+// 동일하게 BODY 역할로 취급하므로, 부모 블록을 바닥 고정했다고 중첩 자식을 못 붙이는 건 아니다.
+const REPEAT_BODY_PATTERN = /^#REPEAT-BODY(?:-BOTTOM)?:(.+)$/;
 
 // `REPEAT_BODY_PATTERN`과 별개 정규식이다 — `-NESTED`를 옵셔널 그룹으로 넣으면 이름
 // capture group 위치가 바뀌므로(1→2), `availableNestedParentBlockNames`가 쓰는 그룹 번호를
 // 깨지 않기 위해 새로 둔다.
 const REPEAT_HEADER_MARKER_PATTERN = /^#REPEAT-HEADER(-NESTED)?:(.+)$/;
-const REPEAT_BODY_MARKER_PATTERN = /^#REPEAT-BODY(-NESTED)?:(.+)$/;
+// BODY는 `-NESTED:`/`-BOTTOM:` 둘 중 하나만 붙을 수 있다(동시 불가) — 한 그룹에 두 대안을
+// 넣고, "nested 여부"는 그 그룹 값이 정확히 '-NESTED'인지로 판정한다(findMatchingRepeatHeaderEntry).
+const REPEAT_BODY_MARKER_PATTERN = /^#REPEAT-BODY(-NESTED|-BOTTOM)?:(.+)$/;
 
 /**
  * `bodyEntry`(`#REPEAT-BODY(-NESTED)?:<segment>` 표)의 문서 순서상 **바로 앞** 최상위
@@ -169,7 +173,8 @@ export function findMatchingRepeatHeaderEntry(
 ): TableOutlineEntry | null {
   const bodyMatch = bodyEntry.markerText?.match(REPEAT_BODY_MARKER_PATTERN);
   if (!bodyMatch) return null;
-  const [, bodyNested, bodySegment] = bodyMatch;
+  const [, bodySuffix, bodySegment] = bodyMatch;
+  const bodyNested = bodySuffix === '-NESTED';
 
   const index = entries.findIndex(
     (e) => e.parentPara === bodyEntry.parentPara && e.controlIndex === bodyEntry.controlIndex,
