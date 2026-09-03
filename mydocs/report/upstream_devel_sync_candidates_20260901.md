@@ -53,19 +53,84 @@
 
 | 커밋 | 메시지 | 주요 경로 | 왜 중요한가 |
 |---|---|---|---|
-| `6e1a4e629` | fix(serializer/hwpx): curve를 hp:seg 체인으로 저장 — 한글 크래시 (#4676) | `src/serializer/hwpx/*` | HWPX writer의 curve 직렬화 오류(`<hc:pt>` 단순 나열)로 한글(한컴오피스)이 파일을 여는 도중 프로세스가 죽는다(COM RPC 0x800706BE). 한글 2022 오라클 1만 건 전수검사로 확정. 동기화 지점 직후 첫 upstream 커밋이자 실제 크래시를 유발하는 상호운용성 결함 — 최우선 검토 대상. |
-| `718ce06d0` | fix(renderer): overlay 표 필러 흐름 복원과 상향 클램프 해제 — 6쪽 표 겹침 소멸 (#4514) | `src/renderer/*` | 글앞/글뒤 표 anchor 처리 오류로 6쪽에 걸쳐 최대 555.5px 겹침(LAYOUT_TABLE_OVERLAP 8→0건). 지금 우리가 진행 중인 table-debugging/컬럼 폭 솔버 작업(`4929e5d15`)과 같은 영역이라 로직 대조 가치가 크다. |
-| `bd8919896` 외(#6303 계열) | fix(layout): 셀 자동 축소 자간을 안쪽 폭에 수렴시킨다 | `src/renderer/layout/*` | 표 셀 자동축소 자간 계산이 발산하던 문제를 안쪽 폭 기준 수렴으로 교정. 우리 table_layout 리팩터(T1~T9)와 직접 겹치는 정밀도 이슈. |
-| `41475dd5e` / `94036e467` / `6f7f5c56f` (#4318) | fix(layout): 미주 다단 마지막 단 줄넘김 연작 | `src/renderer/layout/*` | 다단 미주 마지막 단에서 줄이 본문 하단을 넘는 버그를 여러 단계로 정밀 수정. 다단/미주 조판이라는 까다로운 영역의 참고 가치가 크다. |
-| `3431a7727` (#5251) | fix(hwpx): HWP3 원본 char_shapes 경계를 HWPX 재파싱에서 지킨다 | `src/parser/hwpx/*` | HWP3→HWPX 경로의 char_shapes 경계 보존. 우리 fork의 HWP3 격리/충실도 원칙(`mydocs/tech/parser_architecture.md`)과 정확히 같은 문제의식. **상태(2026-09-01)**: 이식 시도 중 rhwp-code 네이티브 HWP3 파서가 char_shapes 오프셋을 upstream과 다른 단위 체계(단순 문자 인덱스 vs PARA_TEXT 확장 단위)로 계산한다는 더 깊은 전제 불일치가 드러나 이 라운드 1차 착수에서는 보류됨(`mydocs/manual/upstream_devel_intake_strategy.md` "추적" 절 참조).
+| `6e1a4e629` | fix(serializer/hwpx): curve를 hp:seg 체인으로 저장 — 한글 크래시 (#4676) | `src/serializer/hwpx/*` | ✅ **완료** — `main`에 `9a2dc2e88`로 이미 이식됨(2026-09-01). `curve_segs_xml()`이 `<hp:seg type="LINE\|CURVE">` 체인을 방출하고, `<hc:pt>` 미방출을 검증하는 회귀 테스트(`issue4676_curve_emits_seg_chain_not_pts`, `src/serializer/hwpx/section.rs`)까지 존재. HWPX 파서 쪽도 `segment_types` 왕복 확인됨. 후속 작업 없음 — 실물 curve 샘플 픽스처가 `samples/`에 없어 유닛 테스트 수준 커버리지뿐이라는 점만 참고(원하면 실물 샘플 추가 가능, 급하지 않음). |
+| `718ce06d0` | fix(renderer): overlay 표 필러 흐름 복원과 상향 클램프 해제 — 6쪽 표 겹침 소멸 (#4514) | `src/renderer/*` | ✅ **완료** — 이 커밋 자체가 `main`의 조상(2026-08-11, `d522719a1a`로 양쪽에 동일 해시 존재 — 별도 이식이 아니라 원래 공유 이력의 일부). `typeset.rs`의 `overlay_shape_shortcut_para`, `table_layout.rs`의 `overlay_multirow_rowbreak` 클램프 우회 전부 현재 코드에 그대로 있음. `LAYOUT_TABLE_OVERLAP` 진단(`#4515`, `db62298e6`)과 회귀 테스트(`tests/issue_4515_table_overlap_diag.rs`), 리포 샘플(`samples/issue4514/sample1-repro.hwp`)까지 이미 존재. 후속 `#4568`(페이지 분할 리페인트) 알려진 한계는 별도 추적 중. |
+| `bd8919896` 외(#6303 계열) | fix(layout): 셀 자동 축소 자간을 안쪽 폭에 수렴시킨다 | `src/renderer/layout/*` | ✅ **완료** — `main`에 `657d8a21e`로 이식됨(2026-09-01, upstream #6196/#6389/#6303 통합). `paragraph_layout.rs`의 `converge_cell_overflow_char_spacing()`이 최대 4회 반복 수렴. upstream 자신도 최초 무조건 버전을 되돌리고 `suppress_cell_overflow_spacing`이 없을 때만(=셀 내용이 이미 정확히 안쪽 폭에 맞춰 저장된 경우만) 적용하도록 게이팅했는데, 이식본도 동일하게 게이팅되어 있음. 회귀 테스트 `issue_6303_cell_shrink_convergence_tests`(`paragraph_layout.rs`), `tests/issue_6389_cell_stored_ladder_compresses_to_fit.rs` 존재. **미해결 잔여**: 포팅 시 제외된 `#6196` 원본 샘플(`samples/issue6196/cell_char_spacing_fit.hwp`)이 같은 페이지 다른 셀에 별개의 overflow 버그가 있어 아직 미조사 — 별도 이슈로 추적할 것. |
+| `41475dd5e` / `94036e467` / `6f7f5c56f` (#4318) | fix(layout): 미주 다단 마지막 단 줄넘김 연작 | `src/renderer/layout/*` | ✅ **완료** — `main`에 `616767315`(`6f1deb5c5`와 동일 메시지, 스쿼시 이식)로 2026-09-01 이식됨. upstream 5개 커밋(본 수정 + rustfmt + 프로파일 한정 + vpos=0 리셋 인접 처리 + 리셋-인접 처리를 진짜 오버플로로 한정)을 전부 검토해 하나로 통합. `ENDNOTE_LAST_COLUMN_SPLIT_BLEED_PX`(24→4px) 도입, `tests/issue_4318_endnote_last_column_frame.rs` 신규, 기존 `#1355`/`#1082` 관련 테스트 임계값·회귀 가드 유지 확인. |
+| `3431a7727` (#5251) | fix(hwpx): HWP3 원본 char_shapes 경계를 HWPX 재파싱에서 지킨다 | `src/parser/hwpx/*` | 🚫 **조사 완료, 이식 안 함 — rhwp-code에는 재현되는 버그가 없음(2026-09-03 재조사)**. 아래 별도 절 참고. |
+| `d7f90eb00` (#5873) | fix(hwpx): 표 셀 안 구역 나누기를 secPr로 내보낸다 | `src/serializer/hwpx/*` | ✅ **완료** — `main`에 `033d1267c`로 이식됨(2026-09-01). |
+| `d5dada7c1` (#5861) | fix(hwpx): 사용자 정의 기호 0xA807을 평면 15 사상표에 넣는다 | `src/parser/hwpx/*` | ✅ **완료** — `main`에 `3fffc4e58`로 이식됨(2026-09-01, upstream #5140/#5861 통합). |
+| `ce8015138` (#6380) / `1d2674857` (#5860) | fix(parser/hwp3): 사적 문자 소실 방지 / 매핑 없는 사적 문자를 한글이 내는 글자로 해석 | `src/parser/hwp3/*` | ✅ **완료** — `main`에 `049210a0e`로 이식됨(2026-09-01). |
+| `b14557e0a` (#5141) | fix(parser/hwp3): 묶음 개체 세부 길이 8바이트 오류로 인한 자식 도형 소실 방지 | `src/parser/hwp3/*` | ✅ **완료** — `main`에 `0dd135581`로 이식됨(2026-09-01). |
 
-**재착수·재보류(2026-09-02, 3d)**: upstream 패치(`src/parser/hwpx/section.rs`의 `Hwp3OriginSourceGuard` 스레드로컬 + FFFC 8유닛/pageNum·footer 슬롯 생략)를 그대로 이식해 통합 테스트(`issue_5251_hwp3_char_shapes_hwpx_roundtrip.rs`, upstream 시험 그대로 복사)를 돌린 결과, **char_shapes 숫자는 그대로 어긋나고(원본 네이티브 파서 `(0,1,10,15,31)` vs 패치 후 재파싱 `(0,24,33,38,54)`) — rhwp-code 네이티브 HWP3 파서가 실제로 확장 단위가 아니라 단순 문자 인덱스를 쓴다는 가설이 확정됐다.** 더 결정적으로, `render-diff samples/issue_265.hwp --via hwpx`(자기 라운드트립 시각 정합성 게이트)가 **패치 전 PASS(0px)였다가 패치 후 STRUCT_MISMATCH(347px, TextRun 16→18)로 새로 깨졌다** — upstream 패치를 그대로 적용하면 지금 잘 작동하는 rhwp-code 렌더링에 실제 회귀를 낸다. 패치는 되돌렸다(`git checkout`).
+**요약(2026-09-03 재조사)**: Tier 1 9개 항목 중 8개가 이미 `main`에 이식 완료 상태였다 —
+이 문서가 갱신되지 않아 최근까지 "미착수 후보"로 잘못 남아 있었다(`main`과 별개로
+`upstream-sync/tier1-devel-20260901`라는 로컬 전용 브랜치가 같은 작업을 독자적으로
+반복 수행했는데, 그 브랜치를 `main`에 합치치도 이 문서를 갱신하지도 않은 채 방치된
+것으로 보인다 — 그 브랜치의 9개 커밋은 전부 `main`의 커밋과 메시지가 동일한 중복이라
+고유 작업이 없음, 정리 대상). 실제로 남은 Tier 1 미해결 항목은 **`#5251` 단 하나**다.
 
-**결론**: 이 항목은 "HWPX 파서 쪽 어댑터 몇 줄"로 끝나지 않는다. 진짜 원인은 `src/parser/hwp3/*`(네이티브 HWP3 파서)의 char_shapes/char_offsets 계산이 애초에 HWP5/HWPX가 공유하는 PARA_TEXT 확장 단위 체계(개체 U+FFFC=8유닛, 탭=8유닛 등)를 안 쓰고 단순 문자 인덱스를 쓴다는 데 있다 — 이는 렌더러가 각 문서 내부적으로는 자기 char_offsets와 char_shapes를 같은 단위로 일관되게 다뤄 지금까지 개별적으로는 문제없이 렌더링해 온 것과도 부합한다(네이티브 HWP3 렌더링 자체는 정상). 진짜 이식은 네이티브 HWP3 파서의 단위 체계 자체를 확장 단위로 바꾸는 작업이 되어야 하는데, 이는 HWP3 파서 전 소비처(레이아웃·표 계산 등 char_offsets/char_shapes를 참조하는 모든 곳)에 걸친 회귀 위험이 있는 더 큰 작업이다. **다시 보류 — 다음 라운드에서 네이티브 HWP3 파서의 char_offsets 단위 체계 자체를 별도 조사·설계해야 한다.** |
-| `d7f90eb00` (#5873) | fix(hwpx): 표 셀 안 구역 나누기를 secPr로 내보낸다 | `src/serializer/hwpx/*` | 표 셀 내부 구역 나누기 시 secPr 누락 수정 — HWPX 저장 규격 준수성. |
-| `d5dada7c1` (#5861) | fix(hwpx): 사용자 정의 기호 0xA807을 평면 15 사상표에 넣는다 | `src/parser/hwpx/*` | 사용자 정의 기호 매핑 결손 수정. |
-| `ce8015138` (#6380) / `1d2674857` (#5860) | fix(parser/hwp3): 사적 문자 소실 방지 / 매핑 없는 사적 문자를 한글이 내는 글자로 해석 | `src/parser/hwp3/*` | HWP3 고전 인코딩(사적 영역 문자) 손실 방지 — 우리 HWP3 파서 작업과 직접 겹침. |
-| `b14557e0a` (#5141) | fix(parser/hwp3): 묶음 개체 세부 길이 8바이트 오류로 인한 자식 도형 소실 방지 | `src/parser/hwp3/*` | HWP3 도형 파싱 손실 버그. |
+### `#5251` (HWP3→HWPX char_shapes 경계) 재조사 결론 — 처음 진단은 틀렸다
+
+2026-09-02 재보류 결론("네이티브 HWP3 파서의 단위 체계 자체를 확장 단위로 바꿔야 하는
+더 큰 작업")은 **틀렸다**. 2026-09-03 재조사(upstream 4커밋 체인 전체 확인)로 밝혀진 것:
+
+1. **upstream `3431a7727`은 upstream 자신의 최종 수정이 아니다.** 같은 날 이어지는
+   4커밋 체인의 첫 번째일 뿐이다: `3431a7727`(초판, 전역 게이트) →
+   `380525090`(upstream 자신이 "전역 hwp3-origin FFFC=8과 pageNum/footer 생략이
+   #3532·#5542·char_count 왕복을 깨뜨렸다"고 명시하며 **좁은 게이트**
+   `hwpx_hwp3_issue_5251_axis`로 교체 — 한 문단 안에 FFFC **와** `Footer` 컨트롤
+   **과** `PageNumberPos`가 **동시에** 있을 때만 발동, `PAGE_FOOTER_SLOT_PART`
+   sentinel + 위치 재사상 함수 사용) → `7dde31cfd`/`efa65a482`(부수 테스트 수정).
+2. **2026-09-02 이식 시도는 이 4개 중 첫 번째(이미 알려진 결함이 있는 버전)만
+   이식했다** — upstream 자신도 몇 시간 뒤 되돌린 "HWP3 origin이면 전역으로 FFFC=8·
+   footer/pageNum 슬롯 생략" 게이트를 그대로 재현했다. 게다가 upstream의 가드
+   구성 코드(`Hwp3OriginSourceGuard` RAII, `#4916`/`#3518` 계열) 자체가 rhwp-code에
+   없어서 처음부터 새로 만들어야 했는데, 그때 좁은 조건이 아니라 "HWP3 origin
+   마커가 있으면 무조건" 식의 전역 게이트로 구현된 것으로 보인다. `samples/issue_265.hwp`가
+   회귀한 이유는 이 샘플이 좁은 `#5251` 패턴(FFFC+Footer+PageNumberPos 동시 존재)이
+   아닌데도 전역 게이트에 걸려 영향을 받았기 때문이다.
+3. `src/parser/hwp3/mod.rs:1922-1924`에 명시적 주석이 있다: NewNumber/PageNumberPos/
+   PageHide/CharOverlap/Field/IndexMark/Outline/미인식 TOC 참조 등 FFFC를 내는 대부분의
+   HWP3 컨트롤을 **의도적으로** 1유닛으로 유지한다 — 네이티브 HWP3 렌더링이 저장된
+   `LineInfo`/`CharShape` 위치를 단일-마커 관례로 계산하기 때문에, 전역으로 8유닛으로
+   넓히면 네이티브 HWP3 레이아웃 자체가 밀린다. **즉 "HWP3 파서가 항상 8유닛을 내게
+   고친다"는 애초에 선택지가 아니다** — 이건 실수가 아니라 문서화된 의도적 트레이드오프다.
+   `char_offsets`/`char_shapes`는 레이아웃·표·검색/커서·편집 커맨드 등 수십 개 파일에서
+   원시 오프셋 산술로 직접 참조되므로(예: `src/model/paragraph.rs`에 `+8` 리터럴이
+   그대로 박혀 있음), 네이티브 파서의 일반 단위 체계를 건드리는 건 여전히 위험 범위가
+   넓다 — 하지만 **좁게 게이팅된 HWPX 재파싱 경로 안에서만** 보정하면 이 위험을 전부
+   피할 수 있다(upstream의 최종 설계와 일치).
+
+**실측(2026-09-03) — 좁은 게이트를 실제로 구현·검증한 결과: 이식하지 않기로 결정.**
+위 분석대로 upstream 4커밋(`380525090`/`7dde31cfd`/`efa65a482` 포함, `Hwp3OriginSourceGuard`
+스레드로컬 + `hwpx_hwp3_issue_5251_axis` 좁은 게이트 + `PAGE_FOOTER_SLOT_PART` sentinel +
+`hwpx_map_std_pos_to_5251_axis` 위치 재사상)를 rhwp-code의 분할 구조(`section.rs`/
+`section/paragraph_parsing.rs`)에 맞춰 실제로 구현했다. 컴파일 통과, `render-diff
+samples/issue_265.hwp --via hwpx` PASS(0px, 회귀 없음) 확인 — 여기까지는 성공.
+
+그런데 **저장소 전체 277개 `.hwp` 샘플을 HWP3 형식으로 필터링해 좁은 패턴(FFFC+Footer+
+PageNumberPos 동시 존재)을 전수 스윕한 결과, 후보가 단 2건(`issue_265.hwp`,
+`hwp3-sample.hwp` — 사실상 같은 문서의 사본으로 보임)뿐이었고, 이 2건 모두 **패치
+적용 여부와 무관하게 이미 네이티브 파싱과 HWPX 왕복 사이에 문자 단위 char_shape_id
+정렬이 완전히 일치**했다(직접 문자별 대조로 확인, `--verify`/`ir-diff` 우회). 패치가
+실제로 다른 결과를 낼 수 있는 유일한 시나리오는 **진짜로 짝지어진 개체(Table/Picture/
+Shape 컨트롤)가 Footer+PageNumberPos와 한 문단에 동시에 있는 경우**뿐인데(네이티브
+파서가 이 경우 보이는 FFFC 문자 대신 "보이지 않는 8유닛 anchor gap"으로 처리하는 별도
+경로, `hwp3/mod.rs:1907-1919` `preserve_invisible_anchor_gap`) — **이 조합은 저장소의
+샘플 어디에도 존재하지 않는다.**
+
+**결론**: upstream #5251은 upstream 자신의 네이티브 HWP3 파서가 FFFC를 (거의) 항상
+8유닛으로 세는 설계라서 HWPX 재파싱 기본값(1유닛)과 실제로 어긋나는 것이지만,
+rhwp-code의 네이티브 HWP3 파서는 시각적으로 보이는 FFFC 문자를 내는 모든 컨트롤에서
+**이미 항상 1유닛**을 쓰고(`hwp3/mod.rs:1927`), HWPX 재파싱 기본값도 문자 그대로
+1유닛이라 — **애초에 두 축이 어긋날 수가 없는 구조**다. 즉 `#5251`은 rhwp-code
+아키텍처에는 적용되지 않는, upstream 고유의 결함이다. 구현했던 패치(스레드로컬 +
+좁은 게이트 + 재사상 함수, ~150줄)는 되돌렸다(`git checkout`, 커밋 없음) — 확인된
+버그가 전무한 상태에서 코드 복잡도만 늘리는 것은 이 프로젝트의 최소주의 원칙에
+어긋난다. 향후 실제로 짝지어진 개체+Footer+PageNumberPos 조합을 가진 HWP3 실물
+문서가 발견되면 이 절의 분석(특히 `hwp3/mod.rs:1907-1919`)을 재사용해 재평가할 것 —
+그 전까지는 **Tier 1 전 항목이 완료 상태**다.
 
 ## 4. Tier 2 (Mid) — 가치는 있으나 이식 비용·구조 충돌 위험이 크거나 간접적
 
