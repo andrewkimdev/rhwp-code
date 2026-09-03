@@ -311,10 +311,15 @@ const labelInlineRoomRule: RowPatternRule = (grid, prefixMap) => {
       const left = findGridCellAt(grid, cell.row, cell.col - 1);
       if (left && isBlankCell(left) && claimedBlankIdxs.has(left.cellIdx)) continue;
     }
-    // 가드 5: 아래 행에 이 라벨의 열 범위와 겹치는 셀이 2개 이상이면(경계가 어긋난
-    // 답변 그리드) 어느 서브셀이 이 라벨의 답인지 안전하게 정할 수 없다 — 자동
-    // 인라인 후보로 삼지 않는다(수동 "태그 지정" 몫).
-    const overlappingBelow = cellsInRow(grid, cell.row + 1).filter((b) => colRangesOverlap(cell, b));
+    // 가드 5: 아래 행에 이 라벨의 열 범위와 겹치는 **빈** 셀이 2개 이상이면(경계가
+    // 어긋난 답변 그리드) 어느 서브셀이 이 라벨의 답인지 안전하게 정할 수 없다 —
+    // 자동 인라인 후보로 삼지 않는다(수동 "태그 지정" 몫). 텍스트가 있는(다른 라벨인)
+    // 겹침은 세지 않는다 — 라벨 혼자 전체 폭을 차지하는 행 바로 아래에 무관한
+    // 두-라벨 행이 오는 모양(예: "소재지" 아래 "설립허가일"/"설립허가번호")은 그
+    // 두 라벨이 애초에 이 라벨의 답 후보가 될 수 없으므로 오탐이다.
+    const overlappingBelow = cellsInRow(grid, cell.row + 1).filter(
+      (b) => colRangesOverlap(cell, b) && isBlankCell(b),
+    );
     if (overlappingBelow.length > 1) continue;
 
     candidates.push({

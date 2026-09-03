@@ -331,6 +331,30 @@ test('labelInlineRoomRule: 열 경계가 어긋난 답변 그리드(응시지역
   assert.deepEqual(suggestFieldNames(wasm, 0, 0, 0), []);
 });
 
+// 5830506.hwpx row9-11 모양(법인[rowSpan3]/명칭·전화번호 / 소재지[전체 폭 혼자] /
+// 설립허가일·설립허가번호) 축소판 — "소재지"는 아래 행(설립허가일/설립허가번호)과
+// 열 범위가 겹치지만, 그 두 셀은 빈 칸이 아니라 완전히 다른 라벨이므로 가드 5의
+// "경계가 어긋난 답변 그리드" 오탐 대상이 아니다. 텍스트가 있는 겹침은 세지 않아야
+// "법인_소재지" 후보가 나온다.
+test('labelInlineRoomRule: 전체 폭 라벨 아래 무관한 두-라벨 행이 와도(소재지류) 후보로 삼는다', () => {
+  const cells: FakeCell[] = [
+    { row: 0, col: 0, rowSpan: 3, colSpan: 2, text: '법  인' },
+    { row: 0, col: 2, rowSpan: 1, colSpan: 11, text: '명칭' },
+    { row: 0, col: 13, rowSpan: 1, colSpan: 7, text: '전화번호' },
+    { row: 1, col: 2, rowSpan: 1, colSpan: 18, text: '소재지' },
+    { row: 2, col: 2, rowSpan: 1, colSpan: 11, text: '설립허가일' },
+    { row: 2, col: 13, rowSpan: 1, colSpan: 7, text: '설립허가번호' },
+  ];
+  const wasm = makeFakeTableWasm(cells);
+  const suggestions = suggestFieldNames(wasm, 0, 0, 0);
+  const sojaeji = suggestions.find((s) => s.leafText === '소재지');
+  assert.ok(sojaeji, '소재지 후보가 있어야 한다');
+  assert.equal(sojaeji?.suggestedName, '법인_소재지');
+  assert.equal(sojaeji?.sectionPrefix, '법인');
+  assert.ok(sojaeji?.insertAt, '소재지는 insertAt이 있어야 한다(인라인 삽입)');
+  assert.equal(sojaeji?.insertAt?.charOffset, '소재지'.length);
+});
+
 test('labelInlineRoomRule: 삽입 지점에 이미 필드가 있으면 alreadyHasField로 표시하고 제외한다', () => {
   const cells: FakeCell[] = [
     { row: 0, col: 0, rowSpan: 2, colSpan: 1, text: '인적사항' },
