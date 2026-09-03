@@ -134,13 +134,20 @@ rhwp-code의 네이티브 HWP3 파서는 시각적으로 보이는 FFFC 문자�
 
 ## 4. Tier 2 (Mid) — 가치는 있으나 이식 비용·구조 충돌 위험이 크거나 간접적
 
+**요약(2026-09-03)**: 5개 항목 전부 완료 또는 제외 상태다 — `#5185`/`#5192`
+편집 명령 43개는 8절 부록대로 전부 이식 완료(`set-numbering-restart`까지
+2026-09-03에 마무리), `#5932`는 이미 구현돼 있었고, `#4100`/`rhwp-contracts`는
+전제가 낡아 제외됐으며, `#5511`(MCP metadata 리팩터)만 구조 차이로 직접 이식
+대상이 아니라는 원래 평가가 유효하다(참고용으로 남김). **Tier 2에 남은 실행
+항목 없음.**
+
 | 커밋 | 메시지 | 주요 경로 | 비고 |
 |---|---|---|---|
 | `193034df3` (#5511) | refactor: MCP metadata 모듈 추출 | `src/main.rs`(-4331줄) → `src/cli/metadata/mcp/{advanced,edit_content,edit_format,edit_structure,exchange,protocol,read,mod}.rs` | MCP 서버 구조 정리. rhwp-mcp-session 관련 작업 시 구조 참고 가치는 있으나, `main.rs` 분할 방향이 rhwp-code(`main/{batch,convert,edit,...}.rs`)와 달라 직접 이식은 어렵다 — 로직만 참고. |
 | `9aa043c2c`~`e3e2aa21a` (#4100, Stage 1~6) | feat(ooxml_chart)/feat(serializer)/feat(cli): 차트 CSV 왕복 | `src/ooxml_chart/*`, `src/serializer/*`, `src/document_core/*`, `src/cli/commands/*` | ~~HWPX 임베드 OOXML 차트 값을 CSV로 뽑고(`chart-to-csv`) 되넣는(`csv-to-chart`) 완전히 새로운 기능. rhwp-code에 없는 기능 격차 — 31개 파일, +6,166줄로 이식 비용은 크지만 통째로 검토할 가치가 있다.~~ **정정(2026-09-01, Tier 2 착수 조사)**: 이 항목은 전제가 낡았다 — `9aa043c2c`~`e3e2aa21a`는 이미 rhwp-code HEAD의 조상(2026-08-11자, 동기화 지점 이전)이며 `src/ooxml_chart/*`와 `chart-to-csv`/`csv-to-chart` 명령이 이미 구현·문서화(`mydocs/manual/cli_commands.md`)되어 있다. **이번 Tier 2 라운드 대상에서 제외.** |
 | `ba097d6bf` (#5185), `e0851908b` (#5192) 등 | feat(cli): 편집 명령 13건/29건 통합 | `src/cli/commands/edit/*`, `tests/cases/*_contract.rs` | `edit` 서브커맨드 42개+ 신규(`set-section-def`, `set-table-props`, `move-table`, `transpose-table`, `set-column-widths` 등). feature parity 가치는 크지만 rhwp-code CLI 구조가 이미 다르게 쪼개져 있어 명령 단위 개별 선별 이식을 권장. **진행(2026-09-02)**: `move-table`/`transpose-table`/`set-column-widths`/`set-table-props`/`set-section-def` 5건은 rhwp-code에 이미 있던 네이티브 함수(`table_ops.rs`의 `move_table_offset_native`/`transpose_table_cells_in_place_native`/`set_table_column_widths_native`/`set_table_properties_native`, `queries/rendering.rs`의 `set_section_def_native`)에 CLI 배선만 추가해 이식 완료. `set-table-props`/`set-section-def` 모두 착수 전 upstream 원 커밋(각각 `4909e3922`, `0e908e344` — `ba097d6bf` 통합 이전 원본)을 선확인한 결과, 이 라운드의 첫 보고서가 "신규 IR 필요"로 잘못 분류했던 것과 달리 rhwp-code에 이미 동형(또는 더 성숙한) 네이티브 함수가 있어 저위험으로 확정됐다 — 표본 5개 전부 결국 순수 CLI 배선 작업이었다. 나머지 ~37개는 다음 라운드 대상. |
 | 신규 crate | `crates/rhwp-contracts` | `crates/rhwp-contracts/*`(14파일, +12,499줄) | ~~계약 테스트 인프라. rhwp-code의 work-receipt/캡슐 검증 체계(`rhwp replay/audit/lineage`)와 시너지 가능성이 있어 검토 가치.~~ **정정(2026-09-02, 3c 조사)**: 전제가 낡았다 — 실제 내용을 읽어보니 work-receipt/캡슐과 무관하고, `ir_schema`/`ontology`/`provenance`/`schema_registry` 4개 모듈을 별도 crate로 물리적으로 옮긴 것뿐이다(`lib.rs` 자체 주석: "공개 API를 보존하면서 해당 단위 테스트를 루트 rhwp 테스트 바이너리와 독립적으로 컴파일"하기 위한 **빌드 격리 리팩터**). rhwp-code는 이 4개 모듈을 이미 같은 이름(`src/{ir_schema,ontology,provenance,schema_registry}.rs`)으로 갖고 있다 — `ir_schema.rs`/`ontology.rs`는 줄 수까지 일치, `provenance.rs`/`schema_registry.rs`의 줄 수 차이는 내용 차이가 아니라 upstream이 그사이 늘린 명령 수(`charts`/`explore`/`word-count`/`bookmarks` 등, rhwp-code가 아직 안 가진 별개 기능들)만큼 출처 표지 항목이 늘어난 것이다. **포팅 가치 없음 — 이번 라운드에서 제외.** MCP metadata 리팩터(#5511)와 같은 성격(구조 정리, fidelity 무관)으로 재분류. |
-| `61e439043` (#5932) | feat: info에 한컴오피스 마지막 저장 버전 표시 | `src/cli/*`, `src/document_core/*` | 소규모 실용 진단 기능. |
+| `61e439043` (#5932) | feat: info에 한컴오피스 마지막 저장 버전 표시 | `src/cli/*`, `src/document_core/*` | ✅ **완료** — `src/main/export.rs`(2689행 근처 `version.xml` 파싱, 2817-2821행 `info` 출력)와 `src/main/batch.rs`(1624-1647행, `batch info` JSON 필드)에 `[#5932]` 태그로 이미 구현됨. |
 
 ## 5. Tier 3 (Low) — 참고만, 우선순위 낮음
 
