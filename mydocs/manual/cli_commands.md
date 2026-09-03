@@ -1224,6 +1224,50 @@ exit 3) · `--json`. 코어 로직은 기존 `table_ops.rs` 네이티브 함수(
   단 `--offset`은 문단 길이 대비 사전 검사하지 않는다(upstream도 안 함). `-o`
   기본 `_pagebreak.<확장자>`.
 
+### 나머지 3종 (upstream #5185/#5192 계열, 43개 중 42개 완료 — `set-numbering-restart` 제외)
+아래 3개 명령은 강제 단 나누기 삽입과 머리말/꼬리말 문단 분할·병합을 다룬다.
+코어 로직은 기존 `text_editing.rs`/`header_footer_ops.rs` 네이티브 함수를 그대로
+재사용 — 새 편집 로직 없음. 공통: `-o, --output`(기본 산출 형식은 입력 형식을
+따름) · `--dry-run` · `--verify`(저장 직후 재파싱 IR 자기검증, 차이 시 exit 3) ·
+`--json`.
+
+- **`edit insert-column-break <파일> [--section N] [--para N] [--offset N] [옵션]`**
+  커서 위치에서 문단을 분할하고 강제 단 나누기(Ctrl+Shift+Enter)를 삽입한다
+  (1단 문서에서는 쪽 나누기와 동일하게 동작). `--section`/`--para`/`--offset`은
+  생략하면 0. **upstream 원본대로 `--section`/`--para` 범위를 인자 파싱 직후
+  무조건 검사한다**(`--dry-run`에서도 exit 2) — 단 `--offset`은 검사하지 않는다.
+  `-o` 기본 `_colbreak.<확장자>`.
+- **`edit split-paragraph-in-hf <파일> --header|--footer [--section N] [--apply-to 0|1|2] [--para N] [--offset N] [옵션]`**
+  머리말/꼬리말 문단을 분할한다(Enter). `--header`/`--footer` 중 정확히 하나는
+  필수, `--section`/`--apply-to`/`--para`(머리말/꼬리말 *내부* 문단 인덱스)/
+  `--offset`은 생략하면 0. `restore_meta`는 undo 전용 축이라 CLI에서는 항상
+  `None`으로 넘긴다(`split-paragraph`/`split-paragraph-in-footnote`와 같은 관례,
+  이 명령 범위 밖). **`--dry-run`에서 범위를 미리 검사하지 않는다**(네이티브 호출
+  자체가 `--dry-run`에서 생략됨). `-o` 기본 `_hfsplit.<확장자>`.
+- **`edit merge-paragraph-in-hf <파일> --header|--footer [--section N] [--apply-to 0|1|2] [--para N] [옵션]`**
+  머리말/꼬리말 문단을 바로 앞 문단과 병합한다(문단 시작에서 Backspace).
+  `--header`/`--footer` 중 정확히 하나는 필수. **`--para` 기본값은 1**(0은
+  "첫 문단은 병합 불가"로 항상 거부되므로 — upstream 원본과 같은 관례,
+  `merge-paragraph-in-footnote`도 동일). **`--dry-run`에서 범위를 미리 검사하지
+  않는다**. `-o` 기본 `_hfmerge.<확장자>`.
+
+**제외: `set-numbering-restart`** — 코어 `set_numbering_restart_native`는 존재하고
+`Paragraph.numbering_restart` 필드를 정상적으로 설정하지만(`{"ok":true}` 반환),
+**이 필드는 어떤 직렬화기(HWP5·HWPX 모두)에도 연결돼 있지 않다** — 저장 후
+다시 열면 무조건 `None`으로 돌아온다(`src/parser`/`src/serializer` 전체에 이
+필드를 읽거나 쓰는 코드가 없음, 확인 완료). 렌더러의 `NumberingCounter::advance`
+(`src/renderer/layout.rs`)만 라이브 세션 중 화면 번호 재계산에 이 필드를 참조한다
+— `toggle-hide-hf`(머리말/꼬리말 9종 배치에서 제외)와 같은 성격의 **세션 전용
+필드**다. 이 상태로 CLI 편집 명령을 배선하면 "파일을 만드는 것처럼 보이지만
+저장 후 효과가 전혀 남지 않는" 오해 소지 있는 명령이 된다 — 더 나쁘게는
+`--verify`/`ir-diff`(둘 다 `serializer/hwpx/roundtrip.rs`의 `diff_documents`를
+공유)가 이 필드를 비교 대상에서 빠뜨려 `identical:true`를 보고하므로, 문제를
+자체 검증으로도 잡을 수 없다. 실제 문서 모델 변화(네이티브 호출 직후 in-memory
+필드 → HWP5/HWPX 각각 직렬화 후 재파싱)로 직접 확인했다. 배선하지 않았다 —
+향후 진짜 필요해지면 HWP5 ParaHeader와 HWPX `<hp:p>`가 이 정보를 어떤 바이트/
+속성으로 표현하는지부터 조사해 직렬화기에 새로 연결해야 한다(CLI 배선이 아니라
+별도 기능 개발).
+
 ### `edit insert-image <파일> --image <그림> [--page N] [--x N --y N] [--width N --height N] [-o <출력>] [--dry-run] [--verify] [--json]` (#3719 §6-5)
 도장·서명 같은 그림을 쪽 좌표에 붙인다 — 채워 넣은 서식에 직인을 얹는 실물 제출의 마지막 조각.
 - `--image <그림>` (필수) — 지원 형식은 `png`·`jpg`·`jpeg`·`bmp`·`tif`·`tiff` 뿐(확장자와 내용

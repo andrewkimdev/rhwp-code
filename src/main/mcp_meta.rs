@@ -194,6 +194,9 @@ pub(crate) fn mcp_tool_definitions() -> Vec<serde_json::Value> {
                 | "hwp_rename_bookmark"
                 | "hwp_delete_table"
                 | "hwp_insert_page_break"
+                | "hwp_insert_column_break"
+                | "hwp_split_paragraph_in_hf"
+                | "hwp_merge_paragraph_in_hf"
         )
     }
 
@@ -2337,6 +2340,100 @@ pub(crate) fn mcp_tool_definitions() -> Vec<serde_json::Value> {
                 { "when": "verify", "args": ["--verify"] }
             ]),
             &["schemaVersion", "source", "section", "paragraph", "offset", "dryRun", "changedPages", "output", "outputFormat", "verify"],
+        ),
+        tool_with_optional_args(
+            "hwp_insert_column_break",
+            "커서 위치에서 문단을 분할하고 강제 단 나누기를 삽입해 새 문서를 만든다(1단 문서에서는 쪽 나누기와 동일하게 동작). section/para/offset 은 생략하면 0. 산출물은 입력 형식을 따른다(HWPX 입력 → HWPX 산출). section/para 범위는 dryRun 에서도 검사한다(offset 은 문단 길이 대비 검사하지 않는다).",
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "입력 HWP/HWPX 문서 경로" },
+                    "section": { "type": "integer", "minimum": 0, "description": "구역 (0부터). 생략하면 0" },
+                    "para": { "type": "integer", "minimum": 0, "description": "문단 (0부터). 생략하면 0" },
+                    "offset": { "type": "integer", "minimum": 0, "description": "문단 내 분할 오프셋. 생략하면 0" },
+                    "output": { "type": "string", "description": "출력 파일 경로. 생략하면 <입력명>_colbreak.hwp (HWPX 입력이면 _colbreak.hwpx)" },
+                    "dryRun": { "type": "boolean", "description": "true 면 파일을 쓰지 않고 구역/문단 범위 검증만 수행" },
+                    "verify": { "type": "boolean", "description": "저장 직후 재파싱 IR 자기검증 — 차이가 있으면 exit 3" }
+                },
+                "required": ["path"],
+            }),
+            "edit",
+            serde_json::json!(["edit", "insert-column-break", "{path}", "--json"]),
+            serde_json::json!([
+                { "when": "section", "args": ["--section", "{section}"] },
+                { "when": "para", "args": ["--para", "{para}"] },
+                { "when": "offset", "args": ["--offset", "{offset}"] },
+                { "when": "output", "args": ["-o", "{output}"] },
+                { "when": "dryRun", "args": ["--dry-run"] },
+                { "when": "verify", "args": ["--verify"] }
+            ]),
+            &["schemaVersion", "source", "section", "paragraph", "offset", "dryRun", "changedPages", "output", "outputFormat", "verify"],
+        ),
+        tool_with_optional_args(
+            "hwp_split_paragraph_in_hf",
+            "머리말/꼬리말 문단을 분할해 새 문서를 만든다. header/footer 중 정확히 하나는 필수, section/applyTo/para/offset 은 생략하면 0. 산출물은 입력 형식을 따른다(HWPX 입력 → HWPX 산출). 좌표 범위는 dryRun 에서 검사하지 않는다(네이티브 호출 자체가 dryRun 에서 생략됨).",
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "입력 HWP/HWPX 문서 경로" },
+                    "header": { "type": "boolean", "description": "true 면 머리말. footer 와 정확히 하나만 지정" },
+                    "footer": { "type": "boolean", "description": "true 면 꼬리말. header 와 정확히 하나만 지정" },
+                    "section": { "type": "integer", "minimum": 0, "description": "구역 (0부터). 생략하면 0" },
+                    "applyTo": { "type": "integer", "minimum": 0, "maximum": 2, "description": "0(양쪽)·1(짝수쪽)·2(홀수쪽). 생략하면 0" },
+                    "para": { "type": "integer", "minimum": 0, "description": "머리말/꼬리말 내부 문단 (0부터). 생략하면 0" },
+                    "offset": { "type": "integer", "minimum": 0, "description": "문단 내 분할 오프셋. 생략하면 0" },
+                    "output": { "type": "string", "description": "출력 파일 경로. 생략하면 <입력명>_hfsplit.hwp (HWPX 입력이면 _hfsplit.hwpx)" },
+                    "dryRun": { "type": "boolean", "description": "true 면 파일을 쓰지 않는다 — 좌표 범위는 검사하지 않는다" },
+                    "verify": { "type": "boolean", "description": "저장 직후 재파싱 IR 자기검증 — 차이가 있으면 exit 3" }
+                },
+                "required": ["path"],
+            }),
+            "edit",
+            serde_json::json!(["edit", "split-paragraph-in-hf", "{path}", "--json"]),
+            serde_json::json!([
+                { "when": "header", "args": ["--header"] },
+                { "when": "footer", "args": ["--footer"] },
+                { "when": "section", "args": ["--section", "{section}"] },
+                { "when": "applyTo", "args": ["--apply-to", "{applyTo}"] },
+                { "when": "para", "args": ["--para", "{para}"] },
+                { "when": "offset", "args": ["--offset", "{offset}"] },
+                { "when": "output", "args": ["-o", "{output}"] },
+                { "when": "dryRun", "args": ["--dry-run"] },
+                { "when": "verify", "args": ["--verify"] }
+            ]),
+            &["schemaVersion", "source", "section", "isHeader", "applyTo", "paragraph", "offset", "dryRun", "changedPages", "output", "outputFormat", "verify"],
+        ),
+        tool_with_optional_args(
+            "hwp_merge_paragraph_in_hf",
+            "머리말/꼬리말 문단을 바로 앞 문단과 병합해 새 문서를 만든다. header/footer 중 정확히 하나는 필수, section/applyTo 는 생략하면 0, para 는 생략하면 1(0은 첫 문단이라 항상 거부됨). 산출물은 입력 형식을 따른다(HWPX 입력 → HWPX 산출). 좌표 범위는 dryRun 에서 검사하지 않는다.",
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "입력 HWP/HWPX 문서 경로" },
+                    "header": { "type": "boolean", "description": "true 면 머리말. footer 와 정확히 하나만 지정" },
+                    "footer": { "type": "boolean", "description": "true 면 꼬리말. header 와 정확히 하나만 지정" },
+                    "section": { "type": "integer", "minimum": 0, "description": "구역 (0부터). 생략하면 0" },
+                    "applyTo": { "type": "integer", "minimum": 0, "maximum": 2, "description": "0(양쪽)·1(짝수쪽)·2(홀수쪽). 생략하면 0" },
+                    "para": { "type": "integer", "minimum": 1, "description": "머리말/꼬리말 내부 문단 (0부터, 1 이상). 생략하면 1" },
+                    "output": { "type": "string", "description": "출력 파일 경로. 생략하면 <입력명>_hfmerge.hwp (HWPX 입력이면 _hfmerge.hwpx)" },
+                    "dryRun": { "type": "boolean", "description": "true 면 파일을 쓰지 않는다 — 좌표 범위는 검사하지 않는다" },
+                    "verify": { "type": "boolean", "description": "저장 직후 재파싱 IR 자기검증 — 차이가 있으면 exit 3" }
+                },
+                "required": ["path"],
+            }),
+            "edit",
+            serde_json::json!(["edit", "merge-paragraph-in-hf", "{path}", "--json"]),
+            serde_json::json!([
+                { "when": "header", "args": ["--header"] },
+                { "when": "footer", "args": ["--footer"] },
+                { "when": "section", "args": ["--section", "{section}"] },
+                { "when": "applyTo", "args": ["--apply-to", "{applyTo}"] },
+                { "when": "para", "args": ["--para", "{para}"] },
+                { "when": "output", "args": ["-o", "{output}"] },
+                { "when": "dryRun", "args": ["--dry-run"] },
+                { "when": "verify", "args": ["--verify"] }
+            ]),
+            &["schemaVersion", "source", "section", "isHeader", "applyTo", "paragraph", "dryRun", "changedPages", "output", "outputFormat", "verify"],
         ),
         tool_with_optional_args(
             "hwp_export_ir_schema",

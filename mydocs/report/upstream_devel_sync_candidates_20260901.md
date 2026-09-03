@@ -286,3 +286,43 @@ upstream 원본대로 `--section`/`--para` 범위를 네이티브 호출과 무�
 34+5(책갈피/구조) = 39개. 나머지 4개(`insert-column-break`/
 `split-paragraph-in-hf`/`merge-paragraph-in-hf`/`set-numbering-restart`)는
 다음("나머지") 배치 대상.
+
+**진행(2026-09-03, 계속)**: "나머지" 배치 중 3건 완료, 1건 제외 —
+`text_editing.rs`의 `insert_column_break_native`, `header_footer_ops.rs`의
+`split_paragraph_in_header_footer_native`/`merge_paragraph_in_header_footer_native`
+(전부 이미 `pub`)에 CLI 배선만 추가했다(`insert-column-break`/
+`split-paragraph-in-hf`/`merge-paragraph-in-hf`). 인자·시맨틱은 upstream
+`origin/devel`(`../rhwp`)의 `src/cli/commands/edit/document_text.rs` /
+`header_footer_content.rs`를 직접 읽어 확인했다. `insert-column-break`는 직전
+배치의 `insert-page-break`와 완전히 같은 패턴(`--section`/`--para` 범위를
+`--dry-run`에서도 무조건 검사, `--offset`은 검사 안 함). `merge-paragraph-in-hf`는
+upstream 원본도 `--para` 기본값을 1로 잡는다(0은 첫 문단이라 항상 거부 —
+`merge-paragraph-in-footnote`와 같은 관례, 직접 대조 확인). 표본
+`samples/hwpx/143E433F503322BD33.hwpx`(머리말 컨트롤 1개, 문단 1개)로 split→merge
+왕복 검증.
+
+**`set-numbering-restart`는 배선하지 않았다 — 실제 회귀 발견, `toggle-hide-hf`와
+같은 성격**: 코어 `set_numbering_restart_native`(`formatting.rs`)는 정상 동작해
+`Paragraph.numbering_restart` 필드를 `{"ok":true}`로 설정하지만, 이 필드는
+`src/parser`/`src/serializer` 어디에도 읽거나 쓰는 코드가 없다(전체 검색으로
+확인) — 저장 후 다시 열면 **HWP5·HWPX 모두** 무조건 `None`으로 돌아온다.
+직접 확인 절차: `set_numbering_restart_native(0,1,2,5)` 호출 직후 in-memory
+필드는 `Some(NewStart(5))`였으나, `export_hwpx_native()`/`export_hwp_with_adapter()`
+로 저장 후 재파싱하면 둘 다 `None`. 유일한 소비처는 `src/renderer/layout.rs`의
+`NumberingCounter::advance()` — 라이브 세션 중 화면 번호 재계산에만 쓰는 **세션
+전용 필드**다. 더 심각한 점: `--verify`와 `rhwp ir-diff`가 공유하는
+`serializer/hwpx/roundtrip.rs`의 `diff_documents`가 애초에 이 필드를 비교
+대상에서 빠뜨려(책갈피 이름과 같은 부류의 기존 커버리지 공백) `identical:true`를
+보고한다 — 즉 이 명령을 배선하면 "저장했지만 아무 효과도 남지 않는" 명령인데도
+자체 검증(`--verify`)조차 그 사실을 잡아내지 못한다. 코드는 작성하지 않았다
+(CLI/MCP 배선 자체를 시도하지 않음, 되돌릴 커밋 없음). 향후 이 기능이 필요하면
+HWP5 ParaHeader와 HWPX `<hp:p>`가 이 정보를 표현하는 바이트/속성을 먼저 조사해
+직렬화기에 새로 연결해야 한다 — CLI 배선이 아니라 별도 기능 개발.
+
+3개 신규 계약 테스트 그룹(`tests/edit_column_break_hf_numbering_contract.rs`,
+실제로는 3개 명령만 다룸 — 파일명은 착수 당시 4개 예정이었던 흔적) 추가,
+`cargo test --lib` 전체(3634 passed) 및 신규 계약 스위트 통과 확인. 이 배치까지
+완료/제외된 것은 39+3(나머지 중 3건) = 42개, `set-numbering-restart` 1건은
+새 core 작업(직렬화기 확장)이 필요해 **여전히 미착수** — upstream #5185/#5192
+43개 명령의 CLI/MCP 이식은 42/43으로 사실상 마무리, 남은 1건은 별도 이슈로
+분리해 추적할 것.
