@@ -428,7 +428,7 @@ fn main() {
 /// MCP 서버 저자(및 함수 호출 클라이언트)가 도구 이름·설명·입력 JSON Schema·실행 배선을
 /// 손으로 옮겨 적지 않게 한다. `--json` 계약을 가진 명령이 늘면
 /// `capabilities_mcp_covers_every_json_command` 가 누락을 잡는다.
-const EDIT_SUBCOMMANDS: [(&str, &str); 52] = [
+const EDIT_SUBCOMMANDS: [(&str, &str); 53] = [
     (
         "fill-fields",
         "누름틀(필드) 값 채우기 — --data 이름=값, 같은 이름은 [k] 순번 지목",
@@ -606,6 +606,10 @@ const EDIT_SUBCOMMANDS: [(&str, &str); 52] = [
     (
         "merge-paragraph-in-hf",
         "머리말/꼬리말 문단을 이전 문단과 병합 — --header|--footer 필수, --para (생략 시 1, 0 거부)",
+    ),
+    (
+        "set-numbering-restart",
+        "문단 번호 다시 시작 — --mode 필수(0/1/2), --count(=시작 번호, mode=2 전용)/--section/--para (생략 시 0/0/1)",
     ),
     (
         "insert-image",

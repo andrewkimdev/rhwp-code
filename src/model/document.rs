@@ -553,6 +553,30 @@ impl Document {
         new_id
     }
 
+    /// 동일한 Numbering이 이미 있으면 그 ID를, 없으면 새로 추가하고 ID를 반환한다.
+    ///
+    /// `numbering_id`는 tab_def/para_shape와 달리 **1-based**다(0 = "정의 없음",
+    /// `ParaShape.numbering_id`가 이를 그대로 참조하며 소비처는 `numbering_id - 1`로
+    /// 인덱싱한다). `raw_data`/`raw_para_heads`(원본 바이트/XML 보존용)는 논리적
+    /// 동일성과 무관하므로 비교 전 항상 무효화한다 — 값이 바뀐 정의는 원본을 그대로
+    /// 재사용할 수 없다(HWPX는 하드코딩 뼈대 폴백으로 방출).
+    pub fn find_or_create_numbering(&mut self, mut new_numbering: super::style::Numbering) -> u16 {
+        new_numbering.raw_data = None;
+        new_numbering.raw_para_heads = None;
+
+        // 동일한 Numbering이 이미 있는지 검색
+        for (i, n) in self.doc_info.numberings.iter().enumerate() {
+            if *n == new_numbering {
+                return (i + 1) as u16;
+            }
+        }
+
+        // 없으면 새로 추가
+        self.doc_info.numberings.push(new_numbering);
+        self.doc_info.raw_stream_dirty = true;
+        self.doc_info.numberings.len() as u16
+    }
+
     /// [Task #741 후속] 외부 file path 그림 (HWP3 영역 영역 절대 경로 영역 저장된 image)
     /// 영역 의 binary 영역 영역 base_dir 영역 영역 자동 load.
     ///
@@ -799,5 +823,39 @@ mod tests {
         let id2 = doc.find_or_create_para_shape(0, &mods);
         assert_eq!(id2, 1);
         assert_eq!(doc.doc_info.para_shapes.len(), 2);
+    }
+
+    #[test]
+    fn test_find_or_create_numbering_reuse() {
+        use super::style::Numbering;
+        let mut doc = Document::default();
+
+        let mut n1 = Numbering::default();
+        n1.level_start_numbers[0] = 100;
+        let id1 = doc.find_or_create_numbering(n1.clone());
+        // Numbering ID는 1-based (0 = "정의 없음")
+        assert_eq!(id1, 1);
+        assert_eq!(doc.doc_info.numberings.len(), 1);
+
+        // 동일한 값 → 기존 ID 재사용, 새로 추가되지 않음
+        let id2 = doc.find_or_create_numbering(n1.clone());
+        assert_eq!(id2, 1);
+        assert_eq!(doc.doc_info.numberings.len(), 1);
+
+        // 다른 값 → 새 ID
+        let mut n2 = Numbering::default();
+        n2.level_start_numbers[0] = 200;
+        let id3 = doc.find_or_create_numbering(n2);
+        assert_eq!(id3, 2);
+        assert_eq!(doc.doc_info.numberings.len(), 2);
+
+        // raw_data/raw_para_heads 만 다른 값은 동일하게 취급되어야 한다
+        // (ParaShape의 raw_data 제외 패턴과 동일)
+        let mut n1_with_raw = n1.clone();
+        n1_with_raw.raw_data = Some(vec![1, 2, 3]);
+        n1_with_raw.raw_para_heads = Some("<hh:paraHead/>".to_string());
+        let id4 = doc.find_or_create_numbering(n1_with_raw);
+        assert_eq!(id4, 1);
+        assert_eq!(doc.doc_info.numberings.len(), 2);
     }
 }

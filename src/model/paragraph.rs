@@ -52,7 +52,12 @@ pub struct Paragraph {
     /// TAB 확장 데이터 (라운드트립 보존용)
     /// 각 탭 문자의 7 code unit (탭 너비, 종류 등) — text 내 '\t' 순서와 1:1 대응
     pub tab_extended: Vec<[u16; 7]>,
-    /// 문단 번호 시작 방식 오버라이드
+    /// 문단 번호 시작 방식 오버라이드 — **세션 전용 렌더 힌트**, 어느 파서/직렬화기에도
+    /// 연결되어 있지 않아 저장 후 재파싱하면 항상 `None`으로 돌아온다. `set-numbering-restart`
+    /// 명령(`document_core::commands::formatting::set_numbering_restart_native`)은
+    /// 더 이상 이 필드를 세팅하지 않고, 대신 `ParaShape.numbering_id`가 가리키는
+    /// `Numbering` 자체를 갈아 끼워 영속화한다(같은 파일 `apply_numbering_new_start`
+    /// 참고) — 제거 후보(별도 정리 배치 대상), 현재는 세터가 없는 죽은 필드다.
     /// None = 앞 번호 목록에 이어 (기본)
     /// Some(NumberingRestart) = 이전 번호 이어 / 새 번호 시작
     pub numbering_restart: Option<NumberingRestart>,

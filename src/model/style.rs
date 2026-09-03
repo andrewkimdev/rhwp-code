@@ -402,8 +402,21 @@ pub struct Numbering {
     pub raw_para_heads: Option<String>,
 }
 
+/// Numbering 비교: raw_data/raw_para_heads 필드 제외 (라운드트립용 원본
+/// 바이트/XML 은 논리적 동일성과 무관 — ParaShape 의 raw_data 제외 패턴과 동일)
+impl PartialEq for Numbering {
+    fn eq(&self, other: &Self) -> bool {
+        self.heads == other.heads
+            && self.level_formats == other.level_formats
+            && self.start_number == other.start_number
+            && self.level_start_numbers == other.level_start_numbers
+    }
+}
+
+impl Eq for Numbering {}
+
 /// 문단 머리 정보 (표 41)
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct NumberingHead {
     /// 속성 (정렬, 너비 따름, 자동 내어쓰기 등)
     pub attr: u32,

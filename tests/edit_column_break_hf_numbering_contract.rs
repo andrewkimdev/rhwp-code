@@ -10,18 +10,15 @@
 //!
 //! 파일명은 착수 당시 "나머지" 배치 4개(`insert-column-break`/
 //! `split-paragraph-in-hf`/`merge-paragraph-in-hf`/`set-numbering-restart`)를
-//! 다룰 예정으로 지었으나, `set-numbering-restart`는 실제로 배선하지 않았다
-//! (아래 이유로 이 파일은 3개 명령만 다룬다).
-//!
-//! `set-numbering-restart`를 배선하지 않은 이유: 코어 `set_numbering_restart_native`는
-//! `Paragraph.numbering_restart`를 정상적으로 설정하지만, 이 필드는 HWP5·HWPX
-//! 어느 직렬화기에도 연결돼 있지 않아 저장 후 다시 열면 무조건 `None`으로
-//! 돌아온다(`src/renderer/layout.rs`의 `NumberingCounter::advance`만 라이브
-//! 세션 중 참조하는 세션 전용 필드 — `toggle-hide-hf`와 같은 성격). 더 나쁘게는
-//! `--verify`/`ir-diff`가 공유하는 `diff_documents`가 이 필드를 비교하지 않아
-//! `identical:true`를 잘못 보고한다. `mydocs/manual/cli_commands.md`의 "나머지
-//! 3종" 절과 `mydocs/report/upstream_devel_sync_candidates_20260901.md` §8에
-//! 상세 기록.
+//! 다룰 예정으로 지었으나, `set-numbering-restart`는 이 파일에서 다루지 않는다
+//! — 순수 CLI 배선이 아니라 코어 재작성이 먼저 필요해 별도 계약 테스트
+//! `tests/edit_numbering_restart_contract.rs`로 분리했다(코어 `set_numbering_restart_native`가
+//! 원래 세팅하던 `Paragraph.numbering_restart` 필드는 어느 직렬화기에도 연결돼
+//! 있지 않은 세션 전용 렌더 힌트였다 — `toggle-hide-hf`와 같은 성격. 지금은
+//! `ParaShape.numbering_id`가 가리키는 `Numbering` 테이블 자체를 갈아 끼우는
+//! 방식으로 영속화한다). 상세는
+//! `mydocs/manual/cli_commands.md`의 "나머지 4종" 절과
+//! `mydocs/report/upstream_devel_sync_candidates_20260901.md` §8 참고.
 //!
 //! 핵심 비대칭(직전 배치들과 마찬가지로 명령마다 다르다):
 //! - `insert-column-break`는 직전 배치의 `insert-page-break`와 완전히 같은

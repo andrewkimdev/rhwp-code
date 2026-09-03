@@ -1224,12 +1224,12 @@ exit 3) · `--json`. 코어 로직은 기존 `table_ops.rs` 네이티브 함수(
   단 `--offset`은 문단 길이 대비 사전 검사하지 않는다(upstream도 안 함). `-o`
   기본 `_pagebreak.<확장자>`.
 
-### 나머지 3종 (upstream #5185/#5192 계열, 43개 중 42개 완료 — `set-numbering-restart` 제외)
-아래 3개 명령은 강제 단 나누기 삽입과 머리말/꼬리말 문단 분할·병합을 다룬다.
-코어 로직은 기존 `text_editing.rs`/`header_footer_ops.rs` 네이티브 함수를 그대로
-재사용 — 새 편집 로직 없음. 공통: `-o, --output`(기본 산출 형식은 입력 형식을
-따름) · `--dry-run` · `--verify`(저장 직후 재파싱 IR 자기검증, 차이 시 exit 3) ·
-`--json`.
+### 나머지 4종 (upstream #5185/#5192 계열, 43개 전부 완료)
+아래 4개 명령은 강제 단 나누기 삽입, 머리말/꼬리말 문단 분할·병합, 문단 번호
+다시 시작을 다룬다. `set-numbering-restart`를 제외한 3개는 코어 로직이 기존
+`text_editing.rs`/`header_footer_ops.rs` 네이티브 함수를 그대로 재사용 — 새 편집
+로직 없음. 공통: `-o, --output`(기본 산출 형식은 입력 형식을 따름) · `--dry-run` ·
+`--verify`(저장 직후 재파싱 IR 자기검증, 차이 시 exit 3) · `--json`.
 
 - **`edit insert-column-break <파일> [--section N] [--para N] [--offset N] [옵션]`**
   커서 위치에서 문단을 분할하고 강제 단 나누기(Ctrl+Shift+Enter)를 삽입한다
@@ -1251,22 +1251,45 @@ exit 3) · `--json`. 코어 로직은 기존 `table_ops.rs` 네이티브 함수(
   `merge-paragraph-in-footnote`도 동일). **`--dry-run`에서 범위를 미리 검사하지
   않는다**. `-o` 기본 `_hfmerge.<확장자>`.
 
-**제외: `set-numbering-restart`** — 코어 `set_numbering_restart_native`는 존재하고
-`Paragraph.numbering_restart` 필드를 정상적으로 설정하지만(`{"ok":true}` 반환),
-**이 필드는 어떤 직렬화기(HWP5·HWPX 모두)에도 연결돼 있지 않다** — 저장 후
-다시 열면 무조건 `None`으로 돌아온다(`src/parser`/`src/serializer` 전체에 이
-필드를 읽거나 쓰는 코드가 없음, 확인 완료). 렌더러의 `NumberingCounter::advance`
-(`src/renderer/layout.rs`)만 라이브 세션 중 화면 번호 재계산에 이 필드를 참조한다
-— `toggle-hide-hf`(머리말/꼬리말 9종 배치에서 제외)와 같은 성격의 **세션 전용
-필드**다. 이 상태로 CLI 편집 명령을 배선하면 "파일을 만드는 것처럼 보이지만
-저장 후 효과가 전혀 남지 않는" 오해 소지 있는 명령이 된다 — 더 나쁘게는
-`--verify`/`ir-diff`(둘 다 `serializer/hwpx/roundtrip.rs`의 `diff_documents`를
-공유)가 이 필드를 비교 대상에서 빠뜨려 `identical:true`를 보고하므로, 문제를
-자체 검증으로도 잡을 수 없다. 실제 문서 모델 변화(네이티브 호출 직후 in-memory
-필드 → HWP5/HWPX 각각 직렬화 후 재파싱)로 직접 확인했다. 배선하지 않았다 —
-향후 진짜 필요해지면 HWP5 ParaHeader와 HWPX `<hp:p>`가 이 정보를 어떤 바이트/
-속성으로 표현하는지부터 조사해 직렬화기에 새로 연결해야 한다(CLI 배선이 아니라
-별도 기능 개발).
+- **`edit set-numbering-restart <파일> --mode N [--count N] [--section N] [--para N] [옵션]`**
+  문단 번호 다시 시작. `--mode`는 필수(0=앞 번호 목록에 이어/기본, 1=이전 번호
+  목록에 이어, 2=새 번호 목록 시작). `--count`는 이름과 달리 **시작 번호**를
+  뜻한다(생략하면 1, mode=2 전용 — upstream 인자 이름을 그대로 유지). `--section`/
+  `--para`는 생략하면 0. `-o` 기본 `_numrst.<확장자>`.
+
+  다른 3종과 달리 **순수 CLI 배선이 아니었다** — 코어 `set_numbering_restart_native`
+  (`src/document_core/commands/formatting.rs`)가 원래 `Paragraph.numbering_restart`
+  필드만 설정했는데, 이 필드는 어떤 직렬화기(HWP5·HWPX 모두)에도 연결돼 있지
+  않아 저장 후 재파싱하면 항상 `None`으로 돌아오는 **세션 전용 렌더 힌트**였다
+  (`toggle-hide-hf`와 같은 성격). `--verify`/`ir-diff`가 공유하는 `diff_documents`
+  (`serializer/hwpx/roundtrip.rs`)도 이 필드를 비교하지 않아 `identical:true`를
+  잘못 보고했다 — 그래서 직전 배치들과 달리 코어부터 재작성했다.
+
+  실제 영속화 메커니즘: 화면에 표시될 번호는
+  `(numbering.level_start_numbers[level]-1) + counters[level]`로 계산된다
+  (`renderer/layout/utils.rs` `expand_numbering_format`). 어떤 문단이 지금까지
+  등장한 적 없는 새 `numbering_id`를 참조하기 시작하면 이 값이 그대로
+  `level_start_numbers[level]`이 된다 — 즉 mode=2는 대상 문단의 `ParaShape`가
+  가리키는 `numbering_id`를 (다른 시작 번호를 가진) 새 `Numbering`으로 갈아
+  끼우는 것만으로 파서/직렬화기 확장 없이 완전히 영속화된다(이미 정상 왕복하는
+  `ParaShape.numbering_id`+`Numbering` 경로 재사용). 대상 문단부터 같은 목록이
+  이어지는 동안 뒤따르는 문단들도 함께 새 `numbering_id`로 전진 전파한다 — 그렇지
+  않으면 `NumberingState`(`renderer/layout.rs`)의 history 복원이 다음 문단에서
+  원래 카운터를 되살려 번호가 한 문단만 튀었다가 복귀하는 것처럼 보인다. 표
+  셀·머리말/꼬리말·구역 경계로는 전파하지 않는다.
+
+  mode=0/1은 **데이터를 바꾸지 않는다** — 렌더러의 `NumberingRestart::ContinuePrevious`
+  분기가 현재 완전히 빈 코드라 mode=0과 mode=1은 오늘 시점 렌더 결과에 차이가
+  없다(기존 구현부터 그랬던 사실). 실물 한컴 문서(`rhwp-studio/public/samples/para-head-num-2.hwp`)를
+  살펴보면 "이전 번호 목록에 이어"는 실제로는 문단이 중간에 다른 목록으로
+  끊겼다가 원래 numbering_id로 **되돌아가는 것**으로 구현되어 있어(같은
+  numbering_id가 다시 나타나면 history가 자동 복원되므로 별도 플래그가 필요
+  없다), mode=0과 근본적으로 다른 메커니즘이 아니다. 다만 "임의의 문단에서 어느
+  numbering_id로 되돌려야 하는가"를 현재 문서 상태만으로 일반화하는 로직은 이번
+  배치 범위 밖 — 실물 샘플로 추가 실측 후 별도 이슈로 구현한다. 옛
+  `Paragraph.numbering_restart` 필드는 이번 배치에서 세터가 없어져 죽은 코드가
+  됐지만, split/merge 무결성 테스트 등 여러 곳에 걸쳐 있어 제거는 별도 정리
+  배치로 미뤘다.
 
 ### `edit insert-image <파일> --image <그림> [--page N] [--x N --y N] [--width N --height N] [-o <출력>] [--dry-run] [--verify] [--json]` (#3719 §6-5)
 도장·서명 같은 그림을 쪽 좌표에 붙인다 — 채워 넣은 서식에 직인을 얹는 실물 제출의 마지막 조각.

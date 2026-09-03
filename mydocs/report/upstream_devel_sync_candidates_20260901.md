@@ -326,3 +326,62 @@ HWP5 ParaHeader와 HWPX `<hp:p>`가 이 정보를 표현하는 바이트/속성�
 새 core 작업(직렬화기 확장)이 필요해 **여전히 미착수** — upstream #5185/#5192
 43개 명령의 CLI/MCP 이식은 42/43으로 사실상 마무리, 남은 1건은 별도 이슈로
 분리해 추적할 것.
+
+**진행(2026-09-03, 완료) — `set-numbering-restart` 43/43 완료, 단 "직렬화기
+확장"이 아니라 기존 인프라 재사용으로 해결됨**: 위 §진행 항목이 "HWP5 ParaHeader와
+HWPX `<hp:p>`에 새 바이트/속성을 조사해 직렬화기에 새로 연결해야 한다"고 예상한
+것은 **틀렸다** — 실제로는 파서/직렬화기를 전혀 건드리지 않고 해결됐다. 렌더러의
+`expand_numbering_format`(`renderer/layout/utils.rs`)이 화면 번호를
+`(numbering.level_start_numbers[level]-1) + counters[level]`로 계산하는 것을
+확인했는데, 새 `numbering_id`가 처음 등장하면 `counters[level]`이 0→1로
+초기화되어 이 값이 그대로 `level_start_numbers[level]`이 된다 — 즉 "새 번호로
+시작"은 문단이 참조하는 `ParaShape`를 (다른 `level_start_numbers`를 가진) 다른
+`Numbering`으로 갈아 끼우는 것만으로 완전히 표현된다. 이 `ParaShape.numbering_id`
++`Numbering` 경로는 HWP5(`doc_info.rs`/`serializer/doc_info.rs`)·HWPX
+(`hwpx/header.rs`/`serializer/hwpx/header.rs`) 양쪽 다 이미 완전히 파싱·직렬화되어
+정상 왕복한다(일반 번호 매기기 문단이 이미 정상 동작하는 이유와 동일) — 새로
+만든 것은 `document_core` 안의 조립 로직뿐이다.
+
+핵심 안전장치(사전 설계에는 없었고 구현 중 발견): 대상 문단 **하나만** 새
+`numbering_id`로 바꾸면, 뒤따르는 같은 목록 문단이 원래 `numbering_id`를 다시
+참조할 때 `NumberingState`(`renderer/layout.rs`)의 history 복원이 옛 카운터를
+되살려 번호가 한 문단만 튀었다가 복귀하는 회귀가 생긴다 — 그래서
+`apply_numbering_new_start`(`formatting.rs`)는 대상 문단부터 유효 `numbering_id`가
+같은 동안(그리고 `head_type`이 `Outline`/`Number`인 동안 — 번호 없는 일반
+문단이 `numbering_id==0`으로 우연히 매치되는 것을 막는 가드) 뒤따르는 문단까지
+같은 section 안에서 전진 전파한다. 표 셀·머리말/꼬리말·구역 경계는 넘지 않는다.
+
+변경 내역: `model/style.rs`(`Numbering`/`NumberingHead`에 `raw_data`/
+`raw_para_heads` 제외 수동 `PartialEq`), `model/document.rs`
+(`find_or_create_numbering`, `find_or_create_tab_def` 패턴 재사용),
+`document_core/commands/formatting.rs`(`set_numbering_restart_native` 재작성 +
+`apply_numbering_new_start` 신규), `main.rs`/`main/edit.rs`/`main/mcp_meta.rs`
+(CLI/MCP 배선, 다른 배치들과 동일 골격). 옛 `Paragraph.numbering_restart` 필드는
+세터가 없어져 죽은 코드가 됐지만 split/merge 무결성 테스트 등 9곳 이상에 걸쳐
+있어 이번 배치에서는 제거하지 않았다(제거 후보로 doc-comment에 명시만 함, 별도
+정리 배치 대상).
+
+검증: 실물 한컴 문서 `rhwp-studio/public/samples/para-head-num-2.hwp`(및 HWPX
+사본 `samples/hwpx/para-head-num-2.hwpx`)로 신규
+`tests/edit_numbering_restart_contract.rs`(9개 테스트) 작성 — HWP5/HWPX 각각
+저장 후 재파싱해 `para_shape_id`/`Numbering.level_start_numbers`를 직접 단언
+(`--verify`는 개수만 비교해 이 회귀를 못 잡으므로 의존하지 않음), 전진 전파가
+다른 목록 경계에서 정확히 멈추는지 확인, mode=0/1이 데이터를 안 바꾸는지 확인.
+`cargo test --lib` 전체(3635 passed, 0 failed), `cargo test --test
+cli_json_contract`(31 passed) 전부 통과.
+
+**부가 발견 — mode=1("이전 번호 목록에 이어")의 진짜 의미, 다음 이슈를 위한
+실측 자료**: 렌더러의 `NumberingRestart::ContinuePrevious` 분기가 완전히 빈
+코드라 mode=0/1은 현재 렌더 결과에 차이가 없어 이번 배치에서는 둘 다 no-op으로
+남겨뒀다. 그런데 위 실물 샘플(`para-head-num-2.hwp`)이 정확히 이 3모드를
+시연하도록 만들어진 것으로 보인다 — 문단1·2("가"/"나")는 `num_id=3` 공유, 문단3
+("다", "새번호 목록 시작")은 `num_id=2`로 끊고, 문단4("라", "**이전 번호 목록에
+이어**")는 다시 `num_id=3`으로 **되돌아간다**(그래서 `NumberingState`의 history
+복원으로 문단2 다음 번호부터 자연스럽게 이어진다). 즉 실제 한컴 구현에서
+"이전 번호 목록에 이어"는 새 플래그가 아니라 **끊기기 전 원래 numbering_id로
+문단의 참조를 되돌리는 것**이다. 다만 "임의의 문단에서 어느 numbering_id가
+'끊기기 전 원래 것'인지"를 현재 문서 상태만으로 일반화하는 규칙(가장 가까운
+선행 동일 계열 목록을 찾는 휴리스틱 등)은 이번 배치에서 설계하지 않았다 — mode=1
+을 mode=0과 실제로 구분되는 동작으로 만드는 것은 별도 이슈로 분리한다.
+
+upstream #5185/#5192 43개 명령의 CLI/MCP 이식이 **43/43 전부 완료**됐다.

@@ -197,6 +197,7 @@ pub(crate) fn mcp_tool_definitions() -> Vec<serde_json::Value> {
                 | "hwp_insert_column_break"
                 | "hwp_split_paragraph_in_hf"
                 | "hwp_merge_paragraph_in_hf"
+                | "hwp_set_numbering_restart"
         )
     }
 
@@ -2434,6 +2435,35 @@ pub(crate) fn mcp_tool_definitions() -> Vec<serde_json::Value> {
                 { "when": "verify", "args": ["--verify"] }
             ]),
             &["schemaVersion", "source", "section", "isHeader", "applyTo", "paragraph", "dryRun", "changedPages", "output", "outputFormat", "verify"],
+        ),
+        tool_with_optional_args(
+            "hwp_set_numbering_restart",
+            "문단 번호 다시 시작을 설정해 새 문서를 만든다. mode 는 필수(0=앞 번호 목록에 이어/기본, 1=이전 번호 목록에 이어, 2=새 번호 목록 시작). count 는 이름과 달리 시작 번호를 뜻한다(생략하면 1, mode=2 일 때만 의미 있음). section/para 는 생략하면 0. mode 0/1 은 현재 데이터를 바꾸지 않는다(렌더러가 두 값을 구분하지 않음). mode=2 는 대상 문단부터 같은 목록이 이어지는 문단들까지 함께 새 번호 정의로 전진 전파하며, 표 셀·머리말/꼬리말·구역 경계는 넘지 않는다. 산출물은 입력 형식을 따른다(HWPX 입력 → HWPX 산출). section/para 범위는 dryRun 에서도 검사한다.",
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "입력 HWP/HWPX 문서 경로" },
+                    "mode": { "type": "integer", "minimum": 0, "maximum": 2, "description": "0(앞 번호 목록에 이어)·1(이전 번호 목록에 이어)·2(새 번호 목록 시작). 필수" },
+                    "count": { "type": "integer", "minimum": 0, "description": "시작 번호(mode=2 전용). 생략하면 1" },
+                    "section": { "type": "integer", "minimum": 0, "description": "구역 (0부터). 생략하면 0" },
+                    "para": { "type": "integer", "minimum": 0, "description": "문단 (0부터). 생략하면 0" },
+                    "output": { "type": "string", "description": "출력 파일 경로. 생략하면 <입력명>_numrst.hwp (HWPX 입력이면 _numrst.hwpx)" },
+                    "dryRun": { "type": "boolean", "description": "true 면 파일을 쓰지 않고 구역/문단 범위 검증만 수행" },
+                    "verify": { "type": "boolean", "description": "저장 직후 재파싱 IR 자기검증 — 차이가 있으면 exit 3" }
+                },
+                "required": ["path", "mode"],
+            }),
+            "edit",
+            serde_json::json!(["edit", "set-numbering-restart", "{path}", "--mode", "{mode}", "--json"]),
+            serde_json::json!([
+                { "when": "count", "args": ["--count", "{count}"] },
+                { "when": "section", "args": ["--section", "{section}"] },
+                { "when": "para", "args": ["--para", "{para}"] },
+                { "when": "output", "args": ["-o", "{output}"] },
+                { "when": "dryRun", "args": ["--dry-run"] },
+                { "when": "verify", "args": ["--verify"] }
+            ]),
+            &["schemaVersion", "source", "section", "paragraph", "count", "dryRun", "changedPages", "output", "outputFormat", "verify"],
         ),
         tool_with_optional_args(
             "hwp_export_ir_schema",

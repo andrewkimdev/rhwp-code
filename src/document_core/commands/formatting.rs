@@ -2086,6 +2086,14 @@ impl DocumentCore {
     /// 문단 번호 시작 방식을 설정한다.
     /// mode: 0 = 앞 번호 목록에 이어 (기본), 1 = 이전 번호 목록에 이어, 2 = 새 번호 목록 시작
     /// start_num: mode=2일 때 시작 번호
+    ///
+    /// mode 0/1은 데이터를 바꾸지 않는다 — 렌더러의 `NumberingRestart::ContinuePrevious`
+    /// 분기(`renderer/layout.rs` `NumberingState::advance`)가 현재 완전히 빈 코드라
+    /// mode=0과 mode=1은 오늘 시점 렌더 결과에 차이가 없다(기존 구현부터 그랬던
+    /// 사실이며 이번 변경으로 새로 생기는 것이 아니다). mode=2만 `apply_numbering_new_start`로
+    /// `ParaShape`/`Numbering` 테이블을 갱신해 HWP5/HWPX 양쪽에 영속화한다 — 옛
+    /// `Paragraph.numbering_restart` 필드는 어느 파서/직렬화기에도 연결되어 있지
+    /// 않은 세션 전용 렌더 힌트였다(저장 후 재파싱하면 항상 사라짐).
     pub fn set_numbering_restart_native(
         &mut self,
         section_idx: usize,
@@ -2093,8 +2101,6 @@ impl DocumentCore {
         mode: u8,
         start_num: u32,
     ) -> Result<String, crate::error::HwpError> {
-        use crate::model::paragraph::NumberingRestart;
-
         if section_idx >= self.document.sections.len() {
             return Err(crate::error::HwpError::RenderError(
                 "구역 범위 초과".to_string(),
@@ -2106,20 +2112,109 @@ impl DocumentCore {
             ));
         }
 
-        let restart = match mode {
-            0 => None,
-            1 => Some(NumberingRestart::ContinuePrevious),
-            2 => Some(NumberingRestart::NewStart(start_num)),
-            _ => None,
-        };
+        if mode == 2 {
+            self.apply_numbering_new_start(section_idx, para_idx, start_num);
+        }
 
-        self.document.sections[section_idx].paragraphs[para_idx].numbering_restart = restart;
         self.document.sections[section_idx].raw_stream = None;
 
         self.recompose_section(section_idx);
         self.paginate_if_needed();
 
         Ok(crate::document_core::helpers::json_ok())
+    }
+
+    /// mode=2("새 번호 목록 시작") 전용 헬퍼: 대상 문단이 참조하는 `ParaShape`를
+    /// (다른 `level_start_numbers`를 가진) 새 `Numbering`을 가리키는 `ParaShape`로
+    /// 갈아 끼운다.
+    ///
+    /// 화면 표시 번호는 `(level_start_numbers[level]-1) + counters[level]`로 계산되므로
+    /// (`renderer/layout/utils.rs` `expand_numbering_format`), 새 numbering_id를
+    /// 처음 참조하는 순간부터 이 값이 그대로 "시작 번호"로 렌더링된다 — 파서/직렬화기
+    /// 확장 없이 기존 `ParaShape.numbering_id`+`Numbering` 왕복 경로만으로 완전히
+    /// 영속화된다.
+    ///
+    /// 대상 문단부터 같은 목록(유효 numbering_id가 동일)이 이어지는 동안 뒤따르는
+    /// 문단들도 함께 새 numbering_id로 전진 전파한다 — 그렇지 않으면 다음 문단에서
+    /// `NumberingState`의 history 복원이 원래 카운터를 되살려 번호가 한 문단만
+    /// 튀었다가 원래대로 복귀하는 것처럼 보인다(`renderer/layout.rs` `NumberingState::advance`).
+    /// 표 셀·머리말/꼬리말·각주/미주·다음 구역으로는 전파하지 않는다(같은 section의
+    /// top-level 문단 배열까지만).
+    fn apply_numbering_new_start(&mut self, section_idx: usize, para_idx: usize, start_num: u32) {
+        use crate::model::style::{HeadType, Numbering, ParaShapeMods};
+        use crate::renderer::layout::{default_outline_numbering, resolve_numbering_id};
+
+        let outline_numbering_id = self.document.sections[section_idx]
+            .section_def
+            .outline_numbering_id;
+
+        let target_ps_id = self.document.sections[section_idx].paragraphs[para_idx].para_shape_id;
+        let Some(target_ps) = self
+            .document
+            .doc_info
+            .para_shapes
+            .get(target_ps_id as usize)
+            .cloned()
+        else {
+            return;
+        };
+        if !matches!(target_ps.head_type, HeadType::Outline | HeadType::Number) {
+            // 번호/개요가 없는 문단에는 다시 시작할 목록 자체가 없다.
+            return;
+        }
+
+        let level_idx = (target_ps.para_level as usize).min(6);
+        let original_numbering_id = resolve_numbering_id(
+            target_ps.head_type,
+            target_ps.numbering_id,
+            outline_numbering_id,
+        );
+
+        let base_numbering: Numbering = original_numbering_id
+            .checked_sub(1)
+            .and_then(|i| self.document.doc_info.numberings.get(i as usize).cloned())
+            .unwrap_or_else(|| {
+                if target_ps.head_type == HeadType::Outline {
+                    default_outline_numbering()
+                } else {
+                    Numbering::default()
+                }
+            });
+
+        let mut new_numbering = base_numbering;
+        new_numbering.level_start_numbers[level_idx] = start_num;
+        new_numbering.start_number = start_num.min(u16::MAX as u32) as u16;
+        let new_numbering_id = self.document.find_or_create_numbering(new_numbering);
+
+        let para_count = self.document.sections[section_idx].paragraphs.len();
+        for j in para_idx..para_count {
+            let ps_id = self.document.sections[section_idx].paragraphs[j].para_shape_id;
+            let Some(ps) = self
+                .document
+                .doc_info
+                .para_shapes
+                .get(ps_id as usize)
+                .cloned()
+            else {
+                break;
+            };
+            // head_type도 함께 확인 — numbering_id==0(정의 없음)인 일반 문단이
+            // original_numbering_id==0인 목록과 우연히 같은 값으로 매치되어
+            // 번호가 없던 문단에 번호가 생기는 것을 막는다.
+            if !matches!(ps.head_type, HeadType::Outline | HeadType::Number) {
+                break;
+            }
+            let eff_id = resolve_numbering_id(ps.head_type, ps.numbering_id, outline_numbering_id);
+            if eff_id != original_numbering_id {
+                break;
+            }
+            let mods = ParaShapeMods {
+                numbering_id: Some(new_numbering_id),
+                ..Default::default()
+            };
+            let new_ps_id = self.document.find_or_create_para_shape(ps_id, &mods);
+            self.document.sections[section_idx].paragraphs[j].para_shape_id = new_ps_id;
+        }
     }
 
     /// 감추기(PageHide) 컨트롤을 현재 문단에 삽입 또는 갱신한다.
