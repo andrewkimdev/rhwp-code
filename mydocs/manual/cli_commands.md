@@ -1185,6 +1185,45 @@ exit 3) · `--json`. 코어 로직은 기존 `table_ops.rs` 네이티브 함수(
   알려진 키만 골라 읽는다 — `apply-para-format-in-hf`와 동일한 비대칭). `-o` 기본
   `_enshape.<확장자>`.
 
+### 책갈피/구조 5종 (upstream #5185/#5192 계열)
+아래 5개 명령은 책갈피 추가·삭제·이름 변경과 본문 최상위 표 삭제·강제 쪽 나누기
+삽입을 다룬다. 코어 로직은 기존 `bookmark_query.rs`/`table_ops.rs`/
+`text_editing.rs` 네이티브 함수를 그대로 재사용 — 새 편집 로직 없음. 공통:
+`-o, --output`(기본 산출 형식은 입력 형식을 따름) · `--dry-run` ·
+`--verify`(저장 직후 재파싱 IR 자기검증, 차이 시 exit 3) · `--json`. 현재 CLI/MCP
+표면에 책갈피 좌표(구역/문단/컨트롤 인덱스)를 조회하는 전용 명령이 없다 — 문서
+구조를 직접 확인해야 한다(`export-render-tree` 등).
+
+- **`edit add-bookmark <파일> --name <이름> [--section N] [--para N] [--offset N] [옵션]`**
+  지정 위치에 책갈피를 추가한다. `--name`은 필수(비어 있으면 안 됨), `--section`/
+  `--para`/`--offset`은 생략하면 0. **네이티브 함수가 `Err`가 아니라 반환 JSON의
+  `ok`/`error`로 실패를 알린다**(이름 비어있음·중복 이름은 `ok:false` → exit 1) —
+  **`--dry-run`에서는 네이티브를 호출하지 않으므로 구역/문단 범위를 미리 검사하지
+  않는다**. `-o` 기본 `_addbm.<확장자>`.
+- **`edit delete-bookmark <파일> --section N --para N --ctrl N [옵션]`**
+  책갈피를 삭제한다. `--section`/`--para`/`--ctrl`(문단 내 책갈피 컨트롤 인덱스)
+  모두 필수. 컨트롤이 책갈피가 아니면 `ok:false`(exit 1). **`--dry-run`에서는
+  네이티브를 호출하지 않으므로 좌표가 실제 책갈피인지 미리 검사하지 않는다**.
+  `-o` 기본 `_delbm.<확장자>`.
+- **`edit rename-bookmark <파일> --section N --para N --ctrl N --name <이름> [옵션]`**
+  책갈피 이름을 바꾼다. `--section`/`--para`/`--ctrl`/`--name` 모두 필수(새 이름은
+  비어 있으면 안 되고, 자기 자신을 제외한 다른 책갈피와 중복이면 `ok:false` →
+  exit 1). **`--dry-run`에서는 네이티브를 호출하지 않으므로 좌표·중복을 미리
+  검사하지 않는다**. `-o` 기본 `_renbm.<확장자>`.
+- **`edit delete-table <파일> --table N [옵션]`**
+  본문 최상위 표를 삭제한다(중첩 표는 지원 범위 밖). `--table`(표 번호, 다른 표
+  편집 명령과 같은 `resolve_table_index` 좌표계)은 필수. **표 번호 해석이
+  dry-run 여부와 무관하게 항상 실행되므로 범위 초과는 `--dry-run`에서도 잡힌다**
+  (exit 1 — 잘못된 옵션이 아니라 존재하지 않는 대상이므로 usage 아님). 네이티브
+  함수는 책갈피 3종과 달리 `Err`만 반환한다(JSON `ok`/`error` 래핑 없음). `-o`
+  기본 `_deltable.<확장자>`.
+- **`edit insert-page-break <파일> [--section N] [--para N] [--offset N] [옵션]`**
+  커서 위치에서 문단을 분할하고 강제 쪽 나누기(Ctrl+Enter)를 삽입한다.
+  `--section`/`--para`/`--offset`은 생략하면 0. **upstream 원본대로 `--section`/
+  `--para` 범위를 인자 파싱 직후 무조건 검사한다**(`--dry-run`에서도 exit 2) —
+  단 `--offset`은 문단 길이 대비 사전 검사하지 않는다(upstream도 안 함). `-o`
+  기본 `_pagebreak.<확장자>`.
+
 ### `edit insert-image <파일> --image <그림> [--page N] [--x N --y N] [--width N --height N] [-o <출력>] [--dry-run] [--verify] [--json]` (#3719 §6-5)
 도장·서명 같은 그림을 쪽 좌표에 붙인다 — 채워 넣은 서식에 직인을 얹는 실물 제출의 마지막 조각.
 - `--image <그림>` (필수) — 지원 형식은 `png`·`jpg`·`jpeg`·`bmp`·`tif`·`tiff` 뿐(확장자와 내용

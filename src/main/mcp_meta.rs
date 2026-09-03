@@ -189,6 +189,11 @@ pub(crate) fn mcp_tool_definitions() -> Vec<serde_json::Value> {
                 | "hwp_apply_para_format_in_hf"
                 | "hwp_apply_para_format_in_footnote"
                 | "hwp_apply_endnote_shape"
+                | "hwp_add_bookmark"
+                | "hwp_delete_bookmark"
+                | "hwp_rename_bookmark"
+                | "hwp_delete_table"
+                | "hwp_insert_page_break"
         )
     }
 
@@ -2201,6 +2206,137 @@ pub(crate) fn mcp_tool_definitions() -> Vec<serde_json::Value> {
                 { "when": "verify", "args": ["--verify"] }
             ]),
             &["schemaVersion", "source", "section", "props", "dryRun", "changedPages", "output", "outputFormat", "verify"],
+        ),
+        tool_with_optional_args(
+            "hwp_add_bookmark",
+            "책갈피를 추가해 새 문서를 만든다. name 은 필수, section/para/offset 은 생략하면 0. 산출물은 입력 형식을 따른다(HWPX 입력 → HWPX 산출). 이름이 비어있거나 이미 존재하면 실패한다(exit 1) — section/para 범위는 dryRun 에서 검사하지 않는다.",
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "입력 HWP/HWPX 문서 경로" },
+                    "name": { "type": "string", "description": "새 책갈피 이름 (비어있거나 중복이면 실패)" },
+                    "section": { "type": "integer", "minimum": 0, "description": "구역 (0부터). 생략하면 0" },
+                    "para": { "type": "integer", "minimum": 0, "description": "문단 (0부터). 생략하면 0" },
+                    "offset": { "type": "integer", "minimum": 0, "description": "문단 내 삽입 오프셋. 생략하면 0" },
+                    "output": { "type": "string", "description": "출력 파일 경로. 생략하면 <입력명>_addbm.hwp (HWPX 입력이면 _addbm.hwpx)" },
+                    "dryRun": { "type": "boolean", "description": "true 면 파일을 쓰지 않고 이름 형식만 검증 — 구역/문단 범위는 검사하지 않는다" },
+                    "verify": { "type": "boolean", "description": "저장 직후 재파싱 IR 자기검증 — 차이가 있으면 exit 3" }
+                },
+                "required": ["path", "name"],
+            }),
+            "edit",
+            serde_json::json!(["edit", "add-bookmark", "{path}", "--name", "{name}", "--json"]),
+            serde_json::json!([
+                { "when": "section", "args": ["--section", "{section}"] },
+                { "when": "para", "args": ["--para", "{para}"] },
+                { "when": "offset", "args": ["--offset", "{offset}"] },
+                { "when": "output", "args": ["-o", "{output}"] },
+                { "when": "dryRun", "args": ["--dry-run"] },
+                { "when": "verify", "args": ["--verify"] }
+            ]),
+            &["schemaVersion", "source", "section", "paragraph", "offset", "name", "dryRun", "changedPages", "output", "outputFormat", "verify"],
+        ),
+        tool_with_optional_args(
+            "hwp_delete_bookmark",
+            "책갈피를 삭제해 새 문서를 만든다. section/para/ctrl(책갈피 컨트롤 인덱스) 모두 필수 — 현재 CLI/MCP 표면에 책갈피 좌표를 조회하는 전용 명령이 없어 export-render-tree 등으로 문서 구조를 직접 확인해야 한다. 산출물은 입력 형식을 따른다(HWPX 입력 → HWPX 산출). 좌표가 책갈피를 가리키지 않으면 실패한다(exit 1) — 그 범위는 dryRun 에서 검사하지 않는다.",
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "입력 HWP/HWPX 문서 경로" },
+                    "section": { "type": "integer", "minimum": 0, "description": "구역 (0부터)" },
+                    "para": { "type": "integer", "minimum": 0, "description": "문단 (0부터)" },
+                    "ctrl": { "type": "integer", "minimum": 0, "description": "문단 내 책갈피 컨트롤 인덱스 (0부터)" },
+                    "output": { "type": "string", "description": "출력 파일 경로. 생략하면 <입력명>_delbm.hwp (HWPX 입력이면 _delbm.hwpx)" },
+                    "dryRun": { "type": "boolean", "description": "true 면 파일을 쓰지 않는다 — 좌표가 실제 책갈피인지는 검사하지 않는다" },
+                    "verify": { "type": "boolean", "description": "저장 직후 재파싱 IR 자기검증 — 차이가 있으면 exit 3" }
+                },
+                "required": ["path", "section", "para", "ctrl"],
+            }),
+            "edit",
+            serde_json::json!(["edit", "delete-bookmark", "{path}", "--section", "{section}", "--para", "{para}", "--ctrl", "{ctrl}", "--json"]),
+            serde_json::json!([
+                { "when": "output", "args": ["-o", "{output}"] },
+                { "when": "dryRun", "args": ["--dry-run"] },
+                { "when": "verify", "args": ["--verify"] }
+            ]),
+            &["schemaVersion", "source", "section", "paragraph", "ctrl", "dryRun", "changedPages", "output", "outputFormat", "verify"],
+        ),
+        tool_with_optional_args(
+            "hwp_rename_bookmark",
+            "책갈피 이름을 바꿔 새 문서를 만든다. section/para/ctrl(책갈피 컨트롤 인덱스)/name 모두 필수. 산출물은 입력 형식을 따른다(HWPX 입력 → HWPX 산출). 새 이름이 비어있거나 이미 다른 책갈피가 쓰고 있으면, 또는 좌표가 책갈피가 아니면 실패한다(exit 1) — 그 범위는 dryRun 에서 검사하지 않는다.",
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "입력 HWP/HWPX 문서 경로" },
+                    "section": { "type": "integer", "minimum": 0, "description": "구역 (0부터)" },
+                    "para": { "type": "integer", "minimum": 0, "description": "문단 (0부터)" },
+                    "ctrl": { "type": "integer", "minimum": 0, "description": "문단 내 책갈피 컨트롤 인덱스 (0부터)" },
+                    "name": { "type": "string", "description": "새 책갈피 이름 (비어있거나 중복이면 실패)" },
+                    "output": { "type": "string", "description": "출력 파일 경로. 생략하면 <입력명>_renbm.hwp (HWPX 입력이면 _renbm.hwpx)" },
+                    "dryRun": { "type": "boolean", "description": "true 면 파일을 쓰지 않고 이름 형식만 검증 — 좌표가 실제 책갈피인지는 검사하지 않는다" },
+                    "verify": { "type": "boolean", "description": "저장 직후 재파싱 IR 자기검증 — 차이가 있으면 exit 3" }
+                },
+                "required": ["path", "section", "para", "ctrl", "name"],
+            }),
+            "edit",
+            serde_json::json!(["edit", "rename-bookmark", "{path}", "--section", "{section}", "--para", "{para}", "--ctrl", "{ctrl}", "--name", "{name}", "--json"]),
+            serde_json::json!([
+                { "when": "output", "args": ["-o", "{output}"] },
+                { "when": "dryRun", "args": ["--dry-run"] },
+                { "when": "verify", "args": ["--verify"] }
+            ]),
+            &["schemaVersion", "source", "section", "paragraph", "ctrl", "name", "dryRun", "changedPages", "output", "outputFormat", "verify"],
+        ),
+        tool_with_optional_args(
+            "hwp_delete_table",
+            "본문 최상위 표를 삭제해 새 문서를 만든다. table(표 번호, export_tables 등으로 확인) 은 필수 — 표 번호 범위 초과는 dryRun 에서도 검사한다. 산출물은 입력 형식을 따른다(HWPX 입력 → HWPX 산출). 중첩 표는 지원 범위 밖이다(최상위 표만).",
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "입력 HWP/HWPX 문서 경로" },
+                    "table": { "type": "integer", "minimum": 0, "description": "삭제할 본문 최상위 표 번호 (0부터, 중첩 표 제외)" },
+                    "output": { "type": "string", "description": "출력 파일 경로. 생략하면 <입력명>_deltable.hwp (HWPX 입력이면 _deltable.hwpx)" },
+                    "dryRun": { "type": "boolean", "description": "true 면 파일을 쓰지 않고 표 번호 검증만 수행" },
+                    "verify": { "type": "boolean", "description": "저장 직후 재파싱 IR 자기검증 — 차이가 있으면 exit 3" }
+                },
+                "required": ["path", "table"],
+            }),
+            "edit",
+            serde_json::json!(["edit", "delete-table", "{path}", "--table", "{table}", "--json"]),
+            serde_json::json!([
+                { "when": "output", "args": ["-o", "{output}"] },
+                { "when": "dryRun", "args": ["--dry-run"] },
+                { "when": "verify", "args": ["--verify"] }
+            ]),
+            &["schemaVersion", "source", "table", "dryRun", "changedPages", "output", "outputFormat", "verify"],
+        ),
+        tool_with_optional_args(
+            "hwp_insert_page_break",
+            "커서 위치에서 문단을 분할하고 강제 쪽 나누기를 삽입해 새 문서를 만든다. section/para/offset 은 생략하면 0. 산출물은 입력 형식을 따른다(HWPX 입력 → HWPX 산출). section/para 범위는 dryRun 에서도 검사한다(offset 은 문단 길이 대비 검사하지 않는다).",
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "입력 HWP/HWPX 문서 경로" },
+                    "section": { "type": "integer", "minimum": 0, "description": "구역 (0부터). 생략하면 0" },
+                    "para": { "type": "integer", "minimum": 0, "description": "문단 (0부터). 생략하면 0" },
+                    "offset": { "type": "integer", "minimum": 0, "description": "문단 내 분할 오프셋. 생략하면 0" },
+                    "output": { "type": "string", "description": "출력 파일 경로. 생략하면 <입력명>_pagebreak.hwp (HWPX 입력이면 _pagebreak.hwpx)" },
+                    "dryRun": { "type": "boolean", "description": "true 면 파일을 쓰지 않고 구역/문단 범위 검증만 수행" },
+                    "verify": { "type": "boolean", "description": "저장 직후 재파싱 IR 자기검증 — 차이가 있으면 exit 3" }
+                },
+                "required": ["path"],
+            }),
+            "edit",
+            serde_json::json!(["edit", "insert-page-break", "{path}", "--json"]),
+            serde_json::json!([
+                { "when": "section", "args": ["--section", "{section}"] },
+                { "when": "para", "args": ["--para", "{para}"] },
+                { "when": "offset", "args": ["--offset", "{offset}"] },
+                { "when": "output", "args": ["-o", "{output}"] },
+                { "when": "dryRun", "args": ["--dry-run"] },
+                { "when": "verify", "args": ["--verify"] }
+            ]),
+            &["schemaVersion", "source", "section", "paragraph", "offset", "dryRun", "changedPages", "output", "outputFormat", "verify"],
         ),
         tool_with_optional_args(
             "hwp_export_ir_schema",

@@ -259,3 +259,30 @@ cli_commands.md에 기록했다. upstream 최신본에는 이번 6종 외에도
 9개(책갈피·구조/기타)는 `add-bookmark`/`delete-bookmark`/`rename-bookmark`/
 `delete-table`/`insert-page-break`/`insert-column-break`/`split-paragraph-in-hf`/
 `merge-paragraph-in-hf`/`set-numbering-restart` — 여전히 다음 라운드 대상.
+
+**진행(2026-09-03, 계속)**: "책갈피/구조 5종" 배치(`add-bookmark`/`delete-bookmark`/
+`rename-bookmark`/`delete-table`/`insert-page-break`) 완료 —
+`bookmark_query.rs`의 `add_bookmark_native`/`delete_bookmark_native`/
+`rename_bookmark_native`, `table_ops.rs`의 `delete_table_control_native`,
+`text_editing.rs`의 `insert_page_break_native`(전부 이미 `pub`)에 CLI 배선만
+추가했다. 인자·시맨틱은 upstream `origin/devel`(`../rhwp`)의
+`src/cli/commands/edit/bookmarks.rs` / `tables/structure.rs` /
+`document_text.rs`를 직접 읽어 확인했다 — 5개 전부 rhwp-code 네이티브 함수와
+인자 이름·순서까지 1:1로 대응해 새 core 로직 없이 순수 배선으로 끝났다(`toggle-
+hide-hf` 같은 함정 없음). 책갈피 3종(`add`/`delete`/`rename`)은 네이티브 함수가
+`Err`가 아니라 반환 JSON의 `ok`/`error`로 실패를 알리고(이름 비어있음·중복·컨트롤이
+책갈피 아님 등은 exit 1) **네이티브 호출 자체가 `--dry-run`에서 생략되므로 구역/
+문단/컨트롤 범위를 미리 검사하지 않는다** — upstream 원본도 동일. 반대로
+`delete-table`은 `resolve_table_index`가 dry-run 여부와 무관하게 항상 실행되어
+표 번호 범위 초과가 `--dry-run`에서도 잡히고(exit 1), `insert-page-break`는
+upstream 원본대로 `--section`/`--para` 범위를 네이티브 호출과 무관하게 인자
+파싱 직후 무조건 검사한다(`--dry-run`에서도 exit 2, 단 `--offset`은 검사하지
+않음) — 43개 명령 전체에 걸쳐 명령마다 실제로 다른 비대칭이 이번 5개에도
+그대로 있었다. 부수 발견: `ir-diff`는 책갈피 이름 변경을 diff 카테고리로 잡지
+않는다(저장본을 직접 재파싱해 이름을 확인해야 함) — 기존 도구 한계이며 이번
+배치가 만든 문제가 아니다. 22개 신규 계약 테스트
+(`tests/edit_bookmark_structure_contract.rs`) 추가, `cargo test --lib` 전체
+(3634 passed) 및 신규 계약 스위트 통과 확인. 이 배치까지 완료/제외된 것은
+34+5(책갈피/구조) = 39개. 나머지 4개(`insert-column-break`/
+`split-paragraph-in-hf`/`merge-paragraph-in-hf`/`set-numbering-restart`)는
+다음("나머지") 배치 대상.
