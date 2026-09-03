@@ -428,7 +428,7 @@ fn main() {
 /// MCP 서버 저자(및 함수 호출 클라이언트)가 도구 이름·설명·입력 JSON Schema·실행 배선을
 /// 손으로 옮겨 적지 않게 한다. `--json` 계약을 가진 명령이 늘면
 /// `capabilities_mcp_covers_every_json_command` 가 누락을 잡는다.
-const EDIT_SUBCOMMANDS: [(&str, &str); 38] = [
+const EDIT_SUBCOMMANDS: [(&str, &str); 44] = [
     (
         "fill-fields",
         "누름틀(필드) 값 채우기 — --data 이름=값, 같은 이름은 [k] 순번 지목",
@@ -550,6 +550,30 @@ const EDIT_SUBCOMMANDS: [(&str, &str); 38] = [
     (
         "split-paragraph",
         "문단을 오프셋에서 분할 — --section/--para/--offset (생략 시 0)",
+    ),
+    (
+        "apply-char-format",
+        "본문 문단 글자 범위에 글자 서식 적용 — --props 필수, --section/--para/--offset/--count",
+    ),
+    (
+        "apply-para-format",
+        "본문 문단에 문단 서식 적용 — --props 필수, --section/--para (생략 시 0)",
+    ),
+    (
+        "apply-style",
+        "본문 문단에 스타일 적용 — --style 필수, --section/--para (생략 시 0)",
+    ),
+    (
+        "apply-para-format-in-hf",
+        "머리말/꼬리말 문단에 문단 서식 적용 — --header|--footer/--props 필수",
+    ),
+    (
+        "apply-para-format-in-footnote",
+        "각주/미주 안 문단에 문단 서식 적용 — --section/--para/--ctrl/--props 필수",
+    ),
+    (
+        "apply-endnote-shape",
+        "구역의 미주 모양(번호 서식·구분선 등) 적용 — --props 필수, --section (생략 시 0)",
     ),
     (
         "insert-image",

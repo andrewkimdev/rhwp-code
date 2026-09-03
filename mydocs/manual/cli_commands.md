@@ -1144,6 +1144,47 @@ exit 3) · `--json`. 코어 로직은 기존 `table_ops.rs` 네이티브 함수(
   CLI에서는 undo 전용 축인 `restore_meta`를 항상 `None`으로 넘긴다(이 명령의
   범위 밖). `-o` 기본 `_splitpara.<확장자>`.
 
+### 서식/스타일 6종 (upstream #5185/#5192 계열)
+아래 6개 명령은 본문·머리말/꼬리말·각주/미주 문단의 글자/문단 서식과 미주 모양을
+적용한다. 코어 로직은 기존 `formatting.rs`/`header_footer_ops.rs`/
+`footnote_ops.rs`/`object_ops/shape.rs` 네이티브 함수를 그대로 재사용 — 새 편집
+로직 없음. 공통: `-o, --output`(기본 산출 형식은 입력 형식을 따름) · `--dry-run` ·
+`--verify`(저장 직후 재파싱 IR 자기검증, 차이 시 exit 3) · `--json`.
+
+- **`edit apply-char-format <파일> --props <JSON> [--section N] [--para N] [--offset N] [--count N] [옵션]`**
+  본문 문단 글자 범위에 글자 서식(굵게·기울임·밑줄·글자색 등, 코어 `parse_char_shape_mods`가
+  정본)을 적용한다. `--props`는 필수(JSON 형식은 사전 검사), `--section`/`--para`/
+  `--offset`은 생략하면 0, `--count`를 생략하면 문단 끝까지. **`--dry-run`에서도
+  구역/문단/오프셋 범위를 미리 검사한다**(upstream 원본 그대로). `-o` 기본
+  `_chfmt.<확장자>`.
+- **`edit apply-para-format <파일> --props <JSON> [--section N] [--para N] [옵션]`**
+  본문 문단에 문단 서식(정렬은 `alignment`, 줄간격은 `lineSpacing`+`lineSpacingType`
+  등 — 코어 `parse_para_shape_mods`가 정본. `align`이 아니라 `alignment`임에 주의)을
+  적용한다. `--props`는 필수(JSON 형식은 사전 검사), `--section`/`--para`는 생략하면
+  0. **`--dry-run`에서도 범위를 미리 검사한다**. `-o` 기본 `_pfmt.<확장자>`.
+- **`edit apply-style <파일> --style N [--section N] [--para N] [옵션]`**
+  본문 문단에 문서 내 스타일(등록된 서식 묶음, 인덱스는 `export-structure` 등으로
+  확인)을 적용한다. `--style`은 필수, `--section`/`--para`는 생략하면 0.
+  **`--dry-run`에서도 스타일 인덱스·구역/문단 범위를 미리 검사한다**. `-o` 기본
+  `_style.<확장자>`.
+- **`edit apply-para-format-in-hf <파일> --header|--footer --props <JSON> [--section N] [--apply-to 0|1|2] [--para N] [옵션]`**
+  머리말/꼬리말 문단에 문단 서식을 적용한다. `--header`/`--footer` 중 정확히
+  하나와 `--props`는 필수, `--section`/`--apply-to`/`--para`(머리말/꼬리말
+  *내부* 문단 인덱스)는 생략하면 0. **upstream 원본과 동일하게 `--props`의 JSON
+  형식을 사전 검사하지 않는다** — 코어가 알려진 키만 골라 읽으므로 잘못된 JSON도
+  조용히 무시되고 exit 0 이 나온다(이번 배치가 만든 비대칭이 아니다). `-o` 기본
+  `_hfpfmt.<확장자>`.
+- **`edit apply-para-format-in-footnote <파일> --section N --para N --ctrl N --props <JSON> [--fn-para N] [옵션]`**
+  각주/미주 안 문단에 문단 서식을 적용한다. `--section`/`--para`/`--ctrl`(각주/미주
+  컨트롤 인덱스)/`--props`는 모두 필수, `--fn-para`(각주/미주 내부 문단)는 생략하면
+  0. `--props`의 JSON 형식은 사전 검사한다. `-o` 기본 `_fnpfmt.<확장자>`.
+- **`edit apply-endnote-shape <파일> --props <JSON> [--section N] [옵션]`**
+  구역의 미주 모양(번호 서식은 `numberFormat` — `digit`/`circledDigit`/`upperRoman`
+  등, 구분선 등)을 적용한다. `--props`는 필수, `--section`은 생략하면 0.
+  **upstream 원본과 동일하게 `--props`의 JSON 형식을 사전 검사하지 않는다**(코어가
+  알려진 키만 골라 읽는다 — `apply-para-format-in-hf`와 동일한 비대칭). `-o` 기본
+  `_enshape.<확장자>`.
+
 ### `edit insert-image <파일> --image <그림> [--page N] [--x N --y N] [--width N --height N] [-o <출력>] [--dry-run] [--verify] [--json]` (#3719 §6-5)
 도장·서명 같은 그림을 쪽 좌표에 붙인다 — 채워 넣은 서식에 직인을 얹는 실물 제출의 마지막 조각.
 - `--image <그림>` (필수) — 지원 형식은 `png`·`jpg`·`jpeg`·`bmp`·`tif`·`tiff` 뿐(확장자와 내용

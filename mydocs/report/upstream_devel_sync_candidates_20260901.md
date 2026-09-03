@@ -233,4 +233,29 @@ diff를 `git show`로 읽어 인자 이름·의미가 정확히 대응하는지,
 보고하는 사전 존재 특성이 재현된다 — cli_commands.md에 기록, 코어 수정은 이번
 라운드 범위 밖.
 
-나머지 ~23개(서식·스타일/책갈피·구조/기타)는 여전히 다음 라운드 대상.
+**진행(2026-09-03)**: "서식/스타일 6종" 배치(`apply-char-format`/`apply-para-format`/
+`apply-style`/`apply-para-format-in-hf`/`apply-para-format-in-footnote`/
+`apply-endnote-shape`) 완료 — `formatting.rs`의 `apply_char_format_native`/
+`apply_para_format_native`/`apply_style_native`, `header_footer_ops.rs`의
+`apply_para_format_in_hf_native`, `footnote_ops.rs`의
+`apply_para_format_in_footnote_native`, `object_ops/shape.rs`의
+`apply_endnote_shape_native`(전부 이미 `pub`)에 CLI 배선만 추가했다. 인자·시맨틱은
+upstream `origin/devel`(`../rhwp`)의 `src/cli/commands/edit/formatting.rs` /
+`header_footer_properties.rs` / `note_content.rs`를 직접 읽어 확인했다(이 세
+파일은 #5185/#5192 이후 upstream이 `src/main.rs` 단일 파일을 `src/cli/commands/edit/`
+아래로 재구조화하면서 옮긴 위치 — rhwp-code는 이번 배치까지 재구조화하지 않고
+`src/main/edit.rs` 단일 파일 관례를 유지한다). `apply-char-format`/`apply-para-format`/
+`apply-style`은 upstream 원본대로 `--dry-run`에서도 범위(구역/문단/오프셋/스타일
+인덱스)를 미리 검사하지만, `apply-para-format-in-hf`/`apply-endnote-shape`는
+upstream 원본에 사전 JSON 검사가 없어 잘못된 `--props`도 조용히 무시되고 exit 0이
+난다 — 43개 명령 전체에 걸친 기존 비대칭이라 이번 배치가 만든 문제가 아니며
+cli_commands.md에 기록했다. upstream 최신본에는 이번 6종 외에도
+`apply-char-format-in-cell`/`apply-cell-style`/`apply-para-format-in-cell`(표
+셀 전용, #5185/#5192 이후 별도 PR로 추가된 것으로 보임 — 43개 표 대상 밖)이 있어
+혼동하지 않도록 제외했다.
+
+이 배치까지 완료/제외된 것은 6(표 편집)+7(각주/미주)+9(머리말/꼬리말, 8 완료+
+`toggle-hide-hf` 제외)+6(문단 기본)+6(서식/스타일) = 34개. §8 표 43개 기준 나머지
+9개(책갈피·구조/기타)는 `add-bookmark`/`delete-bookmark`/`rename-bookmark`/
+`delete-table`/`insert-page-break`/`insert-column-break`/`split-paragraph-in-hf`/
+`merge-paragraph-in-hf`/`set-numbering-restart` — 여전히 다음 라운드 대상.

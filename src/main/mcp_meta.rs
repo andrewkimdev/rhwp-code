@@ -183,6 +183,12 @@ pub(crate) fn mcp_tool_definitions() -> Vec<serde_json::Value> {
                 | "hwp_delete_paragraph"
                 | "hwp_merge_paragraph"
                 | "hwp_split_paragraph"
+                | "hwp_apply_char_format"
+                | "hwp_apply_para_format"
+                | "hwp_apply_style"
+                | "hwp_apply_para_format_in_hf"
+                | "hwp_apply_para_format_in_footnote"
+                | "hwp_apply_endnote_shape"
         )
     }
 
@@ -2024,6 +2030,177 @@ pub(crate) fn mcp_tool_definitions() -> Vec<serde_json::Value> {
                 { "when": "verify", "args": ["--verify"] }
             ]),
             &["schemaVersion", "source", "section", "paragraph", "dryRun", "changedPages", "output", "outputFormat", "verify"],
+        ),
+        tool_with_optional_args(
+            "hwp_apply_char_format",
+            "본문 문단 글자 범위에 글자 서식(굵게·기울임·밑줄·글자색 등)을 적용해 새 문서를 만든다. props 는 필수, section/para/offset 은 생략하면 0, count 를 생략하면 문단 끝까지. 산출물은 입력 형식을 따른다(HWPX 입력 → HWPX 산출).",
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "입력 HWP/HWPX 문서 경로" },
+                    "section": { "type": "integer", "minimum": 0, "description": "구역 (0부터). 생략하면 0" },
+                    "para": { "type": "integer", "minimum": 0, "description": "문단 (0부터). 생략하면 0" },
+                    "offset": { "type": "integer", "minimum": 0, "description": "문단 내 시작 오프셋. 생략하면 0" },
+                    "count": { "type": "integer", "minimum": 0, "description": "적용할 글자 수. 생략하면 오프셋부터 문단 끝까지" },
+                    "props": { "type": "string", "description": "글자 서식 JSON 객체 문자열, 예: \"{\\\"bold\\\":true}\"" },
+                    "output": { "type": "string", "description": "출력 파일 경로. 생략하면 <입력명>_chfmt.hwp (HWPX 입력이면 _chfmt.hwpx)" },
+                    "dryRun": { "type": "boolean", "description": "true 면 파일을 쓰지 않고 좌표·props 형식 검증만 수행" },
+                    "verify": { "type": "boolean", "description": "저장 직후 재파싱 IR 자기검증 — 차이가 있으면 exit 3" }
+                },
+                "required": ["path", "props"],
+            }),
+            "edit",
+            serde_json::json!(["edit", "apply-char-format", "{path}", "--props", "{props}", "--json"]),
+            serde_json::json!([
+                { "when": "section", "args": ["--section", "{section}"] },
+                { "when": "para", "args": ["--para", "{para}"] },
+                { "when": "offset", "args": ["--offset", "{offset}"] },
+                { "when": "count", "args": ["--count", "{count}"] },
+                { "when": "output", "args": ["-o", "{output}"] },
+                { "when": "dryRun", "args": ["--dry-run"] },
+                { "when": "verify", "args": ["--verify"] }
+            ]),
+            &["schemaVersion", "source", "section", "paragraph", "offset", "count", "props", "dryRun", "changedPages", "output", "outputFormat", "verify"],
+        ),
+        tool_with_optional_args(
+            "hwp_apply_para_format",
+            "본문 문단에 문단 서식(정렬·줄간격·들여쓰기 등)을 적용해 새 문서를 만든다. props 는 필수, section/para 는 생략하면 0. 산출물은 입력 형식을 따른다(HWPX 입력 → HWPX 산출).",
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "입력 HWP/HWPX 문서 경로" },
+                    "section": { "type": "integer", "minimum": 0, "description": "구역 (0부터). 생략하면 0" },
+                    "para": { "type": "integer", "minimum": 0, "description": "문단 (0부터). 생략하면 0" },
+                    "props": { "type": "string", "description": "문단 서식 JSON 객체 문자열, 예: \"{\\\"align\\\":\\\"center\\\"}\"" },
+                    "output": { "type": "string", "description": "출력 파일 경로. 생략하면 <입력명>_pfmt.hwp (HWPX 입력이면 _pfmt.hwpx)" },
+                    "dryRun": { "type": "boolean", "description": "true 면 파일을 쓰지 않고 좌표·props 형식 검증만 수행" },
+                    "verify": { "type": "boolean", "description": "저장 직후 재파싱 IR 자기검증 — 차이가 있으면 exit 3" }
+                },
+                "required": ["path", "props"],
+            }),
+            "edit",
+            serde_json::json!(["edit", "apply-para-format", "{path}", "--props", "{props}", "--json"]),
+            serde_json::json!([
+                { "when": "section", "args": ["--section", "{section}"] },
+                { "when": "para", "args": ["--para", "{para}"] },
+                { "when": "output", "args": ["-o", "{output}"] },
+                { "when": "dryRun", "args": ["--dry-run"] },
+                { "when": "verify", "args": ["--verify"] }
+            ]),
+            &["schemaVersion", "source", "section", "paragraph", "props", "dryRun", "changedPages", "output", "outputFormat", "verify"],
+        ),
+        tool_with_optional_args(
+            "hwp_apply_style",
+            "본문 문단에 문서 내 스타일(등록된 서식 묶음)을 적용해 새 문서를 만든다. style(스타일 인덱스) 은 필수, section/para 는 생략하면 0. 산출물은 입력 형식을 따른다(HWPX 입력 → HWPX 산출).",
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "입력 HWP/HWPX 문서 경로" },
+                    "section": { "type": "integer", "minimum": 0, "description": "구역 (0부터). 생략하면 0" },
+                    "para": { "type": "integer", "minimum": 0, "description": "문단 (0부터). 생략하면 0" },
+                    "style": { "type": "integer", "minimum": 0, "description": "적용할 스타일 인덱스 (export-structure 등으로 확인)" },
+                    "output": { "type": "string", "description": "출력 파일 경로. 생략하면 <입력명>_style.hwp (HWPX 입력이면 _style.hwpx)" },
+                    "dryRun": { "type": "boolean", "description": "true 면 파일을 쓰지 않고 좌표·스타일 범위 검증만 수행" },
+                    "verify": { "type": "boolean", "description": "저장 직후 재파싱 IR 자기검증 — 차이가 있으면 exit 3" }
+                },
+                "required": ["path", "style"],
+            }),
+            "edit",
+            serde_json::json!(["edit", "apply-style", "{path}", "--style", "{style}", "--json"]),
+            serde_json::json!([
+                { "when": "section", "args": ["--section", "{section}"] },
+                { "when": "para", "args": ["--para", "{para}"] },
+                { "when": "output", "args": ["-o", "{output}"] },
+                { "when": "dryRun", "args": ["--dry-run"] },
+                { "when": "verify", "args": ["--verify"] }
+            ]),
+            &["schemaVersion", "source", "section", "paragraph", "style", "dryRun", "changedPages", "output", "outputFormat", "verify"],
+        ),
+        tool_with_optional_args(
+            "hwp_apply_para_format_in_hf",
+            "머리말/꼬리말 문단에 문단 서식을 적용해 새 문서를 만든다. header/footer 와 props 는 필수, section/applyTo/para 는 생략하면 0. 산출물은 입력 형식을 따른다(HWPX 입력 → HWPX 산출).",
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "입력 HWP/HWPX 문서 경로" },
+                    "header": { "type": "boolean", "description": "true 면 머리말. footer 와 정확히 하나만 지정" },
+                    "footer": { "type": "boolean", "description": "true 면 꼬리말. header 와 정확히 하나만 지정" },
+                    "props": { "type": "string", "description": "문단 서식 JSON 객체 문자열, 예: \"{\\\"align\\\":\\\"center\\\"}\"" },
+                    "section": { "type": "integer", "minimum": 0, "description": "구역 (0부터). 생략하면 0" },
+                    "applyTo": { "type": "integer", "minimum": 0, "maximum": 2, "description": "0(양쪽)·1(짝수쪽)·2(홀수쪽). 생략하면 0" },
+                    "para": { "type": "integer", "minimum": 0, "description": "머리말/꼬리말 내부 문단 (0부터). 생략하면 0" },
+                    "output": { "type": "string", "description": "출력 파일 경로. 생략하면 <입력명>_hfpfmt.hwp (HWPX 입력이면 _hfpfmt.hwpx)" },
+                    "dryRun": { "type": "boolean", "description": "true 면 파일을 쓰지 않고 좌표 검증만 수행" },
+                    "verify": { "type": "boolean", "description": "저장 직후 재파싱 IR 자기검증 — 차이가 있으면 exit 3" }
+                },
+                "required": ["path", "props"],
+            }),
+            "edit",
+            serde_json::json!(["edit", "apply-para-format-in-hf", "{path}", "--props", "{props}", "--json"]),
+            serde_json::json!([
+                { "when": "header", "args": ["--header"] },
+                { "when": "footer", "args": ["--footer"] },
+                { "when": "section", "args": ["--section", "{section}"] },
+                { "when": "applyTo", "args": ["--apply-to", "{applyTo}"] },
+                { "when": "para", "args": ["--para", "{para}"] },
+                { "when": "output", "args": ["-o", "{output}"] },
+                { "when": "dryRun", "args": ["--dry-run"] },
+                { "when": "verify", "args": ["--verify"] }
+            ]),
+            &["schemaVersion", "source", "section", "isHeader", "applyTo", "paragraph", "props", "dryRun", "changedPages", "output", "outputFormat", "verify"],
+        ),
+        tool_with_optional_args(
+            "hwp_apply_para_format_in_footnote",
+            "각주/미주 안 문단에 문단 서식을 적용해 새 문서를 만든다. section/para/ctrl/props 모두 필수, fnPara(각주/미주 내부 문단) 는 생략하면 0. 산출물은 입력 형식을 따른다(HWPX 입력 → HWPX 산출).",
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "입력 HWP/HWPX 문서 경로" },
+                    "section": { "type": "integer", "minimum": 0, "description": "구역 (0부터)" },
+                    "para": { "type": "integer", "minimum": 0, "description": "문단 (0부터)" },
+                    "ctrl": { "type": "integer", "minimum": 0, "description": "각주/미주 컨트롤 인덱스" },
+                    "fnPara": { "type": "integer", "minimum": 0, "description": "각주/미주 내부 문단 (0부터). 생략하면 0" },
+                    "props": { "type": "string", "description": "문단 서식 JSON 객체 문자열, 예: \"{\\\"align\\\":\\\"center\\\"}\"" },
+                    "output": { "type": "string", "description": "출력 파일 경로. 생략하면 <입력명>_fnpfmt.hwp (HWPX 입력이면 _fnpfmt.hwpx)" },
+                    "dryRun": { "type": "boolean", "description": "true 면 파일을 쓰지 않고 좌표·props 형식 검증만 수행" },
+                    "verify": { "type": "boolean", "description": "저장 직후 재파싱 IR 자기검증 — 차이가 있으면 exit 3" }
+                },
+                "required": ["path", "section", "para", "ctrl", "props"],
+            }),
+            "edit",
+            serde_json::json!(["edit", "apply-para-format-in-footnote", "{path}", "--section", "{section}", "--para", "{para}", "--ctrl", "{ctrl}", "--props", "{props}", "--json"]),
+            serde_json::json!([
+                { "when": "fnPara", "args": ["--fn-para", "{fnPara}"] },
+                { "when": "output", "args": ["-o", "{output}"] },
+                { "when": "dryRun", "args": ["--dry-run"] },
+                { "when": "verify", "args": ["--verify"] }
+            ]),
+            &["schemaVersion", "source", "section", "paragraph", "ctrl", "fnPara", "props", "dryRun", "changedPages", "output", "outputFormat", "verify"],
+        ),
+        tool_with_optional_args(
+            "hwp_apply_endnote_shape",
+            "구역의 미주 모양(번호 서식·구분선 등)을 적용해 새 문서를 만든다. props 는 필수, section 은 생략하면 0. 산출물은 입력 형식을 따른다(HWPX 입력 → HWPX 산출).",
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "입력 HWP/HWPX 문서 경로" },
+                    "section": { "type": "integer", "minimum": 0, "description": "구역 (0부터). 생략하면 0" },
+                    "props": { "type": "string", "description": "미주 모양 JSON 객체 문자열, 예: \"{\\\"numberFormat\\\":\\\"digit\\\"}\"" },
+                    "output": { "type": "string", "description": "출력 파일 경로. 생략하면 <입력명>_enshape.hwp (HWPX 입력이면 _enshape.hwpx)" },
+                    "dryRun": { "type": "boolean", "description": "true 면 파일을 쓰지 않고 구역 검증만 수행" },
+                    "verify": { "type": "boolean", "description": "저장 직후 재파싱 IR 자기검증 — 차이가 있으면 exit 3" }
+                },
+                "required": ["path", "props"],
+            }),
+            "edit",
+            serde_json::json!(["edit", "apply-endnote-shape", "{path}", "--props", "{props}", "--json"]),
+            serde_json::json!([
+                { "when": "section", "args": ["--section", "{section}"] },
+                { "when": "output", "args": ["-o", "{output}"] },
+                { "when": "dryRun", "args": ["--dry-run"] },
+                { "when": "verify", "args": ["--verify"] }
+            ]),
+            &["schemaVersion", "source", "section", "props", "dryRun", "changedPages", "output", "outputFormat", "verify"],
         ),
         tool_with_optional_args(
             "hwp_export_ir_schema",
