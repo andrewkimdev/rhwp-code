@@ -951,6 +951,32 @@ fn render_pages_to_page_data(
     Ok(page_datas)
 }
 
+/// [#6612] 페이지 SVG 안의 `data:image/svg+xml` 그림을 이미지째 읽는 usvg 리졸버.
+///
+/// rhwp 는 WMF·EMF·AI 그림을 SVG 로 바꿔 `<image href="data:image/svg+xml;base64,…">` 로
+/// 심는다. usvg 의 기본 데이터 리졸버는 이런 하위 SVG 를 `load_sub_svg` 로 읽는데, 그 함수는
+/// SVG 규격("`<image>` 가 참조한 SVG 는 자기 안에 `<image>` 를 둘 수 없다")대로 하위 SVG 의
+/// `<image>` 를 전부 버린다. 비트맵을 품은 WMF(`<svg viewBox><image href="data:image/png"/></svg>`)
+/// 는 그래서 PDF 에서 빈칸이 됐다. 페이지 SVG 와 하위 SVG 를 모두 rhwp 가 만들므로 하위 SVG 를
+/// 같은 옵션으로 파싱해 이미지를 유지한다. 다른 mime 은 usvg 기본 리졸버가 처리한다.
+#[cfg(not(target_arch = "wasm32"))]
+fn pdf_image_href_resolver() -> usvg::ImageHrefResolver<'static> {
+    let default_data = usvg::ImageHrefResolver::default_data_resolver();
+    usvg::ImageHrefResolver {
+        resolve_data: Box::new(move |mime, data, opts| match mime {
+            "image/svg+xml" => match usvg::Tree::from_data(&data, opts) {
+                Ok(tree) => Some(usvg::ImageKind::SVG(tree)),
+                Err(e) => {
+                    eprintln!("경고: PDF 변환 중 하위 SVG 그림을 파싱하지 못해 건너뜁니다: {e}");
+                    None
+                }
+            },
+            _ => default_data(mime, data, opts),
+        }),
+        resolve_string: usvg::ImageHrefResolver::default_string_resolver(),
+    }
+}
+
 /// 여러 SVG 페이지를 옵션 기반 단일 다중 페이지 PDF로 생성
 #[cfg(not(target_arch = "wasm32"))]
 pub fn svgs_to_pdf_with_options(
@@ -966,6 +992,7 @@ pub fn svgs_to_pdf_with_options(
     let fontdb = create_fontdb(export_options);
     let mut options = usvg::Options::default();
     options.fontdb = std::sync::Arc::new(fontdb);
+    options.image_href_resolver = pdf_image_href_resolver();
 
     // (docs/RHWP_GLYPH_OUTLINE_CACHE_PLAN.md) A cache is only constructed if
     // either flag is present -- the common case (neither flag set) takes

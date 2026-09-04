@@ -2849,7 +2849,11 @@ fn header_paper_relative_shape_uses_page_origin() {
 }
 
 #[test]
-fn header_paper_relative_picture_uses_page_origin() {
+// [#6608] 머리말·꼬리말 안 그림은 물리 용지(0,0)가 아니라 그 틀(header_area) 원점에서
+// 오프셋을 잰다 — 한/글 실측(pic-in-head-02.hwp)과 일치하도록 정정. Shape는 이 upstream
+// 수정의 대상이 아니라(위 header_paper_relative_shape_uses_page_origin) 여전히 물리
+// 용지 원점 기준이다.
+fn header_paper_relative_picture_uses_header_frame_origin() {
     let tree =
         render_tree_with_header_control(Control::Picture(Box::new(crate::model::image::Picture {
             common: CommonObjAttr {
@@ -2865,6 +2869,13 @@ fn header_paper_relative_picture_uses_page_origin() {
             ..Default::default()
         })));
 
+    let header_bbox = tree
+        .root
+        .children
+        .iter()
+        .find(|node| matches!(node.node_type, RenderNodeType::Header))
+        .expect("header node should be rendered")
+        .bbox;
     let bbox = first_header_child_bbox(&tree, |node_type| {
         // [Task #2225] 데이터 없는 픽스처 그림은 MissingPicture placeholder 로
         // 방출된다 — 위치 검증 프로브이므로 두 형태 모두 수용 (bbox 동일).
@@ -2873,8 +2884,8 @@ fn header_paper_relative_picture_uses_page_origin() {
             RenderNodeType::Image(_) | RenderNodeType::Placeholder(_)
         )
     });
-    assert!((bbox.x - hwpunit_to_px(1_500, DEFAULT_DPI)).abs() < 0.01);
-    assert!((bbox.y - hwpunit_to_px(2_250, DEFAULT_DPI)).abs() < 0.01);
+    assert!((bbox.x - (header_bbox.x + hwpunit_to_px(1_500, DEFAULT_DPI))).abs() < 0.01);
+    assert!((bbox.y - (header_bbox.y + hwpunit_to_px(2_250, DEFAULT_DPI))).abs() < 0.01);
 }
 
 // [Task #2102] 쪽 배경 이미지 채우기는 구역 첫 쪽에만 적용된다.

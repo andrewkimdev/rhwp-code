@@ -28,6 +28,11 @@ const RT_MODIFY_WORLD_TRANSFORM: u32 = 0x00000024;
 const RT_SELECT_OBJECT: u32 = 0x00000025;
 const RT_CREATE_PEN: u32 = 0x00000026;
 const RT_CREATE_BRUSH_INDIRECT: u32 = 0x00000027;
+/// [#6577] 이 파일군의 비-스톡 펜은 전부 여기서 온다(`EMR_CREATEPEN` 은 0건).
+const RT_EXT_CREATE_PEN: u32 = 0x0000005F;
+/// [#6577] 클립 — 종전에는 클립이 아예 없었다.
+const RT_INTERSECT_CLIP_RECT: u32 = 0x0000001E;
+const RT_EXT_SELECT_CLIP_RGN: u32 = 0x0000004B;
 const RT_DELETE_OBJECT: u32 = 0x00000028;
 const RT_EXT_CREATE_FONT_INDIRECT_W: u32 = 0x00000052;
 // 드로잉 (단계 12)
@@ -42,6 +47,9 @@ const RT_LINE_TO: u32 = 0x00000036;
 const RT_POLYBEZIER16: u32 = 0x00000055;
 const RT_POLYLINE16: u32 = 0x00000056;
 const RT_POLYGON16: u32 = 0x00000057;
+/// [#6577] 패스 기반 EMF 의 주 구성 레코드 — 종전에는 `Unknown` 으로 버려졌다.
+const RT_POLYBEZIER_TO16: u32 = 0x00000058;
+const RT_POLYLINE_TO16: u32 = 0x00000059;
 // 패스 (단계 12)
 const RT_BEGIN_PATH: u32 = 0x0000003B;
 const RT_END_PATH: u32 = 0x0000003C;
@@ -112,6 +120,19 @@ fn dispatch(record_type: u32, c: &mut Cursor<'_>, payload_len: usize) -> Result<
         RT_CREATE_BRUSH_INDIRECT => {
             let (handle, brush) = object::parse_create_brush_indirect(c)?;
             Record::CreateBrushIndirect { handle, brush }
+        }
+        RT_INTERSECT_CLIP_RECT => Record::IntersectClipRect(drawing::parse_rect(c)?),
+        RT_EXT_SELECT_CLIP_RGN => {
+            let cb_rgn_data = c.u32()?;
+            let mode = c.u32()?;
+            Record::ExtSelectClipRgn {
+                mode,
+                has_region: cb_rgn_data > 0,
+            }
+        }
+        RT_EXT_CREATE_PEN => {
+            let (handle, pen) = object::parse_ext_create_pen(c)?;
+            Record::CreatePen { handle, pen }
         }
         RT_EXT_CREATE_FONT_INDIRECT_W => {
             let (handle, font) = object::parse_ext_create_font_indirect_w(c, payload_len)?;
@@ -196,6 +217,14 @@ fn dispatch(record_type: u32, c: &mut Cursor<'_>, payload_len: usize) -> Result<
         RT_POLYBEZIER16 => {
             let (bounds, points) = drawing::parse_points16(c)?;
             Record::PolyBezier16 { bounds, points }
+        }
+        RT_POLYBEZIER_TO16 => {
+            let (bounds, points) = drawing::parse_points16(c)?;
+            Record::PolyBezierTo16 { bounds, points }
+        }
+        RT_POLYLINE_TO16 => {
+            let (bounds, points) = drawing::parse_points16(c)?;
+            Record::PolylineTo16 { bounds, points }
         }
 
         // 패스

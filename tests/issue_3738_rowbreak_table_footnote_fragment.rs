@@ -1897,9 +1897,12 @@ fn native_hwp5_square_picture_uses_the_next_page_wrap_owner() {
         "그림 64는 PDF처럼 p156 우측 Square band에 있어야 함: {:?}",
         p156_images[0]
     );
+    // [upstream #6596] 부동 그림의 바깥 여백(margin.top=510HU=6.8px)이 이제 잉크
+    // 위치에 반영되어, 이 그림의 y가 기존 pinned 90.1px 에서 margin.top 만큼
+    // 아래로 이동한다(96.87px) — 여백 없는 원점에 그리던 종전 결함의 정정.
     assert!(
-        (p156_images[0].1 - 90.1).abs() <= 1.0,
-        "p156 그림 64는 full-width tail 뒤 reset contract의 518HU offset을 유지해야 함: {:?}",
+        (p156_images[0].1 - 96.87).abs() <= 1.0,
+        "p156 그림 64는 full-width tail 뒤 reset contract 위치 + 바깥 여백(margin.top)을 유지해야 함: {:?}",
         p156_images[0]
     );
 
@@ -2016,9 +2019,12 @@ fn native_hwp5_square_picture_figure_56_uses_the_same_next_page_owner_contract()
         "그림 56은 PDF처럼 p127 우측 Square band에 있어야 함: {:?}",
         p127_images[0]
     );
+    // [upstream #6596] 부동 그림의 바깥 여백(margin.top=510HU=6.8px)이 이제 잉크
+    // 위치에 반영되어, 이 그림의 y가 기존 pinned 83.2px 에서 margin.top 만큼
+    // 아래로 이동한다(89.96px) — 여백 없는 원점에 그리던 종전 결함의 정정.
     assert!(
-        (p127_images[0].1 - 83.2).abs() <= 1.0,
-        "p127 그림 56은 next-page owner body top에서 시작해야 함: {:?}",
+        (p127_images[0].1 - 89.96).abs() <= 1.0,
+        "p127 그림 56은 next-page owner body top + 바깥 여백(margin.top)에서 시작해야 함: {:?}",
         p127_images[0]
     );
 
