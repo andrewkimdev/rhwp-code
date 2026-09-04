@@ -25,7 +25,8 @@ use crate::model::bin_data::BinDataContent;
 use crate::model::control::Control;
 use crate::model::paragraph::{LineSeg, Paragraph};
 use crate::model::shape::{
-    CaptionDirection, CommonObjAttr, HorzAlign, HorzRelTo, ShapeObject, TextWrap, VertRelTo,
+    Caption, CaptionDirection, CommonObjAttr, HorzAlign, HorzRelTo, ShapeObject, TextWrap,
+    VertRelTo,
 };
 use crate::model::style::{Alignment, HeadType, LineSpacingType, Numbering, UnderlineType};
 use crate::model::table::Table;
@@ -856,6 +857,34 @@ fn tac_picture_label_extra_px(
     max_font_size + line_spacing_px.max(0.0)
 }
 
+/// [#6575] TAC 개체를 baseline 에 앉힐 때 쓰는 **개체 상자 전체 높이**(px).
+///
+/// 종전에는 그림 높이만으로 `y + baseline - pic_h` 를 잡았다. 그런데 위/아래 캡션이
+/// 붙은 그림은 저장 줄이 **그림 + 캡션 간격 + 캡션**을 통째로 예약하므로, 그림만
+/// 바닥맞춤하면 캡션 높이만큼 아래로 내려간다.
+///
+/// 상자가 baseline 보다 크면 기존 `.max(y)` 클램프가 그대로 줄 상단을 준다 — 한컴이
+/// 이런 줄에서 개체를 줄 상단에 붙이는 동작과 같은 답이다.
+///
+/// 좌/우 캡션은 폭을 늘릴 뿐 높이를 늘리지 않으므로 세로 방향(Top/Bottom)만 센다.
+fn tac_object_box_height_px(object_h: f64, caption: &Option<Caption>, dpi: f64) -> f64 {
+    let Some(cap) = caption else {
+        return object_h;
+    };
+    if !matches!(
+        cap.direction,
+        CaptionDirection::Top | CaptionDirection::Bottom
+    ) || cap.paragraphs.is_empty()
+    {
+        return object_h;
+    }
+    let caption_h = crate::renderer::composer::caption_height_px(caption, dpi);
+    if caption_h <= 0.0 {
+        return object_h;
+    }
+    object_h + hwpunit_to_px(i32::from(cap.spacing), dpi) + caption_h
+}
+
 fn tac_picture_label_extra_for_line(
     _cell_ctx: Option<&CellContext>,
     runs_all_whitespace: bool,
@@ -1556,14 +1585,23 @@ impl LayoutEngine {
         // 텍스트 세그먼트 분리: 갭이 8 이상이면 컨트롤 위치
         let mut segments: Vec<(usize, usize)> = Vec::new(); // (start_char_idx, end_char_idx)
 
-        // 선행 컨트롤 감지: 첫 텍스트 문자 앞에 컨트롤이 있으면 빈 세그먼트 추가
-        // 확장 컨트롤은 8 UTF-16 유닛을 차지하므로, offsets[0] / 8 = 선행 컨트롤 수
-        if !offsets.is_empty() && offsets[0] >= 8 {
-            let num_leading = (offsets[0] / 8) as usize;
-            let tables_to_prepend = num_leading.min(inline_tables.len());
-            for _ in 0..tables_to_prepend {
-                segments.push((0, 0)); // 빈 세그먼트 → 표가 텍스트 앞에 배치됨
-            }
+        // 선행 컨트롤 감지: 첫 텍스트 문자 앞에 컨트롤이 있으면 빈 세그먼트 추가.
+        //
+        // [#6601] 종전에는 `offsets[0] / 8` 로 셌다. 그 값은 **모든** 선행 컨트롤을
+        // 세므로(구역정의·단정의 등 비-인라인 포함) 실제보다 크게 나오고, 그만큼 빈
+        // 세그먼트를 더 앞세워 표와 텍스트의 순서가 뒤집힌다. 선행 개수는 인라인
+        // 표 중 문자 위치가 0 인 것으로 센다.
+        let control_positions_for_lead = para.control_text_positions();
+        let leading_inline_tables = inline_tables
+            .iter()
+            .filter(|(ctrl_idx, _)| {
+                control_positions_for_lead
+                    .get(*ctrl_idx)
+                    .is_some_and(|&position| position == 0)
+            })
+            .count();
+        for _ in 0..leading_inline_tables {
+            segments.push((0, 0)); // 빈 세그먼트 → 표가 텍스트 앞에 배치됨
         }
 
         let mut seg_start = 0;
@@ -1660,8 +1698,25 @@ impl LayoutEngine {
             .collect();
 
         // 5. 총 폭과 정렬 계산 (TAC 표는 outMargin 좌/우 포함 폭 — Issue #3396)
+        // [#6601] 정렬 폭은 선언 폭을 우선한다 — `table_widths` 는 열별 셀 폭
+        // (`col_span == 1` max 합)이라 병합 셀이 많은 표에서 과소합산된다. 같은
+        // 함수의 줄넘김 검사(`should_wrap_middle_anchored_table`)는 `table_footprint`
+        // 에서 이미 선언 폭(`tbl.common.width`)을 우선 취하므로, 정렬도 같은 계약을
+        // 따라야 둘이 어긋나지 않는다.
+        let table_declared_widths: Vec<f64> = inline_tables
+            .iter()
+            .zip(table_widths.iter())
+            .map(|((_, t), colsum)| {
+                let declared = hwpunit_to_px(t.common.width as i32, self.dpi);
+                if declared > 0.0 {
+                    declared
+                } else {
+                    *colsum
+                }
+            })
+            .collect();
         let total_width: f64 = seg_widths.iter().sum::<f64>()
-            + table_widths.iter().sum::<f64>()
+            + table_declared_widths.iter().sum::<f64>()
             + table_om_px.iter().map(|(l, r)| l + r).sum::<f64>();
         let available_width = col_area.width - margin_left - margin_right;
         let start_x = match alignment {
@@ -2343,7 +2398,8 @@ impl LayoutEngine {
                             if raw_lh + 4.0 >= pic_h {
                                 *reserved_tac_picture_height = Some(pic_h);
                             }
-                            let img_y = (y + baseline - pic_h).max(y);
+                            let box_h = tac_object_box_height_px(pic_h, &pic.caption, self.dpi);
+                            let img_y = (y + baseline - box_h).max(y);
                             let bin_data_id = pic.image_attr.bin_data_id;
                             let image_data = find_bin_data_bytes(bdc, bin_data_id);
                             let crop = {
@@ -5385,7 +5441,10 @@ impl LayoutEngine {
                                 let base_img_y = if label_extra > 0.0 {
                                     y + label_extra
                                 } else {
-                                    (y + baseline - pic_h).max(y)
+                                    // [#6575] 같은 계약의 형제 경로 — 상자 전체로 맞춘다.
+                                    let box_h =
+                                        tac_object_box_height_px(pic_h, &pic.caption, self.dpi);
+                                    (y + baseline - box_h).max(y)
                                 };
                                 let img_y = base_img_y + sibling_reserved_px;
                                 let bin_data_id = pic.image_attr.bin_data_id;
@@ -6559,7 +6618,9 @@ impl LayoutEngine {
                             let base_img_y = if label_extra > 0.0 {
                                 vars.y + label_extra
                             } else {
-                                (vars.y + vars.baseline - pic_h).max(vars.y)
+                                // [#6575] baseline 정렬 대상은 그림이 아니라 개체 상자 전체다.
+                                let box_h = tac_object_box_height_px(pic_h, &pic.caption, self.dpi);
+                                (vars.y + vars.baseline - box_h).max(vars.y)
                             };
                             let img_y = base_img_y + sibling_reserved_px;
                             let bin_data_id = pic.image_attr.bin_data_id;

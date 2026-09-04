@@ -4,7 +4,7 @@ use super::super::render_tree::*;
 use super::super::style_resolver::ResolvedBorderStyle;
 use super::super::{LineStyle, StrokeDash};
 use crate::model::style::{BorderLine, BorderLineType, CenterLine};
-use crate::model::table::Table;
+use crate::model::table::{Cell, Table, TableZone};
 
 fn merge_border(a: &BorderLine, b: &BorderLine) -> BorderLine {
     if a.line_type == BorderLineType::None {
@@ -260,6 +260,73 @@ pub(crate) fn collect_cell_borders(
         for r in row..end_row {
             merge_edge_slot(&mut v_edges[end_col][r], &borders[1]);
         }
+    }
+}
+
+/// [#6619] `hp:cellzone` 의 테두리를 zone **바깥 네 변**에 덮어쓴다.
+///
+/// zone 은 셀 고유 `borderFillIDRef` 위에 얹는 **영역 덮어쓰기**다. 종전 렌더러는
+/// zone 에 대해 배경(`render_cell_background`)과 대각선만 그리고 네 변을 한 번도
+/// 방출하지 않아, 오직 zone 만 참조하는 선이 통째로 사라졌다.
+///
+/// ⚠ **`None` 인 변은 덮어쓰지 않는다.** zone 을 완전한 덮어쓰기로 보면 `None` 이
+/// 기존 셀 선을 지워야 하지만, 실측 문서에서 한/글이 덜 그리는 선은 없었다. 근거
+/// 없는 지우기를 넣지 않는다.
+///
+/// ⚠⚠ **끝 주소는 병합 span 으로 환산한다.** `startColAddr`/`endColAddr` 는 그리드
+/// 좌표가 아니라 **칸 주소**다. zone 이 가리키는 끝 칸이 병합돼 있으면
+/// `end_col + 1`/`end_row + 1` 로는 그 칸의 실제 span 끝(`col + col_span` /
+/// `row + row_span`)에 못 미쳐 오른쪽/아래 변이 표 한복판에서 끊긴다.
+pub(crate) fn apply_cellzone_border_fill(
+    h_edges: &mut [Vec<Option<BorderLine>>],
+    v_edges: &mut [Vec<Option<BorderLine>>],
+    zone_borders: &[BorderLine; 4],
+    zone: &TableZone,
+    cells: &[Cell],
+) {
+    if h_edges.is_empty() || v_edges.is_empty() {
+        return;
+    }
+    let col_count = h_edges[0].len();
+    let row_count = v_edges[0].len();
+    if h_edges.len() != row_count + 1 || v_edges.len() != col_count + 1 {
+        return;
+    }
+
+    let sc = zone.start_col as usize;
+    let sr = zone.start_row as usize;
+    if sc >= col_count || sr >= row_count {
+        return;
+    }
+    // 끝 주소의 칸이 병합돼 있으면 그 span 끝까지가 zone 의 바깥 변이다.
+    let end_cell = cells.iter().find(|c| {
+        c.row as usize == zone.end_row as usize && c.col as usize == zone.end_col as usize
+    });
+    let ec = end_cell
+        .map(|c| c.col as usize + (c.col_span as usize).max(1))
+        .unwrap_or(zone.end_col as usize + 1)
+        .min(col_count);
+    let er = end_cell
+        .map(|c| c.row as usize + (c.row_span as usize).max(1))
+        .unwrap_or(zone.end_row as usize + 1)
+        .min(row_count);
+    if ec <= sc || er <= sr {
+        return;
+    }
+
+    let overwrite = |slot: &mut Option<BorderLine>, border: &BorderLine| {
+        if border.line_type != BorderLineType::None {
+            *slot = Some(*border);
+        }
+    };
+
+    for c in sc..ec {
+        overwrite(&mut h_edges[sr][c], &zone_borders[2]); // 위
+        overwrite(&mut h_edges[er][c], &zone_borders[3]); // 아래
+    }
+    for r in sr..er {
+        overwrite(&mut v_edges[sc][r], &zone_borders[0]); // 왼쪽
+        overwrite(&mut v_edges[ec][r], &zone_borders[1]); // 오른쪽
     }
 }
 

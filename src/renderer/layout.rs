@@ -7495,14 +7495,28 @@ impl LayoutEngine {
                             let effective_h = seg_lh.max(shape_max_h);
                             if effective_h > 0.0 {
                                 let para_start = *para_start_y.get(para_index).unwrap_or(&y_offset);
-                                let shape_bottom = para_start + effective_h;
+                                // [#6551] `para_start` 는 **문단 앞 간격(sb) 이전** 위치다.
+                                // 개체는 sb 아래에서 시작하므로 그만큼 더해야 한다. 종전에는
+                                // 이를 버리고 `para_start + lh` 로 덮어써, 이 블록이
+                                // `layout_paragraph` 가 이미 적용한 sb 를 되돌렸다
+                                // (113424 7쪽 pi=73: 렌더 전진량 43.5에 sb 13.3이 빠져
+                                // 다음 제목이 글상자 안으로 올라왔다).
+                                let (sb, sa) = styles
+                                    .para_styles
+                                    .get(para.para_shape_id as usize)
+                                    .map(|s| (s.spacing_before, s.spacing_after))
+                                    .unwrap_or((0.0, 0.0));
+                                // 단 상단 문단은 한컴이 `sb` 를 트림한다(`is_column_top`)
+                                // — `layout_paragraph` 도 그렇게 놓으므로 여기서 더하면
+                                // 되레 어긋난다. 단 아래로 흐른 문단에만 더한다.
+                                let sb_applied = if para_start > col_area.y + 0.5 {
+                                    sb.max(0.0)
+                                } else {
+                                    0.0
+                                };
+                                let shape_bottom = para_start + sb_applied + effective_h;
                                 if shape_bottom > y_offset {
-                                    let spacing = styles
-                                        .para_styles
-                                        .get(para.para_shape_id as usize)
-                                        .map(|s| s.spacing_after)
-                                        .unwrap_or(0.0);
-                                    y_offset = shape_bottom + spacing;
+                                    y_offset = shape_bottom + sa;
                                 }
                             }
                         }
@@ -10319,17 +10333,14 @@ impl LayoutEngine {
                             use crate::model::shape::CaptionDirection;
                             let caption_spacing = hwpunit_to_px(caption.spacing as i32, self.dpi);
                             let caption_h = self.calculate_caption_height(&pic.caption, styles);
-                            // [Task #864 Stage E v2] paragraph_layout 가 inline TAC image 를
-                            // baseline-aligned (y = pic_y + baseline - pic_h) 위치에 emit
-                            // 함. caption 은 image 바로 아래 (image_bottom = pic_y + baseline)
-                            // 에 위치해야 함. 기존 pic_y + pic_h 사용 시 image 영역 안에
-                            // 그려져 가려짐.
-                            let baseline_px = para
-                                .line_segs
-                                .first()
-                                .map(|ls| hwpunit_to_px(ls.baseline_distance, self.dpi))
-                                .unwrap_or(effective_pic_h);
-                            let image_bottom = effective_pic_y + baseline_px.max(effective_pic_h);
+                            // [#6593] 캡션은 실제로 그려진 그림 상자 바로 아래에 붙는다.
+                            // `effective_pic_y` 는 emit 된 ImageNode 의 상단이므로 상자 바닥은
+                            // 그 높이를 더한 값이다. 종전에는 상단에 `max(baseline, 높이)` 를
+                            // 더했는데, 저장 줄이 그림+캡션을 통째로 예약해 baseline 이 그림보다
+                            // 큰 줄에서는 (baseline − 그림 높이)만큼 캡션이 내려가 줄을 넘고,
+                            // 그 아래 내용이 전부 밀렸다. 보통 줄은 baseline < 그림 높이라
+                            // 두 식이 같다.
+                            let image_bottom = effective_pic_y + effective_pic_h;
                             let cap_y = match caption.direction {
                                 CaptionDirection::Bottom => image_bottom + caption_spacing,
                                 CaptionDirection::Top => effective_pic_y,
