@@ -78,10 +78,39 @@
   25 + 4 = 29 passed (rhwp-form-fill/rhwp-safe-edit 핫 패스 회귀 스위트)
 - `cargo test --lib`(전체) — 3637 passed, 0 failed, 13 ignored (221.82s)
 
-## 5. 남은 범위 — 후속 이슈로 명시적으로 남김
+## 5. 후속 — `NestedEntry::TextBox` 실제 문서 통합 테스트 (2026-09-04 추가)
 
-- `NestedEntry::TextBox`가 섞인 실제 문서 샘플로 통합 테스트는 아직 없다
-  (경로 변환 로직 자체는 §3에서 구조적으로 확인).
+Stage 1 종료 시점에 남겨둔 "글상자 내부 필드 실측 통합 테스트 없음" 격차를 채웠다.
+
+- **샘플 확보**: `samples/*.hwp`/`*.hwpx` 78+277개를 `rhwp fields <파일> --json`으로
+  전수 스캔해 글상자(`kind:"textBox"`) 안 필드가 있는 표본 6개를 찾았고, 이미
+  `edit_verify_contract.rs`가 쓰는 `samples/field-01.hwp`를 골랐다(새 샘플 도입 없음).
+  `목차1[0]` 필드가 section 1, paragraph 0, 글상자 컨트롤 `[3]` 안에 있고, `rhwp dump`로
+  실측한 글상자 폭은 `max_width=30011 HWPUNIT`(margins 283×4)이다.
+- **실측 재현(수정 전 코드로 직접 확인)**: `git checkout 9dfabe44a~1 -- \
+  src/document_core/queries/field_query.rs`로 결함 커밋 직전 상태로 되돌려 같은
+  시나리오(글상자 폭을 넘기는 40자 값)를 `edit fill-fields --verify`로 채운 뒤
+  `rhwp dump`로 확인한 결과:
+  - 수정 전: `ls_count=1`, `sw=29444`(옛 짧은 텍스트 폭 그대로) — 61자가 들어간
+    문단인데 한 줄로 stale하게 남음. `verify.identical:true`는 그대로 찍힘
+    (§3의 #1380 무관 결론을 실제 문서로도 재확인).
+  - 수정 후: `ls_count=3`으로 올바르게 재계산됨. `verify.identical:true` 유지.
+  - 수정을 원복(`git checkout HEAD -- ...`)한 뒤 정상 상태로 복귀 확인.
+- **테스트 고정**: `tests/field_edit_textbox_lineseg_reflow_contract.rs` 추가.
+  `edit fill-fields`로 `목차1[0]`을 40자 값으로 채우고 `--verify` 자기 일치를
+  확인한 뒤, `rhwp dump`(사람이 읽는 디버그 텍스트라 스키마 계약이 아니므로
+  최소 줄 단위 파싱만 함)로 컨트롤 `[3]`의 `ls_count`가 2줄 이상으로 재계산됐는지
+  본다. 이 테스트는 수정 전 커밋에 대고 돌리면 **실패**함을 직접 확인했다
+  (진짜 회귀 가드, 우연히 통과하는 테스트 아님).
+- **검증**: `cargo test --test field_edit_textbox_lineseg_reflow_contract` — 1
+  passed. `rustfmt --check`/`cargo clippy -- -D warnings` 새 파일 대상 0건.
+
+## 6. 남은 범위 — 후속 이슈로 명시적으로 남김
+
 - `samples/table-vpos-01.hwpx`의 `담당부서` 필드를 이용한 실측 통합 테스트
-  (핸드오버가 제안한 실사례 재현)는 이번 스테이지에서는 결정론적 합성
-  유닛 테스트로 대체했다 — 실 문서 기반 통합 테스트는 필요 시 후속으로 추가.
+  (핸드오버가 제안한 실사례)는 다루지 않았다 — `field-01.hwp`의 `목차1[0]`이
+  같은 결함 메커니즘(글상자 내부, 값 길이 변화)을 이미 실측으로 덮는다.
+- `NestedEntry::TableCell`이 `TextBox` 안에 중첩된 경로(글상자 안의 표 셀
+  필드)는 실측 통합 테스트가 아직 없다 — 구조적으로는 `nested_path_to_tuple_path`
+  변환이 두 variant를 동일하게 다루므로 별도 분기가 필요 없다고 판단했지만,
+  다중 중첩 실제 샘플로 고정하는 것은 후속으로 남긴다.
