@@ -34,6 +34,28 @@ pub enum NestedEntry {
     },
 }
 
+/// `NestedEntry` 경로를 `reflow_cell_paragraph_by_path`가 받는 3-tuple 경로로 옮긴다.
+///
+/// `TableCell`은 `(control_index, cell_index, para_index)`로 그대로 옮기고, `TextBox`는
+/// cell_index 자리에 0을 채운다 — `get_cell_paragraphs_mut_by_path`가 글상자 항목의
+/// cell_index를 항상 0으로 검증하는 것과 같은 규약이다.
+fn nested_path_to_tuple_path(nested_path: &[NestedEntry]) -> Vec<(usize, usize, usize)> {
+    nested_path
+        .iter()
+        .map(|entry| match entry {
+            NestedEntry::TableCell {
+                control_index,
+                cell_index,
+                para_index,
+            } => (*control_index, *cell_index, *para_index),
+            NestedEntry::TextBox {
+                control_index,
+                para_index,
+            } => (*control_index, 0, *para_index),
+        })
+        .collect()
+}
+
 /// 필드 검색 결과
 #[derive(Debug)]
 pub struct FieldInfo {
@@ -761,7 +783,30 @@ impl DocumentCore {
 
     /// 셀 필드의 텍스트를 교체한다 (셀의 첫 문단 텍스트를 value로 대체).
     /// 중첩 표를 재귀적으로 탐색하여 임의 깊이를 지원한다.
+    ///
+    /// 텍스트 교체 자체는 [`Self::set_cell_field_text_raw`]에 위임하고, 성공하면 값 길이
+    /// 변화로 줄바꿈 경계가 달라졌을 수 있는 line_segs를 `reflow_cell_paragraph_by_path`로
+    /// 재계산한다 — 이 재계산이 없으면 line_segs가 시프트만 된 채 stale하게 남아 저장
+    /// 파일에 그대로 직렬화된다(재파싱 시 rhwp 자신도 저장된 line_segs를 그대로 신뢰한다).
     fn set_cell_field_text(
+        &mut self,
+        location: &FieldLocation,
+        value: &str,
+    ) -> Result<(), HwpError> {
+        self.set_cell_field_text_raw(location, value)?;
+        let reflow_path = nested_path_to_tuple_path(&location.nested_path);
+        if let Some(&(_, _, cell_para_idx)) = reflow_path.last() {
+            self.reflow_cell_paragraph_by_path(
+                location.section_index,
+                location.para_index,
+                &reflow_path,
+                cell_para_idx,
+            );
+        }
+        Ok(())
+    }
+
+    fn set_cell_field_text_raw(
         &mut self,
         location: &FieldLocation,
         value: &str,
@@ -900,10 +945,39 @@ impl DocumentCore {
 
     /// 필드 위치에서 텍스트를 교체한다.
     ///
+    /// 텍스트 교체 자체는 [`Self::set_field_text_at_raw`]에 위임하고, 성공하면 값 길이
+    /// 변화로 줄바꿈 경계가 달라졌을 수 있는 line_segs를 재계산한다 — 중첩 경로(표 셀/
+    /// 글상자)가 있으면 `reflow_cell_paragraph_by_path`, 본문 최상위 문단이면
+    /// `reflow_paragraph`를 쓴다. 이 재계산이 없으면 line_segs가 시프트만 된 채 stale하게
+    /// 남아 저장 파일에 그대로 직렬화된다(재파싱 시 rhwp 자신도 저장된 line_segs를 그대로
+    /// 신뢰한다).
+    fn set_field_text_at(
+        &mut self,
+        location: &FieldLocation,
+        field_range_index: usize,
+        value: &str,
+    ) -> Result<(), HwpError> {
+        self.set_field_text_at_raw(location, field_range_index, value)?;
+        if location.nested_path.is_empty() {
+            self.reflow_paragraph(location.section_index, location.para_index);
+        } else {
+            let reflow_path = nested_path_to_tuple_path(&location.nested_path);
+            if let Some(&(_, _, cell_para_idx)) = reflow_path.last() {
+                self.reflow_cell_paragraph_by_path(
+                    location.section_index,
+                    location.para_index,
+                    &reflow_path,
+                    cell_para_idx,
+                );
+            }
+        }
+        Ok(())
+    }
+
     /// delete_text_at + insert_text_at를 사용하여 char_shapes, line_segs,
     /// range_tags, char_count 등 모든 메타데이터를 올바르게 시프트한다.
     /// (직접 para.text 조작 시 메타데이터 불일치로 한컴 "파일 손상" 발생 — #838)
-    fn set_field_text_at(
+    fn set_field_text_at_raw(
         &mut self,
         location: &FieldLocation,
         field_range_index: usize,
@@ -2911,5 +2985,125 @@ mod tests {
         assert_eq!(updated.text, "새값");
         assert_eq!(updated.char_count, 3);
         assert_eq!(updated.char_offsets, vec![0, 1]);
+    }
+
+    /// 12pt(=1200 HWPUNIT) CJK 폰트 하나짜리 doc_info — reflow 폭 계산에 쓰인다.
+    fn doc_info_with_12pt_char_shape() -> crate::model::document::DocInfo {
+        let mut doc_info = crate::model::document::DocInfo::default();
+        doc_info.char_shapes.push(crate::model::style::CharShape {
+            base_size: 1200, // 12pt → hwpunit_to_px(1200, 96) = 16px
+            ratios: [100; 7],
+            ..Default::default()
+        });
+        doc_info
+    }
+
+    /// [결함 회귀] 셀 필드(가상 필드) 값 교체로 줄바꿈 경계가 바뀌면 line_segs도
+    /// 같이 재계산되어야 한다. 수정 전에는 insert_text_at/delete_text_at가 기존
+    /// line_segs의 text_start만 시프트할 뿐 줄 수를 다시 계산하지 않아, 원래 비어
+    /// 있던 line_segs가 편집 후에도 그대로 비어 있었다(즉 이 테스트는 수정 전
+    /// 코드에서 실패한다).
+    #[test]
+    fn set_cell_field_text_reflows_line_segs_on_wrap_change() {
+        use crate::model::paragraph::CharShapeRef;
+
+        let cell_para = Paragraph {
+            char_shapes: vec![CharShapeRef {
+                start_pos: 0,
+                char_shape_id: 0,
+            }],
+            ..Default::default()
+        };
+        let table = Table {
+            cells: vec![Cell {
+                field_name: Some("셀필드".into()),
+                // 2글자(16px×2=32px)만 들어가는 좁은 셀 — CJK 8글자 값이면 4줄로 접혀야 한다.
+                width: 2400,
+                paragraphs: vec![cell_para],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let parent_para = Paragraph {
+            controls: vec![Control::Table(Box::new(table))],
+            ..Default::default()
+        };
+
+        let mut core = DocumentCore::new_empty();
+        core.document.doc_info = doc_info_with_12pt_char_shape();
+        core.document.sections.push(Section {
+            paragraphs: vec![parent_para],
+            ..Default::default()
+        });
+
+        let location = FieldLocation {
+            section_index: 0,
+            para_index: 0,
+            nested_path: vec![NestedEntry::TableCell {
+                control_index: 0,
+                cell_index: 0,
+                para_index: 0,
+            }],
+        };
+
+        core.set_cell_field_text(&location, "동서남북가나다라")
+            .unwrap();
+
+        let Control::Table(table) = &core.document.sections[0].paragraphs[0].controls[0] else {
+            panic!("expected table control");
+        };
+        let updated = &table.cells[0].paragraphs[0];
+        assert_eq!(updated.text, "동서남북가나다라");
+        assert!(
+            updated.line_segs.len() >= 2,
+            "셀 폭(32px)에 CJK 8글자가 들어가려면 line_segs가 여러 줄로 재계산돼야 하는데 \
+             {}줄로 남아 있음 (stale line_segs 결함)",
+            updated.line_segs.len()
+        );
+    }
+
+    /// [결함 회귀] 본문 최상위(비-셀) ClickHere 필드도 값 교체 후 line_segs가
+    /// 재계산돼야 한다 — `nested_path`가 비어 있는 경로는 `reflow_paragraph`로
+    /// 처리한다(셀/글상자 전용 `reflow_cell_paragraph_by_path`로는 못 덮는 경로).
+    #[test]
+    fn set_field_text_at_reflows_top_level_paragraph_on_wrap_change() {
+        // line_segs를 일부러 비워 둔다 — 수정 전 코드는 insert_text_at/delete_text_at가
+        // 기존 line_segs의 text_start만 시프트할 뿐 새로 만들지 않으므로, 편집 후에도
+        // 계속 비어 있으면 결함이 재발한 것이다.
+        let para = Paragraph {
+            text: "AB".into(),
+            controls: vec![make_field_control(1)],
+            field_ranges: vec![FieldRange {
+                start_char_idx: 0,
+                end_char_idx: 2,
+                control_idx: 0,
+                ..Default::default()
+            }],
+            char_offsets: vec![0, 1],
+            char_count: 3,
+            ..Default::default()
+        };
+
+        let mut core = DocumentCore::new_empty();
+        core.document.sections.push(Section {
+            paragraphs: vec![para],
+            ..Default::default()
+        });
+
+        let location = FieldLocation {
+            section_index: 0,
+            para_index: 0,
+            nested_path: Vec::new(),
+        };
+
+        core.set_field_text_at(&location, 0, "동서남북가나다라")
+            .unwrap();
+
+        let updated = &core.document.sections[0].paragraphs[0];
+        assert_eq!(updated.text, "동서남북가나다라");
+        assert!(
+            !updated.line_segs.is_empty(),
+            "top-level 필드 편집 후 line_segs가 계산돼야 함(수정 전 코드는 빈 채로 남음)"
+        );
     }
 }
