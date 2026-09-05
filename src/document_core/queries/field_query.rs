@@ -3062,6 +3062,77 @@ mod tests {
         );
     }
 
+    /// [결함 회귀] 병합 셀(col_span>1)의 필드도 값 교체 후 line_segs가 재계산되어야
+    /// 한다. `cell_metrics_for_control`은 `Cell.width`를 그대로 읽으므로(병합 셀은
+    /// 이미 병합된 폭이 그 필드에 저장돼 있다) col_span/row_span 자체는 폭 계산에
+    /// 관여하지 않지만, 과거 Java 쪽 `HwpxFieldFiller.stripStaleLineSegArray`가 병합
+    /// 셀 필드(`신청인_상호`, 2026-08-14)에서만 재래핑이 부정확해지는 회귀를 겪었던
+    /// 만큼, 이 리플로우 경로가 병합 셀에서도 동일하게 동작함을 직접 못박아 둔다.
+    #[test]
+    fn set_cell_field_text_reflows_line_segs_for_merged_cell() {
+        use crate::model::paragraph::CharShapeRef;
+
+        let cell_para = Paragraph {
+            char_shapes: vec![CharShapeRef {
+                start_pos: 0,
+                char_shape_id: 0,
+            }],
+            ..Default::default()
+        };
+        let table = Table {
+            cells: vec![Cell {
+                field_name: Some("병합셀필드".into()),
+                // 2글자(16px×2=32px)만 들어가는 좁은 셀 — CJK 8글자 값이면 4줄로 접혀야 한다.
+                width: 2400,
+                col_span: 2,
+                row_span: 1,
+                paragraphs: vec![cell_para],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let parent_para = Paragraph {
+            controls: vec![Control::Table(Box::new(table))],
+            ..Default::default()
+        };
+
+        let mut core = DocumentCore::new_empty();
+        core.document.doc_info = doc_info_with_12pt_char_shape();
+        core.document.sections.push(Section {
+            paragraphs: vec![parent_para],
+            ..Default::default()
+        });
+
+        let location = FieldLocation {
+            section_index: 0,
+            para_index: 0,
+            nested_path: vec![NestedEntry::TableCell {
+                control_index: 0,
+                cell_index: 0,
+                para_index: 0,
+            }],
+        };
+
+        core.set_cell_field_text(&location, "동서남북가나다라")
+            .unwrap();
+
+        let Control::Table(table) = &core.document.sections[0].paragraphs[0].controls[0] else {
+            panic!("expected table control");
+        };
+        assert_eq!(
+            table.cells[0].col_span, 2,
+            "col_span은 리플로우 후에도 보존돼야 함"
+        );
+        let updated = &table.cells[0].paragraphs[0];
+        assert_eq!(updated.text, "동서남북가나다라");
+        assert!(
+            updated.line_segs.len() >= 2,
+            "병합 셀(col_span=2, 폭 32px)에 CJK 8글자가 들어가려면 line_segs가 여러 줄로 \
+             재계산돼야 하는데 {}줄로 남아 있음 (stale line_segs 결함)",
+            updated.line_segs.len()
+        );
+    }
+
     /// [결함 회귀] 본문 최상위(비-셀) ClickHere 필드도 값 교체 후 line_segs가
     /// 재계산돼야 한다 — `nested_path`가 비어 있는 경로는 `reflow_paragraph`로
     /// 처리한다(셀/글상자 전용 `reflow_cell_paragraph_by_path`로는 못 덮는 경로).
