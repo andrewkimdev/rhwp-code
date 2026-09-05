@@ -997,6 +997,19 @@ impl DocumentCore {
         let start_idx = fr.start_char_idx;
         let count = fr.end_char_idx.saturating_sub(start_idx);
 
+        // 기존 컨텐츠 런의 CharShape(누름틀 파란 채움색 등)를 삭제 전에 캡처한다.
+        // delete_text_at의 keep-last dedup(#4162)와 insert_text_at의 경계 시프트는
+        // 각자 자기 맥락(undo 후 원문 서식 보존, 경계 앞 삽입)에서는 올바르지만
+        // 필드 교체에서 나란히 거치면 채운 값이 문단의 주변 서식을 이어받는다.
+        // 아래 되돌림이 없으면 값은 주변 서식으로 나고, 컨텐츠 서식 런은 값 뒤로
+        // 밀려 빈 런으로 남는다(appccr1dlm HSCODE 실측). delete_text_at/insert_text_at
+        // 규칙 자체는 두 맥락이 요구가 반대이므로 손대지 않고 호출부에서만 복원한다.
+        let content_shape_id = if count > 0 {
+            para.char_shape_id_at(start_idx)
+        } else {
+            None
+        };
+
         // 기존 텍스트 삭제 (char_shapes, line_segs, range_tags 등 자동 시프트)
         if count > 0 {
             para.delete_text_at(start_idx, count);
@@ -1005,6 +1018,9 @@ impl DocumentCore {
         // 새 값 삽입
         if !value.is_empty() {
             para.insert_text_at(start_idx, value);
+            if let Some(shape_id) = content_shape_id {
+                para.apply_char_shape_range(start_idx, start_idx + value.chars().count(), shape_id);
+            }
         }
 
         // field_ranges 갱신: start와 end를 명시적으로 재설정
@@ -2524,7 +2540,7 @@ mod tests {
     use super::*;
     use crate::model::control::{Control, Field, FieldType};
     use crate::model::document::Section;
-    use crate::model::paragraph::{FieldRange, Paragraph};
+    use crate::model::paragraph::{CharShapeRef, FieldRange, Paragraph};
     use crate::model::table::{Cell, Table};
 
     fn make_field_control(ctrl_id: u32) -> Control {
@@ -2650,6 +2666,101 @@ mod tests {
         );
         let bytes = crate::serializer::body_text::serialize_section(&core.document.sections[0]);
         assert_ne!(bytes, vec![0xAB; 64]);
+    }
+
+    /// HSCODE(appccr1dlm) 스타일 누름틀 문단: FIELD_BEGIN/FIELD_END 경계 런은 주변
+    /// 서식(8, 검정), 필드 컨텐츠 런만 자기 서식(12, 파랑)을 가진다.
+    /// trailing은 필드 뒤에 남는 같은 문단 텍스트다 — 있으면 delete_text_at의
+    /// keep-last dedup(#4162), 없으면 insert_text_at의 경계 시프트가 컨텐츠
+    /// 서식을 주변 서식으로 바꿔치기하는 경로가 된다. 둘 다 채운 값이 주변
+    /// 서식을 이어받는 같은 결함이므로 두 경우를 각각 잠근다.
+    fn hscode_shaped_field_para(trailing: &str) -> Paragraph {
+        let mut control = make_field_control(100);
+        if let Control::Field(field) = &mut control {
+            field.ctrl_data_name = Some("HSCODE".to_string());
+        }
+        let text = format!("HS{}", trailing);
+        let char_count = text.chars().count();
+        Paragraph {
+            // 스트림: [FIELD_BEGIN 8u] H S [FIELD_END 8u] …trailing
+            char_offsets: (0..char_count).map(|i| 8 + i as u32).collect(),
+            char_shapes: vec![
+                CharShapeRef {
+                    start_pos: 0,
+                    char_shape_id: 8,
+                },
+                CharShapeRef {
+                    start_pos: 8,
+                    char_shape_id: 12,
+                },
+                CharShapeRef {
+                    start_pos: 10,
+                    char_shape_id: 8,
+                },
+            ],
+            controls: vec![control],
+            field_ranges: vec![FieldRange {
+                start_char_idx: 0,
+                end_char_idx: 2,
+                control_idx: 0,
+                ..Default::default()
+            }],
+            char_count: 8 + char_count as u32 + 8 + 1, // begin + 본문 + end + 끝 마커
+            text,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn set_field_value_by_id_preserves_content_char_shape_with_trailing_text() {
+        // 필드 뒤에 원문이 남는 문단에서 값을 채우면, 새 값은 컨텐츠 런의 원래
+        // 서식(12)을 유지하고 뒤의 원문은 주변 서식(8)을 유지해야 한다.
+        let mut core = core_with(vec![hscode_shaped_field_para("TAIL")]);
+        core.set_field_value_by_id(100, "8527").unwrap();
+        let para = &core.document.sections[0].paragraphs[0];
+        assert_eq!(para.text, "8527TAIL");
+        for i in 0..4 {
+            assert_eq!(
+                para.char_shape_id_at(i),
+                Some(12),
+                "채운 값의 {}번째 글자가 필드 서식을 이어받아야 한다",
+                i
+            );
+        }
+        for i in 4..8 {
+            assert_eq!(
+                para.char_shape_id_at(i),
+                Some(8),
+                "필드 뒤 원문의 {}번째 글자는 주변 서식 그대로다",
+                i
+            );
+        }
+    }
+
+    #[test]
+    fn set_field_value_by_name_preserves_content_char_shape_at_paragraph_end() {
+        // HSCODE 실측 경로: 필드가 문단 끝에 있다. 컨텐츠 서식(12) 런이 값 뒤로
+        // 밀려 빈 파란 런만 남는 회귀를 잠근다.
+        let mut core = core_with(vec![hscode_shaped_field_para("")]);
+        core.set_field_value_by_name("HSCODE", "8527").unwrap();
+        let para = &core.document.sections[0].paragraphs[0];
+        assert_eq!(para.text, "8527");
+        for i in 0..4 {
+            assert_eq!(
+                para.char_shape_id_at(i),
+                Some(12),
+                "채운 값의 {}번째 글자가 필드 서식을 이어받아야 한다",
+                i
+            );
+        }
+        // 서식 경계가 값 끝에서 끊겨야 한다 — 뒤로 밀린 빈 12 런이 남으면
+        // 저장 시 값 없는 <hp:t/> 런이 직렬화된다.
+        let refs: Vec<(u32, u32)> = para
+            .char_shapes
+            .iter()
+            .map(|cs| (cs.start_pos, cs.char_shape_id))
+            .collect();
+        assert_eq!(refs, vec![(0, 8), (8, 12)]);
     }
 
     /// 이름이 `name` 인 셀 하나를 담은 표 문단.
