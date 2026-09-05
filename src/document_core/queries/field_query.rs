@@ -1004,10 +1004,21 @@ impl DocumentCore {
         // 아래 되돌림이 없으면 값은 주변 서식으로 나고, 컨텐츠 서식 런은 값 뒤로
         // 밀려 빈 런으로 남는다(appccr1dlm HSCODE 실측). delete_text_at/insert_text_at
         // 규칙 자체는 두 맥락이 요구가 반대이므로 손대지 않고 호출부에서만 복원한다.
+        //
+        // 빈 필드(count==0)는 적재 정규화가 안내문을 지운 실제 템플릿 워크플로다 —
+        // 이때 컨텐츠 런의 서식은 #3545 의 guide_residue 가 기억하므로 그것을 쓴다.
+        // char_shapes 가 비어 있으면 경계를 새로 만들면 안 되므로 되돌리지 않는다.
         let content_shape_id = if count > 0 {
             para.char_shape_id_at(start_idx)
         } else {
-            None
+            match para.controls.get(fr.control_idx) {
+                Some(Control::Field(f)) => f
+                    .guide_residue
+                    .as_ref()
+                    .filter(|_| !para.char_shapes.is_empty())
+                    .map(|r| r.char_shape_id),
+                _ => None,
+            }
         };
 
         // 기존 텍스트 삭제 (char_shapes, line_segs, range_tags 등 자동 시프트)
@@ -2538,7 +2549,7 @@ pub(crate) fn json_escape(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::control::{Control, Field, FieldType};
+    use crate::model::control::{Control, Field, FieldType, GuideResidue};
     use crate::model::document::Section;
     use crate::model::paragraph::{CharShapeRef, FieldRange, Paragraph};
     use crate::model::table::{Cell, Table};
@@ -2755,6 +2766,63 @@ mod tests {
         }
         // 서식 경계가 값 끝에서 끊겨야 한다 — 뒤로 밀린 빈 12 런이 남으면
         // 저장 시 값 없는 <hp:t/> 런이 직렬화된다.
+        let refs: Vec<(u32, u32)> = para
+            .char_shapes
+            .iter()
+            .map(|cs| (cs.start_pos, cs.char_shape_id))
+            .collect();
+        assert_eq!(refs, vec![(0, 8), (8, 12)]);
+    }
+
+    #[test]
+    fn set_field_value_on_guide_cleared_field_restores_residue_shape() {
+        // 실제 템플릿 워크플로: 적재 정규화(#3380)가 안내문("HS")==본문으로 보고 지운
+        // 빈 누름틀을 채운다. 컨텐츠 런의 서식(12)은 guide_residue(#3545)에 남으므로
+        // 채운 값이 그 서식을 이어받아야 한다 — 첫 글자부터 주변 서식(8)을 물으면
+        // 실패다.
+        let mut control = make_field_control(100);
+        if let Control::Field(field) = &mut control {
+            field.ctrl_data_name = Some("HSCODE".to_string());
+            field.guide_residue = Some(GuideResidue {
+                text: "HS".to_string(),
+                char_shape_id: 12,
+            });
+        }
+        let para = Paragraph {
+            // 정규화 직후 상태: 본문 비었고, 컨텐츠 서식 런({8,12})만 빈 자리에 남는다.
+            text: String::new(),
+            controls: vec![control],
+            field_ranges: vec![FieldRange {
+                start_char_idx: 0,
+                end_char_idx: 0,
+                control_idx: 0,
+                ..Default::default()
+            }],
+            char_count: 8 + 8 + 1, // begin + end + 끝 마커
+            char_shapes: vec![
+                CharShapeRef {
+                    start_pos: 0,
+                    char_shape_id: 8,
+                },
+                CharShapeRef {
+                    start_pos: 8,
+                    char_shape_id: 12,
+                },
+            ],
+            ..Default::default()
+        };
+        let mut core = core_with(vec![para]);
+        core.set_field_value_by_name("HSCODE", "8527").unwrap();
+        let para = &core.document.sections[0].paragraphs[0];
+        assert_eq!(para.text, "8527");
+        for i in 0..4 {
+            assert_eq!(
+                para.char_shape_id_at(i),
+                Some(12),
+                "채운 값의 {}번째 글자가 잔재가 기억한 필드 서식을 이어받아야 한다",
+                i
+            );
+        }
         let refs: Vec<(u32, u32)> = para
             .char_shapes
             .iter()
