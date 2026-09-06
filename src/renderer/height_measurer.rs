@@ -1163,6 +1163,63 @@ impl HeightMeasurer {
             .fold(0.0f64, f64::max)
     }
 
+    /// [#3386 카브아웃 안전장치] `table_layout.rs`의 동명 함수와 동일 술어 —
+    /// 이 표 안에 `target_cell`과 "똑같이 완전히 빈 문단 + 거의 같은 저장 lineseg
+    /// 높이"를 갖고 있으면서 **선언 높이가 0이 아닌** 짝(쌍둥이) 셀이 있는지 확인한다.
+    /// 있으면 이 행의 선언 0은 표 전체가 공유하는 "작은 폰트의 완전한 em 줄박스
+    /// 빈 칸" 관례가 이 행에서만 손상된 결과일 가능성이 높다(#1835 stale-height
+    /// 합성 표 실측: 4행 중 row0/1/3 은 동일 lineseg=1300·선언 height=1848 인데
+    /// row2 만 height=0 으로 훼손 — 한글 오라클은 이 행도 다른 행처럼 재성장시킨다).
+    /// 그런 짝이 하나도 없으면(ccrlic1dno #BLOCK rowAddr=4: vertsize=600 은 표
+    /// 전체에서 이 행뿐, 다른 빈 칸은 전부 vertsize=1000) 표 안에서 유일한
+    /// 패턴이므로 실제로 접힌 spacer 행일 가능성이 높다.
+    fn table_has_accommodated_empty_line_twin(
+        table: &crate::model::table::Table,
+        target_cell: &crate::model::table::Cell,
+        row_count: usize,
+    ) -> bool {
+        let Some(target_lh) = target_cell
+            .paragraphs
+            .iter()
+            .find_map(|p| p.line_segs.first())
+            .map(|ls| ls.line_height)
+        else {
+            return false;
+        };
+        if target_lh <= 0 {
+            return false;
+        }
+        table.cells.iter().any(|c| {
+            if c.row == target_cell.row && c.col == target_cell.col {
+                return false;
+            }
+            if c.row_span != 1 || (c.row as usize) >= row_count {
+                return false;
+            }
+            // 선언 값이 없거나(sentinel) 그 자신도 0이면 짝이 될 수 없다.
+            if c.height >= 0x8000_0000 || c.height == 0 {
+                return false;
+            }
+            if !c
+                .paragraphs
+                .iter()
+                .all(|p| p.text.trim().is_empty() && p.controls.is_empty())
+            {
+                return false;
+            }
+            let Some(lh) = c
+                .paragraphs
+                .iter()
+                .find_map(|p| p.line_segs.first())
+                .map(|ls| ls.line_height)
+            else {
+                return false;
+            };
+            let tol = (target_lh / 10).max(30); // ±10%, 최소 30HU
+            (lh - target_lh).abs() <= tol
+        })
+    }
+
     /// 표의 높이를 측정한다 (depth 기반 재귀).
     fn measure_table_impl(
         &self,
@@ -1249,10 +1306,19 @@ impl HeightMeasurer {
             }
         }
 
+        // [#3386 카브아웃 미러] 3단계 기본값(hwpunit_to_px(400,dpi)) 대상에서 제외할
+        // 행 — table_layout.rs resolve_row_heights_with_common_fit 과 동일 술어.
+        // row_span==1 셀을 직접 갖고 있고, 그 셀들이 전부 "선언 0 + 콘텐츠 없음"인
+        // 행(편집기가 구조만 남기고 접어둔 spacer 행)을 표시한다.
+        const DECLARED_ZERO_EPS_PX: f64 = 0.5;
+        let mut row_direct_cell_count = vec![0u32; row_count];
+        let mut row_zero_empty_cell_count = vec![0u32; row_count];
+
         // 2단계: 셀 내 실제 컨텐츠 높이 계산 (layout_table과 동일)
         for cell in &table.cells {
             if cell.row_span == 1 && (cell.row as usize) < row_count {
                 let r = cell.row as usize;
+                row_direct_cell_count[r] += 1;
                 // [Task #1785] 셀 패딩 — aim=false 는 layout 의 레거시 보존값 규칙
                 // (Cell::effective_padding)과 통일: 단순 table.padding 폴백은 cell > table
                 // 보존값 케이스에서 layout 렌더와 어긋나 표 높이가 틀어진다 (36381023
@@ -1619,11 +1685,31 @@ impl HeightMeasurer {
                 // 비정상 padding 이 row_heights 를 확장하면 TAC 표 비례 축소가 모든 행에
                 // 영향. content_height 가 IR cell.height 안에 들어가면 IR 권위 우선.
                 let total_pad = pad_top + pad_bottom;
-                let cell_h_px = if cell.height < 0x80000000 {
+                let cell_height_declared_valid = cell.height < 0x8000_0000;
+                let cell_h_px = if cell_height_declared_valid {
                     hwpunit_to_px(cell.height as i32, self.dpi)
                 } else {
                     0.0
                 };
+                // [#3386 카브아웃 미러] 선언 높이가 0(정확히 declared, sentinel 미사용)이고
+                // 문단에 실제 콘텐츠(텍스트·컨트롤)가 없는 셀은, 저장 LINE_SEG 가 있어도
+                // 그 저장 줄높이(위 content_height 계산의 text_height)를 신뢰하지 않고
+                // 선언 0을 그대로 따른다 — layout 의 `cell_paragraphs_genuinely_empty`
+                // 카브아웃과 동일 술어를 이 측정(MeasuredTable) 경로에도 미러링한다.
+                // 이 미러가 없으면 `mt` 우선 렌더 경로(TAC 표는 measured 행높이를 그대로
+                // 사용)에서 layout 쪽 카브아웃이 적용될 기회조차 없다 (ccrlic1dno #BLOCK
+                // 표 rowAddr=4: cellSz height=0 + 빈 `<hp:t/>` + 저장 lineseg(vertsize=600)
+                // → 측정 11.3px, 한글 실측 ~0px).
+                let is_declared_zero_and_empty = cell_height_declared_valid
+                    && cell_h_px <= DECLARED_ZERO_EPS_PX
+                    && cell
+                        .paragraphs
+                        .iter()
+                        .all(|p| p.text.trim().is_empty() && p.controls.is_empty())
+                    && !Self::table_has_accommodated_empty_line_twin(table, cell, row_count);
+                if is_declared_zero_and_empty {
+                    row_zero_empty_cell_count[r] += 1;
+                }
                 // [Task #2221] layout resolve_row_heights 의 relaxed_pad 미러 —
                 // 중첩(depth>0)/TAC 표에서 저장 LINE_SEG 보유 텍스트 셀의 줄 흐름은
                 // pad 미가산 (#2211과 동일 규칙). layout 만 정정하고 측정을 남겨두면
@@ -1641,7 +1727,9 @@ impl HeightMeasurer {
                         .paragraphs
                         .iter()
                         .all(|p| !crate::renderer::para_has_no_stored_line_segs(p));
-                let required_height = if cell_h_px > 0.0
+                let required_height = if is_declared_zero_and_empty {
+                    cell_h_px
+                } else if cell_h_px > 0.0
                     && total_pad > cell_h_px * 0.5
                     && content_height <= cell_h_px
                 {
@@ -2088,10 +2176,15 @@ impl HeightMeasurer {
             }
         }
 
-        // 3단계: 높이가 0인 행은 기본값 적용
-        for h in &mut row_heights {
-            if *h <= 0.0 {
-                *h = hwpunit_to_px(400, self.dpi);
+        // 3단계: 높이가 0인 행은 기본값 적용 — 단, row_span==1 직접 셀을 갖고 있고
+        // 그 전부가 "선언 0 + 콘텐츠 없음"으로 판정된 행(위 2단계 카브아웃)은
+        // 편집기가 의도적으로 접어둔 spacer 행이므로 기본값을 강제하지 않는다
+        // (table_layout.rs resolve_row_heights_with_common_fit 3단계 미러).
+        for r in 0..row_count {
+            let is_collapsed_spacer_row = row_direct_cell_count[r] > 0
+                && row_direct_cell_count[r] == row_zero_empty_cell_count[r];
+            if row_heights[r] <= 0.0 && !is_collapsed_spacer_row {
+                row_heights[r] = hwpunit_to_px(400, self.dpi);
             }
         }
 

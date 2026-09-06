@@ -1491,6 +1491,71 @@ impl LayoutEngine {
                 .all(|p| !crate::renderer::para_has_no_stored_line_segs(p))
     }
 
+    /// [#3386 카브아웃] 셀의 모든 문단이 실제 콘텐츠(텍스트·컨트롤) 없이 완전히
+    /// 비어 있는지 — `cell_has_stored_line_segs`가 참이어도(저장 LINE_SEG 는
+    /// 있지만 그 줄이 담은 텍스트/컨트롤이 없는 경우), 그 저장 줄높이를 콘텐츠
+    /// 성장의 근거로 삼지 않기 위한 술어. 편집 흔적으로 구조만 남기고
+    /// `cellSz height="0"`으로 접어둔 spacer 행(ccrlic1dno #BLOCK 표 rowAddr=4)이
+    /// 대표 사례 — 빈 `<hp:t/>`도 저장 lineseg(vertsize=600)를 들고 있다.
+    fn cell_paragraphs_genuinely_empty(cell: &crate::model::table::Cell) -> bool {
+        cell.paragraphs
+            .iter()
+            .all(|p| p.text.trim().is_empty() && p.controls.is_empty())
+    }
+
+    /// [#3386 카브아웃 안전장치] 이 표 안에 `target_cell` 과 "똑같이 완전히 빈 문단 +
+    /// 거의 같은 저장 lineseg 높이"를 갖고 있으면서 **선언 높이가 0이 아닌** 짝(쌍둥이)
+    /// 셀이 있는지 — 있으면 이 행의 선언 0은 표 전체가 공유하는 "작은 폰트의 완전한
+    /// em 줄박스 빈 칸" 관례가 이 행에서만 손상된 결과일 가능성이 높다(#1835
+    /// stale-height 합성 표 실측: 4행 중 row0/1/3 은 동일 lineseg=1300·선언
+    /// height=1848 인데 row2 만 height=0 으로 훼손 — 한글 오라클은 이 행도 다른
+    /// 행처럼 재성장시킨다). 그런 짝이 하나도 없으면(ccrlic1dno #BLOCK rowAddr=4:
+    /// vertsize=600 은 표 전체에서 이 행뿐, 다른 빈 칸은 전부 vertsize=1000) 표
+    /// 안에서 유일한 패턴이므로 실제로 접힌 spacer 행일 가능성이 높다 — 카브아웃을
+    /// 적용해도 안전하다.
+    fn table_has_accommodated_empty_line_twin(
+        table: &crate::model::table::Table,
+        target_cell: &crate::model::table::Cell,
+        row_count: usize,
+    ) -> bool {
+        let Some(target_lh) = target_cell
+            .paragraphs
+            .iter()
+            .find_map(|p| p.line_segs.first())
+            .map(|ls| ls.line_height)
+        else {
+            return false;
+        };
+        if target_lh <= 0 {
+            return false;
+        }
+        table.cells.iter().any(|c| {
+            if c.row == target_cell.row && c.col == target_cell.col {
+                return false;
+            }
+            if c.row_span != 1 || (c.row as usize) >= row_count {
+                return false;
+            }
+            // 선언 값이 없거나(sentinel) 그 자신도 0이면 짝이 될 수 없다.
+            if c.height >= 0x8000_0000 || c.height == 0 {
+                return false;
+            }
+            if !Self::cell_paragraphs_genuinely_empty(c) {
+                return false;
+            }
+            let Some(lh) = c
+                .paragraphs
+                .iter()
+                .find_map(|p| p.line_segs.first())
+                .map(|ls| ls.line_height)
+            else {
+                return false;
+            };
+            let tol = (target_lh / 10).max(30); // ±10%, 최소 30HU
+            (lh - target_lh).abs() <= tol
+        })
+    }
+
     /// [#3386] MeasuredTable 행높이를 행별 저장 선언(cellSz)으로 교정한다.
     /// 발동 조건(전부 충족 시에만):
     /// - 모든 셀이 row_span==1 이고 저장 LINE_SEG 를 보유(#2211 술어)
@@ -1600,6 +1665,13 @@ impl LayoutEngine {
             }
         }
 
+        // [#3386 카브아웃] 3단계 기본값(hwpunit_to_px(400,dpi)) 대상에서 제외할 행 —
+        // row_span==1 셀을 직접 갖고 있고, 그 셀들이 전부 "선언 0 + 콘텐츠 없음"인
+        // 행(편집기가 구조만 남기고 접어둔 spacer 행)을 표시한다.
+        const DECLARED_ZERO_EPS_PX: f64 = 0.5;
+        let mut row_direct_cell_count = vec![0u32; row_count];
+        let mut row_zero_empty_cell_count = vec![0u32; row_count];
+
         // 1-b단계: 셀 내 실제 컨텐츠 높이 계산
         for cell in &table.cells {
             if table.local_resize_cols.contains(&cell.col) {
@@ -1609,6 +1681,18 @@ impl LayoutEngine {
                 let r = cell.row as usize;
                 let (pad_left, pad_right, pad_top, pad_bottom) =
                     self.resolve_cell_padding(cell, table);
+                let decl_h = if cell.height < 0x8000_0000 {
+                    hwpunit_to_px(cell.height as i32, self.dpi)
+                } else {
+                    f64::MAX
+                };
+                let is_declared_zero_and_empty = decl_h <= DECLARED_ZERO_EPS_PX
+                    && Self::cell_paragraphs_genuinely_empty(cell)
+                    && !Self::table_has_accommodated_empty_line_twin(table, cell, row_count);
+                row_direct_cell_count[r] += 1;
+                if is_declared_zero_and_empty {
+                    row_zero_empty_cell_count[r] += 1;
+                }
 
                 // LINE_SEG의 line_height에 이미 셀 내 중첩 표 높이가 반영되어 있으므로
                 // controls_height를 별도로 더하면 이중 계산됨
@@ -1620,6 +1704,15 @@ impl LayoutEngine {
                 let required_height = if cell.text_direction != 0 {
                     // 세로쓰기: line_seg.segment_width가 열의 세로 길이
                     self.calc_vertical_cell_content_height(&cell.paragraphs) + pad_top + pad_bottom
+                } else if is_declared_zero_and_empty {
+                    // [#3386 카브아웃] 선언 높이가 0이고 문단에 실제 콘텐츠(텍스트·
+                    // 컨트롤)가 없는 셀은, 저장 LINE_SEG 가 있어도 그 저장 줄높이를
+                    // 신뢰하지 않고 선언 0을 그대로 따른다. 빈 `<hp:t/>`도 편집기가
+                    // 남긴 저장 lineseg(예: vertsize=600)를 갖고 있어, 그 값을
+                    // 콘텐츠처럼 취급하면 한/글이 ~0px 로 접는 spacer 행이 rhwp 에서
+                    // 몇 px 부풀어 렌더된다 (ccrlic1dno #BLOCK 표 rowAddr=4 실측:
+                    // SVG 상 짝 없는 세로선 stub y 205.29→216.63).
+                    decl_h
                 } else {
                     let cell_w_px = hwpunit_to_px(cell.width as i32, self.dpi)
                         * self.render_table_width_scale(table);
@@ -1634,11 +1727,6 @@ impl LayoutEngine {
                     // cellSz 3.8px·lineseg 14.7px → 한글 PDF 실측 18.4px = 14.7+1.9×2).
                     // 선언이 줄 흐름을 수용하는 셀은 종전대로 pad 미가산 (#2211 유지).
                     let line_req = if relaxed_pad && Self::cell_has_stored_line_segs(cell) {
-                        let decl_h = if cell.height < 0x8000_0000 {
-                            hwpunit_to_px(cell.height as i32, self.dpi)
-                        } else {
-                            f64::MAX
-                        };
                         if line_based > decl_h + 1.5 {
                             // 한글 실좌표는 원(cellMargin) 상하 여백 가산 — resolve
                             // 축소 pad(0.9×2)가 아니라 저장 1.9×2 로 18.4px 재현.
@@ -1780,9 +1868,13 @@ impl LayoutEngine {
             }
         }
 
-        // 3단계: 높이 0인 행에 기본값
+        // 3단계: 높이 0인 행에 기본값 — 단, row_span==1 직접 셀을 갖고 있고 그
+        // 전부가 "선언 0 + 콘텐츠 없음"으로 판정된 행(위 1-b 단계의 카브아웃)은
+        // 편집기가 의도적으로 접어둔 spacer 행이므로 기본값을 강제하지 않는다.
         for r in 0..row_count {
-            if row_heights[r] <= 0.0 {
+            let is_collapsed_spacer_row = row_direct_cell_count[r] > 0
+                && row_direct_cell_count[r] == row_zero_empty_cell_count[r];
+            if row_heights[r] <= 0.0 && !is_collapsed_spacer_row {
                 row_heights[r] = hwpunit_to_px(400, self.dpi);
             }
         }
