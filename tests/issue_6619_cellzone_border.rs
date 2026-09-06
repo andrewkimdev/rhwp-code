@@ -5,7 +5,9 @@
 //! zone 에 대해 배경과 대각선만 그리고 네 변을 방출하지 않아, zone 만 참조하는 선이
 //! 통째로 사라지거나(축 ①), 셀 고유 테두리가 그대로 남는(축 ②) 결함이 있었다.
 //! 두 번째 커밋은 첫 수정이 병합 칸 끝 주소를 그리드 좌표로 오인해 반쪽 틀만 그리던
-//! 후속 결함을 고쳤다(축 ③).
+//! 후속 결함을 고쳤다(축 ③). 네 번째 축은 zone 끝 주소가 병합 칸의 **내부**를
+//! 가리킬 때 폴백 사각형이 표 맨아래까지 뻗어 실재하지 않는 칸 경계를 가로지르던
+//! 허상 세로선(ccrlic1dno 표 제목줄)의 가드다(축 ④).
 
 use rhwp::wasm_api::HwpDocument;
 use serde_json::Value;
@@ -229,5 +231,97 @@ fn issue_6619_cellzone_end_address_follows_merged_span() {
         full_width_red,
         "병합 span 무시 회귀 — zone 아래 변이 표 전체 폭(가장 긴 가로선의 ≥90%)까지 \
          가야 한다. max_horizontal_span={max_horizontal_span} red_lines={red_lines:?}"
+    );
+}
+
+/// 축 ④ — zone 끝 주소가 병합 칸의 **내부**(origin 아님)를 가리키면 폴백 사각형이
+/// 표 맨아래까지 뻗는다. 실제 문서(ccrlic1dno `#BLOCK` 표)에서 zone 은 2열 분할
+/// 행들을 덮다가 전폭 병합 제목줄 안에서 끝난다. 종전에는 이 폴백이 제목줄 한복판의
+/// 존재할 수 없는 열 경계까지 zone 오른쪽 변을 그려 제목 텍스트를 가로지르는 허상
+/// 세로선을 만들었다. zone 세로 변은 병합 칸이 경계를 가로지르는 행에서 멈춰야 한다.
+#[test]
+fn cellzone_border_skips_phantom_edge_inside_merged_cell() {
+    let mut doc = HwpDocument::create_empty();
+    // 3행 4열 — 행 0·1은 4칸 모두 분할, 행 2는 전폭 병합 제목줄.
+    let created = doc
+        .create_table_ex_native(
+            0,
+            0,
+            0,
+            3,
+            4,
+            true,
+            Some(&[10000, 10000, 10000, 10000]),
+            Some(&[7200, 7200, 20000]),
+        )
+        .expect("표 생성");
+    let created: Value = serde_json::from_str(&created).expect("createTable JSON");
+    let ppi = created["paraIdx"].as_u64().expect("paraIdx") as u32;
+    let ci = created["controlIdx"].as_u64().expect("controlIdx") as u32;
+
+    // 행 2 를 전폭 병합 — 이 행의 (2,1) 주소엔 셀 origin 이 없다.
+    doc.merge_table_cells(0, ppi, ci, 2, 0, 2, 3)
+        .expect("제목줄 병합");
+
+    // zone: (0,0)~(2,1) — 끝 주소 (2,1) 은 병합 칸 내부. 오른쪽 변만 빨간 실선.
+    let zone_props = r##"{
+        "borderFillId":1,
+        "borderLeft":{"type":0,"width":0,"color":"#000000"},
+        "borderRight":{"type":1,"width":0,"color":"#FF0000"},
+        "borderTop":{"type":0,"width":0,"color":"#000000"},
+        "borderBottom":{"type":0,"width":0,"color":"#000000"},
+        "fillType":"none",
+        "centerLine":"NONE"
+    }"##;
+    doc.set_cell_zone_properties(0, ppi, ci, 0, 0, 2, 1, zone_props)
+        .expect("cellzone 테두리 적용");
+
+    let svg = doc.render_page_svg_native(0).expect("SVG 렌더");
+    let lines = rendered_lines(&svg);
+    let red_lines: Vec<_> = lines.iter().filter(|(.., c)| c == "#ff0000").collect();
+    assert!(
+        !red_lines.is_empty(),
+        "zone 의 빨간 오른쪽 변이 전혀 렌더되지 않음 — 과도 억제. lines={lines:?}"
+    );
+
+    // 표 기하: 가로선(셀 고유 검정)의 y 로 병합줄 상단(y_mid)과 표 하단(y_bottom)을 잡는다.
+    let mut horizontal_ys: Vec<f64> = lines
+        .iter()
+        .filter(|(x1, y1, x2, y2, _)| (y1 - y2).abs() < 0.5 && (x1 - x2).abs() > 1.0)
+        .map(|(_, y1, _, _, _)| *y1)
+        .collect();
+    horizontal_ys.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    horizontal_ys.dedup_by(|a, b| (*a - *b).abs() < 0.5);
+    assert!(
+        horizontal_ys.len() >= 2,
+        "표 행 경계 가로선이 최소 2개 필요. lines={lines:?}"
+    );
+    let y_bottom = horizontal_ys[horizontal_ys.len() - 1];
+    let y_mid = horizontal_ys[horizontal_ys.len() - 2]; // 병합 제목줄의 상단 경계
+
+    let red_verticals: Vec<_> = red_lines
+        .iter()
+        .filter(|(x1, y1, x2, y2, _)| (x1 - x2).abs() < 0.5 && (y1 - y2).abs() > 1.0)
+        .collect();
+    assert!(
+        !red_verticals.is_empty(),
+        "빨간 세로선이 없음 — zone 오른쪽 변 소실. red_lines={red_lines:?}"
+    );
+    for (x1, y1, x2, y2, _) in &red_verticals {
+        let bottom = y1.max(*y2);
+        assert!(
+            (bottom - y_mid).abs() < 1.0,
+            "zone 오른쪽 변은 병합 제목줄 상단(y_mid={y_mid})에서 멈춰야 하는데 \
+             bottom={bottom} 까지 내려감 — 허상 세로선 회귀. line=({x1},{y1})-({x2},{y2})"
+        );
+    }
+    // 세로 변이 y_mid 까지는 실제로 도달해야 한다(행 0·1엔 실재하는 열 경계).
+    let reaches_mid = red_verticals
+        .iter()
+        .any(|(x1, y1, x2, y2, _)| (y1.max(*y2) - y_mid).abs() < 1.0);
+    assert!(
+        reaches_mid,
+        "zone 오른쪽 변이 병합줄 상단 y_mid={y_mid} 까지 오지 않음 — 과도 억제. \
+         red_verticals={red_verticals:?}"
     );
 }

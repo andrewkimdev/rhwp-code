@@ -263,6 +263,34 @@ pub(crate) fn collect_cell_borders(
     }
 }
 
+/// 열 경계 `boundary` 가 행 `row` 위치에서 실제 칸 분할인지 — 경계를 가로지르는
+/// (시작 열도 아니고 끝 열도 아닌) 셀이 그 행을 덮고 있으면 그 위치에는 칸 경계가
+/// 존재할 수 없다. 표의 바깥 경계(0, col_count)는 span 이 표 밖으로 나갈 수 없어
+/// 가로지름 판정이 결코 참이 나오지 않는다.
+fn col_boundary_straddled(cells: &[Cell], boundary: usize, row: usize) -> bool {
+    cells.iter().any(|c| {
+        let r = c.row as usize;
+        let col = c.col as usize;
+        r <= row
+            && row < r + (c.row_span as usize).max(1)
+            && col < boundary
+            && boundary < col + (c.col_span as usize).max(1)
+    })
+}
+
+/// 행 경계 `boundary` 가 열 `col` 위치에서 실제 칸 분할인지 — `col_boundary_straddled`
+/// 의 행·열 대칭.
+fn row_boundary_straddled(cells: &[Cell], boundary: usize, col: usize) -> bool {
+    cells.iter().any(|c| {
+        let r = c.row as usize;
+        let c_col = c.col as usize;
+        c_col <= col
+            && col < c_col + (c.col_span as usize).max(1)
+            && r < boundary
+            && boundary < r + (c.row_span as usize).max(1)
+    })
+}
+
 /// [#6619] `hp:cellzone` 의 테두리를 zone **바깥 네 변**에 덮어쓴다.
 ///
 /// zone 은 셀 고유 `borderFillIDRef` 위에 얹는 **영역 덮어쓰기**다. 종전 렌더러는
@@ -277,6 +305,12 @@ pub(crate) fn collect_cell_borders(
 /// 좌표가 아니라 **칸 주소**다. zone 이 가리키는 끝 칸이 병합돼 있으면
 /// `end_col + 1`/`end_row + 1` 로는 그 칸의 실제 span 끝(`col + col_span` /
 /// `row + row_span`)에 못 미쳐 오른쪽/아래 변이 표 한복판에서 끊긴다.
+///
+/// ⚠⚠⚠ **변은 실재하는 칸 경계에만 그린다.** zone 의 행·열 폭이 행마다 다른 칸
+/// 배치와 어긋날 수 있다(예: zone 끝 주소가 병합 칸의 내부를 가리키면 폴백 사각형이
+/// 표 맨아래까지 뻗는다). 그런 자리의 `None` 슬롯은 "정의된 선 없음"이 아니라 "그런
+/// 선이 있을 수 없음"이므로, 경계를 가로지르는 병합 셀이 있는 행/열에서는 덮어쓰지
+/// 않는다. 한/글은 그런 허상 선을 그리지 않는다(ccrlic1dno 표 제목줄 실측).
 pub(crate) fn apply_cellzone_border_fill(
     h_edges: &mut [Vec<Option<BorderLine>>],
     v_edges: &mut [Vec<Option<BorderLine>>],
@@ -321,12 +355,20 @@ pub(crate) fn apply_cellzone_border_fill(
     };
 
     for c in sc..ec {
-        overwrite(&mut h_edges[sr][c], &zone_borders[2]); // 위
-        overwrite(&mut h_edges[er][c], &zone_borders[3]); // 아래
+        if !row_boundary_straddled(cells, sr, c) {
+            overwrite(&mut h_edges[sr][c], &zone_borders[2]); // 위
+        }
+        if !row_boundary_straddled(cells, er, c) {
+            overwrite(&mut h_edges[er][c], &zone_borders[3]); // 아래
+        }
     }
     for r in sr..er {
-        overwrite(&mut v_edges[sc][r], &zone_borders[0]); // 왼쪽
-        overwrite(&mut v_edges[ec][r], &zone_borders[1]); // 오른쪽
+        if !col_boundary_straddled(cells, sc, r) {
+            overwrite(&mut v_edges[sc][r], &zone_borders[0]); // 왼쪽
+        }
+        if !col_boundary_straddled(cells, ec, r) {
+            overwrite(&mut v_edges[ec][r], &zone_borders[1]); // 오른쪽
+        }
     }
 }
 
