@@ -50,13 +50,31 @@
 
 ## 빌드
 
+`rhwp-chrome`은 자체 소스가 거의 없다 — `rhwp-studio`를 Vite로 빌드해 `viewer.html`로
+쓰고, 저장소 루트 `pkg/`의 WASM 문서 엔진을 얹는 얇은 확장 셸이다. 따라서 최신 코드로
+다시 빌드하려면 **WASM 먼저, 그다음 확장** 순서를 지켜야 한다:
+
 ```bash
+# 1. WASM 코어 재빌드 (rhwp-studio/rhwp-chrome이 공유하는 Rust 크레이트)
+cd ..   # 저장소 루트 (rhwp-code)
+docker compose --env-file .env.docker run --rm wasm
+
+# 2. 확장 재빌드 (rhwp-studio 최신 소스 + 방금 만든 pkg/를 사용)
 cd rhwp-chrome
 npm install
 npm run build
 ```
 
 빌드 결과물은 `dist/` 폴더에 생성됩니다.
+
+**WASM이 낡았는지 모를 때**: `pkg/rhwp_bg.wasm`은 네이티브 CLI와 같은 크레이트에서
+나오므로(`src/wasm_api/*` → `document_core`), `rhwp-studio/src`만 바뀌었어도 Rust
+쪽(`document_core`/파서/렌더러)이 최근에 바뀌었다면 `pkg/`가 같이 낡아 있을 수 있다.
+확인 방법:
+
+```bash
+find src Cargo.toml Cargo.lock -newer pkg/rhwp_bg.wasm   # 결과가 있으면 1번부터 다시
+```
 
 ### 개발 모드 설치
 
