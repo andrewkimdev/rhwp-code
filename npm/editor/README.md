@@ -543,6 +543,25 @@ const editor = await createEditor('#editor', {
 });
 ```
 
+## 개발 — hwpx-template-engine 벤더링 동기화 (저장소 내부용)
+
+형제 저장소 hwpx-template-engine(서식공방)의 라이브 데모 페이지는 npm 레지스트리
+설치 대신 이 패키지의 소스 두 파일(`index.js`/`transport.js`)을 정적 리소스로
+직접 벤더링한다 — 의존성 없는 순수 ES 모듈이라 빌드 단계 없이 복사만 하면
+충분하다(rhwp-studio의 `static-rhwp`와 같은 형제-저장소 규약). `npm/editor`
+디렉터리에서:
+
+```bash
+npm run sync:hwpx-template-engine           # 벤더링 사본 갱신(VERSION 스탬프 포함)
+npm run check:hwpx-template-engine-sync     # 사본이 뒤처졌는지 검사만(복사하지 않음)
+```
+
+동기화는 자동으로 다시 실행되지 않는다 — `@rhwp/editor` 를 바꾼 뒤에는 sync 를
+다시 돌리고 check 로 드리프트가 없는지 확인한다. 같은 페이지의 읽기전용 미리보기(item G)가
+쓰는 `@rhwp/core` WASM 바인딩은 저장소 루트의
+`scripts/sync-core-to-hwpx-template-engine.mjs` 가 별도로 공급한다
+(`./pkg` 에 `wasm-pack build` 산출물이 있어야 한다).
+
 ## 패키지 비교
 
 | 패키지 | 용도 |
