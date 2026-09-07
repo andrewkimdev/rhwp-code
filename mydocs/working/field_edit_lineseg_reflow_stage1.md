@@ -2,8 +2,8 @@
 
 - 이슈: (미등록 — 발견 경위는 `sync/upstream-devel-9to11` 세션의 11순위 조사 중
   범위 밖에서 발견한 별개 결함. 인계 문서:
-  `handover_field_edit_stale_lineseg_20260904.md`, 이번 세션이 착수 전 확인
-  사항을 모두 해소하고 구현까지 완료)
+  `handover_field_edit_stale_lineseg_20260904.md`(저장소에는 커밋되지 않은 세션
+  인계 문서), 이번 세션이 착수 전 확인 사항을 모두 해소하고 구현까지 완료)
 - 작성일: 2026-09-04
 - 브랜치: `fix/field-edit-lineseg-reflow` (base: `main`)
 
@@ -105,7 +105,19 @@ Stage 1 종료 시점에 남겨둔 "글상자 내부 필드 실측 통합 테스
 - **검증**: `cargo test --test field_edit_textbox_lineseg_reflow_contract` — 1
   passed. `rustfmt --check`/`cargo clippy -- -D warnings` 새 파일 대상 0건.
 
-## 6. 남은 범위 — 후속 이슈로 명시적으로 남김
+## 6. 후속 — 병합 셀 line_segs 리플로우 회귀 테스트 (2026-09-05 추가)
+
+Stage 1의 회귀 테스트 2건은 병합 셀(col_span/row_span > 1)을 한 번도 다루지
+않았다 — hwpx-template-engine이 2026-08-14 `stripStaleLineSegArray` 우회로
+고생했던 `신청인_상호` 회귀가 정확히 이 시나리오다. hwpx-template-engine이
+`rhwp edit fill-fields`로 이관하기 전에 병합 셀 경로도 고정해 뒀다.
+
+- **테스트**: `set_cell_field_text_reflows_line_segs_for_merged_cell`
+  (`src/document_core/queries/field_query.rs`) — 병합 셀 안 필드 값을 줄바꿈
+  경계가 바뀌는 길이로 교체한 뒤 `line_segs`가 재계산됐는지 확인한다.
+- **커밋**: `21623e390`(2026-09-05, test-only).
+
+## 7. 남은 범위 — 후속 이슈로 명시적으로 남김
 
 - `samples/table-vpos-01.hwpx`의 `담당부서` 필드를 이용한 실측 통합 테스트
   (핸드오버가 제안한 실사례)는 다루지 않았다 — `field-01.hwp`의 `목차1[0]`이
