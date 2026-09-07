@@ -2,7 +2,7 @@
 kind: canonical
 status: active
 canonical: mydocs/tech/table_layout_rules.md
-last_verified: 2026-07-16
+last_verified: 2026-09-07
 ---
 
 # 문단 내 표의 본문배치 및 페이지 조판 규칙
@@ -130,6 +130,32 @@ TopAndBottom 개체가 본문 시작 위치를 밀어내는 메커니즘.
 - `common.height`가 실제 렌더링 높이보다 작을 수 있음 (셀 콘텐츠 확장)
 - `measure_non_inline_controls_height`에서 InFrontOfText/BehindText 제외 필요
 - pagination의 `current_height` 누적이 vpos보다 과대 → **백로그 B-002**
+
+## 행 높이 — 선언 0 + 빈 문단 행은 접힌 채 유지
+
+선언 높이가 0(`cellSz height="0"`, ±0.5px)이고 행의 문단에 실제 콘텐츠가 없으면,
+저장된 `lineseg`(`vertsize` 가 0이 아닌 값)를 들고 있어도 행을 **재성장하지 않고
+접힌 채 유지**한다. 실측 경로(`height_measurer.rs`)와 비실측 경로
+(`table_layout.rs`) 양쪽에 같은 예외를 둔다(`40c6f689c`, 2026-09-06). 발원지는
+`ccrlic1dno.hwpx` #BLOCK 표(rowAddr=4)의 유령 세로 스텁 — 빈 행이 저장
+lineseg 를 근거로 되살아나며 세로 선이 남는 증상이었다.
+
+**예외의 예외**: #1835 TAC stale-height 사례처럼 행이 똑같이 빈 쌍둥이(twin)
+행을 동반해 한글이 되살리는 경우는 `table_has_accommodated_empty_line_twin`
+가드로 접기를 풀어준다.
+
+고정 테스트: `tests/issue_3386_zero_declared_empty_row_collapse.rs`.
+
+## cellzone 테두리 — 실재하는 칸 경계에만 그린다
+
+`hp:cellzone` 의 변·채움 덮어쓰기는 **분할-실재 검사**를 통과한 경계에만
+그린다(`d73db4e45`, 2026-09-06): 세로 변은 병합 셀이 가로지르지 않는 행의
+경계, 가로 변은 병합 셀이 가로지르지 않는 열의 경계다. zone 끝 주소가 병합 칸
+내부(예: 전폭 제목줄 셀)를 가리킬 때 폴백 사각형이 표 절대 하단까지 늘어나며
+제목 텍스트를 가로지르는 허상 세로선이 생기던 결함의 가드다. 네 변 방출 자체는
+upstream #6619 이식(`7ea3e4e27`, 축 1~3)에서 들어왔고 이 가드가 축 ④ 다.
+
+고정 테스트: `tests/issue_6619_cellzone_border.rs`.
 
 ## 관련 코드 파일
 

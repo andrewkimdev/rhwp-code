@@ -2,7 +2,7 @@
 kind: canonical
 status: active
 canonical: mydocs/tech/hwp_spec_errata.md
-last_verified: 2026-07-16
+last_verified: 2026-09-07
 ---
 
 # HWP 5.0 스펙 문서 정오표
@@ -338,7 +338,7 @@ HasMargin) 모두에서 무시**하며, 재저장 시 원값 그대로 보존 �
 | 스펙 기술 | "bit 15: 필드 내용이 수정되었는지 여부" (상세 동작 미설명) |
 | 실제 동작 | bit 15 == 0: **초기 상태** (사용자 미입력). 한컴은 메모 추가 등 동작 시 안내문 텍스트를 필드 값으로 삽입하지만 bit 15는 0 유지 → 안내문으로 취급 |
 | HWP 3.0 대응 | §10.1.5 바이너리 데이터: "bit 0: 사용자가 내용을 입력하지 않은 초기 상태인지 여부 (1=초기 상태)" |
-| 렌더링 규칙 | bit 15 == 0이고 필드 값이 안내문과 동일 → 안내문으로 표시 (빨간 기울임). 클릭 시 텍스트 삭제하여 빈 필드화 |
+| 렌더링 규칙 | bit 15 == 0이고 필드 값이 안내문과 동일 → 안내문으로 표시 (빨간 기울임). 클릭 시 텍스트 삭제하여 빈 필드화. 단 안내문 **표시**는 2026-09-04 `76246270d`부터 입력 여부로만 숨긴다(포커스·클릭과 무관, 브라우저 placeholder 규약) — "클릭 시 텍스트 삭제"는 문서 모델 정규화(`clear_initial_field_texts()`) 이야기고 렌더러 표시 조건과는 별개다 |
 | 검증 데이터 | field-01-memo.hwp: properties=0x00000001(bit 15=0), 필드 값="여기에 입력"=안내문 → 초기 상태 |
 | 수정 파일 | `src/document_core/commands/document.rs` (`clear_initial_field_texts()`), `src/renderer/layout/paragraph_layout.rs` |
 | 발견일 | 2026-03-16 |
