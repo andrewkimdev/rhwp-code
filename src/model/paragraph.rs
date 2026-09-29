@@ -591,6 +591,47 @@ impl Paragraph {
         }
     }
 
+    /// 문단 중간 문자 `char_idx` 앞에 삽입할 UTF-16 위치를 구한다.
+    ///
+    /// `char_offsets[char_idx]` 는 그 문자 **앞의 컨트롤 갭 전체를 지난** 위치다. 그런데
+    /// `char_idx` 에서 끝나는 필드(`end_char_idx == char_idx`)의 FIELD_END 마커(8 code
+    /// unit)도 그 갭에 들어 있고, `insert_text_at` 은 이런 필드의 범위를 삽입 길이만큼
+    /// 늘린다(= 새 텍스트는 필드 **안**). 그러므로 UTF-16 삽입 위치도 FIELD_END 앞이어야
+    /// char_shapes·line_segs 시프트와 새 char_offsets 가 field_ranges 와 같은 좌표를 쓴다.
+    /// 갭을 지난 위치를 그대로 쓰면 새 텍스트가 FIELD_END 뒤 좌표로 기록되고, 뒤이어
+    /// `rebuild_char_offsets` 가 텍스트를 FIELD_END 앞으로 되돌릴 때 그 사이에 적용한
+    /// 글자모양 경계가 FIELD_END 폭(8)만큼 어긋난다 — 뒤따르는 텍스트가 있는 누름틀을
+    /// 채우면 값의 앞 8글자가 필드 밖 서식을 받던 원인이다. 문단 끝(뒤 문자 없음)은
+    /// 마지막 문자 끝 위치를 쓰므로 이미 FIELD_END 앞이다.
+    ///
+    /// FIELD_END 마커는 갭의 끝(문자 바로 앞)에 놓인다고 본다. 같은 위치에서 비어 있지
+    /// 않은 다른 필드가 시작하면 그 FIELD_BEGIN 이 FIELD_END 뒤에 오므로 순서를 알 수
+    /// 없어 종전 위치(갭 전체를 지난 곳)를 유지한다.
+    fn utf16_insert_pos_before_field_ends(&self, char_idx: usize, text_chars: &[char]) -> u32 {
+        let after_gap = self.char_offsets[char_idx];
+        let begins_non_empty_here = self
+            .field_ranges
+            .iter()
+            .any(|fr| fr.start_char_idx == char_idx && fr.end_char_idx > char_idx);
+        if begins_non_empty_here {
+            return after_gap;
+        }
+        let ends_here = self
+            .field_ranges
+            .iter()
+            .filter(|fr| fr.end_char_idx == char_idx)
+            .count() as u32;
+        if ends_here == 0 {
+            return after_gap;
+        }
+        let prev_char_end = if char_idx == 0 {
+            0
+        } else {
+            self.char_offsets[char_idx - 1] + Self::char_utf16_len(text_chars[char_idx - 1])
+        };
+        after_gap.saturating_sub(ends_here * 8).max(prev_char_end)
+    }
+
     /// char_offset 위치에 텍스트를 삽입한다.
     /// 인라인 컨트롤(각주/미주/수식/새 번호 등, 8 code unit)을 char_offset 위치에 삽입할 때
     /// 문단 메타데이터를 일괄 시프트한다.
@@ -723,7 +764,7 @@ impl Paragraph {
                 0
             }
         } else if effective_char_offset < self.char_offsets.len() {
-            self.char_offsets[effective_char_offset]
+            self.utf16_insert_pos_before_field_ends(effective_char_offset, &text_chars)
         } else if !self.char_offsets.is_empty() {
             let last_idx = self.char_offsets.len() - 1;
             self.char_offsets[last_idx] + Self::char_utf16_len(text_chars[last_idx])

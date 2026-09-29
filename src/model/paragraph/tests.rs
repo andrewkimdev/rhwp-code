@@ -325,6 +325,92 @@ fn test_delete_text_preserves_right_char_shape_at_collapsed_boundary() {
     assert_eq!(refs, vec![(0, 10), (2, 20)]);
 }
 
+/// "A" + 필드(`content`) + " X" 문단. FIELD_BEGIN 은 'A' 뒤 1..9, FIELD_END 는 컨텐츠 뒤,
+/// 필드 밖 글자모양 10, 컨텐츠 20, FIELD_END 런(뒤따르는 텍스트 포함) 10.
+fn paragraph_with_field_then_trailing_text(content: &str) -> Paragraph {
+    let n = content.chars().count() as u32;
+    let mut char_offsets = vec![0];
+    char_offsets.extend((0..n).map(|i| 9 + i));
+    // FIELD_END(8) 뒤의 " X"
+    char_offsets.extend([9 + n + 8, 9 + n + 9]);
+    let mut char_shapes = vec![CharShapeRef {
+        start_pos: 0,
+        char_shape_id: 10,
+    }];
+    if n > 0 {
+        char_shapes.push(CharShapeRef {
+            start_pos: 9,
+            char_shape_id: 20,
+        });
+    }
+    char_shapes.push(CharShapeRef {
+        start_pos: 9 + n,
+        char_shape_id: 10,
+    });
+    Paragraph {
+        text: format!("A{content} X"),
+        char_count: 9 + n + 8 + 2 + 1,
+        char_offsets,
+        char_shapes,
+        controls: vec![Control::Field(crate::model::control::Field {
+            field_type: crate::model::control::FieldType::ClickHere,
+            ..Default::default()
+        })],
+        field_ranges: vec![FieldRange {
+            start_char_idx: 1,
+            end_char_idx: 1 + n as usize,
+            control_idx: 0,
+            ..Default::default()
+        }],
+        has_para_text: true,
+        ..Default::default()
+    }
+}
+
+#[test]
+fn test_insert_at_field_end_with_trailing_text_goes_before_field_end_marker() {
+    // 필드 끝(= 뒤 문자 앞)에 삽입하면 field_ranges 는 필드를 늘린다 — UTF-16 좌표도
+    // FIELD_END 앞이어야 한다. 갭 전체를 지난 위치(뒤 문자 위치)에 기록하면 이후
+    // char_offsets 재생성 때 글자모양 경계가 FIELD_END 폭(8)만큼 어긋난다.
+    let mut para = paragraph_with_field_then_trailing_text("bc");
+    assert_eq!(para.char_offsets, vec![0, 9, 10, 19, 20]);
+    para.insert_text_at(3, "d");
+    assert_eq!(para.text, "Abcd X");
+    assert_eq!(para.field_ranges[0].start_char_idx, 1);
+    assert_eq!(para.field_ranges[0].end_char_idx, 4);
+    // 'd' 는 FIELD_END(11..19) 자리 11 에 들어가고 FIELD_END 와 뒤 텍스트가 1 밀린다.
+    assert_eq!(para.char_offsets, vec![0, 9, 10, 11, 20, 21]);
+    // 컨텐츠 끝에 이어 친 글자는 컨텐츠 서식, 뒤 텍스트는 필드 밖 서식 그대로.
+    assert_eq!(para.char_shape_id_at(3), Some(20));
+    assert_eq!(para.char_shape_id_at(4), Some(10));
+}
+
+#[test]
+fn test_insert_into_empty_field_with_trailing_text_goes_between_field_markers() {
+    // 빈 필드: 'A'(0) FIELD_BEGIN(1..9) FIELD_END(9..17) ' '(17) 'X'(18).
+    let mut para = paragraph_with_field_then_trailing_text("");
+    assert_eq!(para.char_offsets, vec![0, 17, 18]);
+    para.insert_text_at(1, "abc");
+    assert_eq!(para.text, "Aabc X");
+    assert_eq!(para.field_ranges[0].end_char_idx, 4);
+    assert_eq!(para.char_offsets, vec![0, 9, 10, 11, 20, 21]);
+    // 필드 교체 경로처럼 삽입 직후 범위 서식을 입힌 뒤 char_offsets 를 재생성해도
+    // 값 전체가 새 서식이고 뒤 텍스트는 원래 서식이어야 한다.
+    para.apply_char_shape_range(1, 4, 20);
+    let before_rebuild = para.char_offsets.clone();
+    crate::document_core::queries::field_query::rebuild_char_offsets(&mut para);
+    assert_eq!(
+        para.char_offsets, before_rebuild,
+        "insert 좌표 == 재생성 좌표"
+    );
+    for i in 1..4 {
+        assert_eq!(para.char_shape_id_at(i), Some(20), "값 {i}번째 글자");
+    }
+    assert_eq!(para.char_shape_id_at(0), Some(10));
+    assert_eq!(para.char_shape_id_at(4), Some(10));
+    assert_eq!(para.char_shape_id_at(5), Some(10));
+}
+
 #[test]
 fn test_delete_text_to_end_keeps_leftmost_collapsed_char_shape() {
     let mut para = Paragraph {

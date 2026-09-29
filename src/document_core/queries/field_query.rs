@@ -2694,7 +2694,12 @@ mod tests {
         let char_count = text.chars().count();
         Paragraph {
             // 스트림: [FIELD_BEGIN 8u] H S [FIELD_END 8u] …trailing
-            char_offsets: (0..char_count).map(|i| 8 + i as u32).collect(),
+            // 뒤따르는 텍스트는 FIELD_END 갭(10..18)을 지난 18부터다 — 실제 HWPX 적재와
+            // 같은 좌표. 이 갭을 빼 두면 insert_text_at 의 FIELD_END 좌표 어긋남(값 앞
+            // 8글자가 주변 서식을 받던 결함)이 가려진다.
+            char_offsets: (0..char_count)
+                .map(|i| if i < 2 { 8 + i as u32 } else { 16 + i as u32 })
+                .collect(),
             char_shapes: vec![
                 CharShapeRef {
                     start_pos: 0,
