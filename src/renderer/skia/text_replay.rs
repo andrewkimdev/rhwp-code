@@ -100,6 +100,18 @@ impl SkiaTextReplay<'_> {
                     requested_families.push(base);
                 }
                 let mut fallback_families = Vec::new();
+                // --packaged-fonts-only: 호출자 지정 generic 폴백(패키지 family)을
+                // 큐레이션 목록보다 앞에 둔다 — 시스템·번들이 없으므로 이것이
+                // 문서 글꼴 부재 시의 실제 착지점이다.
+                if let Some(p) = crate::renderer::font_paths::packaged_fonts_only() {
+                    let mono = crate::renderer::is_monospace_font_family(&style.font_family);
+                    let ordered = if mono {
+                        [&p.fallback_mono, &p.fallback_sans, &p.fallback_serif]
+                    } else {
+                        [&p.fallback_sans, &p.fallback_serif, &p.fallback_mono]
+                    };
+                    fallback_families.extend(ordered.into_iter().flatten().map(String::as_str));
+                }
                 // [고정폭 계열] SVG/PDF 경로(`generic_fallback`)는 굴림체·바탕체
                 // 등 고정폭 계열 폰트명에 D2Coding/Noto Sans Mono/CSS `monospace`
                 // 로 이어지는 별도 체인을 쓴다. 이 판정이 없으면 native-skia 는

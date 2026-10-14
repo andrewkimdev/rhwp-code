@@ -36,6 +36,11 @@ thread_local! {
 }
 
 pub(super) fn collect_system_families(font_mgr: &FontMgr) -> SystemFontFamilies {
+    // --packaged-fonts-only: 시스템 family 를 하나도 노출하지 않는다 —
+    // `match_system_family_style` 의 사전 필터가 모든 시스템 매칭을 막는다.
+    if crate::renderer::font_paths::is_packaged_fonts_only() {
+        return SystemFontFamilies::new();
+    }
     font_mgr.family_names().collect()
 }
 
@@ -69,6 +74,10 @@ pub(super) fn match_system_family_style(
 }
 
 pub(super) fn legacy_typeface_for_style(font_mgr: &FontMgr, style: FontStyle) -> Option<Typeface> {
+    // --packaged-fonts-only: 시스템 기본 typeface 로 떨어지지 않는다.
+    if crate::renderer::font_paths::is_packaged_fonts_only() {
+        return None;
+    }
     let key = FontStyleCacheKey::new(style);
     LEGACY_TYPEFACE_CACHE.with(|cache| {
         if let Some(cached) = { cache.borrow().get(&key).cloned() } {

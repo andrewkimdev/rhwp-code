@@ -22,6 +22,16 @@
 //! 4. **`ttfs/opensource`** — 최후 폴백. `.gitignore` 대상이 아닌 **저장소 자산**
 //!    (NotoSansKR 2종 + OFL)이라 모든 체크아웃에서 확보된다. 폰트 미설치 환경
 //!    (CI headless·컨테이너)에서 한국어가 드롭되는 것을 막는다(#2293).
+//!
+//! # 패키지 폰트 전용 모드 (`--packaged-fonts-only`, opt-in)
+//!
+//! 서버 대량 변환에서 산출물이 호스트에 설치된 폰트에 따라 달라지지 않도록,
+//! 호출자가 `--font-path` 로 넘긴 디렉터리**만** 폰트 출처로 쓰는 모드다.
+//! 켜면 2~4 단계(환경변수·시스템·번들 `ttfs/opensource`)와
+//! `load_system_fonts()`(시스템 폰트 DB)를 모두 건너뛴다. rhwp CLI 는 렌더
+//! 1회당 프로세스 1개라 CLI 파싱 시점에 한 번 켜는 프로세스 전역 설정으로 둔다
+//! ([`enable_packaged_fonts_only`]). 기본값은 꺼짐이며 WASM 빌드에는 이 모듈이
+//! 없다.
 
 use std::path::{Path, PathBuf};
 
@@ -30,6 +40,47 @@ pub const FONT_PATH_ENV: &str = "RHWP_FONT_PATH";
 
 /// 저장소 번들 오픈소스 폰트 — 최후 폴백(#2293 한국어 드롭 방지).
 pub const BUNDLED_OPENSOURCE_DIR: &str = "ttfs/opensource";
+
+/// 패키지 폰트 전용 모드 설정 — 호출자 지정 폰트 디렉터리와 generic 폴백 family.
+///
+/// generic 폴백(`serif`/`sans-serif`/`monospace`)은 문서 글꼴이 패키지에 없을 때
+/// 떨어질 자리다. 이 모드에서는 시스템·번들 폰트가 없으므로 반드시 패키지 안의
+/// family 를 가리켜야 텍스트가 사라지지 않는다(`--fallback-serif/-sans/-mono`).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PackagedFontsOnly {
+    /// `--font-path` 로 받은 디렉터리(호출 순서 보존).
+    pub dirs: Vec<PathBuf>,
+    pub fallback_serif: Option<String>,
+    pub fallback_sans: Option<String>,
+    pub fallback_mono: Option<String>,
+}
+
+static PACKAGED_FONTS_ONLY: std::sync::OnceLock<PackagedFontsOnly> = std::sync::OnceLock::new();
+
+/// 패키지 폰트 전용 모드를 켠다. 프로세스당 한 번만 유효하다(CLI 파싱 시점).
+/// 이미 켜져 있으면 `false` 를 돌려주고 기존 설정을 유지한다.
+pub fn enable_packaged_fonts_only(config: PackagedFontsOnly) -> bool {
+    PACKAGED_FONTS_ONLY.set(config).is_ok()
+}
+
+/// 패키지 폰트 전용 모드 설정. 꺼져 있으면(기본) `None`.
+pub fn packaged_fonts_only() -> Option<&'static PackagedFontsOnly> {
+    PACKAGED_FONTS_ONLY.get()
+}
+
+/// 패키지 폰트 전용 모드가 켜져 있는가.
+pub fn is_packaged_fonts_only() -> bool {
+    PACKAGED_FONTS_ONLY.get().is_some()
+}
+
+/// 패키지 폰트 전용 모드에서 호출자 디렉터리를 따로 받지 못하는 경로
+/// (`skia::image_conv` 의 프로세스 전역 fontdb 등)용 디렉터리. 꺼져 있으면 빈 목록.
+pub fn packaged_font_dirs() -> &'static [PathBuf] {
+    PACKAGED_FONTS_ONLY
+        .get()
+        .map(|c| c.dirs.as_slice())
+        .unwrap_or(&[])
+}
 
 /// `RHWP_FONT_PATH` 를 읽어 경로 목록으로 나눈다.
 ///
@@ -87,7 +138,15 @@ pub fn system_font_dirs() -> Vec<PathBuf> {
 ///
 /// `extra` 는 호출자 지정 경로(`--font-path` 등)이며 최우선이다.
 pub fn search_dirs(extra: &[PathBuf]) -> Vec<PathBuf> {
+    search_dirs_with_mode(extra, is_packaged_fonts_only())
+}
+
+/// [`search_dirs`] 본체. `packaged_only` 이면 호출자 지정 경로만 돌려준다.
+fn search_dirs_with_mode(extra: &[PathBuf], packaged_only: bool) -> Vec<PathBuf> {
     let mut dirs: Vec<PathBuf> = extra.to_vec();
+    if packaged_only {
+        return dirs;
+    }
     dirs.extend(env_font_paths());
     dirs.extend(system_font_dirs());
     // 최후 폴백 — 저장소 자산이라 항상 존재한다(#2293).
@@ -108,15 +167,30 @@ pub fn search_dirs(extra: &[PathBuf]) -> Vec<PathBuf> {
 ///   제치고 선점된다(#3300, r23 발산 −6.9pp) — 번들은 별도 최후-폴백 로더
 ///   (`bundled_font_dirs`)로 체인 말미에만 선다.
 pub fn custom_font_dirs(extra: &[PathBuf]) -> Vec<PathBuf> {
+    custom_font_dirs_with_mode(extra, is_packaged_fonts_only())
+}
+
+fn custom_font_dirs_with_mode(extra: &[PathBuf], packaged_only: bool) -> Vec<PathBuf> {
     let mut dirs: Vec<PathBuf> = extra.to_vec();
-    dirs.extend(env_font_paths());
+    if !packaged_only {
+        dirs.extend(env_font_paths());
+    }
     dirs
 }
 
 /// 번들 최후-폴백 로더용 디렉터리 — 폰트 미설치 환경(CI headless·컨테이너)
 /// 에서 한국어 드롭을 막는 저장소 자산(#2293). 해석 체인에서는 custom·시스템
 /// 뒤(최후)에만 선다(#3300).
+///
+/// 패키지 폰트 전용 모드에서는 빈 목록 — 번들 Noto Sans KR 을 등록하지 않는다.
 pub fn bundled_font_dirs() -> Vec<PathBuf> {
+    bundled_font_dirs_with_mode(is_packaged_fonts_only())
+}
+
+fn bundled_font_dirs_with_mode(packaged_only: bool) -> Vec<PathBuf> {
+    if packaged_only {
+        return Vec::new();
+    }
     vec![PathBuf::from(BUNDLED_OPENSOURCE_DIR)]
 }
 
@@ -125,7 +199,18 @@ pub fn bundled_font_dirs() -> Vec<PathBuf> {
 /// 시스템 폰트는 `load_system_fonts()` 가 담당하므로 여기서는 호출자 지정 →
 /// 환경변수 → 번들 순으로 디렉터리만 추가한다. 존재하지 않는 경로는 건너뛰되,
 /// `extra`(사용자가 명시한 경로)만 경고한다 — 환경변수·번들은 없을 수 있다.
+///
+/// 패키지 폰트 전용 모드에서는 `extra` 만 적재한다(환경변수·번들 제외).
+/// 시스템 폰트 생략은 호출부(`load_system_fonts_unless_packaged_only`)가 맡는다.
 pub fn load_into_fontdb(fontdb: &mut usvg::fontdb::Database, extra: &[PathBuf]) {
+    load_into_fontdb_with_mode(fontdb, extra, is_packaged_fonts_only());
+}
+
+fn load_into_fontdb_with_mode(
+    fontdb: &mut usvg::fontdb::Database,
+    extra: &[PathBuf],
+    packaged_only: bool,
+) {
     for dir in extra {
         if dir.exists() {
             fontdb.load_fonts_dir(dir);
@@ -135,6 +220,9 @@ pub fn load_into_fontdb(fontdb: &mut usvg::fontdb::Database, extra: &[PathBuf]) 
                 dir.display()
             );
         }
+    }
+    if packaged_only {
+        return;
     }
     for dir in env_font_paths() {
         if dir.exists() {
@@ -149,6 +237,13 @@ pub fn load_into_fontdb(fontdb: &mut usvg::fontdb::Database, extra: &[PathBuf]) 
     let bundled = Path::new(BUNDLED_OPENSOURCE_DIR);
     if bundled.exists() {
         fontdb.load_fonts_dir(bundled);
+    }
+}
+
+/// `fontdb.load_system_fonts()` — 패키지 폰트 전용 모드에서는 건너뛴다.
+pub fn load_system_fonts_unless_packaged_only(fontdb: &mut usvg::fontdb::Database) {
+    if !is_packaged_fonts_only() {
+        fontdb.load_system_fonts();
     }
 }
 
@@ -264,5 +359,85 @@ mod tests {
             bundled_font_dirs(),
             vec![PathBuf::from(BUNDLED_OPENSOURCE_DIR)]
         );
+    }
+
+    /// `--packaged-fonts-only`: 탐색 경로는 호출자 지정 경로뿐이다 — 환경변수·
+    /// 시스템 디렉터리·번들 `ttfs/opensource` 가 모두 빠진다.
+    #[test]
+    fn search_dirs_packaged_only_returns_caller_dirs_only() {
+        let _g = ENV_LOCK.lock().unwrap();
+        std::env::set_var(FONT_PATH_ENV, "/tmp/env-fonts");
+        let extra = vec![
+            PathBuf::from("/tmp/caller-a"),
+            PathBuf::from("/tmp/caller-b"),
+        ];
+        assert_eq!(
+            search_dirs_with_mode(&extra, true),
+            extra,
+            "패키지 전용 모드는 호출자 지정 경로만 순서대로 돌려준다"
+        );
+        assert!(
+            search_dirs_with_mode(&[], true).is_empty(),
+            "호출자 경로가 없으면 탐색 경로도 없다"
+        );
+        // 모드가 꺼져 있으면 종전 순서 그대로(환경변수·시스템·번들 포함).
+        let default_dirs = search_dirs_with_mode(&extra, false);
+        assert!(default_dirs.contains(&PathBuf::from("/tmp/env-fonts")));
+        assert_eq!(
+            default_dirs.last(),
+            Some(&PathBuf::from(BUNDLED_OPENSOURCE_DIR))
+        );
+        std::env::remove_var(FONT_PATH_ENV);
+    }
+
+    #[test]
+    fn custom_and_bundled_dirs_packaged_only_drop_env_and_bundle() {
+        let _g = ENV_LOCK.lock().unwrap();
+        std::env::set_var(FONT_PATH_ENV, "/tmp/env-fonts");
+        let extra = vec![PathBuf::from("/tmp/caller")];
+        assert_eq!(custom_font_dirs_with_mode(&extra, true), extra);
+        assert!(
+            bundled_font_dirs_with_mode(true).is_empty(),
+            "패키지 전용 모드는 번들 Noto Sans KR 을 등록하지 않는다"
+        );
+        assert_eq!(
+            bundled_font_dirs_with_mode(false),
+            vec![PathBuf::from(BUNDLED_OPENSOURCE_DIR)]
+        );
+        std::env::remove_var(FONT_PATH_ENV);
+    }
+
+    /// fontdb 적재: 패키지 전용 모드에서는 호출자 경로의 폰트만 들어가고,
+    /// 환경변수 경로의 폰트는 들어가지 않는다.
+    #[test]
+    fn load_into_fontdb_packaged_only_loads_caller_fonts_only() {
+        let _g = ENV_LOCK.lock().unwrap();
+        let fixtures = PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/fonts"));
+        let bundled = PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/ttfs/opensource"));
+        // 환경변수로 번들 디렉터리를 가리켜, 모드가 이를 무시하는지 본다.
+        std::env::set_var(FONT_PATH_ENV, &bundled);
+
+        let mut packaged = usvg::fontdb::Database::new();
+        load_into_fontdb_with_mode(&mut packaged, std::slice::from_ref(&fixtures), true);
+        assert!(packaged.len() > 0, "호출자 경로 폰트는 적재돼야 한다");
+        let has_noto = |db: &usvg::fontdb::Database| {
+            db.faces().any(|f| {
+                f.families
+                    .iter()
+                    .any(|(n, _)| n.starts_with("Noto Sans KR"))
+            })
+        };
+        assert!(
+            !has_noto(&packaged),
+            "패키지 전용 모드에서는 환경변수·번들 경로의 Noto Sans KR 이 없어야 한다"
+        );
+
+        let mut default_db = usvg::fontdb::Database::new();
+        load_into_fontdb_with_mode(&mut default_db, std::slice::from_ref(&fixtures), false);
+        assert!(
+            has_noto(&default_db),
+            "기본 모드는 환경변수 경로도 적재한다"
+        );
+        std::env::remove_var(FONT_PATH_ENV);
     }
 }

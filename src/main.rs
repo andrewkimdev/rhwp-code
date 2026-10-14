@@ -791,6 +791,11 @@ fn print_help() {
     println!("      --embed-fonts           폰트 서브셋 임베딩 (사용 글자만 base64)");
     println!("      --embed-fonts=full      폰트 전체 임베딩 (base64)");
     println!("      --font-path <경로>      폰트 파일 탐색 경로 (여러 번 지정 가능)");
+    println!("      --packaged-fonts-only   --font-path 폰트만 사용 (시스템 폰트 미사용)");
+    println!("                              RHWP_FONT_PATH·번들 ttfs/opensource 도 무시");
+    println!("      --fallback-serif <명>   serif 폴백 family (--packaged-fonts-only 전용)");
+    println!("      --fallback-sans <명>    sans 폴백 family (--packaged-fonts-only 전용)");
+    println!("      --fallback-mono <명>    mono 폴백 family (--packaged-fonts-only 전용)");
     println!("      --json                  산출물 매니페스트를 JSON으로 stdout에 출력");
     println!();
     println!("  export-render-tree <파일.hwp> [옵션]");
@@ -818,6 +823,11 @@ fn print_help() {
     );
     println!("      --font-path <경로>      폰트 파일 탐색 경로 (여러 번 지정 가능)");
     println!("                              한컴 전용 폰트 (HY견명조 등) 가 시스템에 없을 때 ttfs 디렉토리 지정");
+    println!("      --packaged-fonts-only   --font-path 폰트만 사용 (시스템 폰트 미사용)");
+    println!("                              RHWP_FONT_PATH·번들 ttfs/opensource 도 무시");
+    println!("      --fallback-serif <명>   serif 폴백 family (--packaged-fonts-only 전용)");
+    println!("      --fallback-sans <명>    sans 폴백 family (--packaged-fonts-only 전용)");
+    println!("      --fallback-mono <명>    mono 폴백 family (--packaged-fonts-only 전용)");
     println!("      --scale <배율>          렌더링 배율 (기본: 1.0)");
     println!("      --max-dimension <픽셀>  한 변 최대 픽셀 (longest edge). VLM 입력 한도용.");
     println!(
@@ -956,6 +966,9 @@ fn print_help() {
     println!("      --fallback-serif <명>   PDF serif generic fallback family");
     println!("      --fallback-sans <명>    PDF sans-serif generic fallback family");
     println!("      --fallback-mono <명>    PDF monospace generic fallback family");
+    println!("      --packaged-fonts-only   --font-path 폰트만 사용 (시스템 폰트 미사용)");
+    println!("                              RHWP_FONT_PATH·번들 ttfs/opensource 도 무시");
+    println!("                              (--fallback-* 로 패키지 안의 family 를 지정할 것)");
     println!("      --equation-font <명>    PDF 수식 SVG 우선 font-family");
     println!("      --text-as-paths         텍스트를 폰트 임베드 대신 path로 변환");
     println!("                              (메모리 대폭 절감, 텍스트 선택·검색 불가)");

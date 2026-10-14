@@ -508,10 +508,14 @@ fn svg_fontdb() -> Arc<usvg::fontdb::Database> {
             // 하드 고정("Noto Sans CJK KR")해, 해당 폰트가 없는 환경에서
             // resvg 가 조각의 텍스트를 통째로 드롭했다.
             let mut fontdb = usvg::fontdb::Database::new();
-            fontdb.load_system_fonts();
+            // --packaged-fonts-only 이면 시스템·번들 대신 호출자 --font-path 만 적재한다.
+            crate::renderer::font_paths::load_system_fonts_unless_packaged_only(&mut fontdb);
             // [#2864] 조달 순서는 renderer::font_paths 가 단일 정의한다.
             // ttfs/opensource 번들이 최후 폴백으로 남아 한국어 드롭을 막는다(#2293).
-            crate::renderer::font_paths::load_into_fontdb(&mut fontdb, &[]);
+            crate::renderer::font_paths::load_into_fontdb(
+                &mut fontdb,
+                crate::renderer::font_paths::packaged_font_dirs(),
+            );
 
             // generic 폴백은 실존하는 첫 후보로 (매칭 실패 = 텍스트 드롭 방지).
             let sans = first_existing_family(
@@ -556,6 +560,15 @@ fn svg_fontdb() -> Arc<usvg::fontdb::Database> {
                     "DejaVu Sans Mono",
                 ],
             );
+            // --packaged-fonts-only: generic 폴백은 호출자가 지정한 패키지 family 가 우선.
+            let (sans, serif, mono) = match crate::renderer::font_paths::packaged_fonts_only() {
+                Some(p) => (
+                    p.fallback_sans.clone().or(sans),
+                    p.fallback_serif.clone().or(serif),
+                    p.fallback_mono.clone().or(mono),
+                ),
+                None => (sans, serif, mono),
+            };
             if let Some(f) = sans {
                 fontdb.set_sans_serif_family(f);
             }

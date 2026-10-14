@@ -1308,6 +1308,14 @@ impl SkiaLayerRenderer {
                 return Font::new(tf, size);
             }
         }
+        // --packaged-fonts-only: 호출자 지정 sans 폴백(패키지 family)으로 착지.
+        if let Some(family) = crate::renderer::font_paths::packaged_fonts_only()
+            .and_then(|p| p.fallback_sans.as_deref())
+        {
+            if let Some(tf) = self.custom_typefaces.get(family).cloned() {
+                return Font::new(tf, size);
+            }
+        }
         if let Some(tf) = legacy_typeface_for_style(&self.font_mgr, style) {
             return Font::new(tf, size);
         }

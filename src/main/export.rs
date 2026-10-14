@@ -6,6 +6,122 @@ pub(crate) fn allows_implicit_sibling_resources(format: rhwp::parser::FileFormat
     !matches!(format, rhwp::parser::FileFormat::Hml)
 }
 
+/// `--packaged-fonts-only` + `--fallback-serif/-sans/-mono` 파싱 상태 (export-svg/png 용).
+///
+/// export-pdf 는 `--fallback-*` 를 종전대로 `PdfExportOptions` 로 받으므로
+/// `--packaged-fonts-only` 플래그만 따로 처리한다.
+#[derive(Default)]
+struct PackagedFontArgs {
+    enabled: bool,
+    serif: Option<String>,
+    sans: Option<String>,
+    mono: Option<String>,
+}
+
+impl PackagedFontArgs {
+    /// `args[i]` 가 이 묶음의 옵션이면 소비한 토큰 수, 값 누락이면 종료 코드.
+    fn try_parse(&mut self, args: &[String], i: usize) -> Option<Result<usize, i32>> {
+        let arg = args[i].as_str();
+        if arg == "--packaged-fonts-only" {
+            self.enabled = true;
+            return Some(Ok(1));
+        }
+        let (name, slot) = if arg == "--fallback-serif" || arg.starts_with("--fallback-serif=") {
+            ("--fallback-serif", &mut self.serif)
+        } else if arg == "--fallback-sans" || arg.starts_with("--fallback-sans=") {
+            ("--fallback-sans", &mut self.sans)
+        } else if arg == "--fallback-mono" || arg.starts_with("--fallback-mono=") {
+            ("--fallback-mono", &mut self.mono)
+        } else {
+            return None;
+        };
+        if let Some(value) = arg.strip_prefix(name).and_then(|v| v.strip_prefix('=')) {
+            *slot = Some(value.to_string());
+            return Some(Ok(1));
+        }
+        match args.get(i + 1) {
+            Some(value) => {
+                *slot = Some(value.clone());
+                Some(Ok(2))
+            }
+            None => {
+                eprintln!("오류: {name} 뒤에 폰트 family가 필요합니다.");
+                Some(Err(EXIT_USAGE))
+            }
+        }
+    }
+
+    /// 파싱이 끝난 뒤 호출 — 켜졌으면 프로세스 전역 모드를 설정한다.
+    fn activate(self, font_paths: &[std::path::PathBuf]) -> Result<(), i32> {
+        if !self.enabled {
+            if self.serif.is_some() || self.sans.is_some() || self.mono.is_some() {
+                eprintln!(
+                    "오류: 이 명령의 --fallback-serif/--fallback-sans/--fallback-mono 는 --packaged-fonts-only 와 함께만 사용할 수 있습니다."
+                );
+                return Err(EXIT_USAGE);
+            }
+            return Ok(());
+        }
+        enable_packaged_fonts_only_mode(font_paths, self.serif, self.sans, self.mono);
+        Ok(())
+    }
+}
+
+/// `--packaged-fonts-only` 를 프로세스 전역으로 켠다 (`rhwp::renderer::font_paths` 문서 참조).
+fn enable_packaged_fonts_only_mode(
+    font_paths: &[std::path::PathBuf],
+    serif: Option<String>,
+    sans: Option<String>,
+    mono: Option<String>,
+) {
+    if font_paths.is_empty() {
+        eprintln!(
+            "WARN: --packaged-fonts-only 인데 --font-path 가 없습니다. 사용할 폰트가 하나도 없어 텍스트가 빈칸으로 렌더링될 수 있습니다."
+        );
+    }
+    rhwp::renderer::font_paths::enable_packaged_fonts_only(
+        rhwp::renderer::font_paths::PackagedFontsOnly {
+            dirs: font_paths.to_vec(),
+            fallback_serif: serif,
+            fallback_sans: sans,
+            fallback_mono: mono,
+        },
+    );
+}
+
+/// export-svg + `--packaged-fonts-only`: SVG 의 font-family 체인 끝 generic
+/// (`serif`/`sans-serif`/`monospace`) 바로 앞에 지정된 패키지 family 를 끼운다.
+/// SVG 소비자가 체인 앞쪽 이름을 하나도 못 찾았을 때 generic 대신 패키지 폰트로
+/// 착지하게 하는 것 — export-pdf 의 fontdb generic 설정과 같은 효과다.
+fn insert_packaged_generic_fallbacks(
+    svg: &str,
+    config: &rhwp::renderer::font_paths::PackagedFontsOnly,
+) -> String {
+    let mut out = svg.to_string();
+    for (generic, family) in [
+        ("sans-serif", &config.fallback_sans),
+        ("serif", &config.fallback_serif),
+        ("monospace", &config.fallback_mono),
+    ] {
+        let Some(family) = family.as_deref() else {
+            continue;
+        };
+        let escaped = family
+            .replace('&', "&amp;")
+            .replace('<', "&lt;")
+            .replace('"', "&quot;")
+            .replace('\'', "&apos;");
+        let quoted = format!("&apos;{escaped}&apos;");
+        out = out
+            .replace(&format!(",{generic}\""), &format!(",{quoted},{generic}\""))
+            .replace(
+                &format!("font-family=\"{generic}\""),
+                &format!("font-family=\"{quoted},{generic}\""),
+            );
+    }
+    out
+}
+
 
 pub(crate) fn export_svg(args: &[String]) -> i32 {
     // [#3359] 위치 인자 파싱은 export-structure/export-text(#3349) 규약과 동일 —
@@ -23,9 +139,18 @@ pub(crate) fn export_svg(args: &[String]) -> i32 {
     let mut font_paths: Vec<std::path::PathBuf> = Vec::new();
     let mut render_profile: Option<rhwp::paint::RenderProfile> = None;
     let mut json_mode = false;
+    let mut packaged_font_args = PackagedFontArgs::default();
 
     let mut i = 0;
     while i < args.len() {
+        match packaged_font_args.try_parse(args, i) {
+            Some(Ok(consumed)) => {
+                i += consumed;
+                continue;
+            }
+            Some(Err(code)) => return code,
+            None => {}
+        }
         match args[i].as_str() {
             "--output" | "-o" => {
                 if i + 1 < args.len() {
@@ -184,6 +309,9 @@ pub(crate) fn export_svg(args: &[String]) -> i32 {
         eprintln!("오류: --profile은 --font-style/--embed-fonts와 함께 사용할 수 없습니다.");
         return EXIT_USAGE;
     }
+    if let Err(code) = packaged_font_args.activate(&font_paths) {
+        return code;
+    }
 
     // 파일 읽기
     let read_start = std::time::Instant::now();
@@ -288,6 +416,9 @@ pub(crate) fn export_svg(args: &[String]) -> i32 {
         overflow_cell_total += u64::from(page_overflow_cell_lines);
         match svg_result {
             Ok(mut svg) => {
+                if let Some(config) = rhwp::renderer::font_paths::packaged_fonts_only() {
+                    svg = insert_packaged_generic_fallbacks(&svg, config);
+                }
                 // 격자 오버레이 삽입 (진단용 부가 기능 — render 시간에 포함하지 않는다)
                 if let Some(mm) = grid_mm {
                     let origin_mm = match grid_origin {
@@ -825,9 +956,18 @@ pub(crate) fn export_png(args: &[String]) -> i32 {
     let mut dpi: Option<f64> = None;
     // PNG export is print-equivalent output. Editor visuals require an explicit screen profile.
     let mut render_profile = rhwp::paint::RenderProfile::HighQuality;
+    let mut packaged_font_args = PackagedFontArgs::default();
 
     let mut i = 0;
     while i < args.len() {
+        match packaged_font_args.try_parse(args, i) {
+            Some(Ok(consumed)) => {
+                i += consumed;
+                continue;
+            }
+            Some(Err(code)) => return code,
+            None => {}
+        }
         match args[i].as_str() {
             "--output" | "-o" => {
                 if i + 1 < args.len() {
@@ -961,6 +1101,9 @@ pub(crate) fn export_png(args: &[String]) -> i32 {
         eprintln!("사용법: rhwp export-png <파일.hwp> [옵션] (rhwp --help 참조)");
         return EXIT_USAGE;
     };
+    if let Err(code) = packaged_font_args.activate(&font_paths) {
+        return code;
+    }
 
     let png_options = PngExportOptions {
         scale,
@@ -1107,6 +1250,7 @@ pub(crate) fn export_pdf(args: &[String]) -> i32 {
         let mut render_profile: Option<rhwp::paint::RenderProfile> = None;
         let mut compatibility_only_options = Vec::new();
         let mut direct_raster_dpi_was_set = false;
+        let mut packaged_fonts_only = false;
         // [#3596] --json: 산출물 매니페스트를 stdout 순수 JSON 으로. 렌더 동작 무변경.
         let mut json_mode = false;
 
@@ -1210,6 +1354,10 @@ pub(crate) fn export_pdf(args: &[String]) -> i32 {
                     }
                     direct_pdf_options.raster_dpi = raster_dpi;
                     direct_raster_dpi_was_set = true;
+                    i += 1;
+                }
+                "--packaged-fonts-only" => {
+                    packaged_fonts_only = true;
                     i += 1;
                 }
                 "--font-path" => {
@@ -1372,6 +1520,17 @@ pub(crate) fn export_pdf(args: &[String]) -> i32 {
         {
             eprintln!("오류: --raster-dpi는 direct PDF backend에서만 사용할 수 있습니다.");
             return 2;
+        }
+
+        if packaged_fonts_only {
+            // 폰트 출처를 --font-path 로 한정 — 시스템·번들·RHWP_FONT_PATH 를 쓰지 않는다.
+            // generic 폴백은 export-pdf 가 이미 받는 --fallback-* 값(fontdb)을 그대로 쓴다.
+            enable_packaged_fonts_only_mode(
+                &pdf_options.font_paths,
+                Some(pdf_options.fallback_serif.clone()),
+                Some(pdf_options.fallback_sans.clone()),
+                Some(pdf_options.fallback_mono.clone()),
+            );
         }
 
         // 기본 출력 파일명
@@ -1577,6 +1736,9 @@ pub(crate) fn print_export_pdf_usage() {
     eprintln!("      --fallback-serif <명>");
     eprintln!("      --fallback-sans <명>");
     eprintln!("      --fallback-mono <명>");
+    eprintln!(
+        "      --packaged-fonts-only  --font-path 폰트만 사용 (시스템·번들·RHWP_FONT_PATH 미사용)"
+    );
     eprintln!("      --equation-font <명>");
     eprintln!("  direct backend는 native-skia feature로 빌드한 native CLI가 필요합니다.");
     eprintln!("  참고: <...>는 자리표시자이며, 실제 입력에는 꺾쇠괄호를 쓰지 않습니다.");
@@ -6277,4 +6439,69 @@ pub(crate) fn extract_thumbnail(args: &[String]) -> i32 {
         }
     }
     EXIT_OK
+}
+
+#[cfg(test)]
+mod packaged_font_tests {
+    use super::{insert_packaged_generic_fallbacks, PackagedFontArgs, EXIT_USAGE};
+
+    fn args(v: &[&str]) -> Vec<String> {
+        v.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn packaged_font_args_parse_both_forms() {
+        let a = args(&[
+            "--packaged-fonts-only",
+            "--fallback-serif",
+            "HCR Batang",
+            "--fallback-sans=HCR Dotum",
+            "--fallback-mono",
+        ]);
+        let mut p = PackagedFontArgs::default();
+        assert_eq!(p.try_parse(&a, 0), Some(Ok(1)));
+        assert_eq!(p.try_parse(&a, 1), Some(Ok(2)));
+        assert_eq!(p.try_parse(&a, 3), Some(Ok(1)));
+        assert_eq!(p.try_parse(&a, 4), Some(Err(EXIT_USAGE)), "값 누락");
+        assert!(p.enabled);
+        assert_eq!(p.serif.as_deref(), Some("HCR Batang"));
+        assert_eq!(p.sans.as_deref(), Some("HCR Dotum"));
+        assert_eq!(p.try_parse(&args(&["--font-path"]), 0), None);
+    }
+
+    #[test]
+    fn fallback_without_packaged_mode_is_usage_error() {
+        let p = PackagedFontArgs {
+            sans: Some("HCR Dotum".into()),
+            ..Default::default()
+        };
+        assert_eq!(p.activate(&[]), Err(EXIT_USAGE));
+        assert_eq!(PackagedFontArgs::default().activate(&[]), Ok(()));
+    }
+
+    #[test]
+    fn generic_fallbacks_inserted_before_generic_keyword() {
+        let config = rhwp::renderer::font_paths::PackagedFontsOnly {
+            dirs: Vec::new(),
+            fallback_serif: Some("HCR Batang".into()),
+            fallback_sans: Some("HCR Dotum".into()),
+            fallback_mono: None,
+        };
+        let svg = "<text font-family=\"&apos;바탕&apos;,serif\"/>\
+                   <text font-family=\"&apos;돋움&apos;,sans-serif\"/>\
+                   <text font-family=\"sans-serif\"/>\
+                   <text font-family=\"&apos;굴림체&apos;,monospace\"/>";
+        let out = insert_packaged_generic_fallbacks(svg, &config);
+        assert!(out.contains("&apos;바탕&apos;,&apos;HCR Batang&apos;,serif\""));
+        assert!(out.contains("&apos;돋움&apos;,&apos;HCR Dotum&apos;,sans-serif\""));
+        assert!(out.contains("font-family=\"&apos;HCR Dotum&apos;,sans-serif\""));
+        assert!(
+            out.contains("&apos;굴림체&apos;,monospace\""),
+            "mono 미지정이면 그대로"
+        );
+        assert!(
+            !out.contains("HCR Batang&apos;,sans-serif"),
+            "serif 치환이 sans-serif 를 건드리면 안 된다"
+        );
+    }
 }

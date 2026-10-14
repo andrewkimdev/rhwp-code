@@ -554,7 +554,8 @@ fn share_face_data(fontdb: &mut usvg::fontdb::Database) {
 
 fn create_fontdb(options: &PdfExportOptions) -> usvg::fontdb::Database {
     let mut fontdb = usvg::fontdb::Database::new();
-    fontdb.load_system_fonts();
+    // --packaged-fonts-only 이면 시스템 폰트를 적재하지 않는다(font_paths 모듈 문서).
+    crate::renderer::font_paths::load_system_fonts_unless_packaged_only(&mut fontdb);
     // [#2864] 조달 순서는 renderer::font_paths 가 단일 정의한다.
     // 종전의 ttfs/hwp·ttfs/windows(로컬 전용)와 /mnt/c/Windows/Fonts(WSL2 전용)는
     // 제거했다 — 서버·컨테이너에서 무의미하고 /mnt/c 는 #2268 간헐 행의 원인이었다.
