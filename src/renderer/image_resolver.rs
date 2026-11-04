@@ -84,6 +84,12 @@ thread_local! {
     static CONVERSION_MEMO: RefCell<ConversionMemo> = RefCell::new(ConversionMemo::default());
 }
 
+/// 이 스레드의 변환 메모를 비운다 (`renderer::reset_process_state`).
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn reset_conversion_memo() {
+    CONVERSION_MEMO.with(|memo| *memo.borrow_mut() = ConversionMemo::default());
+}
+
 // 실제로 변환을 수행한 횟수 — 메모가 듣는지 보는 테스트용.
 #[cfg(test)]
 thread_local! {

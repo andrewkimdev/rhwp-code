@@ -51,6 +51,16 @@ pub mod typeset;
 #[cfg(target_arch = "wasm32")]
 pub mod web_canvas;
 
+/// 명령 사이에 남는 프로세스 전역 렌더 상태를 처음 상태로 되돌린다.
+/// 한 프로세스에서 명령을 여러 번 실행하는 `rhwp serve` 가 요청마다 호출한다.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn reset_process_state() {
+    font_paths::reset_packaged_fonts_only();
+    image_resolver::reset_conversion_memo();
+    layout::table_layout::reset_issue2424_profile_counters();
+    crate::diagnostics::perf_counters::reset();
+}
+
 use crate::model::ColorRef;
 
 /// 렌더링 백엔드 종류

@@ -33,6 +33,20 @@ pub(crate) static ISSUE2424_CELL_UNITS_MISSES: std::sync::atomic::AtomicU64 =
 pub(crate) static ISSUE2424_CELL_UNITS_MISS_NANOS: std::sync::atomic::AtomicU64 =
     std::sync::atomic::AtomicU64::new(0);
 
+/// 위 프로파일 카운터를 0으로 되돌린다 (`renderer::reset_process_state`).
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn reset_issue2424_profile_counters() {
+    for counter in [
+        &ISSUE2424_ADVANCE_ROW_CUT_CALLS,
+        &ISSUE2424_ADVANCE_ROW_CUT_NANOS,
+        &ISSUE2424_CELL_UNITS_HITS,
+        &ISSUE2424_CELL_UNITS_MISSES,
+        &ISSUE2424_CELL_UNITS_MISS_NANOS,
+    ] {
+        counter.store(0, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
 /// [#2424 프로파일] env 게이트 1회 판정. wasm 은 항상 false 라 `Instant::now` 가
 /// 호출되지 않는다 (`paginate_pass` 의 게이트 패턴과 동일 규약).
 pub(crate) fn issue2424_profile_enabled() -> bool {

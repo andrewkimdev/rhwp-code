@@ -38,6 +38,8 @@ pub(crate) use governance::*;
 #[path = "main/inspect.rs"]
 mod inspect;
 pub(crate) use inspect::*;
+#[path = "main/serve.rs"]
+mod serve;
 use rhwp::provenance;
 use rhwp::schema_registry::ENVELOPE_SCHEMA_VERSION;
 
@@ -256,6 +258,11 @@ fn strip_global_auth_options(mut args: Vec<String>) -> Result<Vec<String>, i32> 
 
 fn main() {
     let raw_args: Vec<String> = env::args().collect();
+    // serve 는 stdin 이 요청 스트림이라 아래 비밀번호 pre-scan(stdin 소비)보다 먼저 분기한다.
+    if raw_args.get(1).map(String::as_str) == Some("serve") {
+        exit_with(serve::run(&raw_args[2..]));
+        return;
+    }
     if is_batch_invocation(&raw_args) && has_global_auth_option(&raw_args) {
         eprintln!(
             "오류: batch 는 --password·--password-stdin·--output-password·--output-password-stdin 을 지원하지 않습니다. stdin 은 파일 경로 목록 전용입니다."

@@ -30,7 +30,8 @@
 //! 켜면 2~4 단계(환경변수·시스템·번들 `ttfs/opensource`)와
 //! `load_system_fonts()`(시스템 폰트 DB)를 모두 건너뛴다. rhwp CLI 는 렌더
 //! 1회당 프로세스 1개라 CLI 파싱 시점에 한 번 켜는 프로세스 전역 설정으로 둔다
-//! ([`enable_packaged_fonts_only`]). 기본값은 꺼짐이며 WASM 빌드에는 이 모듈이
+//! ([`enable_packaged_fonts_only`]; `rhwp serve` 는 요청마다
+//! [`reset_packaged_fonts_only`] 로 끈다). 기본값은 꺼짐이며 WASM 빌드에는 이 모듈이
 //! 없다.
 
 use std::path::{Path, PathBuf};
@@ -55,29 +56,53 @@ pub struct PackagedFontsOnly {
     pub fallback_mono: Option<String>,
 }
 
-static PACKAGED_FONTS_ONLY: std::sync::OnceLock<PackagedFontsOnly> = std::sync::OnceLock::new();
+static PACKAGED_FONTS_ONLY: std::sync::RwLock<Option<&'static PackagedFontsOnly>> =
+    std::sync::RwLock::new(None);
 
-/// 패키지 폰트 전용 모드를 켠다. 프로세스당 한 번만 유효하다(CLI 파싱 시점).
+/// 패키지 폰트 전용 모드를 켠다. 명령 1회(CLI 파싱 시점)에 한 번만 유효하다.
 /// 이미 켜져 있으면 `false` 를 돌려주고 기존 설정을 유지한다.
 pub fn enable_packaged_fonts_only(config: PackagedFontsOnly) -> bool {
-    PACKAGED_FONTS_ONLY.set(config).is_ok()
+    let mut slot = PACKAGED_FONTS_ONLY.write().unwrap_or_else(|e| e.into_inner());
+    if slot.is_some() {
+        return false;
+    }
+    *slot = Some(intern_packaged_config(config));
+    true
+}
+
+/// 패키지 폰트 전용 모드를 끈다 — `rhwp serve` 가 요청마다 호출해
+/// 앞 요청의 설정이 다음 요청에 남지 않게 한다(1회 실행 CLI 와 같은 시작 상태).
+pub fn reset_packaged_fonts_only() {
+    *PACKAGED_FONTS_ONLY.write().unwrap_or_else(|e| e.into_inner()) = None;
+}
+
+/// `&'static` 반환 계약을 지키려고 설정을 누수시키되, 같은 설정은 한 번만 누수한다.
+fn intern_packaged_config(config: PackagedFontsOnly) -> &'static PackagedFontsOnly {
+    static SEEN: std::sync::Mutex<Vec<&'static PackagedFontsOnly>> =
+        std::sync::Mutex::new(Vec::new());
+    let mut seen = SEEN.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(existing) = seen.iter().find(|c| ***c == config) {
+        return existing;
+    }
+    let leaked: &'static PackagedFontsOnly = Box::leak(Box::new(config));
+    seen.push(leaked);
+    leaked
 }
 
 /// 패키지 폰트 전용 모드 설정. 꺼져 있으면(기본) `None`.
 pub fn packaged_fonts_only() -> Option<&'static PackagedFontsOnly> {
-    PACKAGED_FONTS_ONLY.get()
+    *PACKAGED_FONTS_ONLY.read().unwrap_or_else(|e| e.into_inner())
 }
 
 /// 패키지 폰트 전용 모드가 켜져 있는가.
 pub fn is_packaged_fonts_only() -> bool {
-    PACKAGED_FONTS_ONLY.get().is_some()
+    packaged_fonts_only().is_some()
 }
 
 /// 패키지 폰트 전용 모드에서 호출자 디렉터리를 따로 받지 못하는 경로
 /// (`skia::image_conv` 의 프로세스 전역 fontdb 등)용 디렉터리. 꺼져 있으면 빈 목록.
 pub fn packaged_font_dirs() -> &'static [PathBuf] {
-    PACKAGED_FONTS_ONLY
-        .get()
+    packaged_fonts_only()
         .map(|c| c.dirs.as_slice())
         .unwrap_or(&[])
 }

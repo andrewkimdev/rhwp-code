@@ -443,7 +443,7 @@ pub(crate) fn edit_fill_fields(args: &[String]) -> i32 {
     if json_mode {
         println!("{envelope}");
         if verify_failed {
-            process::exit(3);
+            return 3;
         }
         return EXIT_OK;
     }
@@ -480,7 +480,7 @@ pub(crate) fn edit_fill_fields(args: &[String]) -> i32 {
     }
     if verify_failed {
         eprintln!("검증 실패(--verify): 저장본 재파싱 IR 차이 — 상세는 --json 또는 ir-diff");
-        process::exit(3);
+        return 3;
     }
     for c in confusable {
         // 사람에게도 알린다 — 화면상 같은 이름이라 눈으로는 잡을 수 없는 축이다.
