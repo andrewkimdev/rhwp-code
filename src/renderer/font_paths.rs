@@ -238,7 +238,7 @@ fn load_into_fontdb_with_mode(
 ) {
     for dir in extra {
         if dir.exists() {
-            fontdb.load_fonts_dir(dir);
+            load_fonts_dir_sorted(fontdb, dir);
         } else {
             eprintln!(
                 "WARN: font path '{}' not found. 해당 경로의 폰트는 로드하지 않습니다.",
@@ -251,7 +251,7 @@ fn load_into_fontdb_with_mode(
     }
     for dir in env_font_paths() {
         if dir.exists() {
-            fontdb.load_fonts_dir(&dir);
+            load_fonts_dir_sorted(fontdb, &dir);
         } else {
             eprintln!(
                 "WARN: {FONT_PATH_ENV} entry '{}' not found. 해당 경로의 폰트는 로드하지 않습니다.",
@@ -261,7 +261,59 @@ fn load_into_fontdb_with_mode(
     }
     let bundled = Path::new(BUNDLED_OPENSOURCE_DIR);
     if bundled.exists() {
-        fontdb.load_fonts_dir(bundled);
+        load_fonts_dir_sorted(fontdb, bundled);
+    }
+}
+
+/// `fontdb.load_fonts_dir` 와 같은 파일을 적재하되 경로 이름순으로 적재한다.
+///
+/// fontdb 는 `read_dir` 이 돌려주는 순서(파일시스템마다 다르다 — NTFS 는 이름순,
+/// ext4/overlayfs 는 해시순)대로 적재하고, usvg 의 대체 글꼴 선택은 먼저 적재된
+/// 글꼴 중 그 글자를 가진 첫 글꼴을 고른다. 순서를 고정하지 않으면 같은 문서가
+/// OS·서버마다 다른 글꼴(예: D2Coding 대신 D2CodingBold)로 그려진다.
+fn load_fonts_dir_sorted(fontdb: &mut usvg::fontdb::Database, dir: &Path) {
+    // fontdb 처럼 이미 적재된 파일은 다시 적재하지 않는다(같은 디렉터리가 두 번 지정된 경우).
+    let mut seen: std::collections::HashSet<PathBuf> = fontdb
+        .faces()
+        .filter_map(|face| match &face.source {
+            usvg::fontdb::Source::File(path) => Some(path.clone()),
+            _ => None,
+        })
+        .collect();
+    let mut files = Vec::new();
+    collect_font_files(dir, &mut seen, &mut files);
+    files.sort();
+    for path in files {
+        // fontdb 도 적재 실패는 경고 로그만 남기고 넘어간다.
+        let _ = fontdb.load_font_file(&path);
+    }
+}
+
+/// `dir` 아래(하위 디렉터리 포함) 폰트 파일 경로를 모은다. 확장자 목록과
+/// 심볼릭 링크 순환 방지(정규화 경로 중복 제거)는 fontdb 의 `load_fonts_dir` 와 같다.
+fn collect_font_files(
+    dir: &Path,
+    seen: &mut std::collections::HashSet<PathBuf>,
+    out: &mut Vec<PathBuf>,
+) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let Ok(path) = entry.path().canonicalize() else {
+            continue;
+        };
+        if !seen.insert(path.clone()) {
+            continue;
+        }
+        if path.is_dir() {
+            collect_font_files(&path, seen, out);
+        } else if matches!(
+            path.extension().and_then(|e| e.to_str()),
+            Some("ttf" | "ttc" | "otf" | "otc" | "TTF" | "TTC" | "OTF" | "OTC")
+        ) {
+            out.push(path);
+        }
     }
 }
 
@@ -282,6 +334,30 @@ mod tests {
     /// 병렬로 돌면 set 과 read 사이에 다른 테스트의 remove_var 가 끼어들어
     /// 간헐 실패한다(실측 플레이크).
     static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    /// 디렉터리 순회 순서와 무관하게 경로 이름순으로 적재하고, 같은 디렉터리를
+    /// 두 번 적재해도 글꼴이 중복되지 않아야 한다.
+    #[test]
+    fn load_fonts_dir_sorted_is_path_ordered_and_dedups() {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("ttfs/opensource");
+        let mut fontdb = usvg::fontdb::Database::new();
+        load_fonts_dir_sorted(&mut fontdb, &dir);
+        let paths: Vec<PathBuf> = fontdb
+            .faces()
+            .filter_map(|f| match &f.source {
+                usvg::fontdb::Source::File(p) => Some(p.clone()),
+                _ => None,
+            })
+            .collect();
+        assert!(paths.len() >= 2, "fixture fonts must load: {paths:?}");
+        let mut sorted = paths.clone();
+        sorted.sort();
+        assert_eq!(paths, sorted);
+
+        let count = fontdb.len();
+        load_fonts_dir_sorted(&mut fontdb, &dir);
+        assert_eq!(fontdb.len(), count, "reloading the same dir must not duplicate faces");
+    }
 
     #[test]
     fn env_font_paths_parses_and_filters() {
