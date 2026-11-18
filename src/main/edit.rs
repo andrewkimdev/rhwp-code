@@ -551,6 +551,8 @@ pub(crate) fn fill_fields_core(
     let all_names: Vec<String> = name_counts.keys().cloned().collect();
     let confusable_groups = rhwp::document_core::text_security::confusable_collisions(&all_names);
     let mut confusable: Vec<serde_json::Value> = Vec::new();
+    // 채울 값: (요청 키, 필드 이름, 같은 이름 중 순번, 값) — 요청 순서 그대로.
+    let mut edits: Vec<(&str, &str, usize, String)> = Vec::new();
 
     for (key, value) in data {
         let value_str = match value {
@@ -591,16 +593,23 @@ pub(crate) fn fill_fields_core(
             );
             continue;
         }
-        // 실패 시 원본 불변 — 출력 파일을 쓰지 않고 즉시 끝낸다.
-        doc.set_field_value_by_name_at(name, occurrence, &value_str)
-            .map_err(|e| format!("필드 '{}' 설정 실패 - {}", key, e))?;
         if let Some(loc) = name_locs.get(name).and_then(|l| l.get(occurrence)) {
             changed_paras.push(*loc);
         }
         filled.push(
             serde_json::json!({ "name": name, "occurrence": occurrence, "value": value_str }),
         );
+        edits.push((key.as_str(), name, occurrence, value_str));
     }
+
+    // 값을 한꺼번에 넣는다 — 값마다 구역을 다시 조판하면 긴 목록에서 시간이 값 수의 제곱으로 는다.
+    // 실패 시 원본 불변 — 출력 파일을 쓰지 않고 즉시 끝낸다.
+    let batch: Vec<(&str, usize, &str)> = edits
+        .iter()
+        .map(|(_, name, occurrence, value)| (*name, *occurrence, value.as_str()))
+        .collect();
+    doc.set_field_values_by_name_at(&batch)
+        .map_err(|(index, e)| format!("필드 '{}' 설정 실패 - {}", edits[index].0, e))?;
 
     // [#3383] 입력 형식을 보존한다 — 기본 확장자도 산출 형식을 따른다.
     let out_format = edit_output_format(&bytes, out_path.as_deref());

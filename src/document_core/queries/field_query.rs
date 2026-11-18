@@ -556,13 +556,7 @@ impl DocumentCore {
 
         let section_index = location.section_index;
 
-        if is_cell_field {
-            // 셀 필드: 셀의 첫 문단 텍스트를 직접 교체
-            self.set_cell_field_text(&location, value)?;
-        } else {
-            // ClickHere 필드: field_ranges 기반 교체
-            self.set_field_text_at(&location, fri, value)?;
-        }
+        self.set_field_text_without_recompose(&location, fri, is_cell_field, value)?;
 
         // raw_stream 무효화
         if let Some(sec) = self.document.sections.get_mut(section_index) {
@@ -576,6 +570,94 @@ impl DocumentCore {
             json_escape(&old_value),
             json_escape(value),
         ))
+    }
+
+    /// 여러 필드를 한 번에 채운다 — `(이름, 같은 이름 중 순번, 값)` 목록.
+    ///
+    /// [`Self::set_field_value_by_name_at`] 를 값마다 부르면 값 하나에 문서 전체 필드 수집
+    /// (`collect_all_fields`)과 구역 전체 재조판(`recompose_section`)이 한 번씩 돈다. 채울
+    /// 값의 수와 구역 크기가 함께 느는 문서(행을 복제한 긴 목록)에서는 시간이 값 수의
+    /// 제곱으로 늘어, 3천 개를 채우는 데 20초가 걸렸다.
+    ///
+    /// 여기서는 필드 목록을 처음에 한 번만 모으고, 값은 모델에만 넣은 뒤, 바뀐 구역을
+    /// 끝에서 한 번씩만 다시 조판한다. 결과는 값마다 부른 것과 같다:
+    /// - 값을 넣어도 문단·컨트롤·`field_ranges` 의 수와 순서는 그대로라, 처음 모은 목록의
+    ///   위치(`location`, `field_range_index`)는 끝까지 유효하다. 글자 범위는 목록에서 읽지
+    ///   않고 넣는 시점의 `field_ranges` 에서 읽는다(같은 문단의 앞 필드가 길이를 바꾼다).
+    /// - 값 넣기와 줄 나눔 재계산은 문서 모델과 스타일만 읽고 조판 결과(`composed`)는 읽지
+    ///   않는다. 그래서 조판을 끝으로 미뤄도 중간 값이 달라지지 않는다.
+    ///
+    /// 실패하면 그 항목의 번호(`edits` 안에서)와 사유를 돌려준다. 그 앞 항목까지는 이미
+    /// 모델에 들어가 있고, 바뀐 구역은 조판까지 마친 상태다.
+    pub fn set_field_values_by_name_at(
+        &mut self,
+        edits: &[(&str, usize, &str)],
+    ) -> Result<(), (usize, HwpError)> {
+        // 이름 → 문서 순서대로의 (위치, field_ranges 번호, 셀 필드 여부)
+        let mut targets: std::collections::HashMap<String, Vec<(FieldLocation, usize, bool)>> =
+            std::collections::HashMap::new();
+        for fi in self.collect_all_fields() {
+            if let Some(name) = fi.field.field_name() {
+                targets.entry(name.to_string()).or_default().push((
+                    fi.location.clone(),
+                    fi.field_range_index,
+                    fi.field.ctrl_id == 0,
+                ));
+            }
+        }
+
+        let mut touched_sections: std::collections::BTreeSet<usize> =
+            std::collections::BTreeSet::new();
+        let mut failure: Option<(usize, HwpError)> = None;
+        for (index, (name, occurrence, value)) in edits.iter().enumerate() {
+            let Some((location, fri, is_cell_field)) =
+                targets.get(*name).and_then(|t| t.get(*occurrence))
+            else {
+                failure = Some((
+                    index,
+                    HwpError::InvalidField(format!("필드 이름 '{}'[{}] 없음", name, occurrence)),
+                ));
+                break;
+            };
+            if let Err(e) =
+                self.set_field_text_without_recompose(location, *fri, *is_cell_field, value)
+            {
+                failure = Some((index, e));
+                break;
+            }
+            touched_sections.insert(location.section_index);
+        }
+
+        for section_index in touched_sections {
+            // raw_stream 무효화
+            if let Some(sec) = self.document.sections.get_mut(section_index) {
+                sec.raw_stream = None;
+            }
+            self.recompose_section(section_index);
+        }
+        match failure {
+            Some(f) => Err(f),
+            None => Ok(()),
+        }
+    }
+
+    /// 필드 하나의 텍스트를 바꾸고 그 문단의 줄 나눔을 다시 계산한다. 구역의 raw_stream 무효화와
+    /// 재조판은 호출자 몫이다.
+    fn set_field_text_without_recompose(
+        &mut self,
+        location: &FieldLocation,
+        field_range_index: usize,
+        is_cell_field: bool,
+        value: &str,
+    ) -> Result<(), HwpError> {
+        if is_cell_field {
+            // 셀 필드: 셀의 첫 문단 텍스트를 직접 교체
+            self.set_cell_field_text(location, value)?;
+        } else {
+            // ClickHere 필드: field_ranges 기반 교체
+            self.set_field_text_at(location, field_range_index, value)?;
+        }
+        Ok(())
     }
 
     /// 한글 커서 좌표(list/para/pos)에 누름틀을 넣는다 — 웹한글컨트롤 `CreateField` 용.
@@ -2725,6 +2807,128 @@ mod tests {
             text,
             ..Default::default()
         }
+    }
+
+    /// 누름틀 두 개가 한 문단에 있는 모양: [BEGIN] A A [END] - [BEGIN] B B [END].
+    fn two_field_para(first: &str, second: &str, id: u32) -> Paragraph {
+        let named = |ctrl_id: u32, name: &str| {
+            let mut control = make_field_control(ctrl_id);
+            if let Control::Field(field) = &mut control {
+                field.ctrl_data_name = Some(name.to_string());
+            }
+            control
+        };
+        Paragraph {
+            text: "AA-BB".into(),
+            char_offsets: vec![8, 9, 18, 27, 28],
+            controls: vec![named(id, first), named(id + 1, second)],
+            field_ranges: vec![
+                FieldRange {
+                    start_char_idx: 0,
+                    end_char_idx: 2,
+                    control_idx: 0,
+                    ..Default::default()
+                },
+                FieldRange {
+                    start_char_idx: 3,
+                    end_char_idx: 5,
+                    control_idx: 1,
+                    ..Default::default()
+                },
+            ],
+            char_count: 5 + 32 + 1,
+            ..Default::default()
+        }
+    }
+
+    /// 두 구역에 걸친 문서: 같은 이름(HSCODE)이 되풀이되는 문단과 누름틀 두 개짜리 문단이 섞여 있다.
+    fn many_fields_core(rows: u32) -> DocumentCore {
+        let section = |offset: u32| Section {
+            paragraphs: (0..rows)
+                .flat_map(|i| {
+                    let n = offset + i;
+                    vec![
+                        hscode_shaped_field_para(if i % 2 == 0 { "" } else { "TAIL" }),
+                        two_field_para(&format!("품명_{n}"), &format!("수량_{n}"), 1000 + n * 2),
+                    ]
+                })
+                .collect(),
+            raw_stream: Some(vec![0xAB; 64]),
+            ..Default::default()
+        };
+        let mut core = DocumentCore::new_empty();
+        core.document.sections.push(section(0));
+        core.document.sections.push(section(rows));
+        core.composed = vec![Vec::new(), Vec::new()];
+        core.dirty_sections = vec![true, true];
+        core.dirty_paragraphs = vec![None, None];
+        core
+    }
+
+    #[test]
+    fn set_field_values_by_name_at_matches_filling_one_by_one() {
+        // 한꺼번에 채우기는 값마다 채우기(값 하나에 필드 재수집 + 구역 재조판)와 결과가 같아야 한다.
+        // 순서는 일부러 뒤집는다 — 같은 문단의 뒤 필드를 먼저, 앞 필드를 나중에 채우고, 같은 이름의
+        // 뒤 순번을 먼저 채운다. 값 길이도 0·짧게·길게 섞는다.
+        let rows = 30;
+        let mut edits: Vec<(String, usize, String)> = Vec::new();
+        for n in (0..rows * 2).rev() {
+            edits.push((format!("수량_{n}"), 0, "가".repeat((n % 7) as usize)));
+            edits.push((format!("품명_{n}"), 0, format!("제품 {n} 이름이 꽤 긴 경우")));
+            edits.push(("HSCODE".to_string(), n as usize, format!("85{n:04}")));
+        }
+
+        let mut one_by_one = many_fields_core(rows);
+        for (name, occurrence, value) in &edits {
+            one_by_one
+                .set_field_value_by_name_at(name, *occurrence, value)
+                .unwrap();
+        }
+
+        let mut batched = many_fields_core(rows);
+        let batch: Vec<(&str, usize, &str)> = edits
+            .iter()
+            .map(|(name, occurrence, value)| (name.as_str(), *occurrence, value.as_str()))
+            .collect();
+        batched.set_field_values_by_name_at(&batch).unwrap();
+
+        for section in 0..2 {
+            assert_eq!(
+                format!("{:?}", batched.document.sections[section].paragraphs),
+                format!("{:?}", one_by_one.document.sections[section].paragraphs),
+                "구역 {section} 문단 모델이 값마다 채운 결과와 같아야 한다",
+            );
+            assert!(batched.document.sections[section].raw_stream.is_none());
+            assert_eq!(
+                format!("{:?}", batched.composed[section]),
+                format!("{:?}", one_by_one.composed[section]),
+                "구역 {section} 조판 결과가 값마다 채운 결과와 같아야 한다",
+            );
+            assert_eq!(batched.composed[section].len(), (rows * 2) as usize);
+        }
+        // 값이 실제로 들어갔는지 — 같은 문단의 두 필드와, 같은 이름의 마지막 순번.
+        assert_eq!(
+            batched.document.sections[0].paragraphs[1].text,
+            "제품 0 이름이 꽤 긴 경우-"
+        );
+        let last = &batched.document.sections[1].paragraphs[(rows * 2 - 2) as usize];
+        assert_eq!(last.text, format!("85{:04}TAIL", rows * 2 - 1));
+    }
+
+    #[test]
+    fn set_field_values_by_name_at_reports_the_failing_edit_and_keeps_earlier_ones() {
+        let mut core = many_fields_core(2);
+        let err = core
+            .set_field_values_by_name_at(&[("품명_0", 0, "첫째"), ("없는필드", 0, "x"), ("품명_1", 0, "셋째")])
+            .unwrap_err();
+        assert_eq!(err.0, 1, "실패한 항목의 번호를 돌려준다");
+        assert_eq!(core.document.sections[0].paragraphs[1].text, "첫째-BB");
+        assert_eq!(
+            core.document.sections[0].paragraphs[3].text,
+            "AA-BB",
+            "실패 뒤 항목은 넣지 않는다"
+        );
+        assert_eq!(core.composed[0].len(), 4, "바뀐 구역은 조판까지 마친다");
     }
 
     #[test]
